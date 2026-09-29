@@ -1,15 +1,26 @@
 Perseid
 https://github.com/meteroid-oss/perseid
 
-This project includes generator, template and runtime code derived from:
+Perseid is licensed under the Apache License 2.0 (LICENSE). It contains
+substantial portions of code originally written by others under the MIT
+license, reproduced in the LICENSE-* files:
 
-- Svix: https://github.com/svix/svix-webhooks
-  Copyright (c) 2025 Svix (https://www.svix.com)
-  MIT license notice: LICENSE-Svix
+- Svix (https://www.svix.com)
+  Copyright (c) 2021-2025 Svix
+  Source: https://github.com/svix/openapi-codegen (forked at commit be4c8a7)
+  and https://github.com/svix/svix-webhooks (client library templates and
+  runtimes).
+  Portions still present: the code generation engine (src/api, generator,
+  template engine, postprocessing, code samples), and the Rust, Java and
+  TypeScript templates and runtime files derived from the Svix client
+  libraries. License: LICENSE-Svix (MIT).
 
-- Meteroid: https://github.com/meteroid-oss/meteroid-clients
-  Copyright (c) 2025 Meteroid (https://meteroid.com)
-  MIT license notice: LICENSE-Meteroid
+- Meteroid (https://meteroid.com)
+  Copyright (c) 2025 Meteroid
+  Source: https://github.com/meteroid-oss/meteroid-clients (a fork of the Svix
+  generator; adds the Go, Python and TypeScript templates and runtimes).
+  License: LICENSE-Meteroid (MIT).
 
 The imported code has been modified for reusable SDK configuration, shared
-runtime generation, template overrides, schema handling, and independent tooling.
+runtime generation, template overrides, schema handling and independent
+tooling. Svix is not affiliated with, and does not endorse, Perseid.

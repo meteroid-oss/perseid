@@ -26,8 +26,10 @@ pets = petstore.pets.list_pets(limit=10, status=PetStatus.AVAILABLE)
 pets, err := petstore.New("sk_live_...", nil).Pets().ListPets(ctx, &petstore.PetsListPetsOptions{Limit: petstore.Ptr[int32](10)})
 ```
 
-It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients), and descends from
-the generator [Svix](https://github.com/svix/svix-webhooks) uses for its own client libraries.
+It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients). Perseid is a fork of
+[Svix's openapi-codegen](https://github.com/svix/openapi-codegen), the generator behind the
+[Svix client libraries](https://github.com/svix/svix-webhooks), by way of Meteroid's SDK generator:
+much of the engine and of the Rust, Java and TypeScript templates is still Svix's code.
 
 ## What you get
 
@@ -120,4 +122,5 @@ Early, and honest about it:
 
 ## License
 
-Apache-2.0. Includes MIT-licensed code from Svix and Meteroid, see [NOTICE](NOTICE).
+Apache-2.0. Contains substantial MIT-licensed code from Svix and Meteroid, see [NOTICE](NOTICE),
+[LICENSE-Svix](LICENSE-Svix) and [LICENSE-Meteroid](LICENSE-Meteroid).
