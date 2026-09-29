@@ -33,7 +33,7 @@ runs:
         export PERSEID_VERSION="${PERSEID_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_ACTION_PATH/Cargo.toml" | head -1)}"
         sh "$GITHUB_ACTION_PATH/install.sh"
         echo "$PERSEID_INSTALL" >> "$GITHUB_PATH"
-        languages=$(grep -oE '^\[(rust|typescript|python|go|java)[].]' perseid.toml | tr -d '[].' | sort -u | tr '\n' ' ')
+        languages=$(grep -oE '^\[(rust|typescript|python|go|java|csharp)[].]' perseid.toml | tr -d '[].' | sort -u | tr '\n' ' ')
         echo "languages=$languages" >> "$GITHUB_OUTPUT"
 
     - if: contains(steps.setup.outputs.languages, 'rust')
@@ -46,6 +46,11 @@ runs:
       with:
         go-version: '1.24'
         cache: false
+
+    - if: contains(steps.setup.outputs.languages, 'csharp')
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
 
     - name: Install formatters
       shell: bash
@@ -73,6 +78,9 @@ runs:
             printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$BIN/google-java-format.jar" > "$BIN/google-java-format"
           fi
           chmod +x "$BIN/google-java-format" ;;
+        esac
+        case " $LANGUAGES " in *" csharp "*)
+          dotnet tool install csharpier --version 1.3.0 --tool-path "$BIN" ;;
         esac
 
     - name: Run perseid

@@ -1,1 +1,3 @@
 /target/
+/tests/csharp/bin/
+/tests/csharp/obj/

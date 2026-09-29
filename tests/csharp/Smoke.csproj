@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Exercises a Petstore SDK generated from tests/fixtures/petstore.yaml against an in-process server:
+       dotnet run -p:SdkProject=<sdk>/csharp/Petstore/Petstore.csproj -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(SdkProject)" />
+  </ItemGroup>
+</Project>
