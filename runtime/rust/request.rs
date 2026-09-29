@@ -234,8 +234,9 @@ impl Request {
         let mut retries = schedule.iter();
         let mut retry_count = 0u32;
         loop {
-            let request = self.build_request(conf)?;
+            let mut request = self.build_request(conf)?;
             let send = async {
+                request.body_mut().validate_empty().await.map_err(Error::generic)?;
                 let response = conf.client.request(request).await.map_err(Error::generic)?;
                 let status = response.status();
                 if !status.is_success() {

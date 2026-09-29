@@ -143,7 +143,7 @@ async fn incorrect_reader_lengths_fail() {
         .respond_with(success())
         .mount(&server)
         .await;
-    for length in [2, 8] {
+    for length in [0, 2, 8] {
         let upload = Upload::reader(&b"four"[..], Some(length));
         assert!(client(&server.uri(), 0)
             .files()
@@ -151,6 +151,84 @@ async fn incorrect_reader_lengths_fail() {
             .await
             .is_err());
     }
+}
+
+#[tokio::test]
+async fn empty_known_length_reader_uploads_successfully() {
+    let server = MockServer::start().await;
+    Mock::given(path("/upload"))
+        .and(header("content-length", "0"))
+        .and(body_bytes(Vec::<u8>::new()))
+        .respond_with(success())
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert!(
+        client(&server.uri(), 0)
+            .files()
+            .upload(Upload::reader(tokio::io::empty(), Some(0)))
+            .await
+            .unwrap()
+            .ok
+    );
+}
+
+struct FailedReader;
+impl AsyncRead for FailedReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        _: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Err(std::io::Error::other("reader failed")))
+    }
+}
+
+#[tokio::test]
+async fn zero_length_reader_errors_are_reported_before_sending() {
+    let server = MockServer::start().await;
+    let error = client(&server.uri(), 3)
+        .files()
+        .upload(Upload::reader(FailedReader, Some(0)))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("reader failed"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn zero_length_reader_validation_obeys_timeout_and_cancellation() {
+    let server = MockServer::start().await;
+    let client = Example::new(
+        "secret".into(),
+        Some(ExampleOptions {
+            server_url: Some(server.uri()),
+            timeout: Some(Duration::from_millis(30)),
+            retry_schedule: Some(vec![Duration::ZERO; 3]),
+            ..Default::default()
+        }),
+    );
+    // The writer remains open, so proving EOF must wait and hit the timeout.
+    let (reader, mut writer) = tokio::io::duplex(1);
+    let error = client
+        .files()
+        .upload(Upload::reader(reader, Some(0)))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("deadline has elapsed"));
+    assert!(writer.write_all(b"x").await.is_err());
+
+    // Cancelling a caller-owned future also drops the pending reader.
+    let client = self::client(&server.uri(), 3);
+    let (reader, mut writer) = tokio::io::duplex(1);
+    assert!(tokio::time::timeout(
+        Duration::from_millis(30),
+        client.files().upload(Upload::reader(reader, Some(0))),
+    )
+    .await
+    .is_err());
+    assert!(writer.write_all(b"x").await.is_err());
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]

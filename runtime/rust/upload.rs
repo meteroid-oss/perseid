@@ -209,6 +209,19 @@ impl RequestBody {
     pub(crate) fn length(&self) -> Option<u64> {
         self.remaining
     }
+
+    pub(crate) async fn validate_empty(&mut self) -> io::Result<()> {
+        // Hyper may skip polling a body with an exact zero length. Probe its
+        // reader first so a nonempty or failed reader cannot silently succeed.
+        if self.remaining == Some(0) {
+            while let Some(frame) =
+                std::future::poll_fn(|cx| Pin::new(&mut *self).poll_frame(cx)).await
+            {
+                frame?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Body for RequestBody {
