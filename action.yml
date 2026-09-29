@@ -22,23 +22,56 @@ runs:
   using: composite
   steps:
     - name: Install perseid
+      id: setup
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
         PERSEID_VERSION: ${{ inputs.version || (startsWith(github.action_ref, 'v') && github.action_ref) || 'latest' }}
         PERSEID_INSTALL: ${{ runner.temp }}/perseid
       run: |
         sh "$GITHUB_ACTION_PATH/install.sh"
         echo "$PERSEID_INSTALL" >> "$GITHUB_PATH"
+        languages=$(grep -oE '^\[(rust|typescript|python|go|java)[].]' perseid.toml | tr -d '[].' | sort -u | tr '\n' ' ')
+        echo "languages=$languages" >> "$GITHUB_OUTPUT"
 
-    - name: Install google-java-format
+    - if: contains(steps.setup.outputs.languages, 'rust')
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt
+
+    - if: contains(steps.setup.outputs.languages, 'go')
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+        cache: false
+
+    - name: Install formatters
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
+      env:
+        LANGUAGES: ${{ steps.setup.outputs.languages }}
+        BIN: ${{ runner.temp }}/perseid
       run: |
-        grep -q '^\[java\]' perseid.toml || exit 0
-        jar="$RUNNER_TEMP/google-java-format.jar"
-        curl -fsSL -o "$jar" https://github.com/google/google-java-format/releases/download/v1.25.2/google-java-format-1.25.2-all-deps.jar
-        printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$jar" > "$RUNNER_TEMP/perseid/google-java-format"
-        chmod +x "$RUNNER_TEMP/perseid/google-java-format"
+        arch=$([ "$(uname -m)" = x86_64 ] && echo x64 || echo arm64)
+        fetch() { curl -fsSL --retry 3 -o "$1" "$2"; }
+        case " $LANGUAGES " in *" typescript "*)
+          fetch "$BIN/biome" "https://github.com/biomejs/biome/releases/download/%40biomejs%2Fbiome%402.1.4/biome-linux-$arch"
+          chmod +x "$BIN/biome" ;;
+        esac
+        case " $LANGUAGES " in *" python "*)
+          triple=$([ "$arch" = x64 ] && echo x86_64 || echo aarch64)-unknown-linux-gnu
+          fetch ruff.tar.gz "https://github.com/astral-sh/ruff/releases/download/0.14.10/ruff-$triple.tar.gz"
+          tar -xzf ruff.tar.gz --strip-components 1 -C "$BIN" "ruff-$triple/ruff" && rm ruff.tar.gz ;;
+        esac
+        case " $LANGUAGES " in *" java "*)
+          gjf=https://github.com/google/google-java-format/releases/download/v1.25.2
+          if [ "$arch" = x64 ]; then
+            fetch "$BIN/google-java-format" "$gjf/google-java-format_linux-x86-64"
+          else
+            fetch "$BIN/google-java-format.jar" "$gjf/google-java-format-1.25.2-all-deps.jar"
+            printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$BIN/google-java-format.jar" > "$BIN/google-java-format"
+          fi
+          chmod +x "$BIN/google-java-format" ;;
+        esac
 
     - name: Run perseid
       shell: bash

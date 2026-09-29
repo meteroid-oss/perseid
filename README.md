@@ -82,8 +82,9 @@ For pull request checks, pass `command: generate --check`.
 ## Formatting
 
 Output goes through `rustfmt`, `biome`, `ruff`, `gofmt` and `google-java-format`, with your
-SDK's own formatter configuration. Missing `biome` or `ruff` are run pinned through `npx` or `uvx`;
-the GitHub Action installs everything.
+SDK's own formatter configuration. Locally, missing `biome` or `ruff` run pinned through `npx` or
+`uvx`. The GitHub Action reads the languages from `perseid.toml` and installs only the pinned
+native formatters they need: no JVM, Node or Python setup.
 
 ## License
 
