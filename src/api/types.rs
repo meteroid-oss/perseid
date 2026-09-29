@@ -12,7 +12,7 @@ use schemars::schema::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::cli_v1::IncludeMode;
+use crate::spec::IncludeMode;
 
 use heck::ToUpperCamelCase as _;
 

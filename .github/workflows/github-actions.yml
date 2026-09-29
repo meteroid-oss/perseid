@@ -1,4 +1,4 @@
-name: Perseid CI
+name: CI
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
@@ -11,11 +11,52 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
-      - run: cargo build --locked
-      - run: python3 -m unittest discover -s tests -v
+
+  # A fresh `init` + `generate` must give SDKs that build, for a toy spec and a real one.
+  sdks:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        spec:
+          - tests/fixtures/petstore.yaml
+          - https://raw.githubusercontent.com/meteroid-oss/meteroid-clients/main/spec/openapi.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: cargo install --locked --path . --root "$RUNNER_TEMP/perseid"
+      - run: |
+          echo "$RUNNER_TEMP/perseid/bin" >> "$GITHUB_PATH"
+          curl -fsSL -o "$RUNNER_TEMP/gjf.jar" https://github.com/google/google-java-format/releases/download/v1.25.2/google-java-format-1.25.2-all-deps.jar
+          printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$RUNNER_TEMP/gjf.jar" > "$RUNNER_TEMP/perseid/bin/google-java-format"
+          chmod +x "$RUNNER_TEMP/perseid/bin/google-java-format"
+      - name: Generate
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir sdk && cd sdk
+          perseid init --spec "${{ startsWith(matrix.spec, 'https') && matrix.spec || format('{0}/{1}', github.workspace, matrix.spec) }}"
+          perseid generate
+          perseid generate --check
+      - working-directory: ${{ runner.temp }}/sdk/rust
+        run: cargo check
+      - working-directory: ${{ runner.temp }}/sdk/typescript
+        run: npm install --no-audit --no-fund && npx tsc --noEmit
+      - working-directory: ${{ runner.temp }}/sdk/python
+        run: uv venv && uv pip install -e . && uv run python -c "import $(ls -d */ | grep -v venv | head -1 | tr -d /)"
+      - working-directory: ${{ runner.temp }}/sdk/go
+        run: go vet ./...
+      - working-directory: ${{ runner.temp }}/sdk/java
+        run: gradle build --no-daemon

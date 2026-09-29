@@ -222,7 +222,7 @@ impl Generator<'_> {
 
         let file_path = match state.get_temp("summary_filename") {
             Some(summary_filename) => {
-                let path = crate::project::io::relative(
+                let path = crate::fsx::relative(
                     self.output_dir.as_std_path(),
                     summary_filename
                         .as_str()

@@ -1,11 +1,13 @@
 [package]
 name = "perseid"
-version = "0.1.0"
+version = "0.2.0"
 rust-version = "1.88"
 edition = "2024"
 license = "Apache-2.0 AND MIT"
-description = "Configurable OpenAPI SDK generation with shared templates and runtimes"
+description = "OpenAPI in, idiomatic SDKs out: Rust, TypeScript, Python, Go and Java from one static binary"
 readme = "README.md"
+keywords = ["openapi", "sdk", "codegen", "api", "generator"]
+categories = ["development-tools", "command-line-utilities"]
 repository = "https://github.com/meteroid-oss/perseid"
 
 [dependencies]
@@ -18,21 +20,17 @@ heck = "0.5.0"
 indexmap = "2.7.0"
 itertools = "0.14.0"
 minijinja = { version = "2.8.0", features = ["loader"] }
-ron = "0.10.1"
 schemars = "0.8.21"
 serde = { version = "1.0.215", features = ["derive", "rc"] }
 serde_json = "1.0.133"
+serde_norway = "0.9"
 tempfile = "3.14.0"
+toml = "0.8.23"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
-
-# Native project configuration, reproducibility, and HTTP spec sources.
-toml = "0.8.23"
-toml_edit = "0.22.27"
-sha2 = "0.10.9"
 ureq = { version = "3.2.0", default-features = false, features = ["rustls"] }
-unicode-normalization = "0.1.25"
-regex = "1"
 
-[build-dependencies]
-sha2 = "0.10.9"
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

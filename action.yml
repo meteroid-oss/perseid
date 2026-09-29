@@ -1,0 +1,53 @@
+name: Perseid
+description: Generate SDKs from an OpenAPI spec and open pull requests with the result
+branding:
+  icon: package
+  color: purple
+
+inputs:
+  command:
+    description: Arguments passed to perseid
+    default: generate --pr
+  version:
+    description: Perseid version (default, the action's own tag, else latest)
+    default: ''
+  token:
+    description: GitHub token, needs contents and pull-requests write on every target repository
+    default: ${{ github.token }}
+  working-directory:
+    description: Directory containing perseid.toml
+    default: .
+
+runs:
+  using: composite
+  steps:
+    - name: Install perseid
+      shell: bash
+      env:
+        PERSEID_VERSION: ${{ inputs.version || (startsWith(github.action_ref, 'v') && github.action_ref) || 'latest' }}
+        PERSEID_INSTALL: ${{ runner.temp }}/perseid
+      run: |
+        sh "$GITHUB_ACTION_PATH/install.sh"
+        echo "$PERSEID_INSTALL" >> "$GITHUB_PATH"
+
+    - name: Install google-java-format
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        grep -q '^\[java\]' perseid.toml || exit 0
+        jar="$RUNNER_TEMP/google-java-format.jar"
+        curl -fsSL -o "$jar" https://github.com/google/google-java-format/releases/download/v1.25.2/google-java-format-1.25.2-all-deps.jar
+        printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$jar" > "$RUNNER_TEMP/perseid/google-java-format"
+        chmod +x "$RUNNER_TEMP/perseid/google-java-format"
+
+    - name: Run perseid
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        COMMAND: ${{ inputs.command }}
+      run: |
+        gh auth setup-git
+        git config user.name >/dev/null || git config --global user.name 'github-actions[bot]'
+        git config user.email >/dev/null || git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+        perseid $COMMAND

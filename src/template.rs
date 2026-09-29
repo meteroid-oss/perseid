@@ -255,8 +255,8 @@ pub fn populate_env(
                         .as_str()
                         .ok_or_else(|| anyhow::anyhow!("Invalid output directory"))?,
                 );
-                let destination = crate::project::io::relative(actual, relative)?;
-                crate::project::io::write(&destination, file_contents.as_bytes())?;
+                let destination = crate::fsx::relative(actual, relative)?;
+                crate::fsx::write(&destination, file_contents.as_bytes())?;
                 Ok(destination)
             })();
             let destination = result.map_err(|error| {

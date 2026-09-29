@@ -1,0 +1,12 @@
+{
+  "name": "@@NPM_PACKAGE@@",
+  "version": "@@VERSION@@",
+  "description": "@@CLIENT_NAME@@ API client",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": { "build": "tsc" },
+  "dependencies": { "uuid": "^11.1.0" },
+  "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.5.0" }
+}

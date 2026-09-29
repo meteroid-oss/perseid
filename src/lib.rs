@@ -1,17 +1,27 @@
 mod api;
-mod cli_v1;
+pub mod assets;
 pub(crate) mod cli_v2;
 mod codesamples;
-mod formatting;
+pub mod config;
+mod format;
+mod fsx;
+pub mod generate;
 mod generator;
+pub mod init;
 mod postprocessing;
+pub mod pr;
+pub mod spec;
 mod template;
 
 pub use crate::{
-    cli_v1::run_cli_v1_main,
     codesamples::{CodeSample, CodesampleTemplates, generate_codesamples},
     postprocessing::CodegenLanguage,
 };
 
-pub mod project;
-pub mod runner;
+/// The API model templates receive, as pretty JSON.
+pub fn inspect(spec: &str, config: &config::Config) -> anyhow::Result<String> {
+    Ok(serde_json::to_string_pretty(&spec::api(
+        spec,
+        &config.filters(),
+    )?)?)
+}

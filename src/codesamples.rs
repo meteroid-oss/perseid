@@ -10,7 +10,7 @@ use crate::{
         Api, Resource,
         types::{EnumVariantType, Field, FieldType, StructEnumRepr, Type, TypeData},
     },
-    cli_v1::IncludeMode,
+    spec::IncludeMode,
     template,
 };
 use aide::openapi::OpenApi;

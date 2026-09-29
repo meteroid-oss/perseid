@@ -1,0 +1,50 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-musl }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+          - { runner: macos-15-intel, target: x86_64-apple-darwin }
+          - { runner: macos-15, target: aarch64-apple-darwin }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - run: |
+          cargo build --release --locked --target ${{ matrix.target }}
+          test "$(target/${{ matrix.target }}/release/perseid --version)" = "perseid ${GITHUB_REF_NAME#v}"
+          cp target/${{ matrix.target }}/release/perseid .
+          tar -czf perseid-${{ matrix.target }}.tar.gz perseid LICENSE LICENSE-Meteroid LICENSE-Svix NOTICE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: perseid-${{ matrix.target }}
+          path: perseid-*.tar.gz
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: perseid-*
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          sha256sum perseid-*.tar.gz > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes perseid-*.tar.gz SHA256SUMS
