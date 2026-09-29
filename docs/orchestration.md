@@ -1,5 +1,7 @@
 # Project orchestration
 
+For a complete setup, see [From a private backend to automatically updated SDKs](getting-started.md).
+
 Perseid can manage the path from an exported OpenAPI spec to reviewed SDK updates
 and published packages. Generation and orchestration ship together; GitHub is an
 optional destination, with no Perseid account or service dependency.

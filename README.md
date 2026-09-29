@@ -10,6 +10,9 @@ parser and templates, not a complete implementation of every OpenAPI feature.
 
 ## Project orchestration
 
+Start with the [private-backend getting-started guide](docs/getting-started.md) for
+automatic SDK update PRs on every API change, including setup, credentials and CI.
+
 Perseid also synchronizes specs, generates SDKs across one or several repositories,
 opens coordinated GitHub update PRs, and prepares/publishes versioned releases.
 A root `perseid.toml` supplies the spec source and targets; language presets avoid

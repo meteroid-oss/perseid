@@ -1,0 +1,56 @@
+# Copy to the ORCHESTRATION REPOSITORY as .github/workflows/update-sdks.yml.
+# It owns sync, generation, formatting, SDK checks, and PR delivery.
+name: Update SDKs
+on:
+  repository_dispatch:
+    types: [openapi-updated]
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - perseid.toml
+      - perseid.releases.json
+      - .perseid/overrides.toml
+      - .perseid/templates/**
+      - .perseid/runtime/**
+      - .perseid/setup-ci.sh
+permissions:
+  contents: read
+concurrency:
+  group: perseid-sdk-updates
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perseid-sdk-tools
+      - name: Install pinned generator and formatters
+        run: bash .perseid/setup-ci.sh
+      - uses: actions/create-github-app-token@v3
+        id: sdk-token
+        with:
+          client-id: ${{ vars.PERSEID_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PERSEID_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          # Newline-separated names: backend, this repo, and any external SDK repos.
+          repositories: ${{ vars.PERSEID_REPOSITORIES }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Sync the private spec and open or update SDK PRs
+        env:
+          GH_TOKEN: ${{ steps.sdk-token.outputs.token }}
+        run: |
+          gh auth setup-git
+          perseid sync
+          perseid generate --pr
