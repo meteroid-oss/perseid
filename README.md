@@ -1,7 +1,7 @@
 <p align="center"><img src=".github/cover.svg" alt="perseid: OpenAPI in, idiomatic SDKs out" width="100%"></p>
 
 **GitHub-native SDK generation. No cloud, no subscription.**
-Change your OpenAPI spec, and idiomatic Rust, TypeScript, Python, Go and Java SDKs regenerate
+Change your OpenAPI spec, and idiomatic Rust, TypeScript, Python, Go, Java and C# SDKs regenerate
 and land as pull requests, in one repository or one per language. One static binary, running in
 your CI: an open-source alternative to Fern, Speakeasy and Stainless.
 
@@ -24,6 +24,11 @@ pets = petstore.pets.list_pets(limit=10, status=PetStatus.AVAILABLE)
 
 ```go
 pets, err := petstore.New("sk_live_...", nil).Pets().ListPets(ctx, &petstore.PetsListPetsOptions{Limit: petstore.Ptr[int32](10)})
+```
+
+```csharp
+using var petstore = new PetstoreClient("sk_live_...");
+var pets = await petstore.Pets.ListPetsAsync(new() { Limit = 10, Status = PetStatus.Available });
 ```
 
 It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients), and started as a fork of
@@ -136,6 +141,7 @@ package = "@acme/sdk"
 [python]
 [java]
 package = "com.acme.sdk"
+[csharp]                            # Acme namespace and NuGet package by default
 [go]
 module = "github.com/acme/acme-go"
 repo = "acme/acme-go"               # lives in its own repository
@@ -184,10 +190,11 @@ Or anywhere: `docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/work" ghcr.io/met
 
 ## Formatting
 
-Output goes through `rustfmt`, `biome`, `ruff`, `gofmt` and `google-java-format`, with your
-SDK's own formatter configuration. Locally, missing `biome` or `ruff` run pinned through `npx` or
-`uvx`. The GitHub Action reads the languages from `perseid.toml` and installs only the pinned
-native formatters they need: no JVM, Node or Python setup.
+Output goes through `rustfmt`, `biome`, `ruff`, `gofmt`, `google-java-format` and `csharpier`,
+with your SDK's own formatter configuration. Locally, missing `biome` or `ruff` run pinned through
+`npx` or `uvx`. The GitHub Action reads the languages from `perseid.toml` and installs only the
+pinned native formatters they need: no JVM, Node or Python setup (`csharpier` installs as a .NET
+tool).
 
 ## Status
 
@@ -200,7 +207,7 @@ Early, and honest about it:
   specs, not yet on hundreds of APIs. Unsupported constructs make generation fail instead of
   being skipped: an issue with the spec attached is the fastest way to get one supported.
 - Not there yet: pagination helpers, auth other than bearer tokens, streaming outside Rust,
-  publishing to package registries (keep your usual release workflow). C# is next.
+  publishing to package registries (keep your usual release workflow).
 
 ## License
 
