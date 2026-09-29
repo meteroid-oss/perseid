@@ -105,9 +105,17 @@ pub fn bootstrap(config: &Config, sdk: &Sdk, repo: &Path) -> Result<Vec<PathBuf>
         "typescript" => &["package.json"],
         "python" => &["pyproject.toml", "setup.py"],
         "go" => &["go.mod"],
+        "csharp" => &[],
         _ => &["build.gradle", "build.gradle.kts", "pom.xml"],
     };
-    if manifests.iter().any(|m| dir.join(m).exists()) {
+    let dotnet = || {
+        std::fs::read_dir(&dir).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|e| e.path().extension().is_some_and(|x| x == "sln"))
+        })
+    };
+    if manifests.iter().any(|m| dir.join(m).exists()) || (sdk.language == "csharp" && dotnet()) {
         return Ok(vec![]);
     }
     let mut created = scaffold(config, sdk, &dir)?;
@@ -147,6 +155,10 @@ fn package(config: &Config, sdk: &Sdk, dir: &Path, released: Option<String>) -> 
         "typescript" => json!({ "release-type": "node", "extra-files": ["src/request.ts"] }),
         "python" => json!({ "release-type": "python" }),
         "go" => json!({ "release-type": "go", "version-file": "version.go" }),
+        "csharp" => {
+            let name = context["package_name"].as_str().unwrap();
+            json!({ "release-type": "simple", "extra-files": [format!("{name}/{name}.csproj")] })
+        }
         _ => json!({
             "release-type": "simple",
             "extra-files": ["gradle.properties", format!("src/main/java/{java}/Version.java")],

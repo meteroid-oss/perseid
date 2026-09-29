@@ -10,7 +10,7 @@
 
   <PropertyGroup>
     <PackageId>@@PACKAGE_NAME@@</PackageId>
-    <Version>@@VERSION@@</Version>
+    <Version>@@VERSION@@</Version><!-- x-release-please-version -->
     <Authors>@@CLIENT_NAME@@</Authors>
     <Description>.NET SDK for the @@CLIENT_NAME@@ API.</Description>
     <PackageTags>@@USER_AGENT_PREFIX@@;api;sdk</PackageTags>

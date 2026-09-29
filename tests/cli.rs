@@ -451,3 +451,22 @@ fn init_no_release_skips_release_files() {
     assert!(!dir.path().join(".release-please-manifest.json").exists());
     assert!(!dir.path().join(".github").exists());
 }
+
+#[test]
+fn csharp_releases_bump_the_csproj_version() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        "tests/fixtures/petstore.yaml",
+        dir.path().join("openapi.yaml"),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "csharp"]);
+    assert!(ok, "{out}");
+    let release = json(&dir.path().join("release-please-config.json"));
+    assert_eq!(
+        release["packages"]["csharp"]["extra-files"][0],
+        "Petstore/Petstore.csproj"
+    );
+    let csproj = fs::read_to_string(dir.path().join("csharp/Petstore/Petstore.csproj")).unwrap();
+    assert!(csproj.contains("x-release-please-version"), "{csproj}");
+}

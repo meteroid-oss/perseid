@@ -70,3 +70,4 @@ jobs:
           maven-central-password: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           gpg-key: ${{ secrets.GPG_SECRET_KEY }}
           gpg-password: ${{ secrets.GPG_SECRET_KEY_PASSWORD }}
+          nuget-api-key: ${{ secrets.NUGET_API_KEY }}

@@ -32,6 +32,9 @@ inputs:
   gpg-password:
     description: Passphrase of the GPG key
     default: ''
+  nuget-api-key:
+    description: nuget.org API key
+    default: ''
 
 outputs:
   language:
@@ -48,6 +51,7 @@ runs:
         for pair in Cargo.toml:rust package.json:typescript pyproject.toml:python go.mod:go gradle.properties:java build.gradle:java; do
           if [ -f "${pair%%:*}" ]; then echo "language=${pair#*:}" >> "$GITHUB_OUTPUT"; exit 0; fi
         done
+        if compgen -G '*.sln' > /dev/null; then echo "language=csharp" >> "$GITHUB_OUTPUT"; exit 0; fi
         echo "::error::no package manifest in ${{ inputs.path }}"
         exit 1
 
@@ -155,3 +159,18 @@ runs:
         gradle=gradle
         [ -x gradlew ] && gradle=./gradlew
         $gradle publishAndReleaseToMavenCentral --no-configuration-cache
+
+    - if: steps.detect.outputs.language == 'csharp'
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+    - if: steps.detect.outputs.language == 'csharp'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        NUGET_API_KEY: ${{ inputs.nuget-api-key }}
+      run: |
+        dotnet pack -c Release -o "$RUNNER_TEMP/nupkg"
+        # --skip-duplicate makes re-running a release safe.
+        dotnet nuget push "$RUNNER_TEMP"/nupkg/*.nupkg --api-key "$NUGET_API_KEY" \
+          --source https://api.nuget.org/v3/index.json --skip-duplicate
