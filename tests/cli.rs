@@ -435,3 +435,19 @@ fn empty_sdk_repositories_get_a_skeleton_releasing_from_their_root() {
     assert_eq!(release["packages"]["."]["include-component-in-tag"], false);
     assert!(checkout.join(".github/workflows/sdk-release.yml").exists());
 }
+
+#[test]
+fn init_no_release_skips_release_files() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        "tests/fixtures/petstore.yaml",
+        dir.path().join("openapi.yaml"),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "rust", "--no-release"]);
+    assert!(ok, "{out}");
+    assert!(dir.path().join("rust/Cargo.toml").exists());
+    assert!(!dir.path().join("release-please-config.json").exists());
+    assert!(!dir.path().join(".release-please-manifest.json").exists());
+    assert!(!dir.path().join(".github").exists());
+}

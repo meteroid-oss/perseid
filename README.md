@@ -172,10 +172,10 @@ For pull request checks, pass `command: generate --check`.
 
 ## Releases
 
-Every SDK keeps its own version, in its own manifest. `perseid init` also scaffolds
-[release-please](https://github.com/googleapis/release-please) (`release-please-config.json`)
-and `.github/workflows/sdk-release.yml`, and gives SDK repositories without a manifest the same on
-their first pull request:
+Every SDK keeps its own version, in its own manifest, and is released on its own. `perseid init`
+also scaffolds [release-please](https://github.com/googleapis/release-please)
+(`release-please-config.json`) and `.github/workflows/sdk-release.yml` (skip them with
+`--no-release`), and gives SDK repositories without a manifest the same on their first pull request:
 
 1. The Action titles its pull request as a conventional commit sized by
    [oasdiff](https://github.com/oasdiff/oasdiff): `feat(api)!:` for breaking API changes,
@@ -187,9 +187,16 @@ their first pull request:
    npm and PyPI, a Central Portal token and GPG key for Maven Central, the module proxy for Go.
    Versions already on the registry are skipped, so re-running a failed job is safe.
 
-Set the `PERSEID_AUTO_RELEASE` variable to `true` and a `RELEASE_TOKEN` secret (a GitHub App or
-fine-grained token) to merge release PRs once their checks pass, and `auto-merge: true` on the
-Action for generated pull requests.
+`relax-enum-additions` (default `true`) counts enum values added to responses as minor changes.
+That is only safe while the SDKs accept unknown enum values; set it to `false` otherwise.
+
+`auto-merge: true` enables GitHub auto-merge on the generated pull requests and, through their
+`perseid:auto-release` label, on the release PRs they lead to. It needs:
+
+- "Allow auto-merge" in the repository settings;
+- required status checks, through branch protection or rulesets: without any, GitHub merges at once;
+- a GitHub App token as the Action's `token` and as the `RELEASE_TOKEN` secret, since merges made
+  with the default `GITHUB_TOKEN` trigger no workflow, so nothing would be released or published.
 
 ## Self-hosted runners and other CIs
 

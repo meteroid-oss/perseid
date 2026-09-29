@@ -26,6 +26,7 @@ pub struct Init {
     pub spec: Option<String>,
     pub name: Option<String>,
     pub base_url: Option<String>,
+    pub release: bool,
 }
 
 pub fn run(init: Init, root: &Path) -> Result<Vec<PathBuf>> {
@@ -90,7 +91,9 @@ pub fn run(init: Init, root: &Path) -> Result<Vec<PathBuf>> {
         created.extend(scaffold(&config, sdk, &dir)?);
         packages.push(package(&config, sdk, &dir, released));
     }
-    created.extend(release(&root, &packages)?);
+    if init.release {
+        created.extend(release(&root, &packages)?);
+    }
     Ok(created)
 }
 

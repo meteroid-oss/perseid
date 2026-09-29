@@ -36,6 +36,9 @@ enum Command {
         /// API base URL (default: first server of the spec).
         #[arg(long)]
         base_url: Option<String>,
+        /// Skip the release-please files and the SDK release workflow.
+        #[arg(long)]
+        no_release: bool,
     },
     /// Generate SDKs.
     Generate {
@@ -85,6 +88,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             spec,
             name,
             base_url,
+            no_release,
         } => {
             let root = cli.config.parent().map(|p| cwd.join(p)).unwrap_or(cwd);
             let created = init::run(
@@ -93,6 +97,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     spec,
                     name,
                     base_url,
+                    release: !no_release,
                 },
                 &root,
             )?;

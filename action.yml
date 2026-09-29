@@ -25,8 +25,15 @@ inputs:
   base-spec:
     description: Previous OpenAPI document compared by the `auto` bump (default, the spec file before the pushed commits)
     default: ''
+  relax-enum-additions:
+    description: >-
+      Count enum values added to responses as minor changes instead of breaking ones. Only right
+      for SDKs whose enums accept unknown values
+    default: 'true'
   auto-merge:
-    description: Enable auto-merge (squash) on the pull requests perseid opens
+    description: >-
+      Enable GitHub auto-merge (squash) on the SDK pull requests, and on the release PRs they lead to
+      (label `perseid:auto-release`, read by the scaffolded sdk-release.yml)
     default: 'false'
 
 runs:
@@ -103,6 +110,7 @@ runs:
         BUMP: ${{ inputs.bump }}
         BASE: ${{ inputs.base-spec }}
         BEFORE: ${{ github.event.before }}
+        RELAX: ${{ inputs.relax-enum-additions }}
         BIN: ${{ runner.temp }}/perseid
       run: |
         if [ "$BUMP" != auto ]; then echo "bump=$BUMP" >> "$GITHUB_OUTPUT"; exit 0; fi
@@ -118,11 +126,16 @@ runs:
         fi
         arch=$([ "$(uname -m)" = x86_64 ] && echo amd64 || echo arm64)
         curl -fsSL --retry 3 "https://github.com/oasdiff/oasdiff/releases/download/v1.32.1/oasdiff_1.32.1_linux_$arch.tar.gz" | tar -xz -C "$BIN" oasdiff
-        if ! oasdiff breaking --fail-on ERR "$BASE" "$spec" > /dev/null; then level=major
-        elif ! oasdiff changelog --fail-on INFO "$BASE" "$spec" > /dev/null; then level=minor
+        levels=()
+        if [ "$RELAX" = true ]; then
+          echo 'response-property-enum-value-added info' > "$RUNNER_TEMP/oasdiff-levels"
+          levels=(--severity-levels "$RUNNER_TEMP/oasdiff-levels")
+        fi
+        if ! oasdiff breaking --fail-on ERR "${levels[@]}" "$BASE" "$spec" > /dev/null; then level=major
+        elif ! oasdiff changelog --fail-on INFO "${levels[@]}" "$BASE" "$spec" > /dev/null; then level=minor
         else level="patch"; fi
         echo "bump=$level" >> "$GITHUB_OUTPUT"
-        { echo "### API changes"; echo; oasdiff changelog -f markdown "$BASE" "$spec"; } | head -c 50000 > "$RUNNER_TEMP/api-changes.md"
+        { echo "### API changes"; echo; oasdiff changelog -f markdown "${levels[@]}" "$BASE" "$spec"; } | head -c 50000 > "$RUNNER_TEMP/api-changes.md"
         echo "notes=$RUNNER_TEMP/api-changes.md" >> "$GITHUB_OUTPUT"
 
     - name: Run perseid
@@ -140,5 +153,11 @@ runs:
         git config user.email >/dev/null || git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
         perseid $COMMAND ${BUMP:+--bump "$BUMP"} ${NOTES:+--notes "$NOTES"} | tee "$RUNNER_TEMP/perseid.out"
         if [ "$AUTO_MERGE" = true ]; then
-          { grep -E '^https://' "$RUNNER_TEMP/perseid.out" || true; } | while read -r url; do gh pr merge "$url" --auto --squash; done
+          { grep -E '^https://' "$RUNNER_TEMP/perseid.out" || true; } | while read -r url; do
+            repo=$(echo "$url" | cut -d/ -f4-5)
+            gh label create perseid:auto-release --repo "$repo" --force --color 6f42c1 \
+              --description "Auto-merge the release PR this change leads to"
+            gh pr edit "$url" --add-label perseid:auto-release
+            gh pr merge "$url" --auto --squash
+          done
         fi

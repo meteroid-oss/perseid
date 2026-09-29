@@ -33,12 +33,17 @@ jobs:
         uses: googleapis/release-please-action@v5
         with:
           token: ${{ secrets.RELEASE_TOKEN || github.token }}
-      # Merging with the default token would not trigger this workflow again, hence RELEASE_TOKEN.
-      - if: vars.PERSEID_AUTO_RELEASE == 'true' && steps.release.outputs.pr
+      # Auto-merges the release PR when the pushed commit came from a PR labeled by the perseid
+      # Action's `auto-merge: true`. A merge made with the default token triggers no publish.
+      - if: steps.release.outputs.pr
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
           PR: ${{ fromJSON(steps.release.outputs.pr).number }}
-        run: gh pr merge "$PR" --auto --squash --repo "$GITHUB_REPOSITORY"
+        run: |
+          labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[].labels[].name] | join(" ")')
+          case " $labels " in
+            *" perseid:auto-release "*) gh pr merge "$PR" --auto --squash --repo "$GITHUB_REPOSITORY" ;;
+          esac
 
   publish:
     needs: release-please
