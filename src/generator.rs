@@ -195,7 +195,16 @@ impl Generator<'_> {
         }
 
         let file_path = match state.get_temp("summary_filename") {
-            Some(summary_filename) => self.output_dir.join(summary_filename.as_str().unwrap()),
+            Some(summary_filename) => {
+                let path = crate::project::io::relative(
+                    self.output_dir.as_std_path(),
+                    summary_filename
+                        .as_str()
+                        .context("Invalid summary filename")?,
+                )?;
+                Utf8PathBuf::from_path_buf(path)
+                    .map_err(|_| anyhow::anyhow!("Non-UTF8 summary path"))?
+            }
             None => self.output_dir.join(format!("{basename}.{tpl_file_ext}")),
         };
 

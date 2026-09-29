@@ -4,9 +4,11 @@ Perseid can manage the path from an exported OpenAPI spec to reviewed SDK update
 and published packages. Generation and orchestration ship together; GitHub is an
 optional destination, with no Perseid account or service dependency.
 
-The orchestration module uses Python 3.11's standard library. Git is needed for
-Git sources and external destinations. GitHub delivery also requires `gh` with
-appropriate repository access. SDK builds still need their language toolchains.
+The orchestrator and configured generation runner are Rust modules in the same
+binary. Templates and runtimes are embedded. Local file-source generation needs
+neither Python nor a source checkout. Git is needed for Git sources and external
+destinations; GitHub delivery also requires `gh` with repository access. SDK
+builds and configured hooks still need their language toolchains.
 
 ## A small configuration
 
@@ -41,19 +43,23 @@ orchestration does not scaffold a new publishable package.
 Run through the compiled CLI:
 
 ```sh
-perseid project sync
-perseid project plan
-perseid project generate --check
-perseid project check
-perseid project propose --dry-run
-perseid project propose
+perseid sync
+perseid plan
+perseid generate --check
+perseid check
+perseid generate --pr --dry-run
+perseid generate --pr
 ```
 
-Alternatively, run `python3 /path/to/perseid/project.py <command>`. The Rust CLI
-locates assets through `PERSEID_DIR` (default: its build checkout). Every command
-accepts `--config path/to/perseid.toml`; commands other than `sync` accept repeated
-`--target` filters. The existing low-level `perseid generate --template ...` and
-`generate.py --config codegen/codegen.toml` interfaces remain available.
+Every command accepts `--config path/to/perseid.toml`; commands other than `sync`
+accept repeated `--target` filters. `generate` operates locally by default;
+`generate --pr` generates, runs checks, and creates or updates GitHub PRs.
+`--dry-run` requires `--pr` and previews the delivery without external writes.
+
+The `perseid project ...` command namespace remains a compatibility alias. Its
+old `generate --pr` command aliases `generate --pr`. Existing `generate --template ...`
+and `perseid sdk --config codegen/codegen.toml` interfaces remain available.
+`generate.py` and `project.py` are optional Python wrappers around the native CLI.
 
 Commit `perseid.toml`, `perseid.lock.json`, the spec snapshot (default
 `spec/openapi.json`), generated SDK files, and `.perseid/`. Ignore
@@ -95,11 +101,17 @@ Repeated syncs with identical inputs do not rewrite files or add timestamps.
 `plan` reads the lock without fetching or running an exporter. Generation rejects
 stale or modified inputs rather than silently fetching a newer spec.
 
-The checksum verifies the installed source/assets, not the provenance of a custom
-prebuilt binary. Supply a matching binary or let the Python runner build it.
-Pin the Perseid checkout/image by commit or immutable image digest as well as the
-package version. Exporter dependencies and SDK toolchain versions remain your CI's
-responsibility; the lock does not make arbitrary hooks hermetic.
+The engine fingerprint is baked into the compiled binary from its Rust source,
+Cargo manifests, and embedded assets. A `PERSEID_DIR` development override adds the
+actual external asset contents to that fingerprint. Destination template/runtime
+override contents are separately hashed in each target receipt. Changing an
+override changes provenance even when the source spec lock is unchanged.
+
+The native lock uses schema version 2. Migrating a Python-created lock requires
+one `perseid sync` and regeneration; old locks are rejected with instructions.
+Pin the Perseid binary/image by commit or immutable image digest as well as its
+package version. Exporter dependencies and SDK toolchain versions remain your
+CI's responsibility; arbitrary hooks are not made hermetic by the lock.
 
 ## Layout and extension points
 
@@ -134,16 +146,18 @@ dependencies they need: staging does not copy dependency/build caches.
 
 `generate` stages every destination before applying changes. Failed rendering,
 formatting, or requested checks leave the SDK files untouched. `generate --check`
-runs checks before applying changes; `project check` regenerates and runs checks
+runs checks before applying changes; `check` regenerates and runs checks
 without applying anything, exiting nonzero on drift. Rendering receipts and
 ownership manifests are kept separately per target under `.perseid/`.
 
 Filesystem application is not a cross-repository transaction: an OS failure
 midway through copying can still leave partial changes, which a rerun repairs.
-Workspaces containing symlinks outside ignored dependency/build directories are
-currently rejected. Standard dependency/build directories are omitted from
+Local staging rejects symlinks outside ignored dependency/build directories.
+Fresh delivery checkouts reject all symlinks before any generation or control-file
+write, including dry-runs. Repository-relative target paths cannot contain `..`;
+normalized target directories must not overlap. Standard dependency/build directories are omitted from
 staging and drift comparison; do not place SDK sources inside `build`, `dist`,
-`target`, or the other ignored cache directories listed in `orchestration/common.py`.
+`target`, or the other ignored cache directories listed in `src/project/io.rs`.
 
 ## Multiple repositories and GitHub PRs
 
@@ -162,7 +176,7 @@ External workspaces are cloned into `.perseid-work/` and reused without resettin
 local changes. They do not automatically pull newer commits: remove a disposable
 workspace to get a fresh clone, after preserving any edits you want to keep.
 
-`propose` uses fresh clones of each destination's base branch and runs all
+`generate --pr` uses fresh clones of each destination's base branch and runs all
 configured checks before the first push. It creates or updates one PR per repo
 on `perseid/<project-name>/update`, using an explicit force-with-lease to reject
 concurrent changes. Repeated identical runs reuse the existing PR; an obsolete PR is closed when
@@ -170,7 +184,7 @@ the current desired output already matches the base branch. A commit
 without Perseid's marker at the tip of the reserved branch blocks replacement.
 Reserve that branch for automation and put manual changes in normal branches.
 
-Selecting one target for `propose` includes all targets in that repository, so
+Selecting one target for `generate --pr` includes all targets in that repository, so
 updating the stable PR cannot discard a sibling target's pending changes. The
 controller repository also gets a PR when its snapshot/lock/version metadata has
 changed, even if every SDK target lives elsewhere. Unrelated local working-tree
@@ -198,12 +212,12 @@ existing SDK. The default policy is `lockstep`. Set `policy = "independent"` to
 bump targets independently.
 
 ```sh
-perseid project version minor --notes changes.md
-perseid project generate --check
-perseid project propose
+perseid version minor --notes changes.md
+perseid generate --check
+perseid generate --pr
 # After the control metadata and SDK PRs have merged:
-perseid project release --dry-run
-perseid project release
+perseid release --dry-run
+perseid release
 ```
 
 `version` accepts `major`, `minor`, `patch`, or an explicit stable `X.Y.Z` greater
@@ -262,15 +276,26 @@ update cycle.
 See [`examples/orchestration-workflow.yml`](../examples/orchestration-workflow.yml)
 for a manual update workflow. It is stored outside `.github/workflows` so consumer
 repositories can adapt it. Install the toolchains needed by your targets and pin
-the Perseid ref before enabling it. Local `project check` is also suitable for an
+the Perseid ref before enabling it. Local `check` is also suitable for an
 ordinary pull-request CI job.
 
-The Docker image includes Python, Git, and `gh`, with `perseid` as its entry point:
+The Docker image includes Git and `gh`, and no Python interpreter, with `perseid` as its entry point:
 
 ```sh
-docker run --rm -v "$PWD:/workspace" -w /workspace perseid project plan
+docker run --rm -v "$PWD:/workspace" -w /workspace perseid plan
 ```
 
 It is a generation/orchestration image, not an all-language build environment.
 Provide SDK build toolchains in a derived image or run the CLI on a CI runner.
 Use `--entrypoint` to run a different command in the image.
+
+## CLI correspondence with Fern
+
+Fern's `generate` command combines generation and configured delivery;
+`github.mode: pull-request` selects PR delivery. Perseid uses an explicit
+`generate --pr` flag for that same action, with local output as the default.
+There is no separate new workflow to learn behind “propose.” See Fern's
+[configuration reference](https://buildwithfern.com/learn/sdks/reference/generators-yml)
+and [SDK commands](https://buildwithfern.com/learn/cli-api-reference/cli-reference/sdk-commands).
+Spec synchronization and package publication remain explicit commands so a local
+regeneration does not implicitly refresh upstream inputs or publish a package.

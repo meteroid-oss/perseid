@@ -23,17 +23,16 @@ jobs:
           # Replace with an immutable commit after the orchestration PR merges.
           ref: main
           path: perseid
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
       - uses: dtolnay/rust-toolchain@stable
       # Install Node/Java/Go/etc. here as required by your configured SDK checks.
-      - name: Synchronize and propose updates
+      - name: Build native Perseid
+        run: cargo build --locked --release --manifest-path perseid/Cargo.toml
+      - name: Synchronize and open SDK pull requests
         working-directory: project
         env:
           # Set PERSEID_TOKEN to an App token/PAT for cross-repository updates.
           GH_TOKEN: ${{ secrets.PERSEID_TOKEN || github.token }}
         run: |
           gh auth setup-git
-          python3 ../perseid/project.py sync
-          python3 ../perseid/project.py propose
+          ../perseid/target/release/perseid sync
+          ../perseid/target/release/perseid generate --pr

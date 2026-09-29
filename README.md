@@ -16,9 +16,9 @@ A root `perseid.toml` supplies the spec source and targets; language presets avo
 repeating template tasks. GitHub is optional for local generation.
 
 ```sh
-perseid project sync
-perseid project generate --check
-perseid project propose --dry-run
+perseid sync
+perseid generate --check
+perseid generate --pr --dry-run
 ```
 
 See the [orchestration guide](docs/orchestration.md) and
@@ -27,11 +27,11 @@ below remain supported, including all template/runtime extension points.
 
 ## Use from an SDK repository
 
-Check out Perseid and run it against an SDK repository's configuration:
+Run the native CLI against an SDK repository's existing configuration:
 
 ```sh
-python3 /path/to/perseid/generate.py --config /path/to/sdk/codegen/codegen.toml
-python3 /path/to/perseid/generate.py --config /path/to/sdk/codegen/codegen.toml --language rust --check
+perseid sdk --config /path/to/sdk/codegen/codegen.toml
+perseid sdk --config /path/to/sdk/codegen/codegen.toml --language rust --check
 ```
 
 By default it generates every configured language. Repeat `--language` to
@@ -44,11 +44,16 @@ Perseid's template directory. Commands run from the SDK root with `PERSEID_DIR` 
 Only explicitly configured languages run. `--no-format` skips formatters;
 `--local` remains accepted for compatibility and is the default behavior.
 
-Requires Python 3.11+, Rust 1.88+, and the SDK's formatting/build toolchains.
-The runner builds Perseid with `cargo build --locked`. `PERSEID_BIN` may point to a
-prebuilt binary, but the matching Perseid checkout is still needed for templates,
-runtime files and scripts. Both the binary and the SDK configuration must
-match the assets' package version.
+The CLI and configured runner are native Rust. A prebuilt binary needs no Python,
+Rust compiler, Docker daemon, or source checkout for local generation: all shared
+templates/runtimes and optional helper scripts are embedded. Building Perseid
+requires Rust 1.88+; SDK checks need their own language toolchains.
+
+`generate.py` and `project.py` remain optional compatibility wrappers. They use
+`PERSEID_BIN` or build the native binary with Cargo; they contain no generation or
+orchestration implementation. `PERSEID_DIR` can select an external asset directory
+for development; its contents participate in the input fingerprint. Configured
+Python formatting hooks still need Python, just like other consumer-selected tools.
 
 A Rust configuration looks like this (the SDK package and its dependencies
 must already exist):
@@ -224,7 +229,7 @@ transport tests through `check_commands`.
 
 The Rust binary is also usable directly (`cargo run -- --help`) for generation
 or IR debugging. `Dockerfile` retains the inherited binary/formatter image and
-ships the shared assets under `/opt/perseid`. The normal runner uses local tools;
+ships the shared assets under `/opt/perseid`. Generation runs in-process; configured hooks use local tools;
 container-based SDK checks need the SDK dependencies and language toolchains.
 The Docker image includes the `project` commands and uses `perseid` as its entry
 point; use `--entrypoint` for shell commands.

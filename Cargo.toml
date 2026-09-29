@@ -25,3 +25,14 @@ serde_json = "1.0.133"
 tempfile = "3.14.0"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
+
+# Native project configuration, reproducibility, and HTTP spec sources.
+toml = "0.8.23"
+toml_edit = "0.22.27"
+sha2 = "0.10.9"
+ureq = { version = "3.2.0", default-features = false, features = ["rustls"] }
+unicode-normalization = "0.1.25"
+regex = "1"
+
+[build-dependencies]
+sha2 = "0.10.9"

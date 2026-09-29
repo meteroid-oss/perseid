@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 
 use camino::Utf8Path;
-use fs_err as fs;
 use heck::{
     ToKebabCase, ToLowerCamelCase as _, ToShoutySnakeCase as _, ToSnakeCase as _,
     ToUpperCamelCase as _,
@@ -234,9 +233,28 @@ pub fn populate_env(
     env.add_function(
         // For java lib we need to create extra files.
         "generate_extra_file",
-        |state: &State, filename: Cow<'_, str>, file_contents: Cow<'_, str>| {
-            fs::write(&*filename, file_contents.as_bytes()).unwrap();
+        |state: &State,
+         filename: Cow<'_, str>,
+         file_contents: Cow<'_, str>|
+         -> Result<(), minijinja::Error> {
+            let result = (|| -> anyhow::Result<()> {
+                let output = state
+                    .lookup("output_dir")
+                    .ok_or_else(|| anyhow::anyhow!("Missing output directory"))?;
+                let root = std::path::Path::new(
+                    output
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("Invalid output directory"))?,
+                );
+                let relative = std::path::Path::new(&*filename).strip_prefix(root)?;
+                let destination = crate::project::io::relative(root, relative)?;
+                crate::project::io::write(&destination, file_contents.as_bytes())
+            })();
+            result.map_err(|error| {
+                minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, error.to_string())
+            })?;
             state.set_temp("extra_generated_file", filename.into());
+            Ok(())
         },
     );
 

@@ -7,6 +7,10 @@ FROM chef AS planner
 COPY Cargo.toml .
 COPY Cargo.lock .
 COPY src /app/src
+COPY build.rs /app/build.rs
+COPY templates /app/templates
+COPY runtime /app/runtime
+COPY scripts /app/scripts
 
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -19,6 +23,10 @@ RUN cargo chef cook --release --recipe-path recipe.json
 COPY Cargo.toml .
 COPY Cargo.lock .
 COPY src /app/src
+COPY build.rs /app/build.rs
+COPY templates /app/templates
+COPY runtime /app/runtime
+COPY scripts /app/scripts
 
 RUN cargo build --release --bin perseid
 
@@ -26,7 +34,7 @@ RUN cargo build --release --bin perseid
 # main image
 FROM alpine:3.21
 ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.cargo/bin"
-RUN apk add --no-cache openjdk21-jre-headless curl gcompat libgcc libstdc++ python3 bash git github-cli
+RUN apk add --no-cache openjdk21-jre-headless curl gcompat libgcc libstdc++ bash git github-cli
 
 # Java formatter
 RUN echo "25157797a0a972c2290b5bc71530c4f7ad646458025e3484412a6e5a9b8c9aa6 google-java-format-1.25.2-all-deps.jar" > google-java-format-1.25.2-all-deps.jar.sha256 && \
@@ -71,16 +79,6 @@ RUN apk add --no-cache binutils && \
 # perseid
 COPY --from=perseid-builder /app/target/release/perseid /usr/bin/
 
-# Shared assets are versioned with the generator binary.
-COPY templates /opt/perseid/templates
-COPY runtime /opt/perseid/runtime
-COPY scripts /opt/perseid/scripts
-COPY generate.py project.py Cargo.toml Cargo.lock /opt/perseid/
-COPY orchestration /opt/perseid/orchestration
-COPY src /opt/perseid/src
-
+# Templates/runtimes/helpers are embedded in the native binary.
 ENTRYPOINT ["perseid"]
-
-ENV PERSEID_BIN=/usr/bin/perseid
-ENV PERSEID_DIR=/opt/perseid
 ENV PERSEID_JAVA_FORMAT_JAR=/usr/bin/google-java-format-1.25.2-all-deps.jar
