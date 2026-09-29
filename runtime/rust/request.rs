@@ -236,7 +236,11 @@ impl Request {
         loop {
             let mut request = self.build_request(conf)?;
             let send = async {
-                request.body_mut().validate_empty().await.map_err(Error::generic)?;
+                request
+                    .body_mut()
+                    .validate_empty()
+                    .await
+                    .map_err(Error::generic)?;
                 let response = conf.client.request(request).await.map_err(Error::generic)?;
                 let status = response.status();
                 if !status.is_success() {
@@ -272,10 +276,9 @@ impl Request {
                 Ok(ResponseBody::Buffered(Some(bytes)))
             };
             let result = if let Some(timeout) = conf.timeout {
-                match tokio::time::timeout(timeout, send).await {
-                    Ok(result) => result,
-                    Err(error) => Err(Error::generic(error)),
-                }
+                tokio::time::timeout(timeout, send)
+                    .await
+                    .map_err(Error::generic)?
             } else {
                 send.await
             };

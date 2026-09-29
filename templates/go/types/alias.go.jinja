@@ -1,0 +1,15 @@
+{% from "types/macros.go.jinja" import go_type -%}
+{% set target = go_type(type.target) -%}
+package {{ sdk.package_name }}
+{% if "time.Time" in target and "json.RawMessage" in target %}
+import (
+	"encoding/json"
+	"time"
+)
+{% elif "time.Time" in target %}
+import "time"
+{% elif "json.RawMessage" in target %}
+import "encoding/json"
+{% endif %}
+{{ doc_comment }}
+type {{ type.name | to_upper_camel_case }} = {{ target }}

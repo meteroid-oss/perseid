@@ -59,6 +59,10 @@ impl Api {
         Ok(Self { resources, types })
     }
 
+    pub(crate) fn inline_aliases(&mut self) -> anyhow::Result<()> {
+        types::inline_aliases(&mut self.types, &mut self.resources)
+    }
+
     pub(crate) fn merge(mut self, other: Self) -> anyhow::Result<Self> {
         merge_resources(&mut self.resources, other.resources);
         merge_types(&mut self.types, other.types)?;

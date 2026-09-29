@@ -34,7 +34,7 @@ pub(crate) fn generate(
 }
 
 pub(crate) fn generate_with_output_context(
-    api: Api,
+    mut api: Api,
     tpl_name: String,
     output_dir: &Utf8Path,
     no_postprocess: bool,
@@ -61,6 +61,10 @@ pub(crate) fn generate_with_output_context(
         bail!(
             "multipart uploads, binary uploads and event streams currently require the Rust target"
         );
+    }
+
+    if tpl_file_ext != "rs" {
+        api.inline_aliases()?;
     }
 
     let tpl_kind = match tpl_base_name {

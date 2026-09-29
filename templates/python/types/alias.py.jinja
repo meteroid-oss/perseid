@@ -1,0 +1,12 @@
+{% from "types/macros.py.jinja" import py_type -%}
+import typing as t
+from datetime import datetime
+from decimal import Decimal
+
+{% for c in referenced_components -%}
+from .{{ c | to_snake_case }} import {{ c | to_upper_camel_case }}
+{% endfor %}
+{% if type.description is defined -%}
+# {{ type.description | replace("\n", "\n# ") }}
+{% endif -%}
+{{ type.name | to_upper_camel_case }} = {{ py_type(type.target) }}

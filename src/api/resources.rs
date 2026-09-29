@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use aide::openapi::{self, ReferenceOr};
-use anyhow::{Context as _, bail};
+use anyhow::{Context as _, bail, ensure};
 use heck::ToSnakeCase as _;
 use indexmap::IndexMap;
 use schemars::schema::{InstanceType, Schema};
@@ -118,6 +118,34 @@ pub(crate) struct Resource {
 }
 
 impl Resource {
+    pub(crate) fn inline_aliases(
+        &mut self,
+        aliases: &BTreeMap<String, FieldType>,
+    ) -> anyhow::Result<()> {
+        for operation in &mut self.operations {
+            let body_schemas = [
+                &operation.request_body_schema_name,
+                &operation.response_body_schema_name,
+            ];
+            for name in body_schemas.into_iter().flatten() {
+                ensure!(
+                    !aliases.contains_key(name),
+                    "alias schema `{name}` cannot be used as a request or response body"
+                );
+            }
+            for param in &mut operation.query_params {
+                param.r#type.inline_aliases(aliases);
+            }
+            for field in &mut operation.multipart_fields {
+                field.field.r#type.inline_aliases(aliases);
+            }
+        }
+        for resource in self.subresources.values_mut() {
+            resource.inline_aliases(aliases)?;
+        }
+        Ok(())
+    }
+
     fn new(name: String) -> Self {
         Self {
             name,
