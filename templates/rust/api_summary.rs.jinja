@@ -1,5 +1,11 @@
 // this file is @generated
 pub mod client;
+#[path = "../upload.rs"]
+pub mod upload;
+#[path = "../event_stream.rs"]
+mod event_stream;
+pub use upload::Upload;
+pub use event_stream::{EventStream, SseEvent};
 
 {% for resource in api.resources -%}
     mod {{ resource.name | to_snake_case }};
@@ -12,6 +18,9 @@ pub use self::{
         {{ resource.name | to_snake_case }}::{
             {{ resource_type_name }},
             {% for op in resource.operations -%}
+                {% if op.request_body_kind == "multipart" %}
+                    {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body,
+                {% endif %}
                 {% if op | has_query_or_header_params -%}
                     {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options,
                 {% endif -%}
@@ -44,7 +53,8 @@ pub struct {{ sdk.client_name }}Options {
     /// Timeout for HTTP requests.
     ///
     /// The timeout is applied from when the request starts connecting until
-    /// the response body has finished. If set to `None`, requests never time
+    /// the response body has finished. For SSE this covers opening the stream only.
+    /// If set to `None`, requests never time
     /// out.
     ///
     /// Default: 15 seconds.

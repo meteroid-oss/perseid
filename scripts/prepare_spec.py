@@ -51,15 +51,17 @@ def prepare(
             reason = None
             content = op.get("requestBody", {}).get("content", {})
             if any(
-                t not in {"application/json", "application/x-www-form-urlencoded"}
+                t
+                not in {
+                    "application/json",
+                    "application/x-www-form-urlencoded",
+                    "application/octet-stream",
+                    "multipart/form-data",
+                }
                 for t in content
             ):
                 reason = "Upload request body: " + ", ".join(content)
             responses = op.get("responses", {})
-            if any(
-                "text/event-stream" in r.get("content", {}) for r in responses.values()
-            ):
-                reason = "Server-sent event stream requires a streaming transport"
             successes = {c: r for c, r in responses.items() if c.startswith("2")}
             if not successes:
                 reason = "No documented 2xx response (redirect or protocol upgrade)"

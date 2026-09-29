@@ -1,0 +1,30 @@
+[global]
+perseid_version = "0.1.0"
+input_files = ["spec.json"]
+[global.prepare]
+exclude_unsupported = false
+[global.sdk]
+client_name = "Example"
+package_name = "example"
+rust_crate = "perseid_test_sdk"
+java_package = "com.example"
+default_base_url = "https://example.test"
+user_agent_prefix = "example"
+header_prefix = "example"
+patch_nullable = false
+version = "0.1.0"
+[rust]
+runtime_output_dir = "src"
+format_commands = ["cargo fmt"]
+[[rust.task]]
+template = "rust/api_resource.rs.jinja"
+output_dir = "src/api"
+[[rust.task]]
+template = "rust/api_summary.rs.jinja"
+output_dir = "src/api"
+[[rust.task]]
+template = "rust/component_type.rs.jinja"
+output_dir = "src/models"
+[[rust.task]]
+template = "rust/component_type_summary.rs.jinja"
+output_dir = "src/models"

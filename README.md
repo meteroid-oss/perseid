@@ -91,7 +91,7 @@ models as unset-or-null; consumers must choose it explicitly.
 
 The runtime sources are in `runtime/`; `runtime/manifest.json` lists exactly
 which files each language installs. Rust shares `request.rs`, `connector.rs`,
-and `configuration.rs`; Java shares its HTTP client/options and utility types;
+`configuration.rs`, `upload.rs`, and `event_stream.rs`; Java shares its HTTP client/options and utility types;
 TypeScript shares requests and datetime handling; Python shares API common code
 and serialization; Go shares requests, client configuration and utility types.
 Client entry points that enumerate API resources remain Jinja templates.
@@ -165,10 +165,12 @@ to the inherited 3.1 parser. It never rewrites the checked-in source spec. This
 is a generator-specific adapter, not a general standards-preserving OpenAPI
 version converter; OpenAPI 3.2 support is not claimed.
 
-Multipart uploads, raw-binary uploads and SSE responses are not implemented.
-With `exclude_unsupported = true`, preparation omits these operations and writes
-coverage and reasons to `codegen/coverage.json`. Without this opt-in it rejects
-them. Changing the spec version alone does not add transport support.
+The Rust target supports multipart uploads, raw-binary uploads, and SSE responses.
+Other targets reject specs containing these transports with an explicit error;
+they retain their existing JSON, form, and buffered-response behavior. Preparation
+preserves the supported transports and writes coverage to `codegen/coverage.json`.
+`exclude_unsupported = true` still permits omission of unsupported media types or
+operations without a documented success response.
 
 Scalar/array/map alias rendering is currently implemented in Rust; other
 languages reject unsupported alias kinds. Schema support varies by language,
@@ -180,6 +182,48 @@ partial regeneration, and deletes only stale tracked files with an `@generated`
 marker. `scripts/clean_generated.py <sdk-root>` removes those tracked outputs.
 Rendering failures leave previous SDK output intact; formatter/check failures
 leave the generated output available for inspection.
+
+## Rust uploads and event streams
+
+Raw `application/octet-stream` methods take `api::Upload`. Choose
+`Upload::bytes(bytes)` for a replayable buffer or
+`Upload::reader(reader, Some(length))` for a single-use Tokio `AsyncRead` reader.
+Passing `None` as the length enables streaming without a known content length.
+Reader bodies use bounded chunks and validate declared lengths while reading.
+Configure the client timeout for the expected upload duration.
+
+Multipart operations generate a `<Resource><Operation>Body` struct in `api`.
+Its binary fields take `Upload`; ordinary fields retain their schema types.
+Optional fields set to `None` are omitted. File parts support
+`.with_filename("data.csv").with_content_type("text/csv")`. Referenced binary
+schemas are supported. Multipart arrays and custom OpenAPI `encoding` entries
+are rejected explicitly in this first implementation.
+
+Retry policy depends on the body: buffers can be replayed, keeping the same
+idempotency key and multipart boundary. A request containing any reader is
+never automatically retried, including after a transport failure or timeout.
+Reopen the source and explicitly issue a new request when retrying such an upload.
+
+SSE operations return `api::EventStream`; consume it with
+`while let Some(event) = stream.next().await { ... }`. Each `SseEvent` exposes
+`event`, `data`, `id`, and the server's `retry` hint. Decoding handles UTF-8 split
+across chunks, LF/CRLF/CR line endings, multiline data and comments, following the
+[SSE event format](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation).
+
+The client timeout covers opening an SSE response, not the whole stream.
+Cancelling `next()` preserves partially decoded events; drop the stream to
+release the response, or wrap `next()` in a caller-chosen idle timeout.
+Each buffered event/line is limited to 1 MiB by default; change it with
+`with_max_event_bytes`. EOF discards incomplete events, and a parsing or transport
+error yields one error before terminating the stream. The SDK does not reconnect
+a live stream or automatically apply `Last-Event-ID`; callers control resumption
+using the API's declared request parameters and their own deduplication policy.
+
+The generated Rust API module declares the new shared runtime modules and
+reexports `Upload`, `EventStream` and `SseEvent`. No new SDK dependencies are
+required beyond the existing Hyper/Tokio stack. Consumers overriding the Rust
+API summary, request runtime, or configuration runtime should update those
+overrides together.
 
 ## Tooling and checks
 
@@ -202,7 +246,11 @@ python3 -m unittest discover -s tests -v
 
 Tests cover schema regressions, all five template families, runtime substitution,
 overrides, output paths, failed-render preservation, and partial regeneration
-using a synthetic API. SDK repositories should run their own compiler and
+using synthetic APIs. A generated Rust fixture is compiled and tested against
+local HTTP servers for streaming uploads, multipart encoding, retries, SSE parsing,
+cancellation and timeouts. Its dependencies are locked in
+`tests/fixtures/rust-sdk/Cargo.lock`. `PERSEID_TEST_TARGET` can override the fixture's
+Cargo cache directory. SDK repositories should also run their own compiler and
 transport tests through `check_commands`.
 
 The Rust binary is also usable directly (`cargo run -- --help`) for generation

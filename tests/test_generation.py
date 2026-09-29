@@ -171,6 +171,31 @@ patch_nullable = false
             self.assertTrue(
                 all((root / p).read_bytes() == content for p, content in before.items())
             )
+            # A new transport must fail clearly for targets without its runtime.
+            source = json.loads((root / "spec.json").read_text())
+            source["paths"]["/events"] = {
+                "get": {
+                    "tags": ["Widgets"],
+                    "operationId": "events",
+                    "responses": {
+                        "200": {
+                            "description": "events",
+                            "content": {"text/event-stream": {}},
+                        }
+                    },
+                }
+            }
+            (root / "spec.json").write_text(json.dumps(source))
+            for language in ("java", "typescript", "python", "go"):
+                failed = subprocess.run(
+                    command + ["--language", language], env=env, capture_output=True
+                )
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn(b"currently require the Rust target", failed.stderr)
+            self.assertTrue(
+                all((root / p).read_bytes() == content for p, content in before.items())
+            )
+
             # Failed rendering must not replace any already-generated SDK files.
             (root / "request.rs").write_text("// @generated\n@@MISSING@@\n")
             failed = subprocess.run(
