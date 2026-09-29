@@ -74,13 +74,22 @@ struct Filters {
     specified: Vec<String>,
 }
 
-fn load_api(inputs: &[Value], arguments: &[String]) -> Result<Api> {
+enum Input {
+    OpenApi(Value),
+    Ron(String),
+}
+
+fn load_api(inputs: &[Input], arguments: &[String]) -> Result<Api> {
     let filters = Filters::try_parse_from(
         std::iter::once("generate".to_owned()).chain(arguments.iter().cloned()),
     )?;
     let excluded = filters.excluded.into_iter().collect();
     let specified = filters.specified.into_iter().collect();
     inputs.iter().try_fold(Api::default(), |api, input| {
+        let input = match input {
+            Input::Ron(input) => return api.merge(ron::from_str(input)?),
+            Input::OpenApi(input) => input,
+        };
         let mut spec: aide::openapi::OpenApi = serde_json::from_str(&serde_json::to_string(input)?)
             .context("parsing OpenAPI input")?;
         let webhooks = get_webhooks(&spec);
@@ -219,20 +228,33 @@ pub fn generate(
         io::copy_files(&path, &templates, &io::files(&path, false)?)?;
     }
     let mut inputs = match options.inputs {
-        Some(v) => v.to_vec(),
+        Some(values) => values
+            .iter()
+            .cloned()
+            .map(Input::OpenApi)
+            .collect::<Vec<_>>(),
         None => config
             .global
             .input_files
             .iter()
-            .map(|p| io::read_json(&io::relative(root, p)?))
+            .map(|p| {
+                let path = io::relative(root, p)?;
+                match path.extension().and_then(|e| e.to_str()) {
+                    Some("ron") => Ok(Input::Ron(fs::read_to_string(path)?)),
+                    Some("json") => Ok(Input::OpenApi(io::read_json(&path)?)),
+                    _ => anyhow::bail!("Input file extension must be .json or .ron"),
+                }
+            })
             .collect::<Result<Vec<_>>>()?,
     };
     let mut coverage = None;
     if let Some(preparation) = &config.global.prepare {
         ensure!(inputs.len() == 1, "Spec preparation accepts one input");
-        let (input, report) =
-            prepare::prepare(inputs.remove(0), &config.global.input_files[0], preparation)?;
-        inputs.push(input);
+        let Input::OpenApi(input) = inputs.remove(0) else {
+            anyhow::bail!("Spec preparation requires OpenAPI JSON");
+        };
+        let (input, report) = prepare::prepare(input, &config.global.input_files[0], preparation)?;
+        inputs.push(Input::OpenApi(input));
         coverage = Some(report);
     }
     let (layer, error) = ExitOnErrorLayer::new();
@@ -263,12 +285,13 @@ pub fn generate(
                         .cloned()
                         .collect::<Vec<_>>();
                     let api = load_api(&inputs, &args)?;
-                    let produced = generator::generate(
+                    let produced = generator::generate_with_output_context(
                         api,
                         template.to_str().context("Non-UTF8 template path")?.into(),
                         Utf8Path::from_path(&output).context("Non-UTF8 output path")?,
                         true,
                         serde_json::to_value(&context)?,
+                        Some(&task.output_dir),
                     )?;
                     for path in produced {
                         let path = path
@@ -399,11 +422,9 @@ pub fn configured(
         .and_then(Path::parent)
         .context("Config belongs at codegen/codegen.toml")?;
     let config: Config = toml::from_str(&fs::read_to_string(&path)?)?;
-    let before = io::files(root, true)?;
-    let stage = io::stage(root)?;
     generate(
         &config,
-        stage.path(),
+        root,
         assets,
         GenerateOptions {
             languages,
@@ -415,12 +436,11 @@ pub fn configured(
             continue;
         }
         if !no_format {
-            io::hooks(&language.format_commands, stage.path(), &assets.env())?;
+            io::hooks(&language.format_commands, root, &assets.env())?;
         }
         if checks {
-            io::hooks(&language.check_commands, stage.path(), &assets.env())?;
+            io::hooks(&language.check_commands, root, &assets.env())?;
         }
     }
-    let changes = io::changes(&before, &io::files(stage.path(), true)?);
-    io::apply(root, stage.path(), &before, &changes)
+    Ok(())
 }

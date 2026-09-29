@@ -30,6 +30,17 @@ pub(crate) fn generate(
     no_postprocess: bool,
     sdk: serde_json::Value,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
+    generate_with_output_context(api, tpl_name, output_dir, no_postprocess, sdk, None)
+}
+
+pub(crate) fn generate_with_output_context(
+    api: Api,
+    tpl_name: String,
+    output_dir: &Utf8Path,
+    no_postprocess: bool,
+    sdk: serde_json::Value,
+    output_context: Option<&str>,
+) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let (name_without_jinja_suffix, tpl_path) = match tpl_name.strip_suffix(".jinja") {
         Some(basename) => (basename, &tpl_name),
         None => (tpl_name.as_str(), &format!("{tpl_name}.jinja")),
@@ -71,7 +82,11 @@ pub(crate) fn generate(
             .with_context(|| format!("invalid template path `{tpl_path}`"))?,
     )?;
     minijinja_env.add_global("sdk", minijinja::Value::from_serialize(sdk));
-    minijinja_env.add_global("output_dir", output_dir.as_str().to_owned());
+    minijinja_env.add_global(
+        "output_dir",
+        output_context.unwrap_or(output_dir.as_str()).to_owned(),
+    );
+    minijinja_env.add_global("_perseid_actual_output_dir", output_dir.as_str().to_owned());
     minijinja_env.add_template(tpl_path, &tpl_source)?;
     let tpl = minijinja_env.get_template(tpl_path)?;
 

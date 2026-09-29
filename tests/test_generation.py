@@ -152,6 +152,49 @@ patch_nullable = false
             self.assertTrue(
                 all((root / p).read_bytes() == content for p, content in before.items())
             )
+            # Legacy hooks must retain access to installed dependencies and .git.
+            biome = root / "typescript/node_modules/.bin/biome"
+            biome.parent.mkdir(parents=True)
+            biome.write_text("#!/bin/sh\necho called >> biome-calls\n")
+            biome.chmod(0o755)
+            (root / ".git").mkdir()
+            config = config.replace(
+                "[typescript]\n",
+                "[typescript]\nformat_commands = ['python3 \"$PERSEID_DIR/scripts/format_typescript.py\" typescript']\ncheck_commands = ['test -d .git && test -f typescript/node_modules/.bin/biome']\n",
+            )
+            (root / "codegen/codegen.toml").write_text(config)
+            subprocess.run(
+                [arg for arg in command if arg != "--no-format"]
+                + ["--language", "typescript", "--check"],
+                env=env,
+                check=True,
+                capture_output=True,
+            )
+            self.assertEqual(
+                (root / "typescript/biome-calls").read_text(), "called\ncalled\n"
+            )
+
+            # Exercise a supported RON fixture; the inherited query-schema IR
+            # serializer has a separate pre-existing roundtrip limitation.
+            ron_spec = json.loads((root / "spec.json").read_text())
+            ron_spec["paths"]["/widgets"]["get"].pop("parameters")
+            (root / "ron-source.json").write_text(json.dumps(ron_spec))
+            subprocess.run(
+                [str(binary), "debug", "--input-file", str(root / "ron-source.json")],
+                cwd=root,
+                env=env,
+                check=True,
+                capture_output=True,
+            )
+            ron_config = config.replace(
+                'input_files = ["spec.json"]', 'input_files = ["debug.ron"]'
+            )
+            (root / "codegen/codegen.toml").write_text(ron_config)
+            completed = subprocess.run(command, env=env, capture_output=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            (root / "codegen/codegen.toml").write_text(config)
+            subprocess.run(command, env=env, check=True, capture_output=True)
+
             # A new transport must fail clearly for targets without its runtime.
             source = json.loads((root / "spec.json").read_text())
             source["paths"]["/events"] = {

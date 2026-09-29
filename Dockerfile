@@ -16,9 +16,15 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS perseid-builder
 
+# A static musl binary keeps native HTTP/DNS working on Alpine; gcompat cannot
+# provide every resolver symbol used by a glibc-linked Rust HTTP client.
+RUN rustup target add x86_64-unknown-linux-musl && \
+    apt-get update && apt-get install -y --no-install-recommends musl-tools && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY --from=planner /app/recipe.json recipe.json
 
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
 
 COPY Cargo.toml .
 COPY Cargo.lock .
@@ -28,7 +34,7 @@ COPY templates /app/templates
 COPY runtime /app/runtime
 COPY scripts /app/scripts
 
-RUN cargo build --release --bin perseid
+RUN cargo build --release --target x86_64-unknown-linux-musl --bin perseid
 
 
 # main image
@@ -77,7 +83,7 @@ RUN apk add --no-cache binutils && \
     apk del binutils
 
 # perseid
-COPY --from=perseid-builder /app/target/release/perseid /usr/bin/
+COPY --from=perseid-builder /app/target/x86_64-unknown-linux-musl/release/perseid /usr/bin/
 
 # Templates/runtimes/helpers are embedded in the native binary.
 ENTRYPOINT ["perseid"]

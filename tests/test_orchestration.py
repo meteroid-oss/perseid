@@ -295,6 +295,27 @@ class LifecycleTests(unittest.TestCase):
         )
         self.assertIn("// B", (self.root / "go/request.go").read_text())
 
+    def test_relative_template_context_and_extra_file_confinement(self):
+        self.configure('[targets.rust]\ntemplate_overrides = "overrides"')
+        template = self.root / "overrides/rust/api_summary.rs.jinja"
+        template.parent.mkdir(parents=True)
+        template.write_text(
+            '// @generated\n// {{ output_dir }}\n{% set _ = generate_extra_file(output_dir ~ "/custom.rs", "// @generated\\n") %}'
+        )
+        self.cli("sync")
+        self.cli("generate")
+        self.assertIn(
+            "// rust/src/api", (self.root / "rust/src/api/mod.rs").read_text()
+        )
+        self.assertTrue((self.root / "rust/src/api/custom.rs").exists())
+        self.cli("check")
+        template.write_text(
+            '// @generated\n{% set _ = generate_extra_file(output_dir ~ "/../outside.rs", "// @generated\\n") %}'
+        )
+        before = self.snapshot()
+        self.cli("generate", success=False)
+        self.assertEqual(before, self.snapshot())
+
     def test_versions_and_package_metadata(self):
         self.configure(
             "[targets.typescript]\n[targets.rust]",

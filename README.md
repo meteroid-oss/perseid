@@ -202,8 +202,11 @@ The runner stages all rendering before replacing SDK files. It tracks ownership
 per language in `codegen/generated_files.json`, preserves other languages during
 partial regeneration, and deletes only stale tracked files with an `@generated`
 marker. `scripts/clean_generated.py <sdk-root>` removes those tracked outputs.
-Rendering failures leave previous SDK output intact; formatter/check failures
-leave the generated output available for inspection.
+Rendering failures leave previous SDK output intact. The legacy `sdk` command runs
+format/check hooks in the existing workspace after rendering, preserving installed
+dependencies and Git context. Its hook failures leave generated changes available
+for inspection. Project `generate --check` stages generation and hooks together
+before applying any destination changes.
 
 ## Rust uploads and event streams
 
@@ -277,7 +280,8 @@ transport tests through `check_commands`.
 
 The Rust binary is also usable directly (`cargo run -- --help`) for generation
 or IR debugging. `Dockerfile` retains the inherited binary/formatter image and
-ships the shared assets under `/opt/perseid`. Generation runs in-process; configured hooks use local tools;
+embeds the shared assets in the binary. Generation runs in-process; configured hooks
+use local tools;
 container-based SDK checks need the SDK dependencies and language toolchains.
 The Docker image includes the `project` commands and uses `perseid` as its entry
 point; use `--entrypoint` for shell commands.
