@@ -16,6 +16,8 @@ use tracing_subscriber::layer::{Context, Layer};
 
 use crate::api::Api;
 
+mod upgrade;
+
 #[derive(Copy, Clone, Default, Debug, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum IncludeMode {
@@ -32,7 +34,7 @@ pub struct Filters {
     pub specified: BTreeSet<String>,
 }
 
-/// Reads an OpenAPI document (JSON or YAML) from a path or an http(s) URL, as JSON text.
+/// Reads an OpenAPI document (JSON or YAML) from a path or an http(s) URL, as JSON text, upgraded to 3.1 when it is 3.0.
 pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
     let text = if location.starts_with("https://") || location.starts_with("http://") {
         ureq::get(location)
@@ -43,11 +45,13 @@ pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
         std::fs::read_to_string(root.join(location))
             .with_context(|| format!("reading {location}"))?
     };
-    if text.trim_start().starts_with('{') {
-        return Ok(text);
+    let mut value: Value = if text.trim_start().starts_with('{') {
+        serde_json::from_str(&text).map_err(anyhow::Error::from)
+    } else {
+        serde_norway::from_str(&text).map_err(anyhow::Error::from)
     }
-    let value: Value =
-        serde_norway::from_str(&text).with_context(|| format!("parsing {location}"))?;
+    .with_context(|| format!("parsing {location}"))?;
+    upgrade::to_3_1(&mut value).with_context(|| location.to_owned())?;
     Ok(serde_json::to_string(&value)?)
 }
 
