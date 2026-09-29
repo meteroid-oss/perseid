@@ -25,20 +25,18 @@ file = "../backend/apis/generated/openapi.json"
 default_base_url = "https://api.example.com"
 
 [targets.rust]
-format_commands = ["cargo fmt"]
 check_commands = ["cargo test --locked"]
 
 [targets.typescript]
-format_commands = ["npm ci", "npm run format"]
-check_commands = ["npm test"]
+check_commands = ["npm ci --ignore-scripts", "npm test"]
 ```
 
 This generates into `rust/` and `typescript/`. Target keys name languages by
 default; explicit `language = "rust"` allows a name such as `public-rust`.
 Names, namespace, user-agent, runtime locations, and template tasks have defaults.
-All five languages have presets. The corresponding package skeletons,
-dependencies, error adapters, and handwritten extensions must already exist;
-orchestration does not scaffold a new publishable package.
+All five languages have presets. Use `perseid init` to create package manifests
+and generic error adapters, or point generation at an existing SDK. Generation
+preserves SDK-owned support files.
 
 Run through the compiled CLI:
 
@@ -51,13 +49,13 @@ perseid generate --pr --dry-run
 perseid generate --pr
 ```
 
-Every command accepts `--config path/to/perseid.toml`; commands other than `sync`
+Lifecycle commands accept `--config path/to/perseid.toml`; commands other than `sync`
 accept repeated `--target` filters. `generate` operates locally by default;
 `generate --pr` generates, runs checks, and creates or updates GitHub PRs.
 `--dry-run` requires `--pr` and previews the delivery without external writes.
 
 The `perseid project ...` command namespace remains a compatibility alias. Its
-old `generate --pr` command aliases `generate --pr`. Existing `generate --template ...`
+hidden `propose` alias also invokes `generate --pr`. Existing `generate --template ...`
 and `perseid sdk --config codegen/codegen.toml` interfaces remain available.
 `generate.py` and `project.py` are optional Python wrappers around the native CLI.
 
@@ -204,38 +202,121 @@ other private repositories. Use Actions concurrency to serialize updates for a
 project. Multiple repositories cannot be updated atomically: rerun after a
 partial failure to reconcile them.
 
+## Bootstrapping and destination overrides
+
+Create one or several SDK packages with their runtime dependencies and customizable
+support files (entry points/errors). Init refuses file conflicts before writing:
+
+```sh
+perseid init --name acme --language rust --language typescript --spec openapi.json
+perseid sync
+perseid generate
+perseid generate --check
+```
+
+Use `--output PATH` for another repository. A dedicated destination managed by
+another controller can use:
+
+```sh
+perseid init --name acme --language go --directory . --sdk-only \
+  --go-module github.com/acme/go-sdk
+```
+
+`--sdk-only` omits `perseid.toml`; the controller supplies source/repository settings.
+Go requires the intended import path explicitly. Java scaffolding uses Gradle
+without downloading a wrapper; install Gradle or add your usual wrapper. The
+TypeScript check installs dependencies in staging and creates `package-lock.json`
+on its first run, then uses `npm ci` on later runs. Commit that lockfile. Python's
+starter check verifies syntax; extend it with your SDK tests. Checks require the
+language toolchains; init and plain generation do not install build dependencies.
+
+Every destination can own a discovered `.perseid/overrides.toml`:
+
+```toml
+[targets.rust]
+template_overrides = ".perseid/templates"
+check_commands = ["cargo test --locked"]
+
+[targets.rust.runtime_overrides]
+"request.rs" = ".perseid/runtime/request.rs"
+
+[targets.rust.sdk]
+client_name = "Acme"
+```
+
+Use controller target names as keys (the default names are the languages).
+A template at `.perseid/templates/rust/api_resource.rs.jinja` replaces that
+shared template; absent files fall back to embedded defaults. SDK settings and
+runtime mappings merge with controller values; command lists and template roots
+replace them. Local overrides can also supply `read_version` / `version_commands`.
+Source, destination paths/repositories, release policy, and publication commands
+stay in the controller. Override contents are hashed into generation receipts;
+changes are reviewed in the destination repository and never overwritten by init
+or regeneration. All paths remain repository-relative and reject symlinks/traversal.
+
 ## Versioning and releases
 
 API `info.version`, Perseid's own version, and SDK package versions are separate.
-Versions start at `0.1.0`; configure `[release].initial_version` to migrate an
-existing SDK. The default policy is `lockstep`. Set `policy = "independent"` to
-bump targets independently.
+**Independent versioning is the default. Each SDK repository owns its version.**
+Rust reads `Cargo.toml`, Python reads PEP 621 `pyproject.toml`, and TypeScript reads
+`package.json`. Go reads stable release tags matching its configured tag pattern.
+Existing Java/custom layouts supply a `read_version` command; `init` configures
+Java's `version.txt` automatically. A package with no manifest or release tag starts
+at `[release].initial_version` (default `0.1.0`).
 
 ```sh
-perseid version minor --notes changes.md
-perseid generate --check
+perseid version minor --target rust --notes changes.md
+perseid version 2.3.0 --target typescript --notes changes.md
 perseid generate --pr
-# After the control metadata and SDK PRs have merged:
+# After the controller and SDK PRs have merged:
 perseid release --dry-run
 perseid release
 ```
 
-`version` accepts `major`, `minor`, `patch`, or an explicit stable `X.Y.Z` greater
-than the current version. It writes `perseid.versions.json` with versions and
-reviewable release notes. Generation applies those versions to SDK context and
-package metadata. Lockstep requires every target when preparing versions;
-independent mode allows `--target`. Automatic semantic version suggestions and
-prerelease versions are deliberately not part of this first implementation.
+`version` accepts `major`, `minor`, `patch`, or an explicit stable `X.Y.Z`. For
+independent targets it records a **bump request and notes**, not a current version,
+in `perseid.releases.json`. Generation resolves the request against the destination
+checkout and stores the resolved proposal in that SDK's `.perseid/releases/NAME.json`.
+The ID and destination request history prevent the same request from bumping again
+after regeneration or merge; rerunning a superseded generation request fails
+clearly. Historical release requests can still resume their existing immutable tag.
+A new `version` invocation creates a new request. Explicit versions must exceed
+the destination's version when first resolved.
 
-Default stamping supports Rust's literal `[package].version`, Python's PEP 621
-`[project].version`, and TypeScript's `package.json`. Go uses release tags.
-Java requires `version_commands` because Maven/Gradle layouts differ. For custom
-metadata, workspace-inherited versions, or package lockfiles, `version_commands`
-replaces the default stamping and runs with `PERSEID_VERSION` set:
+You can edit a proposed package version and run generation again before merging;
+Go proposals can be edited in `.perseid/releases/NAME.json`. Commit the resulting
+metadata and generated changes together. Release checks reject inconsistent
+metadata. A manual SDK release outside Perseid needs **no controller version
+update**: the next fresh destination checkout supplies the new manifest/tag.
+`generate --pr` always uses fresh clones; local external generation reuses its
+`.perseid-work` checkout, which can be updated with ordinary Git commands.
+
+For intentionally synchronized SDKs, set `[release] policy = "lockstep"`.
+This opt-in mode retains the shared `perseid.versions.json` and requires all
+targets when preparing a version. Automatic compatibility analysis, semantic
+bump recommendations, and prerelease versions are not implemented. Bump requests
+are explicit, including the desired major/minor policy before `1.0`.
+
+Default stamping supports literal Cargo/PEP 621 versions and `package.json`,
+including the SDK entry in a local `Cargo.lock` and npm lockfiles. Dependency
+versions are preserved. Java/custom metadata and other workspace/lockfile layouts
+can use `version_commands` instead.
+Hooks run in the target directory; stamping receives `PERSEID_VERSION`.
+For example, a destination's `.perseid/overrides.toml` can contain:
+
+```toml
+[targets.typescript]
+version_commands = ["npm version --no-git-tag-version --allow-same-version \"$PERSEID_VERSION\""]
+
+[targets.java]
+read_version = "cat version.txt"
+version_commands = ["printf '%s\\n' \"$PERSEID_VERSION\" > version.txt"]
+```
+
+Publish policy remains in the controller:
 
 ```toml
 [targets.typescript.release]
-version_commands = ["npm version --no-git-tag-version --allow-same-version \"$PERSEID_VERSION\""]
 publish = "npm publish"
 is_published = "./scripts/is-published.sh"
 tag = "typescript/v{version}"
@@ -255,9 +336,12 @@ distinguish a missing version from an unavailable registry.
 `release` requires committed control inputs. It checks out destination code,
 regenerates and runs checks, and rejects unmerged/drifting changes before doing
 any publication. Each target gets an immutable tag (default
-`{target}/v{version}`); tags in one repository must be distinct. Go module users
-should configure `tag = "v{version}"` for a root module or the appropriate
-subdirectory-prefixed tag.
+`{target}/v{version}`); tags in one repository must be distinct. Go defaults to
+`v{version}` for a root module and `DIRECTORY/v{version}` for a subdirectory.
+An override is available through `release.tag`. Go major versions 2+ require the
+matching `/vMAJOR` module path in `go.mod`; update it before generating the major
+release. A new release must exceed existing matching stable tags; an existing
+tag can only be resumed at its original commit.
 
 The tag is pushed before registry publication. If publication or GitHub release
 creation fails, rerunning uses the tagged commit and registry probe to resume,
@@ -279,15 +363,43 @@ repositories can adapt it. Install the toolchains needed by your targets and pin
 the Perseid ref before enabling it. Local `check` is also suitable for an
 ordinary pull-request CI job.
 
-The Docker image includes Git and `gh`, and no Python interpreter, with `perseid` as its entry point:
+The same native CLI can use formatters installed on `PATH` or bundled in Docker.
+Only tools for selected languages are required. No Python formatter helper scripts
+or per-target formatting hooks are necessary:
+
+| Language | Executable on PATH | Bundled version |
+| --- | --- | --- |
+| Rust | `rustfmt` | nightly-2025-02-27 |
+| Java | `google-java-format` | 1.25.2 (Java 21 runtime) |
+| TypeScript | `biome` | 2.1.4 |
+| Python | `ruff` | 0.14.10 |
+| Go | `gofmt` | Go 1.24.7 |
+
+Perseid formats only files in its generated ownership manifest. It does not
+follow Rust modules into handwritten files. Rust defaults to edition 2021;
+configure a custom command for another edition. Native users should pin the
+same formatter versions for reproducible output. Missing tools produce an
+installation hint; `--no-format` explicitly skips formatting. An explicit
+`format_commands` list replaces the built-in adapter (`[]` disables formatting).
+These defaults apply to both `generate` and legacy `sdk` commands.
 
 ```sh
-docker run --rm -v "$PWD:/workspace" -w /workspace perseid plan
+# Native: install the selected formatters in an earlier CI step.
+perseid sync
+perseid generate
+
+# Container: use a locally built or published, pinned image.
+docker build -t perseid .
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace perseid sync
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/workspace" -w /workspace perseid generate
 ```
 
-It is a generation/orchestration image, not an all-language build environment.
-Provide SDK build toolchains in a derived image or run the CLI on a CI runner.
-Use `--entrypoint` to run a different command in the image.
+The image also includes Git and `gh`; the native binary embeds templates and
+runtimes. It needs no Python interpreter, Node, or Cargo to generate and format.
+The bundled image currently targets Linux x86_64. `--check` / `--pr` additionally
+run configured SDK checks, which require their language build tools/dependencies.
+Use a CI runner or derived image for those checks and package publication. Provide
+GitHub credentials/configuration when using delivery commands in Docker.
 
 ## CLI correspondence with Fern
 

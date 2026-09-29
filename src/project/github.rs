@@ -44,7 +44,18 @@ pub fn generate_pr(
         if repository == "." {
             copy_control(project, &root)?;
         }
-        ws::render(project, &root, &selected, &lock, assets, false, true)?;
+        ws::render(
+            project,
+            &root,
+            &selected,
+            &lock,
+            assets,
+            ws::RenderOptions {
+                no_format: false,
+                checks: true,
+                version_root: &root,
+            },
+        )?;
         let paths = ws::tracked_changes(&root)?;
         let title = format!("Update {} SDKs", project.config.name);
         let body = format!(

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -103,6 +104,19 @@ class LifecycleTests(unittest.TestCase):
         self.git(root, "commit", "--quiet", "-m", message)
 
     def configure(self, targets, source='file = "source.json"', extra=""):
+        names = set(re.findall(r"\[targets\.([a-z_]+)", targets))
+        for name in names:
+            header = f"[targets.{name}]"
+            if header not in targets:
+                targets = header + "\nformat_commands = []\n" + targets
+            else:
+                start = targets.index(header) + len(header)
+                end = targets.find("[", start)
+                section = targets[start : end if end >= 0 else len(targets)]
+                if "format_commands" not in section:
+                    targets = (
+                        targets[:start] + "\nformat_commands = []" + targets[start:]
+                    )
         self.config.write_text(
             'name = "example"\nperseid_version = "0.1.0"\n'
             + extra
@@ -336,10 +350,21 @@ class LifecycleTests(unittest.TestCase):
         (self.root / "rust/Cargo.toml").write_text(
             '[package]\nname="example"\nversion = "0.1.0" # keep this\n'
         )
+        (self.root / "rust/Cargo.lock").write_text(
+            'version = 4\n[[package]]\nname = "example"\nversion = "0.1.0"\n[[package]]\nname = "dep"\nversion = "1.0.0"\nsource = "registry+https://example.test"\n'
+        )
+        (self.root / "typescript/package-lock.json").write_text(
+            '{"version":"0.1.0","lockfileVersion":3,"packages":{"":{"name":"example","version":"0.1.0"},"node_modules/dep":{"version":"1.0.0"}}}'
+        )
         self.cli("generate")
         self.assertIn(
             'version = "0.2.0" # keep this', (self.root / "rust/Cargo.toml").read_text()
         )
+        self.assertIn('version = "0.2.0"', (self.root / "rust/Cargo.lock").read_text())
+        lock = json.loads((self.root / "typescript/package-lock.json").read_text())
+        self.assertEqual(lock["version"], "0.2.0")
+        self.assertEqual(lock["packages"][""]["version"], "0.2.0")
+        self.assertEqual(lock["packages"]["node_modules/dep"]["version"], "1.0.0")
         self.assertEqual(
             json.loads((self.root / "typescript/package.json").read_text())["version"],
             "0.2.0",
@@ -353,7 +378,10 @@ class LifecycleTests(unittest.TestCase):
         self.cli("sync")
         (self.root / "notes.md").write_text("Fix")
         state = self.result("version", "patch", "--target", "go", "--notes", "notes.md")
-        self.assertEqual(state["versions"], {"go": "0.1.1", "python": "0.1.0"})
+        self.assertEqual(list(state["requests"]), ["go"])
+        self.assertEqual(state["requests"]["go"]["bump"], "patch")
+        self.cli("generate")
+        self.assertEqual(self.result("plan")["targets"][0]["version"], "0.1.1")
 
     def test_pr_dry_run_idempotence_and_grouping(self):
         self.configure("[targets.go]\n[targets.python]")
@@ -447,9 +475,232 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse((self.root / "go/obsolete.go").exists())
         self.assertTrue((self.root / "go/extension.go").exists())
 
+    def test_builtin_formatters_use_only_owned_files_and_selected_languages(self):
+        self.configure(
+            "[targets.go]\n[targets.rust]\n[targets.java]\n[targets.python]\n[targets.typescript]"
+        )
+        self.config.write_text(
+            self.config.read_text().replace("format_commands = []", "")
+        )
+        folder = self.home / "formatters"
+        folder.mkdir()
+        log = self.home / "formatters.jsonl"
+        import sys
+
+        for tool in ("gofmt", "rustfmt", "google-java-format", "ruff", "biome"):
+            path = folder / tool
+            path.write_text(
+                f"#!{sys.executable}\nimport json,sys\nwith open({str(log)!r}, 'a') as f: f.write(json.dumps(sys.argv)+'\\n')\n"
+            )
+            path.chmod(0o755)
+        self.env["PATH"] = str(folder)
+        self.cli("sync")
+        self.cli("generate")
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual(
+            {Path(c[0]).name for c in calls},
+            {"gofmt", "rustfmt", "google-java-format", "ruff", "biome"},
+        )
+        handwritten = self.root / "go/custom.go"
+        handwritten.write_text("package example\n")
+        log.write_text("")
+        self.cli("generate", "--target", "go")
+        calls = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual({Path(c[0]).name for c in calls}, {"gofmt"})
+        self.assertFalse(any("custom.go" in arg for call in calls for arg in call))
+        self.env["PATH"] = str(self.home / "empty")
+        error = self.cli("generate", "--target", "go", success=False).stderr
+        self.assertIn("Install gofmt on PATH", error)
+        self.cli("generate", "--target", "go", "--no-format")
+
+    def test_destination_manifest_is_authoritative_and_bumps_do_not_repeat(self):
+        self.configure("[targets.typescript]")
+        directory = self.root / "typescript"
+        directory.mkdir()
+        manifest = directory / "package.json"
+        manifest.write_text('{"name":"example","version":"1.4.0"}')
+        self.cli("sync")
+        self.cli("generate")
+        self.assertEqual(self.result("plan")["targets"][0]["version"], "1.4.0")
+        (self.root / "notes.md").write_text("Fix")
+        self.cli("version", "patch", "--target", "typescript", "--notes", "notes.md")
+        intent = (self.root / "perseid.releases.json").read_bytes()
+        self.assertNotIn("versions", json.loads(intent))
+        self.assertFalse((self.root / "perseid.versions.json").exists())
+        self.cli("generate")
+        self.cli("generate")
+        self.assertEqual(json.loads(manifest.read_text())["version"], "1.4.1")
+        # A manual release is adopted without editing controller metadata.
+        manifest.write_text('{"name":"example","version":"1.5.0"}')
+        self.cli("generate")
+        self.cli("check")
+        self.assertEqual(json.loads(manifest.read_text())["version"], "1.5.0")
+        self.assertEqual(intent, (self.root / "perseid.releases.json").read_bytes())
+        self.cli("version", "minor", "--target", "typescript", "--notes", "notes.md")
+        self.cli("generate")
+        self.assertEqual(json.loads(manifest.read_text())["version"], "1.6.0")
+        latest = (self.root / "perseid.releases.json").read_bytes()
+        (self.root / "perseid.releases.json").write_bytes(intent)
+        self.assertIn("stale", self.cli("generate", success=False).stderr)
+        self.assertEqual(json.loads(manifest.read_text())["version"], "1.6.0")
+        (self.root / "perseid.releases.json").write_bytes(latest)
+        self.cli("version", "1.2.0", "--target", "typescript", "--notes", "notes.md")
+        self.assertIn("greater than", self.cli("generate", success=False).stderr)
+
+    def test_go_versions_follow_manual_release_tags(self):
+        self.cli("sync")
+        self.init_git(self.root)
+        self.commit(self.root)
+        self.git(self.root, "tag", "go/v1.2.0")
+        self.git(self.root, "tag", "unrelated/v9.0.0")
+        self.assertEqual(self.result("plan")["targets"][0]["version"], "1.2.0")
+        (self.root / "notes.md").write_text("Fix")
+        self.cli("version", "patch", "--notes", "notes.md")
+        self.cli("generate")
+        self.cli("check")
+        self.assertEqual(self.result("plan")["targets"][0]["version"], "1.2.1")
+        self.commit(self.root)
+        self.git(self.root, "tag", "go/v1.3.0")
+        self.cli("generate")
+        self.assertEqual(self.result("plan")["targets"][0]["version"], "1.3.0")
+        self.cli("version", "minor", "--notes", "notes.md")
+        self.cli("generate")
+        self.assertEqual(self.result("plan")["targets"][0]["version"], "1.4.0")
+
+    def test_external_manual_release_is_used_by_fresh_pr_generation(self):
+        sdk = self.home / "sdk"
+        sdk.mkdir()
+        (sdk / "package.json").write_text('{"name":"example","version":"2.1.0"}')
+        remote = self.remote(sdk, "sdk")
+        self.configure(
+            '[targets.typescript]\nrepository = "testing/sdk"\ndirectory = "."'
+        )
+        self.cli("sync")
+        self.remote()
+        self.fake_gh()
+        (self.root / "notes.md").write_text("API addition")
+        self.cli("version", "minor", "--target", "typescript", "--notes", "notes.md")
+        self.cli("generate", "--pr")
+        branch = "perseid/example/update"
+        manifest = json.loads(self.git(remote, "show", f"{branch}:package.json"))
+        self.assertEqual(manifest["version"], "2.2.0")
+        self.git(sdk, "fetch", "--quiet", "origin", branch)
+        self.git(sdk, "merge", "--quiet", "--ff-only", "FETCH_HEAD")
+        (sdk / "package.json").write_text('{"name":"example","version":"2.3.0"}')
+        self.commit(sdk, "manual SDK release")
+        self.git(sdk, "tag", "typescript/v2.3.0")
+        self.git(sdk, "push", "--quiet", "origin", "main", "--tags")
+        self.cli("generate", "--pr")
+        self.assertEqual(
+            json.loads(self.git(remote, "show", f"{branch}:package.json"))["version"],
+            "2.3.0",
+        )
+        self.cli("version", "patch", "--target", "typescript", "--notes", "notes.md")
+        self.cli("generate", "--pr")
+        self.assertEqual(
+            json.loads(self.git(remote, "show", f"{branch}:package.json"))["version"],
+            "2.3.1",
+        )
+
+    def test_destination_overrides_are_discovered_and_hashed(self):
+        self.configure("[targets.go]")
+        folder = self.root / ".perseid"
+        folder.mkdir()
+        overrides = folder / "overrides.toml"
+        overrides.write_text(
+            '[targets.go]\nformat_commands = ["printf formatted > format-marker"]\n[targets.go.sdk]\nclient_name = "Custom"\n[targets.go.runtime_overrides]\n"request.go" = ".perseid/custom.go"\n'
+        )
+        (folder / "custom.go").write_text(
+            "// @generated\npackage example\n// custom runtime\n"
+        )
+        self.cli("sync")
+        self.cli("generate")
+        self.assertEqual((self.root / "go/format-marker").read_text(), "formatted")
+        self.assertIn("custom runtime", (self.root / "go/request.go").read_text())
+        receipt = self.root / ".perseid/receipts/go.json"
+        before = receipt.read_bytes()
+        overrides.write_text(
+            overrides.read_text().replace(
+                'client_name = "Custom"', 'client_name = "Another"'
+            )
+        )
+        self.cli("generate")
+        self.assertNotEqual(before, receipt.read_bytes())
+        overrides.write_text('[targets.go]\ndirectory = "outside"\n')
+        self.cli("generate", success=False)
+
+    def test_init_all_languages_and_conflicts(self):
+        destination = self.home / "new-sdk"
+        args = [
+            "init",
+            "--name",
+            "example",
+            "--output",
+            str(destination),
+            "--go-module",
+            "github.com/testing/example/go",
+        ]
+        for language in ("rust", "java", "typescript", "python", "go"):
+            args += ["--language", language]
+        self.cli(*args)
+        for path in (
+            "rust/Cargo.toml",
+            "rust/src/error.rs",
+            "typescript/src/util.ts",
+            "python/example/errors.py",
+            "java/build.gradle",
+            "go/errors.go",
+            ".perseid/overrides.toml",
+            "perseid.toml",
+        ):
+            self.assertTrue((destination / path).exists(), path)
+        (destination / "openapi.json").write_text(json.dumps(SPEC))
+        self.cli("sync", "--config", str(destination / "perseid.toml"))
+        self.cli(
+            "generate", "--no-format", "--config", str(destination / "perseid.toml")
+        )
+        self.cli(
+            "generate", "--no-format", "--config", str(destination / "perseid.toml")
+        )
+        self.assertEqual((destination / "java/version.txt").read_bytes(), b"0.1.0\n")
+        before = {str(p): p.read_bytes() for p in destination.rglob("*") if p.is_file()}
+        self.assertIn("overwrite", self.cli(*args, success=False).stderr)
+        self.assertEqual(
+            before,
+            {str(p): p.read_bytes() for p in destination.rglob("*") if p.is_file()},
+        )
+        self.cli(
+            "init",
+            "--name",
+            "other",
+            "--language",
+            "go",
+            "--output",
+            str(self.home / "missing-module"),
+            success=False,
+        )
+        self.assertFalse((self.home / "missing-module").exists())
+        dedicated = self.home / "go-sdk"
+        self.cli(
+            "init",
+            "--name",
+            "example",
+            "--language",
+            "go",
+            "--directory",
+            ".",
+            "--sdk-only",
+            "--go-module",
+            "github.com/testing/go-sdk",
+            "--output",
+            str(dedicated),
+        )
+        self.assertTrue((dedicated / "go.mod").exists())
+        self.assertFalse((dedicated / "perseid.toml").exists())
+
     def prepare_release(self, probe, publish):
         self.configure(
-            "[targets.go.release]\npublish = "
+            "[targets.go]\nformat_commands = []\n[targets.go.release]\npublish = "
             + json.dumps(publish)
             + "\nis_published = "
             + json.dumps(probe)
@@ -487,6 +738,37 @@ class LifecycleTests(unittest.TestCase):
         self.assertNotEqual(
             self.git(remote, "rev-parse", "main"),
             self.git(remote, "rev-parse", "go/v0.1.1"),
+        )
+
+    def test_old_release_recovers_after_new_request_and_manual_release(self):
+        registry = self.home / "registry"
+        count = self.home / "publish-count"
+        self.prepare_release(
+            f'test -f "{registry}"', f'touch "{registry}"; echo published >> "{count}"'
+        )
+        controller_a = self.git(self.root, "rev-parse", "HEAD")
+        self.cli(
+            "release", env={**self.env, "FAKE_GH_FAIL_RELEASE": "1"}, success=False
+        )
+        self.git(self.root, "fetch", "--quiet", "origin", "--tags")
+        # A manual SDK release must not overwrite A's immutable release identity.
+        (self.root / "README.md").write_text("manual release")
+        self.commit(self.root)
+        self.git(self.root, "tag", "go/v0.2.0")
+        self.cli("generate")
+        record = json.loads((self.root / ".perseid/releases/go.json").read_text())
+        self.assertEqual(record["version"], "0.1.1")
+        self.cli("version", "patch", "--notes", "notes.md")
+        self.cli("generate")
+        self.commit(self.root, "new release intent B")
+        self.git(self.root, "push", "--quiet", "origin", "main", "--tags")
+        # Rerunning workflow A still recovers its original tag, never bumps/publishes B.
+        self.git(self.root, "checkout", "--quiet", "--detach", controller_a)
+        result = self.result("release")
+        self.assertEqual(result[0]["version"], "0.1.1")
+        self.assertEqual(count.read_text(), "published\n")
+        self.assertEqual(
+            self.gh_state()["releases"]["testing/controller"], ["go/v0.1.1"]
         )
 
     def test_failed_registry_probe_prevents_publication(self):

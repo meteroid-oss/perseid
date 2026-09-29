@@ -53,6 +53,8 @@ struct CliArgs {
 
 #[derive(Clone, Subcommand)]
 enum Command {
+    /// Bootstrap SDK packages and project configuration without overwriting files.
+    Init(crate::project::init::Init),
     /// Project lifecycle commands (also available directly at the top level).
     Project {
         #[command(subcommand)]
@@ -147,6 +149,7 @@ pub fn run_cli_v1_main() -> anyhow::Result<()> {
     let args = CliArgs::parse();
     use crate::project::ProjectCommand;
     let project = match &args.command {
+        Command::Init(args) => return crate::project::init::run(args),
         Command::Project { command } => Some(command.clone()),
         Command::Sync { config } => Some(ProjectCommand::Sync {
             config: config.clone(),

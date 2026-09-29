@@ -37,7 +37,7 @@ pub fn checkout(
     io::files(destination, false)?; // Validate clone before ANY generation/control writes.
     Ok(())
 }
-fn working_root(project: &Project, repository: &str, names: &[String]) -> Result<PathBuf> {
+pub fn working_root(project: &Project, repository: &str, names: &[String]) -> Result<PathBuf> {
     if repository == "." {
         return Ok(project.root.clone());
     }
@@ -54,6 +54,10 @@ fn working_root(project: &Project, repository: &str, names: &[String]) -> Result
 fn extensions(project: &Project, root: &Path, name: &str) -> Result<String> {
     let target = &project.config.targets[name];
     let mut hashes = BTreeMap::new();
+    let overrides = io::relative(root, ".perseid/overrides.toml")?;
+    if overrides.exists() {
+        hashes.insert("overrides.toml".into(), io::sha(&fs::read(overrides)?));
+    }
     if let Some(directory) = &target.template_overrides {
         for (path, state) in io::files(&io::relative(root, directory)?, false)? {
             hashes.insert(format!("template/{}", path.display()), state.digest);
@@ -67,15 +71,21 @@ fn extensions(project: &Project, root: &Path, name: &str) -> Result<String> {
     }
     Ok(io::sha(&io::json(&hashes)?))
 }
+pub struct RenderOptions<'a> {
+    pub no_format: bool,
+    pub checks: bool,
+    pub version_root: &'a Path,
+}
 pub fn render(
     project: &Project,
     root: &Path,
     names: &[String],
     lock: &Lock,
     assets: &Assets,
-    no_format: bool,
-    checks: bool,
+    options: RenderOptions<'_>,
 ) -> Result<()> {
+    let effective = project.with_overrides(root, names)?;
+    let project = &effective;
     let bytes = fs::read(project.snapshot()?)?;
     ensure!(
         io::sha(&bytes) == lock.spec_sha256,
@@ -86,7 +96,8 @@ pub fn render(
         let target = &project.config.targets[name];
         let directory = io::relative(root, target.directory(name))?;
         fs::create_dir_all(&directory)?;
-        let config = project.generator_config(name)?;
+        let resolved = super::release::resolve(project, root, options.version_root, name, assets)?;
+        let config = project.generator_config(name, &resolved.version)?;
         let language = target.language(name);
         let lang = &config.languages[language];
         let manifest = format!(".perseid/manifests/{name}.json");
@@ -126,8 +137,9 @@ pub fn render(
         if project.config.release.is_some()
             || target.release.is_some()
             || project.versions_path().exists()
+            || !project.independent()
         {
-            super::release::stamp(project, name, &directory, assets)?;
+            super::release::stamp(project, name, &directory, assets, &resolved.version)?;
         }
         let mut env = assets.env();
         env.insert(
@@ -138,17 +150,22 @@ pub fn render(
             "PERSEID_GENERATED_MANIFEST".into(),
             manifest_path.to_string_lossy().into_owned(),
         );
-        if !no_format {
-            io::hooks(&target.format_commands, &directory, &env)?;
+        if !options.no_format {
+            if let Some(commands) = &target.format_commands {
+                io::hooks(commands, &directory, &env)?;
+            } else {
+                crate::formatting::format(language, root, &directory, &manifest_path)?;
+            }
         }
-        if checks {
+        if options.checks {
             io::hooks(&target.check_commands, &directory, &env)?;
         }
         ensure!(
             extensions(project, root, name)? == extension_hash,
             "Generation hooks changed target extensions; rerun with stable inputs"
         );
-        let receipt = json!({"lock":lock,"target":name,"version":project.versions.versions[name],"extensions_sha256":extension_hash});
+        super::release::record(root, name, &resolved)?;
+        let receipt = json!({"lock":lock,"target":name,"version":resolved.version,"extensions_sha256":extension_hash});
         io::write(
             &io::relative(root, format!(".perseid/receipts/{name}.json"))?,
             &io::json(&receipt)?,
@@ -177,8 +194,11 @@ pub fn generate(
             &selected,
             &lock,
             assets,
-            no_format,
-            checks || check,
+            RenderOptions {
+                no_format,
+                checks: checks || check,
+                version_root: &root,
+            },
         )?;
         let changes = io::changes(&before, &io::files(stage.path(), true)?);
         results.push(

@@ -2,6 +2,7 @@
 pub mod assets;
 pub mod config;
 mod github;
+pub mod init;
 pub mod io;
 pub mod prepare;
 mod release;

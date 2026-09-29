@@ -37,9 +37,14 @@ COPY scripts /app/scripts
 RUN cargo build --release --target x86_64-unknown-linux-musl --bin perseid
 
 
+# Standalone formatters; no Go or Python runtime is required in the final image.
+FROM golang:1.24.7-alpine3.21 AS go-formatter
+FROM ghcr.io/astral-sh/ruff:0.14.10 AS python-formatter
+
 # main image
 FROM alpine:3.21
-ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.cargo/bin"
+ENV CARGO_HOME=/opt/cargo RUSTUP_HOME=/opt/rustup
+ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/cargo/bin"
 RUN apk add --no-cache openjdk21-jre-headless curl gcompat libgcc libstdc++ bash git github-cli
 
 # Java formatter
@@ -49,7 +54,7 @@ RUN echo "25157797a0a972c2290b5bc71530c4f7ad646458025e3484412a6e5a9b8c9aa6 googl
     rm google-java-format-1.25.2-all-deps.jar.sha256 && \
     mv google-java-format-1.25.2-all-deps.jar /usr/bin/  && \
     echo "#!/bin/sh" >> /usr/bin/google-java-format && \
-    echo '/usr/bin/java -jar /usr/bin/google-java-format-1.25.2-all-deps.jar $@' >> /usr/bin/google-java-format && \
+    echo '/usr/bin/java -jar /usr/bin/google-java-format-1.25.2-all-deps.jar "$@"' >> /usr/bin/google-java-format && \
     chmod +x /usr/bin/google-java-format
 
 
@@ -73,14 +78,17 @@ RUN apk add --no-cache binutils && \
     --no-update-default-toolchain \
     --default-toolchain nightly-2025-02-27 \
     --component rustfmt && \
-    rm -rf /root/.rustup/toolchains/nightly-*/lib/rustlib && \
-    rm /root/.rustup/toolchains/nightly-*/bin/cargo* && \
-    rm /root/.rustup/toolchains/nightly-*/bin/rust-* && \
-    rm /root/.rustup/toolchains/nightly-*/bin/rustc && \
-    rm /root/.rustup/toolchains/nightly-*/bin/rustdoc && \
-    rm -rf /root/.rustup/toolchains/nightly-*/share && \
-    strip /root/.rustup/toolchains/nightly-*/lib/librustc_driver-*.so && \
+    rm -rf /opt/rustup/toolchains/nightly-*/lib/rustlib && \
+    rm /opt/rustup/toolchains/nightly-*/bin/cargo* && \
+    rm /opt/rustup/toolchains/nightly-*/bin/rust-* && \
+    rm /opt/rustup/toolchains/nightly-*/bin/rustc && \
+    rm /opt/rustup/toolchains/nightly-*/bin/rustdoc && \
+    rm -rf /opt/rustup/toolchains/nightly-*/share && \
+    strip /opt/rustup/toolchains/nightly-*/lib/librustc_driver-*.so && \
     apk del binutils
+
+COPY --from=go-formatter /usr/local/go/bin/gofmt /usr/bin/gofmt
+COPY --from=python-formatter /ruff /usr/bin/ruff
 
 # perseid
 COPY --from=perseid-builder /app/target/x86_64-unknown-linux-musl/release/perseid /usr/bin/

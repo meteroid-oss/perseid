@@ -29,6 +29,7 @@ fn snapshot() -> String {
 pub struct ReleaseHooks {
     #[serde(default)]
     pub version_commands: Vec<String>,
+    pub read_version: Option<String>,
     pub publish: Option<String>,
     pub is_published: Option<String>,
     pub tag: Option<String>,
@@ -51,7 +52,7 @@ pub struct Target {
     #[serde(default)]
     pub extra_codegen_args: Vec<String>,
     #[serde(default)]
-    pub format_commands: Vec<String>,
+    pub format_commands: Option<Vec<String>>,
     #[serde(default)]
     pub check_commands: Vec<String>,
     pub release: Option<ReleaseHooks>,
@@ -78,7 +79,7 @@ pub struct ReleaseSettings {
     pub initial_version: String,
 }
 fn policy() -> String {
-    "lockstep".into()
+    "independent".into()
 }
 fn initial() -> String {
     "0.1.0".into()
@@ -94,11 +95,13 @@ pub struct Config {
     pub targets: BTreeMap<String, Target>,
     pub release: Option<ReleaseSettings>,
 }
+#[derive(Clone)]
 pub struct Project {
     pub path: PathBuf,
     pub root: PathBuf,
     pub config: Config,
     pub versions: Versions,
+    pub requests: super::release::Requests,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -108,11 +111,31 @@ pub struct Versions {
     #[serde(default)]
     pub notes: BTreeMap<String, String>,
 }
-fn identifier(value: &str) -> bool {
+pub(super) fn identifier(value: &str) -> bool {
     value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
         && value
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_' || c == b'-')
+}
+/// Destination-owned customizations. Repository layout/source/release policy stay in the controller.
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Overrides {
+    #[serde(default)]
+    targets: BTreeMap<String, TargetOverride>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TargetOverride {
+    #[serde(default)]
+    sdk: BTreeMap<String, Value>,
+    template_overrides: Option<String>,
+    #[serde(default)]
+    runtime_overrides: BTreeMap<String, String>,
+    format_commands: Option<Vec<String>>,
+    check_commands: Option<Vec<String>>,
+    read_version: Option<String>,
+    version_commands: Option<Vec<String>>,
 }
 impl Project {
     pub fn load(path: &Path) -> Result<Self> {
@@ -215,7 +238,12 @@ impl Project {
             notes: BTreeMap::new(),
         };
         let version_file = io::relative(&root, "perseid.versions.json")?;
-        if version_file.exists() {
+        if version_file.exists()
+            && config
+                .release
+                .as_ref()
+                .is_some_and(|r| r.policy == "lockstep")
+        {
             let stored: Versions = serde_json::from_value(io::read_json(&version_file)?)?;
             ensure!(stored.schema == 1, "Unsupported versions schema");
             versions.versions.extend(stored.versions);
@@ -224,11 +252,18 @@ impl Project {
         for version in versions.versions.values() {
             super::release::version_tuple(version)?;
         }
+        let request_path = io::relative(&root, "perseid.releases.json")?;
+        let requests = if request_path.exists() {
+            serde_json::from_value(io::read_json(&request_path)?)?
+        } else {
+            super::release::Requests::default()
+        };
         let project = Self {
             path,
             root,
             config,
             versions,
+            requests,
         };
         let snapshot = project.snapshot()?;
         ensure!(
@@ -251,6 +286,47 @@ impl Project {
         );
         Ok(project)
     }
+    pub fn with_overrides(&self, root: &Path, names: &[String]) -> Result<Self> {
+        let mut project = self.clone();
+        let path = io::relative(root, ".perseid/overrides.toml")?;
+        if !path.exists() {
+            return Ok(project);
+        }
+        let overrides: Overrides = toml::from_str(&fs::read_to_string(path)?)?;
+        for name in overrides.targets.keys() {
+            ensure!(
+                self.config.targets.contains_key(name),
+                "Unknown override target {name}"
+            );
+        }
+        for (name, custom) in overrides.targets {
+            if !names.contains(&name) {
+                continue;
+            }
+            let target = project.config.targets.get_mut(&name).unwrap();
+            target.sdk.extend(custom.sdk);
+            if custom.template_overrides.is_some() {
+                target.template_overrides = custom.template_overrides;
+            }
+            target.runtime_overrides.extend(custom.runtime_overrides);
+            if custom.format_commands.is_some() {
+                target.format_commands = custom.format_commands;
+            }
+            if let Some(commands) = custom.check_commands {
+                target.check_commands = commands;
+            }
+            if custom.read_version.is_some() || custom.version_commands.is_some() {
+                let release = target.release.get_or_insert_with(ReleaseHooks::default);
+                if custom.read_version.is_some() {
+                    release.read_version = custom.read_version;
+                }
+                if let Some(commands) = custom.version_commands {
+                    release.version_commands = commands;
+                }
+            }
+        }
+        Ok(project)
+    }
     pub fn snapshot(&self) -> Result<PathBuf> {
         io::relative(&self.root, &self.config.source.snapshot)
     }
@@ -258,7 +334,17 @@ impl Project {
         self.root.join("perseid.lock.json")
     }
     pub fn versions_path(&self) -> PathBuf {
-        self.root.join("perseid.versions.json")
+        self.root.join(if self.independent() {
+            "perseid.releases.json"
+        } else {
+            "perseid.versions.json"
+        })
+    }
+    pub fn independent(&self) -> bool {
+        self.config
+            .release
+            .as_ref()
+            .is_none_or(|r| r.policy == "independent")
     }
     pub fn fingerprint(&self) -> Result<String> {
         Ok(io::sha(&io::json(&self.config)?))
@@ -291,7 +377,7 @@ impl Project {
         }
         Ok(groups)
     }
-    pub fn generator_config(&self, name: &str) -> Result<GeneratorConfig> {
+    pub fn generator_config(&self, name: &str, version: &str) -> Result<GeneratorConfig> {
         let target = &self.config.targets[name];
         let language = target.language(name);
         let directory = Path::new(target.directory(name));
@@ -306,10 +392,7 @@ impl Project {
         )?;
         sdk.extend(self.config.sdk.clone());
         sdk.extend(target.sdk.clone());
-        sdk.insert(
-            "version".into(),
-            self.versions.versions[name].clone().into(),
-        );
+        sdk.insert("version".into(), version.into());
         let setting = |key| -> Result<&str> {
             sdk.get(key)
                 .and_then(Value::as_str)
@@ -384,7 +467,16 @@ impl Project {
     }
     pub fn plan(&self, names: &[String], assets: &Assets) -> Result<Value> {
         let lock = super::source::locked(self, assets)?;
-        let targets = self.selected(names)?.iter().map(|name| { let target = &self.config.targets[name]; json!({"name":name, "language": target.language(name), "repository": target.repository(), "directory":target.directory(name), "version":self.versions.versions[name]}) }).collect::<Vec<_>>();
+        let mut targets = Vec::new();
+        for (repository, selected) in self.groups(names)? {
+            let root = super::workspace::working_root(self, &repository, &selected)?;
+            let effective = self.with_overrides(&root, &selected)?;
+            for name in selected {
+                let target = &self.config.targets[&name];
+                let resolved = super::release::resolve(&effective, &root, &root, &name, assets)?;
+                targets.push(json!({"name":name,"language":target.language(&name),"repository":target.repository(),"directory":target.directory(&name),"version":resolved.version}));
+            }
+        }
         Ok(json!({"source":lock.source,"spec_sha256":lock.spec_sha256,"targets":targets}))
     }
 }

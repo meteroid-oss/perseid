@@ -43,7 +43,7 @@ pub struct LanguageConfig {
     #[serde(default)]
     pub extra_codegen_args: Vec<String>,
     #[serde(default)]
-    pub format_commands: Vec<String>,
+    pub format_commands: Option<Vec<String>>,
     #[serde(default)]
     pub check_commands: Vec<String>,
 }
@@ -436,7 +436,16 @@ pub fn configured(
             continue;
         }
         if !no_format {
-            io::hooks(&language.format_commands, root, &assets.env())?;
+            if let Some(commands) = &language.format_commands {
+                io::hooks(commands, root, &assets.env())?;
+            } else {
+                crate::formatting::format(
+                    name,
+                    root,
+                    root,
+                    &root.join("codegen/generated_files.json"),
+                )?;
+            }
         }
         if checks {
             io::hooks(&language.check_commands, root, &assets.env())?;
