@@ -7,6 +7,35 @@ use anyhow::{Context, Result, bail};
 
 pub const BRANCH: &str = "perseid/update";
 
+/// Semver bump requested from release tooling through the conventional-commit type of the PR.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+pub enum Bump {
+    Patch,
+    Minor,
+    Major,
+}
+
+impl Bump {
+    pub fn title(self, subject: &str) -> String {
+        let kind = match self {
+            Bump::Patch => "fix(api)",
+            Bump::Minor => "feat(api)",
+            Bump::Major => "feat(api)!",
+        };
+        format!("{kind}: {subject}")
+    }
+
+    pub fn of_title(title: &str) -> Option<Self> {
+        let (kind, _) = title.split_once(':')?;
+        match kind {
+            _ if kind.ends_with('!') => Some(Bump::Major),
+            _ if kind.starts_with("feat") => Some(Bump::Minor),
+            _ if kind.starts_with("fix") => Some(Bump::Patch),
+            _ => None,
+        }
+    }
+}
+
 fn run(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
     let output = Command::new(program)
         .args(args)
@@ -67,12 +96,39 @@ pub fn toplevel(dir: &Path) -> Result<PathBuf> {
 }
 
 /// Commits `paths` of the repository at `dir` to the update branch and opens (or refreshes) its PR.
-pub fn open(dir: &Path, paths: &[String], title: &str, body: &str) -> Result<Option<String>> {
+/// An open PR keeps its bump if larger: it releases every spec change since the last merge.
+pub fn open(
+    dir: &Path,
+    paths: &[String],
+    bump: Bump,
+    subject: &str,
+    body: &str,
+) -> Result<Option<String>> {
     let mut status = vec!["status", "--porcelain", "--"];
     status.extend(paths.iter().map(String::as_str));
     if git(dir, &status)?.is_empty() {
         return Ok(None);
     }
+    let existing = run(
+        dir,
+        "gh",
+        &[
+            "pr",
+            "list",
+            "--head",
+            BRANCH,
+            "--state",
+            "open",
+            "--json",
+            "url,title",
+            "--jq",
+            r#".[0] | select(.) | .url + "\t" + .title"#,
+        ],
+    )?;
+    let (existing, previous) = existing.split_once('\t').unwrap_or_default();
+    let title = bump
+        .max(Bump::of_title(previous).unwrap_or(bump))
+        .title(subject);
     let base = git(dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     git(dir, &["switch", "--quiet", "-C", BRANCH])?;
     let mut add = vec!["add", "--all", "--"];
@@ -88,7 +144,7 @@ pub fn open(dir: &Path, paths: &[String], title: &str, body: &str) -> Result<Opt
             "user.email=perseid@users.noreply.github.com",
         ]);
     }
-    commit.extend(["commit", "--quiet", "-m", title]);
+    commit.extend(["commit", "--quiet", "-m", &title]);
     git(dir, &commit)?;
     let unchanged = git(dir, &["fetch", "--quiet", "--depth", "1", "origin", BRANCH]).is_ok()
         && git(dir, &["rev-parse", "HEAD^{tree}"])?
@@ -96,26 +152,35 @@ pub fn open(dir: &Path, paths: &[String], title: &str, body: &str) -> Result<Opt
     if !unchanged {
         git(dir, &["push", "--quiet", "--force", "origin", BRANCH])?;
     }
-    let existing = run(
-        dir,
-        "gh",
-        &[
-            "pr", "list", "--head", BRANCH, "--state", "open", "--json", "url", "--jq", ".[0].url",
-        ],
-    )?;
     if !existing.is_empty() {
         run(
             dir,
             "gh",
-            &["pr", "edit", BRANCH, "--title", title, "--body", body],
+            &["pr", "edit", BRANCH, "--title", &title, "--body", body],
         )?;
-        return Ok(Some(existing));
+        return Ok(Some(existing.to_owned()));
     }
     let mut create = vec![
-        "pr", "create", "--head", BRANCH, "--title", title, "--body", body,
+        "pr", "create", "--head", BRANCH, "--title", &title, "--body", body,
     ];
     if base != "HEAD" {
         create.extend(["--base", &base]);
     }
     run(dir, "gh", &create).map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Bump;
+
+    #[test]
+    fn bump_round_trips_through_conventional_titles() {
+        for bump in [Bump::Patch, Bump::Minor, Bump::Major] {
+            assert_eq!(Bump::of_title(&bump.title("update SDKs")), Some(bump));
+        }
+        assert_eq!(Bump::title(Bump::Major, "x"), "feat(api)!: x");
+        assert_eq!(Bump::of_title("fix!: drop field"), Some(Bump::Major));
+        assert_eq!(Bump::of_title("Update SDKs to Acme 1.0"), None);
+        assert_eq!(Bump::of_title(""), None);
+    }
 }

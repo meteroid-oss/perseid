@@ -17,6 +17,17 @@ inputs:
   working-directory:
     description: Directory containing perseid.toml
     default: .
+  bump:
+    description: >-
+      Release size pull requests ask for: major, minor or patch. `auto` compares the spec with
+      `base-spec` using oasdiff: breaking changes are major, other API changes minor, the rest patch
+    default: auto
+  base-spec:
+    description: Previous OpenAPI document compared by the `auto` bump (default, the spec file before the pushed commits)
+    default: ''
+  auto-merge:
+    description: Enable auto-merge (squash) on the pull requests perseid opens
+    default: 'false'
 
 runs:
   using: composite
@@ -83,14 +94,51 @@ runs:
           dotnet tool install csharpier --version 1.3.0 --tool-path "$BIN" ;;
         esac
 
+    - name: Size the release
+      id: bump
+      if: contains(format(' {0} ', inputs.command), ' --pr ')
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        BUMP: ${{ inputs.bump }}
+        BASE: ${{ inputs.base-spec }}
+        BEFORE: ${{ github.event.before }}
+        BIN: ${{ runner.temp }}/perseid
+      run: |
+        if [ "$BUMP" != auto ]; then echo "bump=$BUMP" >> "$GITHUB_OUTPUT"; exit 0; fi
+        spec=$(sed -n 's/^spec *= *"\(.*\)".*/\1/p' perseid.toml | head -1)
+        if [ -z "$BASE" ] && [ -f "$spec" ] && [ -n "${BEFORE//0/}" ] &&
+          git fetch --quiet --depth 1 origin "$BEFORE" && git show "$BEFORE:./$spec" > "$RUNNER_TEMP/base-spec"; then
+          BASE=$RUNNER_TEMP/base-spec
+        fi
+        if [ -z "$BASE" ]; then
+          echo "::notice::no previous spec to compare with, asking for a minor release"
+          echo "bump=minor" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+        arch=$([ "$(uname -m)" = x86_64 ] && echo amd64 || echo arm64)
+        curl -fsSL --retry 3 "https://github.com/oasdiff/oasdiff/releases/download/v1.32.1/oasdiff_1.32.1_linux_$arch.tar.gz" | tar -xz -C "$BIN" oasdiff
+        if ! oasdiff breaking --fail-on ERR "$BASE" "$spec" > /dev/null; then level=major
+        elif ! oasdiff changelog --fail-on INFO "$BASE" "$spec" > /dev/null; then level=minor
+        else level="patch"; fi
+        echo "bump=$level" >> "$GITHUB_OUTPUT"
+        { echo "### API changes"; echo; oasdiff changelog -f markdown "$BASE" "$spec"; } | head -c 50000 > "$RUNNER_TEMP/api-changes.md"
+        echo "notes=$RUNNER_TEMP/api-changes.md" >> "$GITHUB_OUTPUT"
+
     - name: Run perseid
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
         GH_TOKEN: ${{ inputs.token }}
         COMMAND: ${{ inputs.command }}
+        BUMP: ${{ steps.bump.outputs.bump }}
+        NOTES: ${{ steps.bump.outputs.notes }}
+        AUTO_MERGE: ${{ inputs.auto-merge }}
       run: |
         gh auth setup-git
         git config user.name >/dev/null || git config --global user.name 'github-actions[bot]'
         git config user.email >/dev/null || git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
-        perseid $COMMAND
+        perseid $COMMAND ${BUMP:+--bump "$BUMP"} ${NOTES:+--notes "$NOTES"} | tee "$RUNNER_TEMP/perseid.out"
+        if [ "$AUTO_MERGE" = true ]; then
+          { grep -E '^https://' "$RUNNER_TEMP/perseid.out" || true; } | while read -r url; do gh pr merge "$url" --auto --squash; done
+        fi

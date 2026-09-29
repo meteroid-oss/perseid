@@ -271,3 +271,167 @@ fn csharp_init_and_generate_lay_out_a_dotnet_project() {
     let api = fs::read_to_string(sdk.join("Petstore/Api/PetsApi.cs")).unwrap();
     assert!(api.contains("public Task<Pet> GetPetAsync("), "{api}");
 }
+
+fn json(path: &Path) -> serde_json::Value {
+    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn init_configures_release_please_per_sdk() {
+    let dir = project();
+    let config = json(&dir.path().join("release-please-config.json"));
+    assert_eq!(config["packages"]["rust"]["release-type"], "rust");
+    assert_eq!(config["packages"]["go"]["version-file"], "version.go");
+    assert_eq!(config["tag-separator"], "/");
+    assert_eq!(
+        json(&dir.path().join(".release-please-manifest.json")),
+        serde_json::json!({}),
+        "never released SDKs start at initial-version"
+    );
+    assert!(
+        dir.path()
+            .join(".github/workflows/sdk-release.yml")
+            .exists()
+    );
+
+    fs::create_dir(dir.path().join("python")).unwrap();
+    fs::write(
+        dir.path().join("python/pyproject.toml"),
+        "[project]\nname = \"petstore\"\nversion = \"1.4.0\"\n",
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "python", "java"]);
+    assert!(ok, "{out}");
+    let config = json(&dir.path().join("release-please-config.json"));
+    assert_eq!(config["packages"]["python"]["release-type"], "python");
+    assert_eq!(
+        config["packages"]["java"]["extra-files"][1],
+        "src/main/java/com/petstore/Version.java"
+    );
+    assert_eq!(
+        json(&dir.path().join(".release-please-manifest.json")),
+        serde_json::json!({ "python": "1.4.0" })
+    );
+    let properties = fs::read_to_string(dir.path().join("java/gradle.properties")).unwrap();
+    assert!(properties.contains("VERSION_NAME=0.1.0"), "{properties}");
+}
+
+#[test]
+fn bump_needs_a_pull_request() {
+    let dir = project();
+    let (ok, out) = perseid(dir.path(), &["generate", "--bump", "major"]);
+    assert!(!ok && out.contains("--pr"), "{out}");
+}
+
+#[cfg(unix)]
+#[test]
+fn open_pull_requests_keep_their_largest_bump() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = project();
+    let git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "--quiet", "--initial-branch", "main"]);
+    git(&["init", "--quiet", "--bare", "origin.git"]);
+    git(&["remote", "add", "origin", "origin.git"]);
+    fs::write(dir.path().join(".gitignore"), "origin.git\nbin\n").unwrap();
+    git(&["add", "--all"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-qm",
+        "init",
+    ]);
+
+    let bin = dir.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let gh = bin.join("gh");
+    fs::write(
+        &gh,
+        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\ncase \"$2\" in\n  list) printf 'https://pr/1\\tfeat(api)!: update SDKs to Petstore 1\\n' ;;\nesac\n",
+    )
+    .unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let log = dir.path().join("gh.log");
+    let output = Command::new(env!("CARGO_BIN_EXE_perseid"))
+        .args(["generate", "rust", "--pr", "--bump", "patch", "--no-format"])
+        .current_dir(dir.path())
+        .env(
+            "PATH",
+            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+        )
+        .env("GH_LOG", &log)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{text}");
+    let calls = fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains("pr edit perseid/update --title feat(api)!: update SDKs to"),
+        "{calls}"
+    );
+}
+
+#[test]
+fn empty_sdk_repositories_get_a_skeleton_releasing_from_their_root() {
+    let dir = project();
+    let remote = dir.path().join("go-sdk.git");
+    let git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "--quiet", "--bare", "go-sdk.git"]);
+    git(&["clone", "--quiet", "go-sdk.git", "seed"]);
+    git(&[
+        "-C",
+        "seed",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "init",
+    ]);
+    git(&["-C", "seed", "push", "--quiet", "origin", "HEAD"]);
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    fs::write(
+        dir.path().join("perseid.toml"),
+        config.replace(
+            "[go]\n",
+            &format!("[go]\nrepo = \"file://{}\"\n", remote.display()),
+        ),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "go", "--no-format"]);
+    assert!(ok, "{out}");
+    let checkout = dir
+        .path()
+        .join(".perseid/repos")
+        .join(dir.path().file_name().unwrap())
+        .join("go-sdk");
+    assert!(checkout.join("go.mod").exists());
+    assert!(checkout.join("client.go").exists());
+    let release = json(&checkout.join("release-please-config.json"));
+    assert_eq!(release["packages"]["."]["include-component-in-tag"], false);
+    assert!(checkout.join(".github/workflows/sdk-release.yml").exists());
+}

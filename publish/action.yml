@@ -1,0 +1,157 @@
+name: Perseid publish
+description: Publish one SDK release to its registry, skipping versions already published
+branding:
+  icon: upload-cloud
+  color: purple
+
+inputs:
+  path:
+    description: SDK directory, relative to the repository root
+    default: .
+  tag:
+    description: Git tag of the release (Go warms the module proxy with it)
+    default: ''
+  cargo-token:
+    description: crates.io token, only needed until crates.io trusted publishing is configured
+    default: ''
+  npm-token:
+    description: npm token, only needed until npm trusted publishing is configured
+    default: ''
+  pypi-token:
+    description: PyPI token, only needed without PyPI trusted publishing
+    default: ''
+  maven-central-username:
+    description: Central Portal user token name
+    default: ''
+  maven-central-password:
+    description: Central Portal user token password
+    default: ''
+  gpg-key:
+    description: ASCII-armored GPG private key signing Maven artifacts
+    default: ''
+  gpg-password:
+    description: Passphrase of the GPG key
+    default: ''
+
+outputs:
+  language:
+    description: Detected SDK language
+    value: ${{ steps.detect.outputs.language }}
+
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: |
+        for pair in Cargo.toml:rust package.json:typescript pyproject.toml:python go.mod:go gradle.properties:java build.gradle:java; do
+          if [ -f "${pair%%:*}" ]; then echo "language=${pair#*:}" >> "$GITHUB_OUTPUT"; exit 0; fi
+        done
+        echo "::error::no package manifest in ${{ inputs.path }}"
+        exit 1
+
+    - if: steps.detect.outputs.language == 'rust'
+      uses: dtolnay/rust-toolchain@stable
+    - if: steps.detect.outputs.language == 'rust' && inputs.cargo-token == ''
+      id: crates
+      uses: rust-lang/crates-io-auth-action@v1
+    - if: steps.detect.outputs.language == 'rust'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ inputs.cargo-token || steps.crates.outputs.token }}
+      run: |
+        read -r name version < <(cargo metadata --no-deps --format-version 1 |
+          jq -r --arg manifest "$PWD/Cargo.toml" '.packages[] | select(.manifest_path == $manifest) | "\(.name) \(.version)"')
+        if curl -fsS -o /dev/null -A "perseid-publish (https://github.com/meteroid-oss/perseid)" "https://crates.io/api/v1/crates/$name/$version"; then
+          echo "::notice::$name $version is already on crates.io"
+          exit 0
+        fi
+        cargo publish
+
+    - if: steps.detect.outputs.language == 'typescript'
+      uses: actions/setup-node@v5
+      with:
+        node-version: lts/*
+        registry-url: https://registry.npmjs.org
+    - if: steps.detect.outputs.language == 'typescript'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        NODE_AUTH_TOKEN: ${{ inputs.npm-token }}
+        SDK_PATH: ${{ inputs.path }}
+      run: |
+        name=$(npm pkg get name | tr -d '"')
+        version=$(npm pkg get version | tr -d '"')
+        if npm view "$name@$version" version > /dev/null 2>&1; then
+          echo "::notice::$name@$version is already on npm"
+          exit 0
+        fi
+        npm install -g 'npm@^11.5.1'
+        if [ -f package-lock.json ]; then npm ci; else npm install; fi
+        npm run build --if-present
+        # Provenance requires the package to name the repository it is built from.
+        if [ "$(npm pkg get repository)" = "{}" ]; then
+          npm pkg set repository.type=git "repository.url=git+$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          [ "$SDK_PATH" = . ] || npm pkg set "repository.directory=$SDK_PATH"
+        fi
+        case "$version" in *-*) dist_tag=next ;; *) dist_tag=latest ;; esac
+        npm publish --access public --provenance --tag "$dist_tag"
+
+    - if: steps.detect.outputs.language == 'python'
+      uses: astral-sh/setup-uv@v6
+    - if: steps.detect.outputs.language == 'python'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        UV_PUBLISH_TOKEN: ${{ inputs.pypi-token }}
+      run: |
+        uv build
+        uv publish --trusted-publishing automatic --check-url https://pypi.org/simple/
+
+    # Go has no upload: the module proxy serves tags. Fetching the version makes it resolvable now.
+    - if: steps.detect.outputs.language == 'go'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        TAG: ${{ inputs.tag }}
+      run: |
+        if [ -z "$TAG" ]; then
+          echo "::notice::no release tag given, the Go module proxy will fetch the version on first use"
+          exit 0
+        fi
+        module=$(awk '$1 == "module" { print $2; exit }' go.mod | sed 's/[A-Z]/!\L&/g')
+        url="https://proxy.golang.org/$module/@v/${TAG##*/}.info"
+        for _ in 1 2 3 4 5 6; do
+          curl -fsS "$url" && exit 0
+          sleep 30
+        done
+        echo "::warning::$url is not served yet, the proxy usually catches up on its own"
+
+    - if: steps.detect.outputs.language == 'java'
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - if: steps.detect.outputs.language == 'java'
+      uses: gradle/actions/setup-gradle@v4
+    - if: steps.detect.outputs.language == 'java'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ inputs.maven-central-username }}
+        ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ inputs.maven-central-password }}
+        ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ inputs.gpg-key }}
+        ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ inputs.gpg-password }}
+      run: |
+        property() { sed -n "s/^$1=//p" gradle.properties 2>/dev/null | head -1; }
+        group=$(property GROUP) artifact=$(property POM_ARTIFACT_ID) version=$(property VERSION_NAME)
+        if [ -n "$group" ] && [ -n "$artifact" ] && [ -n "$version" ] &&
+          curl -fsI -o /dev/null "https://repo1.maven.org/maven2/${group//.//}/$artifact/$version/$artifact-$version.pom"; then
+          echo "::notice::$group:$artifact:$version is already on Maven Central"
+          exit 0
+        fi
+        gradle=gradle
+        [ -x gradlew ] && gradle=./gradlew
+        $gradle publishAndReleaseToMavenCentral --no-configuration-cache

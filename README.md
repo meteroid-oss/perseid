@@ -170,6 +170,27 @@ jobs:
 
 For pull request checks, pass `command: generate --check`.
 
+## Releases
+
+Every SDK keeps its own version, in its own manifest. `perseid init` also scaffolds
+[release-please](https://github.com/googleapis/release-please) (`release-please-config.json`)
+and `.github/workflows/sdk-release.yml`, and gives SDK repositories without a manifest the same on
+their first pull request:
+
+1. The Action titles its pull request as a conventional commit sized by
+   [oasdiff](https://github.com/oasdiff/oasdiff): `feat(api)!:` for breaking API changes,
+   `feat(api):` for other API changes, `fix(api):` otherwise (`bump` input, `--bump` flag).
+2. Merging it, or any `fix:`/`feat:` commit touching an SDK, opens a release PR bumping the
+   touched SDKs and their changelogs. Before 1.0, breaking changes bump the minor version.
+3. Merging the release PR tags each SDK (`rust/v0.4.0`, or `v0.4.0` alone in its repository) and
+   publishes it through `meteroid-oss/perseid/publish`: trusted publishing (OIDC) for crates.io,
+   npm and PyPI, a Central Portal token and GPG key for Maven Central, the module proxy for Go.
+   Versions already on the registry are skipped, so re-running a failed job is safe.
+
+Set the `PERSEID_AUTO_RELEASE` variable to `true` and a `RELEASE_TOKEN` secret (a GitHub App or
+fine-grained token) to merge release PRs once their checks pass, and `auto-merge: true` on the
+Action for generated pull requests.
+
 ## Self-hosted runners and other CIs
 
 `ghcr.io/meteroid-oss/perseid` bundles perseid, git, gh and every pinned formatter.
@@ -206,8 +227,7 @@ Early, and honest about it:
 - Proven on [Meteroid's API](https://github.com/meteroid-oss/meteroid-clients) and our test
   specs, not yet on hundreds of APIs. Unsupported constructs make generation fail instead of
   being skipped: an issue with the spec attached is the fastest way to get one supported.
-- Not there yet: pagination helpers, auth other than bearer tokens, streaming outside Rust,
-  publishing to package registries (keep your usual release workflow).
+- Not there yet: pagination helpers, auth other than bearer tokens, streaming outside Rust.
 
 ## License
 

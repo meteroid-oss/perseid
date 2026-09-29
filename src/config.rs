@@ -192,7 +192,7 @@ impl Config {
 }
 
 /// The SDK's own package manifest owns its version, so release tooling keeps working.
-fn manifest_version(dir: &Path) -> Option<String> {
+pub(crate) fn manifest_version(dir: &Path) -> Option<String> {
     let read = |file: &str| std::fs::read_to_string(dir.join(file)).ok();
     if let Some(json) = read("package.json") {
         let value: Value = serde_json::from_str(&json).ok()?;
@@ -221,6 +221,12 @@ fn manifest_version(dir: &Path) -> Option<String> {
     }
     if let Some(version) = csproj_version(dir) {
         return Some(version);
+    }
+    if let Some(go) = read("version.go") {
+        return go.lines().find_map(|l| {
+            let value = l.trim().strip_prefix("const Version = ")?;
+            Some(value.split('"').nth(1)?.to_owned())
+        });
     }
     read("version.txt").map(|v| v.trim().to_owned())
 }

@@ -2,11 +2,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use heck::{ToKebabCase, ToUpperCamelCase};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
     assets,
-    config::{self, Config, LANGUAGES},
+    config::{self, Config, LANGUAGES, Sdk, manifest_version},
     fsx,
     generate::tokens,
     spec,
@@ -83,18 +83,143 @@ pub fn run(init: Init, root: &Path) -> Result<Vec<PathBuf>> {
         created.push(config_path.clone());
     }
     let (config, root) = Config::load(&config_path)?;
+    let mut packages = Vec::new();
     for sdk in config.sdks(&[])?.iter().filter(|s| s.repo.is_none()) {
         let dir = root.join(&sdk.path);
-        let mut context = config.context(sdk, &dir);
-        let path = context["java_package"].as_str().unwrap().replace('.', "/");
-        context["java_package_path"] = path.into();
-        for (path, content) in assets::under(&format!("scaffold/{}", sdk.language)) {
-            let target = dir.join(tokens(path, &context)?);
-            if target.exists() {
-                continue;
-            }
-            let content = tokens(std::str::from_utf8(content)?, &context)?;
-            fsx::write(&target, content.as_bytes())?;
+        let released = manifest_version(&dir);
+        created.extend(scaffold(&config, sdk, &dir)?);
+        packages.push(package(&config, sdk, &dir, released));
+    }
+    created.extend(release(&root, &packages)?);
+    Ok(created)
+}
+
+/// Gives an SDK repository without a package manifest the skeleton `init` gives local SDKs.
+pub fn bootstrap(config: &Config, sdk: &Sdk, repo: &Path) -> Result<Vec<PathBuf>> {
+    let dir = repo.join(&sdk.path);
+    let manifests: &[&str] = match sdk.language {
+        "rust" => &["Cargo.toml"],
+        "typescript" => &["package.json"],
+        "python" => &["pyproject.toml", "setup.py"],
+        "go" => &["go.mod"],
+        _ => &["build.gradle", "build.gradle.kts", "pom.xml"],
+    };
+    if manifests.iter().any(|m| dir.join(m).exists()) {
+        return Ok(vec![]);
+    }
+    let mut created = scaffold(config, sdk, &dir)?;
+    created.extend(release(repo, &[package(config, sdk, &dir, None)])?);
+    Ok(created)
+}
+
+fn scaffold(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut created = Vec::new();
+    let mut context = config.context(sdk, dir);
+    let path = context["java_package"].as_str().unwrap().replace('.', "/");
+    context["java_package_path"] = path.into();
+    for (path, content) in assets::under(&format!("scaffold/{}", sdk.language)) {
+        let target = dir.join(tokens(path, &context)?);
+        if target.exists() {
+            continue;
+        }
+        let content = tokens(std::str::from_utf8(content)?, &context)?;
+        fsx::write(&target, content.as_bytes())?;
+        created.push(target);
+    }
+    Ok(created)
+}
+
+/// A release-please package, `released` at its current version or never released.
+struct Package {
+    path: String,
+    released: Option<String>,
+    config: Value,
+}
+
+fn package(config: &Config, sdk: &Sdk, dir: &Path, released: Option<String>) -> Package {
+    let context = config.context(sdk, dir);
+    let java = context["java_package"].as_str().unwrap().replace('.', "/");
+    let mut entry = match sdk.language {
+        "rust" => json!({ "release-type": "rust" }),
+        "typescript" => json!({ "release-type": "node", "extra-files": ["src/request.ts"] }),
+        "python" => json!({ "release-type": "python" }),
+        "go" => json!({ "release-type": "go", "version-file": "version.go" }),
+        _ => json!({
+            "release-type": "simple",
+            "extra-files": ["gradle.properties", format!("src/main/java/{java}/Version.java")],
+        }),
+    };
+    entry["component"] = sdk.language.into();
+    if sdk.path == "." {
+        entry["include-component-in-tag"] = false.into();
+    }
+    Package {
+        path: sdk.path.clone(),
+        released,
+        config: entry,
+    }
+}
+
+/// Adds missing `packages` to the release-please files of `repo`, and the workflow releasing them.
+fn release(repo: &Path, packages: &[Package]) -> Result<Vec<PathBuf>> {
+    if packages.is_empty() {
+        return Ok(vec![]);
+    }
+    let read = |path: &Path| -> Result<Option<Value>> {
+        match std::fs::read_to_string(path) {
+            Ok(text) => Ok(Some(serde_json::from_str(&text)?)),
+            Err(_) => Ok(None),
+        }
+    };
+    let config_path = repo.join("release-please-config.json");
+    let manifest_path = repo.join(".release-please-manifest.json");
+    let mut config = read(&config_path)?.unwrap_or_else(|| {
+        json!({
+            "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+            "bump-minor-pre-major": true,
+            "bump-patch-for-minor-pre-major": true,
+            "initial-version": "0.1.0",
+            "tag-separator": "/",
+            "packages": {},
+        })
+    });
+    let mut manifest = read(&manifest_path)?.unwrap_or_else(|| json!({}));
+    let (Some(entries), Some(versions)) = (
+        config
+            .as_object_mut()
+            .map(|c| c.entry("packages").or_insert_with(|| json!({}))),
+        manifest.as_object_mut(),
+    ) else {
+        bail!("release-please files must hold JSON objects");
+    };
+    let Some(entries) = entries.as_object_mut() else {
+        bail!("`packages` of release-please-config.json must be an object");
+    };
+    let mut created = Vec::new();
+    let mut added = false;
+    for package in packages {
+        if entries.contains_key(&package.path) {
+            continue;
+        }
+        entries.insert(package.path.clone(), package.config.clone());
+        if let Some(version) = &package.released {
+            versions.insert(package.path.clone(), version.as_str().into());
+        }
+        added = true;
+    }
+    if added {
+        for (path, value) in [(config_path, &config), (manifest_path, &manifest)] {
+            fsx::write(
+                &path,
+                (serde_json::to_string_pretty(value)? + "\n").as_bytes(),
+            )?;
+            created.push(path);
+        }
+    }
+    for (path, content) in assets::under("scaffold/release") {
+        let target = repo.join(path);
+        if !target.exists() {
+            fsx::write(&target, content)?;
             created.push(target);
         }
     }

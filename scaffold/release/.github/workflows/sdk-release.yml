@@ -1,0 +1,67 @@
+# Scaffolded by `perseid init`, yours to edit. release-please turns conventional commits under
+# each SDK into a release PR; merging it tags the bumped SDKs and publishes them to their registries.
+name: SDK Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      path:
+        description: SDK directory to publish again from the selected tag or branch (`.` for the root)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      paths: ${{ steps.release.outputs.paths_released }}
+      releases: ${{ toJSON(steps.release.outputs) }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v5
+        with:
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+      # Merging with the default token would not trigger this workflow again, hence RELEASE_TOKEN.
+      - if: vars.PERSEID_AUTO_RELEASE == 'true' && steps.release.outputs.pr
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          PR: ${{ fromJSON(steps.release.outputs.pr).number }}
+        run: gh pr merge "$PR" --auto --squash --repo "$GITHUB_REPOSITORY"
+
+  publish:
+    needs: release-please
+    if: ${{ !failure() && !cancelled() && (github.event_name == 'workflow_dispatch' || needs.release-please.outputs.paths != '[]') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        path: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.path) || needs.release-please.outputs.paths) }}
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: meteroid-oss/perseid/publish@v0
+        with:
+          path: ${{ matrix.path }}
+          tag: ${{ fromJSON(needs.release-please.outputs.releases || '{}')[matrix.path == '.' && 'tag_name' || format('{0}--tag_name', matrix.path)] || (github.ref_type == 'tag' && github.ref_name) || '' }}
+          # Registries without trusted publishing, or before their first release enables it.
+          cargo-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          npm-token: ${{ secrets.NPM_TOKEN }}
+          maven-central-username: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          maven-central-password: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          gpg-key: ${{ secrets.GPG_SECRET_KEY }}
+          gpg-password: ${{ secrets.GPG_SECRET_KEY_PASSWORD }}

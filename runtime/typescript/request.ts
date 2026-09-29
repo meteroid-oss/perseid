@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { type Middleware, withMiddleware } from "./middleware";
 import { ApiException, type XOR } from "./util";
 
-export const LIB_VERSION = "@@VERSION@@";
+export const LIB_VERSION = "@@VERSION@@"; // x-release-please-version
 const USER_AGENT = `@@USER_AGENT_PREFIX@@-typescript/${LIB_VERSION}`;
 
 export enum HttpMethod {
