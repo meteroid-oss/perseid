@@ -10,7 +10,7 @@ import urllib.request
 
 VERSION = "1.25.2"
 SHA256 = "25157797a0a972c2290b5bc71530c4f7ad646458025e3484412a6e5a9b8c9aa6"
-root = Path.cwd()
+root = Path(os.environ.get("PERSEID_REPOSITORY_ROOT", Path.cwd()))
 jar = Path(
     os.environ.get(
         "PERSEID_JAVA_FORMAT_JAR",
@@ -25,7 +25,10 @@ if not jar.exists():
     )
 if hashlib.sha256(jar.read_bytes()).hexdigest() != SHA256:
     raise SystemExit(f"Unexpected formatter checksum: {jar}")
-manifest = json.loads((root / "codegen/generated_files.json").read_text())
+manifest_path = Path(
+    os.environ.get("PERSEID_GENERATED_MANIFEST", root / "codegen/generated_files.json")
+)
+manifest = json.loads(manifest_path.read_text())
 files = [str(root / path) for path in manifest["java"] if path.endswith(".java")]
 if files:
     subprocess.run(["java", "-jar", str(jar), "-i", "-a", *files], check=True)

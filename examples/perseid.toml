@@ -1,0 +1,23 @@
+name = "example"
+perseid_version = "0.1.0"
+
+[source]
+file = "../backend/openapi.json"
+
+[sdk]
+default_base_url = "https://api.example.com"
+
+[targets.rust]
+format_commands = ["cargo fmt"]
+check_commands = ["cargo test --locked"]
+
+[targets.typescript]
+format_commands = ["npm ci", "npm run format"]
+check_commands = ["npm test"]
+
+# An external target needs only repository and directory:
+# [targets.go]
+# repository = "acme/example-go"
+# directory = "."
+# format_commands = ["gofmt -w ."]
+# check_commands = ["go test ./..."]

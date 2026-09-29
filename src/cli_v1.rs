@@ -53,6 +53,13 @@ struct CliArgs {
 
 #[derive(Clone, Subcommand)]
 enum Command {
+    /// Synchronize, generate, review, and release SDK projects.
+    #[command(disable_help_flag = true)]
+    Project {
+        /// Project command and options; use `project --help` for details.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Generate code from an OpenAPI spec.
     Generate {
         /// Path to a template file to use (`.jinja` extension can be omitted).
@@ -94,6 +101,23 @@ pub(crate) enum IncludeMode {
 
 pub fn run_cli_v1_main() -> anyhow::Result<()> {
     let args = CliArgs::parse();
+    if let Command::Project { args } = &args.command {
+        let root = std::env::var_os("PERSEID_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let entry = root.join("project.py");
+        anyhow::ensure!(
+            entry.is_file(),
+            "Perseid assets not found; set PERSEID_DIR to the matching checkout"
+        );
+        let status = std::process::Command::new("python3")
+            .arg(entry)
+            .args(args)
+            .env("PERSEID_BIN", std::env::current_exe()?)
+            .status()
+            .context("starting project orchestration (Python 3.11+ required)")?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
     let sdk = if let Some(path) = &args.context_file {
         serde_json::from_str(&fs::read_to_string(path)?).context("parsing template context")?
     } else {
@@ -111,6 +135,7 @@ pub fn run_cli_v1_main() -> anyhow::Result<()> {
     let input_files = match &args.command {
         Command::Generate { input_file, .. } => input_file,
         Command::Debug { input_file } => input_file,
+        Command::Project { .. } => unreachable!("handled before loading the spec"),
     };
 
     let api = input_files
@@ -146,6 +171,7 @@ pub fn run_cli_v1_main() -> anyhow::Result<()> {
         })?;
 
     match args.command {
+        Command::Project { .. } => unreachable!("handled before loading the spec"),
         Command::Generate {
             template,
             output_dir,

@@ -2,13 +2,17 @@
 """Apply the inherited Biome import cleanup to Perseid-owned TypeScript outputs."""
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 
-root = Path.cwd()
-package = (root / sys.argv[1]).resolve()
-manifest = json.loads((root / "codegen/generated_files.json").read_text())
+root = Path(os.environ.get("PERSEID_REPOSITORY_ROOT", Path.cwd()))
+package = (root / sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
+manifest_path = Path(
+    os.environ.get("PERSEID_GENERATED_MANIFEST", root / "codegen/generated_files.json")
+)
+manifest = json.loads(manifest_path.read_text())
 files = [str(root / path) for path in manifest["typescript"] if path.endswith(".ts")]
 if files:
     biome = package / "node_modules/.bin/biome"

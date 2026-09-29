@@ -77,7 +77,24 @@ def load_manifest(path: Path) -> dict[str, list[str]]:
 
 def generate(config_path: Path, languages: list[str], no_format: bool, check: bool):
     config = tomllib.loads(config_path.read_text())
-    root = config_path.parent.parent.resolve()
+    generate_config(
+        config, config_path.parent.parent.resolve(), languages, no_format, check
+    )
+
+
+def generate_config(
+    config: dict,
+    root: Path,
+    languages: list[str],
+    no_format: bool = False,
+    check: bool = False,
+    *,
+    inputs: list[Path] | None = None,
+    manifest: str = "codegen/generated_files.json",
+    coverage_file: str = "codegen/coverage.json",
+):
+    """Generate from a resolved configuration; callers may supply immutable inputs."""
+    root = root.resolve()
     global_config = config["global"]
     if global_config["perseid_version"] != VERSION:
         raise ValueError(
@@ -111,7 +128,8 @@ def generate(config_path: Path, languages: list[str], no_format: bool, check: bo
     os.environ["PERSEID_DIR"] = str(PERSEID_ROOT)
     if version_file := global_config.get("version_file"):
         sdk["version"] = safe_path(root, version_file).read_text().strip()
-    manifest_path = root / "codegen/generated_files.json"
+    manifest_path = safe_path(root, manifest)
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     previous = load_manifest(manifest_path)
     binary = build_binary()
     runtime_manifest = json.loads((PERSEID_ROOT / "runtime/manifest.json").read_text())
@@ -123,8 +141,8 @@ def generate(config_path: Path, languages: list[str], no_format: bool, check: bo
         if overrides := global_config.get("template_overrides"):
             shutil.copytree(safe_path(root, overrides), templates, dirs_exist_ok=True)
         input_files = []
-        for index, source in enumerate(global_config["input_files"]):
-            source = safe_path(root, source)
+        for index, source in enumerate(inputs or global_config["input_files"]):
+            source = Path(source) if inputs else safe_path(root, source)
             if preparation := global_config.get("prepare"):
                 from scripts.prepare_spec import prepare
 
@@ -228,7 +246,7 @@ def generate(config_path: Path, languages: list[str], no_format: bool, check: bo
         if (stage / "_coverage.json").exists():
             coverage = json.loads((stage / "_coverage.json").read_text())
             coverage["source"] = global_config["input_files"][0]
-            (root / "codegen/coverage.json").write_text(
+            safe_path(root, coverage_file).write_text(
                 json.dumps(coverage, indent=2) + "\n"
             )
     if not no_format:

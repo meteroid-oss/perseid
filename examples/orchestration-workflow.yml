@@ -1,0 +1,39 @@
+# Consumer example: adapt toolchains, pin the Perseid commit, then move to
+# .github/workflows/update-sdks.yml in the configuration/clients repository.
+name: Update SDKs
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: perseid-update
+  cancel-in-progress: false
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: project
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: meteroid-oss/perseid
+          # Replace with an immutable commit after the orchestration PR merges.
+          ref: main
+          path: perseid
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      # Install Node/Java/Go/etc. here as required by your configured SDK checks.
+      - name: Synchronize and propose updates
+        working-directory: project
+        env:
+          # Set PERSEID_TOKEN to an App token/PAT for cross-repository updates.
+          GH_TOKEN: ${{ secrets.PERSEID_TOKEN || github.token }}
+        run: |
+          gh auth setup-git
+          python3 ../perseid/project.py sync
+          python3 ../perseid/project.py propose

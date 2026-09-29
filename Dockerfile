@@ -26,7 +26,7 @@ RUN cargo build --release --bin perseid
 # main image
 FROM alpine:3.21
 ENV PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.cargo/bin"
-RUN apk add --no-cache openjdk21-jre-headless curl gcompat libgcc libstdc++ python3 bash
+RUN apk add --no-cache openjdk21-jre-headless curl gcompat libgcc libstdc++ python3 bash git github-cli
 
 # Java formatter
 RUN echo "25157797a0a972c2290b5bc71530c4f7ad646458025e3484412a6e5a9b8c9aa6 google-java-format-1.25.2-all-deps.jar" > google-java-format-1.25.2-all-deps.jar.sha256 && \
@@ -75,7 +75,11 @@ COPY --from=perseid-builder /app/target/release/perseid /usr/bin/
 COPY templates /opt/perseid/templates
 COPY runtime /opt/perseid/runtime
 COPY scripts /opt/perseid/scripts
-COPY generate.py Cargo.toml /opt/perseid/
+COPY generate.py project.py Cargo.toml Cargo.lock /opt/perseid/
+COPY orchestration /opt/perseid/orchestration
+COPY src /opt/perseid/src
+
+ENTRYPOINT ["perseid"]
 
 ENV PERSEID_BIN=/usr/bin/perseid
 ENV PERSEID_DIR=/opt/perseid

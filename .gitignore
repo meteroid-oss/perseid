@@ -3,3 +3,4 @@ __pycache__/
 .generated_paths.json
 .perseid-tmp/
 .ruff_cache/
+.perseid-work/

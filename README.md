@@ -8,6 +8,23 @@ supply their own specs and configuration. Version 0.1.0 is the initial extractio
 This is an SDK generator for the schema and HTTP patterns supported by its
 parser and templates, not a complete implementation of every OpenAPI feature.
 
+## Project orchestration
+
+Perseid also synchronizes specs, generates SDKs across one or several repositories,
+opens coordinated GitHub update PRs, and prepares/publishes versioned releases.
+A root `perseid.toml` supplies the spec source and targets; language presets avoid
+repeating template tasks. GitHub is optional for local generation.
+
+```sh
+perseid project sync
+perseid project generate --check
+perseid project propose --dry-run
+```
+
+See the [orchestration guide](docs/orchestration.md) and
+[small configuration example](examples/perseid.toml). The existing interfaces
+below remain supported, including all template/runtime extension points.
+
 ## Use from an SDK repository
 
 Check out Perseid and run it against an SDK repository's configuration:
@@ -209,7 +226,8 @@ The Rust binary is also usable directly (`cargo run -- --help`) for generation
 or IR debugging. `Dockerfile` retains the inherited binary/formatter image and
 ships the shared assets under `/opt/perseid`. The normal runner uses local tools;
 container-based SDK checks need the SDK dependencies and language toolchains.
-The Docker build has not been validated as part of this extraction.
+The Docker image includes the `project` commands and uses `perseid` as its entry
+point; use `--entrypoint` for shell commands.
 
 For consumer CI, check out the same Perseid revision used locally and verify
 the configured `perseid_version` matches. Upgrade that pin and regenerate when
