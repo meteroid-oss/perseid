@@ -1,4 +1,4 @@
-<p align="center"><img src=".github/cover.png" alt="perseid: OpenAPI in, idiomatic SDKs out" width="100%"></p>
+<p align="center"><img src=".github/cover.svg" alt="perseid: OpenAPI in, idiomatic SDKs out" width="100%"></p>
 
 **GitHub-native SDK generation. No cloud, no subscription.**
 Change your OpenAPI spec, and idiomatic Rust, TypeScript, Python, Go and Java SDKs regenerate
