@@ -20,6 +20,19 @@ fn passes(language: &str) -> (&'static str, &'static [Pass]) {
         "rust" => ("rs", &[(&[&["rustfmt"]], &["--edition", "2021"])]),
         "go" => ("go", &[(&[&["gofmt"]], &["-w"])]),
         "java" => ("java", &[(&[&["google-java-format"]], &["-i", "-a"])]),
+        "csharp" => (
+            "cs",
+            &[(
+                &[&["csharpier"]],
+                &[
+                    "format",
+                    "--no-cache",
+                    "--no-msbuild-check",
+                    "--log-level",
+                    "Warning",
+                ],
+            )],
+        ),
         "python" => (
             "py",
             &[

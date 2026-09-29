@@ -1299,19 +1299,20 @@ impl FieldType {
             Self::UInt64 => "ulong".into(),
             Self::Float => "float".into(),
             Self::Double => "double".into(),
-            Self::String => "string".into(),
+            Self::String | Self::Uri | Self::StringConst { .. } => "string".into(),
             Self::Decimal => "decimal".into(),
-            Self::DateTime => "DateTime".into(),
-            Self::Uri => "string".into(),
-            Self::JsonObject => "Object".into(),
+            Self::DateTime => "DateTimeOffset".into(),
+            Self::JsonObject => "JsonNode".into(),
             Self::Map { value_ty } => {
                 format!("Dictionary<string, {}>", value_ty.to_csharp_typename()).into()
             }
             Self::List { inner } | Self::Set { inner } => {
                 format!("List<{}>", inner.to_csharp_typename()).into()
             }
-            Self::SchemaRef { name, .. } => Cow::Borrowed(name.as_str()),
-            Self::StringConst { .. } => "string".into(),
+            Self::SchemaRef {
+                inner: Some(ty), ..
+            } if matches!(ty.data, TypeData::StringAlias) => "string".into(),
+            Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
             Self::StringEnum { .. } => unreachable_inline_enum(),
         }
     }

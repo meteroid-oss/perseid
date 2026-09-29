@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::spec::{Filters, IncludeMode};
 
 pub const FILE: &str = "perseid.toml";
-pub const LANGUAGES: [&str; 5] = ["rust", "typescript", "python", "go", "java"];
+pub const LANGUAGES: [&str; 6] = ["rust", "typescript", "python", "go", "java", "csharp"];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -43,6 +43,7 @@ pub struct Config {
     pub python: Option<Target>,
     pub go: Option<Target>,
     pub java: Option<Target>,
+    pub csharp: Option<Target>,
 }
 
 #[derive(Deserialize, Default)]
@@ -52,7 +53,7 @@ pub struct Target {
     pub path: Option<String>,
     /// `owner/name` of a GitHub repository to generate into instead of this one.
     pub repo: Option<String>,
-    /// Crate, npm, PyPI or Go package name, or Java package.
+    /// Crate, npm, PyPI or Go package name, Java package or C# root namespace.
     pub package: Option<String>,
     /// Go module path.
     pub module: Option<String>,
@@ -124,6 +125,7 @@ impl Config {
             &self.python,
             &self.go,
             &self.java,
+            &self.csharp,
         ];
         let sdks = LANGUAGES
             .into_iter()
@@ -142,7 +144,7 @@ impl Config {
             .collect::<Vec<_>>();
         ensure!(
             !sdks.is_empty(),
-            "nothing to generate: add a [rust], [typescript], [python], [go] or [java] table"
+            "nothing to generate: add a [rust], [typescript], [python], [go], [java] or [csharp] table"
         );
         Ok(sdks)
     }
@@ -155,6 +157,7 @@ impl Config {
         let package = target.package.clone().unwrap_or_else(|| match language {
             "java" => format!("com.{}", snake.replace('_', "")),
             "typescript" => kebab.clone(),
+            "csharp" => self.name.clone(),
             _ => snake.clone(),
         });
         let version = target.version.clone().or_else(|| self.version.clone());
@@ -216,5 +219,33 @@ fn manifest_version(dir: &Path) -> Option<String> {
             return version;
         }
     }
+    if let Some(version) = csproj_version(dir) {
+        return Some(version);
+    }
     read("version.txt").map(|v| v.trim().to_owned())
+}
+
+/// `<Version>` of the first `.csproj` in `dir` or one level below, as `perseid init csharp` lays out.
+fn csproj_version(dir: &Path) -> Option<String> {
+    let entries = |dir: &Path| {
+        let mut paths: Vec<_> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| Some(e.ok()?.path()))
+            .collect();
+        paths.sort();
+        paths
+    };
+    let top = entries(dir);
+    let nested = top.iter().filter(|p| p.is_dir()).flat_map(|d| entries(d));
+    top.iter()
+        .cloned()
+        .chain(nested)
+        .filter(|p| p.extension().is_some_and(|e| e == "csproj"))
+        .find_map(|project| {
+            let text = std::fs::read_to_string(project).ok()?;
+            let start = text.find("<Version>")? + "<Version>".len();
+            let end = start + text[start..].find("</Version>")?;
+            Some(text[start..end].trim().to_owned())
+        })
 }

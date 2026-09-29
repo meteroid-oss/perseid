@@ -50,6 +50,7 @@ fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathB
             .as_str()
             .unwrap()
             .replace(['.', '-'], "_"),
+        "csharp" => context["package_name"].as_str().unwrap().to_owned(),
         "java" => format!(
             "src/main/java/{}",
             context["java_package"].as_str().unwrap().replace('.', "/")
@@ -58,6 +59,7 @@ fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathB
     });
     let (api, models) = match language {
         "go" => (runtime.clone(), runtime.clone()),
+        "csharp" => (runtime.join("Api"), runtime.join("Models")),
         _ => (runtime.join("api"), runtime.join("models")),
     };
     let summary = match language {
@@ -71,6 +73,10 @@ fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathB
     ];
     match language {
         "java" => tasks.push(("operation_options", api)),
+        "csharp" => {
+            tasks.push(("operation_options", api));
+            tasks.push(("component_type_summary", models));
+        }
         "go" => {}
         _ => tasks.push(("component_type_summary", models)),
     }
@@ -82,6 +88,7 @@ fn extension(language: &str) -> &str {
         "rust" => "rs",
         "typescript" => "ts",
         "python" => "py",
+        "csharp" => "cs",
         other => other,
     }
 }
@@ -92,7 +99,15 @@ fn skipped(name: &str) -> bool {
         || name.starts_with("perseid-stage-")
         || matches!(
             name,
-            "node_modules" | "target" | "build" | "dist" | "vendor" | "__pycache__" | "venv"
+            "node_modules"
+                | "target"
+                | "build"
+                | "dist"
+                | "vendor"
+                | "__pycache__"
+                | "venv"
+                | "bin"
+                | "obj"
         )
 }
 
