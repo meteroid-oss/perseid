@@ -76,7 +76,7 @@ fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathB
     (runtime, tasks)
 }
 
-/// Renders templates, then runtime files, into `stage`. Returns their paths and how many came from templates.
+/// Renders templates, then runtime files, into `stage`. Returns their paths relative to it.
 fn render(
     config: &Config,
     root: &Path,
@@ -84,7 +84,7 @@ fn render(
     context: &Value,
     spec: &str,
     stage: &Path,
-) -> Result<(Vec<PathBuf>, usize)> {
+) -> Result<Vec<PathBuf>> {
     let assets_dir = tempfile::tempdir()?;
     assets::materialize(
         language,
@@ -120,7 +120,6 @@ fn render(
             produced.push(clean(path.as_std_path().strip_prefix(stage)?));
         }
     }
-    let templated = produced.len();
     let runtime_dir = assets_dir.path().join("runtime").join(language);
     if runtime_dir.is_dir() {
         for file in assets::walk(&runtime_dir)? {
@@ -140,7 +139,7 @@ fn render(
             path.display()
         );
     }
-    Ok((produced, templated))
+    Ok(produced)
 }
 
 /// Substitutes `@@UPPER_SNAKE@@` tokens with `sdk` context values.
@@ -209,18 +208,17 @@ pub fn sdk(
                 .with_filter(tracing::level_filters::LevelFilter::ERROR),
         )
         .with(FailOnError(failed.clone()));
-    let (produced, templated) = tracing::subscriber::with_default(subscriber, || {
+    let produced = tracing::subscriber::with_default(subscriber, || {
         render(config, root, sdk.language, &context, spec, stage.path())
     })?;
     if failed.load(Ordering::SeqCst) {
         bail!("{} generation logged errors", sdk.language);
     }
-    // Runtime files ship pre-formatted; only template output goes through formatters.
     if options.format {
         format::format(
             sdk.language,
             dir,
-            &produced[..templated]
+            &produced
                 .iter()
                 .map(|p| stage.path().strip_prefix(dir).unwrap().join(p))
                 .collect::<Vec<_>>(),
