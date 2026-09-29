@@ -201,5 +201,16 @@ fn manifest_version(dir: &Path) -> Option<String> {
                 .map(str::to_owned);
         }
     }
+    if let Some(properties) = read("gradle.properties") {
+        let version = properties.lines().find_map(|l| {
+            let (key, value) = l.split_once('=')?;
+            ["VERSION_NAME", "version"]
+                .contains(&key.trim())
+                .then(|| value.trim().to_owned())
+        });
+        if version.is_some() {
+            return version;
+        }
+    }
     read("version.txt").map(|v| v.trim().to_owned())
 }
