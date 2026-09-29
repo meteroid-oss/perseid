@@ -101,5 +101,18 @@ jobs:
       - working-directory: digests
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          docker buildx imagetools create -t "$image:${GITHUB_REF_NAME#v}" -t "$image:latest" \
+          version="${GITHUB_REF_NAME#v}"
+          docker buildx imagetools create -t "$image:$version" -t "$image:${version%%.*}" -t "$image:latest" \
             $(printf "$image@sha256:%s " *)
+
+  major-tag:
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          major="${GITHUB_REF_NAME%%.*}"
+          git tag -f "$major" "$GITHUB_SHA"
+          git push -f origin "refs/tags/$major"
