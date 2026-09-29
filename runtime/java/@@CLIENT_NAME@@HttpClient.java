@@ -22,10 +22,20 @@ public class @@CLIENT_NAME@@HttpClient {
 
     public @@CLIENT_NAME@@HttpClient(
             HttpUrl baseUrl, Map<String, String> defaultHeaders, List<Long> retrySchedule) {
+        this(baseUrl, defaultHeaders, retrySchedule, List.of());
+    }
+
+    public @@CLIENT_NAME@@HttpClient(
+            HttpUrl baseUrl,
+            Map<String, String> defaultHeaders,
+            List<Long> retrySchedule,
+            List<Interceptor> interceptors) {
         this.baseUrl = baseUrl;
         this.defaultHeaders = defaultHeaders;
         this.retrySchedule = retrySchedule;
-        this.client = new OkHttpClient();
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        interceptors.forEach(builder::addInterceptor);
+        this.client = builder.build();
 
         this.objectMapper = Utils.getObjectMapper();
     }

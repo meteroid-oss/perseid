@@ -51,6 +51,9 @@ type Options struct {
 	// timeout of its own; per-attempt deadlines come from Timeout instead.
 	HTTPClient *http.Client
 
+	// Middleware wraps every HTTP attempt: caching, logging, custom headers.
+	Middleware []Middleware
+
 	// Timeout bounds a single attempt, from dialing until the response body has
 	// been read. Zero selects DefaultTimeout; a negative value disables it.
 	Timeout time.Duration
@@ -103,6 +106,7 @@ func newConfig(token string, options *Options) *config {
 	if opts.HTTPClient != nil {
 		cfg.httpClient = opts.HTTPClient
 	}
+	cfg.httpClient = withMiddleware(cfg.httpClient, opts.Middleware)
 	if opts.UserAgent != "" {
 		cfg.userAgent = opts.UserAgent
 	}

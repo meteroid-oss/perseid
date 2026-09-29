@@ -115,3 +115,70 @@ fn stale_generated_files_are_removed_from_directories_without_output() {
     assert!(dir.path().join("rust/src/retired/mine.rs").exists());
     assert!(dir.path().join("rust/target/debug/build.rs").exists());
 }
+
+#[test]
+fn extension_snippets_are_included_in_resource_classes() {
+    let dir = project();
+    let extensions = dir.path().join(".perseid/templates/rust/extensions");
+    fs::create_dir_all(&extensions).unwrap();
+    fs::write(
+        extensions.join("pets.rs"),
+        "pub fn custom_method(&self) -> usize {\n    42\n}\n",
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "rust", "--no-format"]);
+    assert!(ok, "{out}");
+    let pets = fs::read_to_string(dir.path().join("rust/src/api/pets.rs")).unwrap();
+    assert!(pets.contains("pub fn custom_method(&self)"), "{pets}");
+}
+
+#[test]
+fn webhooks_verifier_is_opt_in() {
+    let dir = project();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(!dir.path().join("rust/src/webhooks.rs").exists());
+    assert!(!dir.path().join("go/webhooks.go").exists());
+
+    let config = dir.path().join("perseid.toml");
+    let toml = fs::read_to_string(&config).unwrap();
+    fs::write(
+        &config,
+        toml.replacen("\n[rust]", "webhooks = true\n\n[rust]", 1),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let go = fs::read_to_string(dir.path().join("go/webhooks.go")).unwrap();
+    assert!(
+        go.contains("package petstore") && go.contains("func NewWebhook"),
+        "{go}"
+    );
+    assert!(dir.path().join("rust/src/webhooks.rs").exists());
+
+    let toml = fs::read_to_string(&config)
+        .unwrap()
+        .replacen("[go]", "[go]\nwebhooks = false", 1);
+    fs::write(&config, toml).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(
+        !dir.path().join("go/webhooks.go").exists(),
+        "target setting wins, stale file removed"
+    );
+    assert!(dir.path().join("rust/src/webhooks.rs").exists());
+}
+
+#[test]
+fn handwritten_files_are_never_overwritten() {
+    let dir = project();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let path = dir.path().join("rust/src/request.rs");
+    fs::write(&path, "// handwritten\n").unwrap();
+
+    let (ok, out) = perseid(dir.path(), &["generate", "rust", "--no-format"]);
+    assert!(!ok);
+    assert!(out.contains("src/request.rs"), "{out}");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "// handwritten\n");
+}

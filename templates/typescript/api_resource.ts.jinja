@@ -33,6 +33,9 @@ import { HttpMethod, {{ sdk.client_name }}Request, {{ sdk.client_name }}RequestC
 export class {{ resource_type_name }} {
     public constructor(private readonly requestCtx: {{ sdk.client_name }}RequestContext) {}
 
+    {% set extension %}extensions/{{ resource.name | to_snake_case }}.ts{% endset -%}
+    {% include extension ignore missing %}
+
     {% for op in resource.operations -%}
         {% if op.response_is_binary | default(false) -%}
             {% set response_type = "Uint8Array" -%}

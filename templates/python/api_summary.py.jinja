@@ -34,6 +34,7 @@ from .common import (
     Configuration,
     default_retry_schedule,
 )
+from .middleware import AsyncMiddleware, SyncMiddleware
 {% for resource in api.resources -%}
     {% set cls = resource.name | to_upper_camel_case -%}
     from .{{ resource.name | to_snake_case }} import {{ cls }}, {{ cls }}Async
@@ -56,6 +57,13 @@ class {{ sdk.client_name }}Options:
     """Explicit list of delays (seconds) before each retry. Takes precedence
     over `num_retries`."""
 
+    middleware: t.List[SyncMiddleware] = dataclasses.field(default_factory=list)
+    """Wraps every HTTP attempt of the synchronous client: caching, logging,
+    custom headers. See `middleware.py`."""
+
+    async_middleware: t.List[AsyncMiddleware] = dataclasses.field(default_factory=list)
+    """The same, for the asyncio client."""
+
 
 def _build_configuration(token: str, options: t.Optional[{{ sdk.client_name }}Options]) -> Configuration:
     options = options if options is not None else {{ sdk.client_name }}Options()
@@ -71,6 +79,8 @@ def _build_configuration(token: str, options: t.Optional[{{ sdk.client_name }}Op
         bearer_access_token=token,
         timeout=options.timeout,
         retry_schedule=retry_schedule,
+        middleware=list(options.middleware),
+        async_middleware=list(options.async_middleware),
     )
 
 

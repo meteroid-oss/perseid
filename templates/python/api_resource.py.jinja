@@ -24,6 +24,8 @@ from .common import ApiBaseAsync, ApiBaseSync, decode_response, serialize_query_
 
 class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
     """{{ resource.name | to_snake_case | replace("_", " ") }} API."""
+{%- set extension %}extensions/{{ resource.name | to_snake_case }}{% if is_async %}_async{% endif %}.py{% endset %}
+{{ "\n" }}{% include extension ignore missing %}
 {%- if resource.operations | length == 0 %}
 
     pass

@@ -70,7 +70,8 @@ public class {{ sdk.client_name }} {
         {{ sdk.client_name }}HttpClient httpClient = new {{ sdk.client_name }}HttpClient(
                 parsedUrl,
                 defaultHeaders,
-                options.getRetrySchedule()
+                options.getRetrySchedule(),
+                options.getInterceptors()
         );
 
 {% for resource in api.resources %}

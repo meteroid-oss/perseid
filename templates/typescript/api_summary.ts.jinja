@@ -8,13 +8,18 @@
 import { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}";
 {% endfor -%}
 import type { {{ sdk.client_name }}RequestContext } from "./request";
+import type { Middleware } from "./middleware";
 import type { XOR } from "./util";
 
 export { ApiException } from "./util";
 export type { XOR } from "./util";
+export type { Middleware } from "./middleware";
 {% for module in sdk.extra_exports | default([]) -%}
 export * from "./{{ module }}";
 {% endfor -%}
+{% if sdk.webhooks and "webhook" not in sdk.extra_exports | default([]) -%}
+export * from "./webhook";
+{% endif -%}
 export * from "./models/index";
 export { LIB_VERSION } from "./request";
 
@@ -39,6 +44,8 @@ export type {{ sdk.client_name }}Options = {
    * Useful for testing, adding custom middleware, or running in non-standard environments.
    */
   fetch?: typeof fetch;
+  /** Wraps every HTTP attempt: caching, logging, custom headers. */
+  middleware?: Middleware[];
 } & XOR<
   {
     /** List of delays (in milliseconds) to wait before each retry attempt. */
@@ -92,6 +99,7 @@ export class {{ sdk.client_name }} {
         retryScheduleInMs: options.retryScheduleInMs,
         debug: options.debug,
         fetch: options.fetch,
+        middleware: options.middleware,
       };
       return;
     }
@@ -104,6 +112,7 @@ export class {{ sdk.client_name }} {
         numRetries: options.numRetries,
         debug: options.debug,
         fetch: options.fetch,
+        middleware: options.middleware,
       };
       return;
     }
@@ -114,6 +123,7 @@ export class {{ sdk.client_name }} {
       timeout: options.requestTimeout,
       debug: options.debug,
       fetch: options.fetch,
+      middleware: options.middleware,
     };
   }
 

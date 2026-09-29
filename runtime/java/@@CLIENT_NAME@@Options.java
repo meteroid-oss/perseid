@@ -4,6 +4,9 @@ package @@JAVA_PACKAGE@@;
 import lombok.Getter;
 import lombok.Setter;
 
+import okhttp3.Interceptor;
+
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -15,4 +18,7 @@ public final class @@CLIENT_NAME@@Options {
     private String serverUrl = DEFAULT_URL;
     private final List<Long> retrySchedule = Arrays.asList(50L, 100L, 200L);
     private boolean debug = false;
+
+    /** Wraps every HTTP attempt, inside the retry loop: caching, logging, custom headers. */
+    private final List<Interceptor> interceptors = new ArrayList<>();
 }

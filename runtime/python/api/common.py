@@ -36,6 +36,7 @@ import httpx
 from .._version import __version__
 from ..errors import ApiException, NetworkException, ResponseDecodeError
 from ..serialization import BaseModel, format_datetime, format_decimal
+from .middleware import AsyncMiddleware, SyncMiddleware, chain_async, chain_sync
 
 __all__ = [
     "ApiBase",
@@ -115,6 +116,8 @@ class Configuration:
     retry_schedule: t.List[float] = dataclasses.field(
         default_factory=lambda: default_retry_schedule(DEFAULT_NUM_RETRIES)
     )
+    middleware: t.List[SyncMiddleware] = dataclasses.field(default_factory=list)
+    async_middleware: t.List[AsyncMiddleware] = dataclasses.field(default_factory=list)
 
     def headers(self) -> t.Dict[str, str]:
         headers = {"user-agent": self.user_agent, "accept": "application/json"}
@@ -215,6 +218,12 @@ class ApiBaseSync(ApiBase):
         super().__init__(cfg)
         self._httpx_client = httpx_client
 
+    def _send(self, kwargs: t.Dict[str, t.Any]) -> httpx.Response:
+        if not self._cfg.middleware:
+            return self._httpx_client.request(**kwargs)
+        request = self._httpx_client.build_request(**kwargs)
+        return chain_sync(self._httpx_client.send, self._cfg.middleware)(request)
+
     def _request_sync(self, **kwargs: t.Any) -> httpx.Response:
         """Execute one operation, retrying 5xx and transport failures.
 
@@ -231,7 +240,7 @@ class ApiBaseSync(ApiBase):
                 time.sleep(delay)
                 request_kwargs["headers"]["@@HEADER_PREFIX@@-retry-count"] = str(attempt)
             try:
-                response = self._httpx_client.request(**request_kwargs)
+                response = self._send(request_kwargs)
             except httpx.HTTPError as exc:
                 last_error = exc
                 continue
@@ -247,6 +256,13 @@ class ApiBaseAsync(ApiBase):
     def __init__(self, cfg: Configuration, httpx_client: httpx.AsyncClient) -> None:
         super().__init__(cfg)
         self._httpx_client = httpx_client
+
+    async def _send(self, kwargs: t.Dict[str, t.Any]) -> httpx.Response:
+        if not self._cfg.async_middleware:
+            return await self._httpx_client.request(**kwargs)
+        request = self._httpx_client.build_request(**kwargs)
+        send = chain_async(self._httpx_client.send, self._cfg.async_middleware)
+        return await send(request)
 
     async def _request_asyncio(self, **kwargs: t.Any) -> httpx.Response:
         """Execute one operation, retrying 5xx and transport failures.
@@ -264,7 +280,7 @@ class ApiBaseAsync(ApiBase):
                 await asyncio.sleep(delay)
                 request_kwargs["headers"]["@@HEADER_PREFIX@@-retry-count"] = str(attempt)
             try:
-                response = await self._httpx_client.request(**request_kwargs)
+                response = await self._send(request_kwargs)
             except httpx.HTTPError as exc:
                 last_error = exc
                 continue

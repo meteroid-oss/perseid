@@ -4,6 +4,8 @@ pub mod client;
 pub mod upload;
 #[path = "../event_stream.rs"]
 mod event_stream;
+#[path = "../middleware.rs"]
+pub mod middleware;
 pub use upload::Upload;
 pub use event_stream::{EventStream, SseEvent};
 
@@ -43,6 +45,7 @@ use std::{sync::Arc, time::Duration};
 
 use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
 
+use super::middleware::Middlewares;
 use crate::Configuration;
 
 const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -80,6 +83,9 @@ pub struct {{ sdk.client_name }}Options {
     /// List of delays to wait before each retry attempt.
     /// Takes precedence over `num_retries`.
     pub retry_schedule: Option<Vec<Duration>>,
+
+    /// Middleware wrapping every HTTP attempt: caching, logging, custom headers.
+    pub middleware: Middlewares,
 }
 
 impl Default for {{ sdk.client_name }}Options {
@@ -90,6 +96,7 @@ impl Default for {{ sdk.client_name }}Options {
             timeout: Some(Duration::from_secs(15)),
             num_retries: None,
             retry_schedule: None,
+            middleware: Middlewares::default(),
         }
     }
 }
@@ -142,6 +149,7 @@ impl {{ sdk.client_name }} {
             bearer_access_token: Some(token),
             num_retries: options.num_retries.unwrap_or(2),
             retry_schedule: options.retry_schedule,
+            middleware: options.middleware.0,
         });
 
         Self { cfg }
@@ -162,6 +170,7 @@ impl {{ sdk.client_name }} {
             timeout: self.cfg.timeout,
             num_retries: self.cfg.num_retries,
             retry_schedule: self.cfg.retry_schedule.clone(),
+            middleware: self.cfg.middleware.clone(),
         });
 
         Self { cfg }

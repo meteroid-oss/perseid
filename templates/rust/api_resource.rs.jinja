@@ -48,6 +48,9 @@ impl<'a> {{ resource_type_name }}<'a> {
         Self { cfg }
     }
 
+    {% set extension %}extensions/{{ resource.name | to_snake_case }}.rs{% endset -%}
+    {% include extension ignore missing %}
+
     {% for op in resource.operations %}
     {% set has_params = op | has_query_or_header_params -%}
     {% if op.description is defined -%}

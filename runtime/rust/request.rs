@@ -5,7 +5,6 @@
 use std::{collections::HashMap, time::Duration};
 
 use http1::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, USER_AGENT};
-use http_body_util::BodyExt as _;
 use hyper::body::Bytes;
 use itertools::Itertools as _;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
@@ -13,6 +12,7 @@ use rand::Rng;
 use serde::de::DeserializeOwned;
 
 use crate::api::{
+    middleware::{BoxError, Next, Request as MiddlewareRequest},
     upload::{Multipart, RequestBody},
     EventStream, Upload,
 };
@@ -21,6 +21,10 @@ use crate::{error::Error, Configuration};
 enum ResponseBody {
     Buffered(Option<Bytes>),
     Events(EventStream),
+}
+
+fn middleware_error(error: BoxError) -> Error {
+    Error::generic(std::io::Error::other(error))
 }
 
 pub(crate) enum Auth {
@@ -241,10 +245,18 @@ impl Request {
                     .validate_empty()
                     .await
                     .map_err(Error::generic)?;
-                let response = conf.client.request(request).await.map_err(Error::generic)?;
+                let response = Next::new(&conf.middleware, &conf.client)
+                    .run(MiddlewareRequest(request))
+                    .await
+                    .map_err(middleware_error)?;
                 let status = response.status();
                 if !status.is_success() {
-                    return Err(Error::from_response(status, response.into_body()).await);
+                    return Err(match response.into_upstream() {
+                        Ok(body) => Error::from_response(status, body).await,
+                        Err(_) => Error::generic(std::io::Error::other(format!(
+                            "middleware returned a buffered {status} response"
+                        ))),
+                    });
                 }
                 if event_stream {
                     let content_type = response
@@ -262,17 +274,24 @@ impl Request {
                             "expected a text/event-stream response",
                         )));
                     }
-                    return Ok(ResponseBody::Events(EventStream::new(response.into_body())));
+                    return match response.into_upstream() {
+                        Ok(body) => Ok(ResponseBody::Events(EventStream::new(body))),
+                        Err(_) => Err(Error::generic(std::io::Error::other(
+                            "middleware cannot buffer an event stream",
+                        ))),
+                    };
                 }
                 if self.no_return_type {
                     return Ok(ResponseBody::Buffered(None));
                 }
-                let bytes = response
-                    .into_body()
-                    .collect()
-                    .await
-                    .map_err(Error::generic)?
-                    .to_bytes();
+                let bytes = match response.into_buffered() {
+                    Ok(bytes) => bytes,
+                    Err(response) => response
+                        .into_parts()
+                        .await
+                        .map_err(middleware_error)?
+                        .2,
+                };
                 Ok(ResponseBody::Buffered(Some(bytes)))
             };
             let result = if let Some(timeout) = conf.timeout {

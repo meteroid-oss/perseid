@@ -61,6 +61,34 @@ jobs:
       - working-directory: ${{ runner.temp }}/sdk/java
         run: gradle build --no-daemon
 
+  # Opt-in runtime (webhooks) and middleware, exercised by tests inside each generated SDK.
+  extensions:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [rust, typescript, python, go, java]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: cargo install --locked --path . --root "$RUNNER_TEMP/perseid"
+      - run: |
+          echo "$RUNNER_TEMP/perseid/bin" >> "$GITHUB_PATH"
+          curl -fsSL -o "$RUNNER_TEMP/gjf.jar" https://github.com/google/google-java-format/releases/download/v1.25.2/google-java-format-1.25.2-all-deps.jar
+          printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$RUNNER_TEMP/gjf.jar" > "$RUNNER_TEMP/perseid/bin/google-java-format"
+          chmod +x "$RUNNER_TEMP/perseid/bin/google-java-format"
+      - run: tests/sdk/run.sh ${{ matrix.language }}
+
   image:
     runs-on: ubuntu-24.04
     steps:
