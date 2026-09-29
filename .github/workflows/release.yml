@@ -102,6 +102,7 @@ jobs:
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}"
           version="${GITHUB_REF_NAME#v}"
+          # shellcheck disable=SC2046 # one argument per digest
           docker buildx imagetools create -t "$image:$version" -t "$image:${version%%.*}" -t "$image:latest" \
             $(printf "$image@sha256:%s " *)
 

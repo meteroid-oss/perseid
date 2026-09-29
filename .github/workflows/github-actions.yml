@@ -1,7 +1,14 @@
 name: CI
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   test:
     runs-on: ubuntu-24.04
@@ -55,7 +62,7 @@ jobs:
       - working-directory: ${{ runner.temp }}/sdk/typescript
         run: npm install --no-audit --no-fund && npx tsc --noEmit
       - working-directory: ${{ runner.temp }}/sdk/python
-        run: uv venv && uv pip install -e . && uv run python -c "import $(ls -d */ | grep -v venv | head -1 | tr -d /)"
+        run: uv venv && uv pip install -e . && uv run python -c "import $(sed -n 's/^name = "\(.*\)"/\1/p' pyproject.toml | tr - _)"
       - working-directory: ${{ runner.temp }}/sdk/go
         run: go vet ./...
       - working-directory: ${{ runner.temp }}/sdk/java
