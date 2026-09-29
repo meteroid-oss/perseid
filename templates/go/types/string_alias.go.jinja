@@ -1,0 +1,7 @@
+{% set type_name = type.name | to_upper_camel_case -%}
+package {{ sdk.package_name }}
+
+{{ doc_comment }}
+{#- A true alias (`=`) rather than a defined type, so callers can pass plain
+    strings wherever an ID is expected. -#}
+type {{ type_name }} = string

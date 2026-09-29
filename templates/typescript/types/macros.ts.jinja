@@ -1,0 +1,137 @@
+{#
+    Shared helpers for the TypeScript model templates.
+
+    `field_from_json` / `field_to_json` render the expression that converts a
+    single field between its JSON wire representation and its TypeScript
+    representation. They recurse through lists, sets and maps.
+-#}
+
+{#
+    The TypeScript type of `type`. This is `type.to_js()`, except that any-JSON
+    values (`{}` in the spec) are typed `unknown` rather than `any`, so callers
+    have to narrow them before use. Recurses through lists, sets and maps so
+    that e.g. a list of any-JSON values is `unknown[]`.
+-#}
+{% macro js_type(type) -%}
+    {%- if type.is_json_object() -%}
+        unknown
+    {%- elif type.is_list() or type.is_set() -%}
+        {{ js_type(type.inner_type()) }}[]
+    {%- elif type.is_map() -%}
+        { [key: string]: {{ js_type(type.value_type()) }} }
+    {%- else -%}
+        {{ type.to_js() }}
+    {%- endif -%}
+{%- endmacro %}
+
+{# The TypeScript type of a field, including `| null` for nullable fields. -#}
+{% macro field_type(field) -%}
+    {{- js_type(field.type) }}{% if field.nullable %} | null{% endif -%}
+{%- endmacro %}
+
+{# A full interface member declaration (doc comment + `name?: Type;`). -#}
+{% macro field_decl(field) %}
+    {%- if field.description is defined %}
+        {{- field.description | with_javadoc_deprecation(field.deprecated) | to_doc_comment(style="js") }}
+    {% elif field.deprecated %}
+        {{- "" | with_javadoc_deprecation(field.deprecated) | to_doc_comment(style="js") }}
+    {% endif -%}
+    {{ field.name | to_lower_camel_case }}{% if not field.required %}?{% endif %}: {{ field_type(field) }};
+{% endmacro %}
+
+{# True when the JSON value may be absent or null and therefore needs a guard. -#}
+{% macro needs_guard(field_required, field_nullable) %}{{ not field_required or field_nullable }}{% endmacro %}
+
+{#
+    Convert `field_expr` (a JSON value) into the TypeScript representation of
+    `type`. `field_required`/`field_nullable` describe the *field* this
+    expression belongs to; nested calls always pass required=true.
+-#}
+{% macro field_from_json(field_expr, type, field_required, field_nullable) %}
+    {%- set guarded = (not field_required) or field_nullable -%}
+    {%- set fallback = "null" if (field_required and field_nullable) else "undefined" -%}
+    {%- if type.is_datetime() -%}
+        {%- if guarded -%}
+            {{ field_expr }} != null ? parseDateTime({{ field_expr }}) : {{ fallback }}
+        {%- else -%}
+            parseDateTime({{ field_expr }})
+        {%- endif -%}
+    {%- elif type.is_schema_ref() -%}
+        {%- if guarded -%}
+            {{ field_expr }} != null ? {{ type.to_js() }}Serializer._fromJsonObject({{ field_expr }}) : {{ fallback }}
+        {%- else -%}
+            {{ type.to_js() }}Serializer._fromJsonObject({{ field_expr }})
+        {%- endif -%}
+    {%- elif type.is_list() or type.is_set() -%}
+        {%- set inner_t = type.inner_type() -%}
+        {%- if inner_t.is_datetime() or inner_t.is_schema_ref() or inner_t.is_list() or inner_t.is_set() or inner_t.is_map() -%}
+            {%- if guarded -%}
+                {{ field_expr }} != null ? {{ field_expr }}.map((item: any) => {{ field_from_json("item", inner_t, true, false) }}) : {{ fallback }}
+            {%- else -%}
+                {{ field_expr }}.map((item: any) => {{ field_from_json("item", inner_t, true, false) }})
+            {%- endif -%}
+        {%- else -%}
+            {{ field_expr }}
+        {%- endif -%}
+    {%- elif type.is_map() -%}
+        {%- set value_t = type.value_type() -%}
+        {%- if value_t.is_datetime() or value_t.is_schema_ref() or value_t.is_list() or value_t.is_set() or value_t.is_map() -%}
+            {%- set mapped -%}
+                Object.fromEntries(Object.entries({{ field_expr }}).map((entry: [string, any]) => [entry[0], {{ field_from_json("entry[1]", value_t, true, false) }}]))
+            {%- endset -%}
+            {%- if guarded -%}
+                {{ field_expr }} != null ? {{ mapped }} : {{ fallback }}
+            {%- else -%}
+                {{ mapped }}
+            {%- endif -%}
+        {%- else -%}
+            {{ field_expr }}
+        {%- endif -%}
+    {%- else -%}
+        {{ field_expr }}
+    {%- endif -%}
+{% endmacro %}
+
+{#
+    Convert `field_expr` (a TypeScript value) into its JSON representation.
+    Dates are handled by `JSON.stringify` (which calls `toISOString`), so only
+    schema refs and containers thereof need explicit conversion.
+-#}
+{% macro field_to_json(field_expr, type, field_required, field_nullable) %}
+    {%- set guarded = (not field_required) or field_nullable -%}
+    {%- set fallback = "null" if (field_required and field_nullable) else "undefined" -%}
+    {%- if type.is_schema_ref() -%}
+        {%- if guarded -%}
+            {{ field_expr }} != null ? {{ type.to_js() }}Serializer._toJsonObject({{ field_expr }}) : {{ fallback }}
+        {%- else -%}
+            {{ type.to_js() }}Serializer._toJsonObject({{ field_expr }})
+        {%- endif -%}
+    {%- elif type.is_list() or type.is_set() -%}
+        {%- set inner_t = type.inner_type() -%}
+        {%- if inner_t.is_schema_ref() or inner_t.is_list() or inner_t.is_set() or inner_t.is_map() -%}
+            {%- if guarded -%}
+                {{ field_expr }} != null ? {{ field_expr }}.map((item: any) => {{ field_to_json("item", inner_t, true, false) }}) : {{ fallback }}
+            {%- else -%}
+                {{ field_expr }}.map((item: any) => {{ field_to_json("item", inner_t, true, false) }})
+            {%- endif -%}
+        {%- else -%}
+            {{ field_expr }}
+        {%- endif -%}
+    {%- elif type.is_map() -%}
+        {%- set value_t = type.value_type() -%}
+        {%- if value_t.is_schema_ref() or value_t.is_list() or value_t.is_set() or value_t.is_map() -%}
+            {%- set mapped -%}
+                Object.fromEntries(Object.entries({{ field_expr }}).map((entry: [string, any]) => [entry[0], {{ field_to_json("entry[1]", value_t, true, false) }}]))
+            {%- endset -%}
+            {%- if guarded -%}
+                {{ field_expr }} != null ? {{ mapped }} : {{ fallback }}
+            {%- else -%}
+                {{ mapped }}
+            {%- endif -%}
+        {%- else -%}
+            {{ field_expr }}
+        {%- endif -%}
+    {%- else -%}
+        {{ field_expr }}
+    {%- endif -%}
+{% endmacro %}

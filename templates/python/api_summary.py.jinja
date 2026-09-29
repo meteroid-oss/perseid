@@ -1,0 +1,187 @@
+# this file is @generated
+"""{{ sdk.client_name }} API resources."""
+
+from .client import {{ sdk.client_name }}, {{ sdk.client_name }}Async, {{ sdk.client_name }}Options
+{% for resource in api.resources -%}
+    {% set cls = resource.name | to_upper_camel_case -%}
+    from .{{ resource.name | to_snake_case }} import {{ cls }}, {{ cls }}Async
+{% endfor %}
+__all__ = [
+    "{{ sdk.client_name }}",
+    "{{ sdk.client_name }}Async",
+    "{{ sdk.client_name }}Options",
+    {% for resource in api.resources -%}
+        {% set cls = resource.name | to_upper_camel_case -%}
+        "{{ cls }}",
+        "{{ cls }}Async",
+    {% endfor -%}
+]
+
+{#- The client entry point lives in its own module so `api/__init__.py` stays a
+    plain barrel file. -#}
+{% set client_py %}# this file is @generated
+"""{{ sdk.client_name }} API client."""
+
+import dataclasses
+import typing as t
+
+import httpx
+
+from .common import (
+    DEFAULT_NUM_RETRIES,
+    DEFAULT_SERVER_URL,
+    DEFAULT_TIMEOUT,
+    Configuration,
+    default_retry_schedule,
+)
+{% for resource in api.resources -%}
+    {% set cls = resource.name | to_upper_camel_case -%}
+    from .{{ resource.name | to_snake_case }} import {{ cls }}, {{ cls }}Async
+{% endfor %}
+
+@dataclasses.dataclass
+class {{ sdk.client_name }}Options:
+    """Options for configuring the {{ sdk.client_name }} client."""
+
+    server_url: t.Optional[str] = None
+    """Custom server URL. Defaults to `{{ sdk.default_base_url }}`."""
+
+    timeout: t.Optional[float] = DEFAULT_TIMEOUT
+    """Timeout for HTTP requests, in seconds. `None` disables the timeout."""
+
+    num_retries: t.Optional[int] = None
+    """Number of retries on server-side errors or timeouts. Defaults to 2."""
+
+    retry_schedule: t.Optional[t.List[float]] = None
+    """Explicit list of delays (seconds) before each retry. Takes precedence
+    over `num_retries`."""
+
+
+def _build_configuration(token: str, options: t.Optional[{{ sdk.client_name }}Options]) -> Configuration:
+    options = options if options is not None else {{ sdk.client_name }}Options()
+    if options.retry_schedule is not None:
+        retry_schedule = list(options.retry_schedule)
+    else:
+        num_retries = (
+            options.num_retries if options.num_retries is not None else DEFAULT_NUM_RETRIES
+        )
+        retry_schedule = default_retry_schedule(num_retries)
+    return Configuration(
+        base_path=(options.server_url or DEFAULT_SERVER_URL).rstrip("/"),
+        bearer_access_token=token,
+        timeout=options.timeout,
+        retry_schedule=retry_schedule,
+    )
+
+
+class {{ sdk.client_name }}:
+    """Synchronous {{ sdk.client_name }} API client.
+
+    Example
+    -------
+    ::
+
+        from {{ sdk.package_name }} import {{ sdk.client_name }}
+
+        client = {{ sdk.client_name }}("your-api-key")
+        # Access the generated resources through client.
+    """
+
+    _cfg: Configuration
+    _httpx_client: httpx.Client
+    _owns_httpx_client: bool
+
+    def __init__(
+        self,
+        token: str,
+        options: t.Optional[{{ sdk.client_name }}Options] = None,
+        httpx_client: t.Optional[httpx.Client] = None,
+    ) -> None:
+        self._cfg = _build_configuration(token, options)
+        self._owns_httpx_client = httpx_client is None
+        self._httpx_client = (
+            httpx_client
+            if httpx_client is not None
+            else httpx.Client(timeout=self._cfg.timeout)
+        )
+
+    def with_token(self, token: str) -> "{{ sdk.client_name }}":
+        """Return a client using a different token but the same connection pool."""
+        clone = {{ sdk.client_name }}.__new__({{ sdk.client_name }})
+        clone._cfg = dataclasses.replace(self._cfg, bearer_access_token=token)
+        clone._httpx_client = self._httpx_client
+        clone._owns_httpx_client = False
+        return clone
+
+    def close(self) -> None:
+        if self._owns_httpx_client:
+            self._httpx_client.close()
+
+    def __enter__(self) -> "{{ sdk.client_name }}":
+        return self
+
+    def __exit__(self, *exc_info: t.Any) -> None:
+        self.close()
+{% for resource in api.resources %}
+    @property
+    def {{ resource.name | to_snake_case }}(self) -> {{ resource.name | to_upper_camel_case }}:
+        """Access the {{ resource.name | to_snake_case | replace("_", " ") }} API."""
+        return {{ resource.name | to_upper_camel_case }}(self._cfg, self._httpx_client)
+{% endfor %}
+
+class {{ sdk.client_name }}Async:
+    """Asyncio {{ sdk.client_name }} API client.
+
+    Example
+    -------
+    ::
+
+        from {{ sdk.package_name }} import {{ sdk.client_name }}Async
+
+        async with {{ sdk.client_name }}Async("your-api-key") as client:
+            pass  # Access the generated resources through client.
+    """
+
+    _cfg: Configuration
+    _httpx_client: httpx.AsyncClient
+    _owns_httpx_client: bool
+
+    def __init__(
+        self,
+        token: str,
+        options: t.Optional[{{ sdk.client_name }}Options] = None,
+        httpx_client: t.Optional[httpx.AsyncClient] = None,
+    ) -> None:
+        self._cfg = _build_configuration(token, options)
+        self._owns_httpx_client = httpx_client is None
+        self._httpx_client = (
+            httpx_client
+            if httpx_client is not None
+            else httpx.AsyncClient(timeout=self._cfg.timeout)
+        )
+
+    def with_token(self, token: str) -> "{{ sdk.client_name }}Async":
+        """Return a client using a different token but the same connection pool."""
+        clone = {{ sdk.client_name }}Async.__new__({{ sdk.client_name }}Async)
+        clone._cfg = dataclasses.replace(self._cfg, bearer_access_token=token)
+        clone._httpx_client = self._httpx_client
+        clone._owns_httpx_client = False
+        return clone
+
+    async def aclose(self) -> None:
+        if self._owns_httpx_client:
+            await self._httpx_client.aclose()
+
+    async def __aenter__(self) -> "{{ sdk.client_name }}Async":
+        return self
+
+    async def __aexit__(self, *exc_info: t.Any) -> None:
+        await self.aclose()
+{% for resource in api.resources %}
+    @property
+    def {{ resource.name | to_snake_case }}(self) -> {{ resource.name | to_upper_camel_case }}Async:
+        """Access the {{ resource.name | to_snake_case | replace("_", " ") }} API."""
+        return {{ resource.name | to_upper_camel_case }}Async(self._cfg, self._httpx_client)
+{% endfor %}
+{% endset %}
+{% set _ = generate_extra_file(output_dir ~ "/client.py", client_py) %}

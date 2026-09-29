@@ -1,0 +1,32 @@
+// this file is @generated
+{% if type.description is defined -%}
+{% set doc_comment = type.description | to_doc_comment(style="js") -%}
+{% else -%}
+{% set doc_comment = "" -%}
+{% endif -%}
+
+{#
+    The body is rendered first so that the `parseDateTime` import is only
+    emitted by the models that use it (the datetime conversion can sit deep in
+    a list, a map or an enum variant).
+-#}
+{% set body -%}
+{% if type.kind == "struct" -%}
+    {% include "types/struct.ts.jinja" -%}
+{% elif type.kind == "string_enum" -%}
+    {% include "types/string_enum.ts.jinja" -%}
+{% elif type.kind == "integer_enum" -%}
+    {% include "types/integer_enum.ts.jinja" -%}
+{% elif type.kind == "struct_enum" -%}
+    {% include "types/struct_enum.ts.jinja" -%}
+{% elif type.kind == "string_alias" -%}
+    {% include "types/string_alias.ts.jinja" -%}
+{% else -%}
+    {# Fail loudly rather than silently emitting nothing for an unhandled kind. #}
+    {{ panic("typescript codegen: unsupported schema kind `" ~ type.kind ~ "` for type `" ~ type.name ~ "`") }}
+{% endif %}
+{% endset -%}
+{% if "parseDateTime(" in body -%}
+import { parseDateTime } from "../datetime";
+{% endif -%}
+{{ body }}

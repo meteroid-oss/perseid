@@ -1,0 +1,34 @@
+{% from "types/macros.go.jinja" import go_deprecated -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+package {{ sdk.package_name }}
+
+import "strconv"
+
+{{ doc_comment }}
+{% if type.deprecated %}{{ go_deprecated("type") }}
+{% endif %}type {{ type_name }} int64
+
+// Known values of {{ type_name }}.
+const (
+{% for name, value in type.variants %}{{ type_name }}{{ name | to_upper_camel_case }} {{ type_name }} = {{ value }}
+{% endfor %})
+
+// All{{ type_name }}Values lists every {{ type_name }} value known to this SDK version.
+var All{{ type_name }}Values = []{{ type_name }}{
+{% for name, value in type.variants %}{{ type_name }}{{ name | to_upper_camel_case }},
+{% endfor %}}
+
+// String returns the decimal representation of the value.
+func (e {{ type_name }}) String() string {
+	return strconv.FormatInt(int64(e), 10)
+}
+
+// IsKnown reports whether the value is one this SDK version knows about.
+func (e {{ type_name }}) IsKnown() bool {
+	for _, known := range All{{ type_name }}Values {
+		if e == known {
+			return true
+		}
+	}
+	return false
+}

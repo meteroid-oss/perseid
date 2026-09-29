@@ -1,0 +1,13 @@
+{% set type_name = type.name | to_upper_camel_case -%}
+{{ doc_comment }}
+export type {{ type_name }} = string;
+
+export const {{ type_name }}Serializer = {
+    _fromJsonObject(object: any): {{ type_name }} {
+        return object;
+    },
+
+    _toJsonObject(self: {{ type_name }}): any {
+        return self;
+    },
+};

@@ -1,0 +1,36 @@
+{% import "types/macros.ts.jinja" as m -%}
+{% for c in referenced_components -%}
+import {
+    {{ c | to_upper_camel_case }},
+    {{ c | to_upper_camel_case }}Serializer,
+} from './{{ c | to_lower_camel_case }}';
+{% endfor -%}
+
+{% set type_name = type.name | to_upper_camel_case -%}
+
+{{ doc_comment }}
+export interface {{ type_name }} {
+    {% for field in type.fields -%}
+        {{ m.field_decl(field) }}
+    {% endfor -%}
+}
+
+export const {{ type_name }}Serializer = {
+    _fromJsonObject(object: any): {{ type_name }} {
+        return {
+            {% for field in type.fields -%}
+                {% set field_expr %}object['{{ field.name }}']{% endset -%}
+                {{ field.name | to_lower_camel_case }}: {{ m.field_from_json(field_expr, field.type, field.required, field.nullable) }},
+            {% endfor -%}
+        };
+    },
+
+    _toJsonObject(self: {{ type_name }}): any {
+        return {
+            {% for field in type.fields -%}
+                {% set field_expr %}self.{{ field.name | to_lower_camel_case }}{% endset -%}
+                '{{ field.name }}': {{ m.field_to_json(field_expr, field.type, field.required, field.nullable) }},
+            {% endfor -%}
+        };
+    },
+};

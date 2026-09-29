@@ -1,0 +1,20 @@
+// this file is @generated
+{% if type.description is defined -%}
+{% set doc_comment = type.description | to_doc_comment(style="go") -%}
+{% else -%}
+{% set doc_comment = "" -%}
+{% endif -%}
+
+{% if type.kind == "struct" -%}
+    {% include "types/struct.go.jinja" -%}
+{% elif type.kind == "string_enum" -%}
+    {% include "types/string_enum.go.jinja" -%}
+{% elif type.kind == "integer_enum" -%}
+    {% include "types/integer_enum.go.jinja" -%}
+{% elif type.kind == "struct_enum" -%}
+    {% include "types/struct_enum.go.jinja" -%}
+{% elif type.kind == "string_alias" -%}
+    {% include "types/string_alias.go.jinja" -%}
+{% else -%}
+    {{ panic("go codegen: unsupported component type kind `" ~ type.kind ~ "` for type `" ~ type.name ~ "`") }}
+{% endif %}

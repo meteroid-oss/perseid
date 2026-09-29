@@ -1,0 +1,15 @@
+Perseid
+https://github.com/meteroid-oss/perseid
+
+This project includes generator, template and runtime code derived from:
+
+- Svix: https://github.com/svix/svix-webhooks
+  Copyright (c) 2025 Svix (https://www.svix.com)
+  MIT license notice: LICENSE-Svix
+
+- Meteroid: https://github.com/meteroid-oss/meteroid-clients
+  Copyright (c) 2025 Meteroid (https://meteroid.com)
+  MIT license notice: LICENSE-Meteroid
+
+The imported code has been modified for reusable SDK configuration, shared
+runtime generation, template overrides, schema handling, and independent tooling.

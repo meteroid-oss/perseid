@@ -1,0 +1,11 @@
+# this file is @generated
+"""Models for the {{ sdk.client_name }} API."""
+
+{% for _, type in api.types | items -%}
+from .{{ type.name | to_snake_case }} import {{ type.name | to_upper_camel_case }}
+{% endfor %}
+__all__ = [
+    {% for _, type in api.types | items -%}
+        "{{ type.name | to_upper_camel_case }}",
+    {% endfor -%}
+]

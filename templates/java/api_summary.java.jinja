@@ -1,0 +1,74 @@
+{% set _ = set_summary_filename(sdk.client_name ~ ".java") -%}
+// this file is @generated
+package {{ sdk.java_package }};
+
+import {{ sdk.java_package }}.api.*;
+
+import lombok.Getter;
+
+import okhttp3.HttpUrl;
+
+import java.util.Map;
+
+/**
+ * Main entry point for the {{ sdk.client_name }} Java SDK.
+ *
+ * <p>This class provides access to all {{ sdk.client_name }} API resources through a fluent interface.
+ *
+ * <p>Example usage:
+ * <pre>{@code
+ * // Initialize with API key
+ * {{ sdk.client_name }} client = new {{ sdk.client_name }}("your-api-key");
+ *
+ * // Or with custom options
+ * {{ sdk.client_name }}Options options = new {{ sdk.client_name }}Options();
+ * options.setServerUrl("https://api.example.com");
+ * {{ sdk.client_name }} client = new {{ sdk.client_name }}("your-api-key", options);
+ *
+ * // Access API resources
+ * // Resource accessors depend on your OpenAPI specification.
+ * }</pre>
+ */
+@Getter
+public class {{ sdk.client_name }} {
+{% for resource in api.resources %}
+    private final {{ resource.name | to_upper_camel_case }} {{ resource.name | to_lower_camel_case }};
+{% endfor %}
+
+    /**
+     * Create a new {{ sdk.client_name }} client with default options.
+     *
+     * @param apiKey Your {{ sdk.client_name }} API key
+     */
+    public {{ sdk.client_name }}(String apiKey) {
+        this(apiKey, new {{ sdk.client_name }}Options());
+    }
+
+    /**
+     * Create a new {{ sdk.client_name }} client with custom options.
+     *
+     * @param apiKey Your {{ sdk.client_name }} API key
+     * @param options Configuration options for the client
+     */
+    public {{ sdk.client_name }}(String apiKey, {{ sdk.client_name }}Options options) {
+        HttpUrl parsedUrl = HttpUrl.parse(options.getServerUrl());
+        if (parsedUrl == null) {
+            throw new IllegalArgumentException("Invalid server URL: " + options.getServerUrl());
+        }
+
+        Map<String, String> defaultHeaders = Map.of(
+                "User-Agent", "{{ sdk.user_agent_prefix }}-java/" + Version.VERSION,
+                "Authorization", "Bearer " + apiKey
+        );
+
+        {{ sdk.client_name }}HttpClient httpClient = new {{ sdk.client_name }}HttpClient(
+                parsedUrl,
+                defaultHeaders,
+                options.getRetrySchedule()
+        );
+
+{% for resource in api.resources %}
+        this.{{ resource.name | to_lower_camel_case }} = new {{ resource.name | to_upper_camel_case }}(httpClient);
+{% endfor %}
+    }
+}

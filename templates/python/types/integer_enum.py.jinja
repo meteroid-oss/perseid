@@ -1,0 +1,14 @@
+{% from "types/macros.py.jinja" import docstring -%}
+import enum
+
+
+class {{ type.name | to_upper_camel_case }}(enum.IntEnum):
+    {% if type.description is defined -%}
+        {{ docstring(type.description) | indent(4) }}
+    {% endif %}
+    {%- for name, value in type.variants %}
+    {{ name | to_upper_snake_case }} = {{ value }}
+    {%- endfor %}
+
+    def __str__(self) -> str:
+        return str(self.value)

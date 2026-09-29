@@ -1,0 +1,13 @@
+// this file is @generated
+#![allow(clippy::too_many_arguments)]
+
+{% for _, type in api.types | items -%}
+    pub mod {{ type.name | to_rust_ident }};
+{% endfor -%}
+
+pub use self::{
+    {% for _, type in api.types | items -%}
+        {% set type_name = type.name | to_upper_camel_case -%}
+        {{ type.name | to_rust_ident }}::{{ type_name }},
+    {% endfor -%}
+};

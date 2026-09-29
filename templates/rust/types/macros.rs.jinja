@@ -1,0 +1,3 @@
+{% macro field_name(name) -%}
+    {{ name | to_rust_ident }}
+{% endmacro -%}

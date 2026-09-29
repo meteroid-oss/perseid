@@ -1,0 +1,120 @@
+// this file is @generated
+{% for resource in api.resources -%}
+{% if resource.subresources | length > 0 -%}
+{{ panic("typescript codegen: subresources are not supported (resource `" ~ resource.name ~ "`)") }}
+{% endif -%}
+{% endfor -%}
+{% for resource in api.resources -%}
+import { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}";
+{% endfor -%}
+import type { {{ sdk.client_name }}RequestContext } from "./request";
+import type { XOR } from "./util";
+
+export { ApiException } from "./util";
+export type { XOR } from "./util";
+{% for module in sdk.extra_exports | default([]) -%}
+export * from "./{{ module }}";
+{% endfor -%}
+export * from "./models/index";
+export { LIB_VERSION } from "./request";
+
+{% for resource in api.resources -%}
+export { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}";
+{% for op in resource.operations -%}
+{% if op | has_query_or_header_params -%}
+export type { {{ resource.name | to_upper_camel_case }}{{ op.name | to_upper_camel_case }}Options } from "./api/{{ resource.name | to_lower_camel_case }}";
+{% endif -%}
+{% endfor -%}
+{% endfor %}
+
+export type {{ sdk.client_name }}Options = {
+  /** Write a one-line summary of every request and response to stderr. */
+  debug?: boolean;
+  /** Custom API server URL. Defaults to `{{ sdk.default_base_url }}`. */
+  serverUrl?: string;
+  /** Time in milliseconds to wait for requests to get a response. */
+  requestTimeout?: number;
+  /**
+   * Custom fetch implementation to use for HTTP requests.
+   * Useful for testing, adding custom middleware, or running in non-standard environments.
+   */
+  fetch?: typeof fetch;
+} & XOR<
+  {
+    /** List of delays (in milliseconds) to wait before each retry attempt. */
+    retryScheduleInMs?: number[];
+  },
+  {
+    /**
+     * The number of times the client will retry if a server-side error
+     * or timeout is received.
+     * Default: 2
+     */
+    numRetries?: number;
+  }
+>;
+
+const DEFAULT_BASE_URL = "{{ sdk.default_base_url }}";
+
+/**
+ * {{ sdk.client_name }} API client.
+ *
+ * @example
+ * ```typescript
+ * const client = new {{ sdk.client_name }}("your-api-key");
+ *
+ * // Access the generated resources through the client.
+ * ```
+ */
+export class {{ sdk.client_name }} {
+  private readonly requestCtx: {{ sdk.client_name }}RequestContext;
+
+  /**
+   * Create a new {{ sdk.client_name }} client.
+   *
+   * @param token API token for authentication
+   * @param options Client configuration options
+   */
+  public constructor(token: string, options: {{ sdk.client_name }}Options = {}) {
+    const baseUrl: string = options.serverUrl ?? DEFAULT_BASE_URL;
+
+    if (options.retryScheduleInMs != null) {
+      this.requestCtx = {
+        baseUrl,
+        token,
+        timeout: options.requestTimeout,
+        retryScheduleInMs: options.retryScheduleInMs,
+        debug: options.debug,
+        fetch: options.fetch,
+      };
+      return;
+    }
+
+    if (options.numRetries != null) {
+      this.requestCtx = {
+        baseUrl,
+        token,
+        timeout: options.requestTimeout,
+        numRetries: options.numRetries,
+        debug: options.debug,
+        fetch: options.fetch,
+      };
+      return;
+    }
+
+    this.requestCtx = {
+      baseUrl,
+      token,
+      timeout: options.requestTimeout,
+      debug: options.debug,
+      fetch: options.fetch,
+    };
+  }
+
+  {% for resource in api.resources %}
+  /** Access the {{ resource.name | to_snake_case | replace("_", " ") }} API. */
+  public get {{ resource.name | to_lower_camel_case }}(): {{ resource.name | to_upper_camel_case }} {
+    return new {{ resource.name | to_upper_camel_case }}(this.requestCtx);
+  }
+  {% endfor %}
+}

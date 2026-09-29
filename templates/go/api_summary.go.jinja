@@ -1,0 +1,32 @@
+{% set _ = set_summary_filename("client.go") -%}
+// this file is @generated
+package {{ sdk.package_name }}
+
+// Client is the entry point of the {{ sdk.client_name }} SDK.
+//
+// A Client is safe for concurrent use by multiple goroutines. Each API area is
+// reached through an accessor method, e.g. client.Customers().ListCustomers(ctx, nil).
+type Client struct {
+	cfg *config
+}
+
+// New builds a Client authenticated with the given API token.
+//
+// Pass nil options to use the defaults: {{ sdk.default_base_url }} as the server,
+// a 15 second per-request timeout and two retries on transient failures.
+func New(token string, options *Options) *Client {
+	return &Client{cfg: newConfig(token, options)}
+}
+
+// WithToken returns a copy of the client that authenticates with a different
+// API token, reusing the underlying HTTP client and every other setting.
+func (c *Client) WithToken(token string) *Client {
+	return &Client{cfg: c.cfg.withToken(token)}
+}
+
+{% for resource in api.resources %}
+// {{ resource.name | to_upper_camel_case }} returns the {{ resource.name | to_snake_case | replace("_", " ") }} API.
+func (c *Client) {{ resource.name | to_upper_camel_case }}() *{{ resource.name | to_upper_camel_case }} {
+	return &{{ resource.name | to_upper_camel_case }}{client: c}
+}
+{% endfor %}

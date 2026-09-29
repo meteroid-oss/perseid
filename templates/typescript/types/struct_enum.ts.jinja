@@ -1,0 +1,217 @@
+{% import "types/macros.ts.jinja" as m -%}
+{% for c in referenced_components -%}
+import {
+    {{ c | to_upper_camel_case }},
+    {{ c | to_upper_camel_case }}Serializer,
+} from './{{ c | to_lower_camel_case }}';
+{% endfor -%}
+
+{% set type_name = type.name | to_upper_camel_case -%}
+{% set disc_json = type.discriminator_field -%}
+{% set disc = type.discriminator_field | to_lower_camel_case -%}
+
+{% if type.repr != "internally_tagged" and type.repr != "adjacently_tagged" -%}
+{{ panic("typescript codegen: unsupported struct enum representation `" ~ type.repr ~ "` for type `" ~ type.name ~ "`") }}
+{% endif -%}
+
+{% if type.repr == "adjacently_tagged" -%}
+{#- ==================== ADJACENTLY TAGGED ==================== -#}
+{% set content_json = type.content_field -%}
+{% set content = type.content_field | to_lower_camel_case -%}
+
+{% if type.fields | length > 0 -%}
+interface _{{ type_name }}Base {
+    {% for field in type.fields -%}
+        {{ m.field_decl(field) }}
+    {% endfor -%}
+}
+{% endif %}
+
+{% for variant in type.variants -%}
+{% set variant_name = variant.name | to_upper_camel_case -%}
+{% if variant.type == "struct" and variant.fields is defined and variant.fields | length > 0 -%}
+export interface {{ type_name }}{{ variant_name }}{{ content_json | to_upper_camel_case }} {
+    {% for field in variant.fields -%}
+        {{ m.field_decl(field) }}
+    {% endfor -%}
+}
+{% endif -%}
+{% endfor %}
+
+{% for variant in type.variants -%}
+{% set variant_name = variant.name | to_upper_camel_case -%}
+export interface {{ type_name }}{{ variant_name }} {% if type.fields | length > 0 %}extends _{{ type_name }}Base {% endif %}{
+    {{ disc }}: '{{ variant.name }}';
+    {% if variant.type == "ref" and variant.schema_ref is defined -%}
+    {{ content }}: {{ variant.schema_ref | to_upper_camel_case }};
+    {% elif variant.type == "struct" and variant.fields is defined and variant.fields | length > 0 -%}
+    {{ content }}: {{ type_name }}{{ variant_name }}{{ content_json | to_upper_camel_case }};
+    {% endif -%}
+}
+{% endfor %}
+
+{{ doc_comment }}
+export type {{ type_name }} =
+    {%- for variant in type.variants %}
+    | {{ type_name }}{{ variant.name | to_upper_camel_case }}
+    {%- endfor %};
+
+export const {{ type_name }}Serializer = {
+    _fromJsonObject(object: any): {{ type_name }} {
+        const {{ disc }} = object['{{ disc_json }}'];
+        {% if type.fields | length > 0 -%}
+        const baseFields = {
+            {% for field in type.fields -%}
+                {% set field_expr %}object['{{ field.name }}']{% endset -%}
+                {{ field.name | to_lower_camel_case }}: {{ m.field_from_json(field_expr, field.type, field.required, field.nullable) }},
+            {% endfor -%}
+        };
+        {% endif -%}
+        const content = object['{{ content_json }}'];
+
+        switch ({{ disc }}) {
+        {%- for variant in type.variants %}
+            case '{{ variant.name }}':
+                return {
+                    {{ disc }}: '{{ variant.name }}',
+                    {% if type.fields | length > 0 %}...baseFields,{% endif %}
+                    {% if variant.type == "ref" and variant.schema_ref is defined -%}
+                    {{ content }}: {{ variant.schema_ref | to_upper_camel_case }}Serializer._fromJsonObject(content),
+                    {% elif variant.type == "struct" and variant.fields is defined and variant.fields | length > 0 -%}
+                    {{ content }}: {
+                        {% for field in variant.fields -%}
+                            {% set field_expr %}content['{{ field.name }}']{% endset -%}
+                            {{ field.name | to_lower_camel_case }}: {{ m.field_from_json(field_expr, field.type, field.required, field.nullable) }},
+                        {% endfor -%}
+                    },
+                    {% endif -%}
+                };
+        {%- endfor %}
+            default:
+                throw new Error(`Unexpected {{ disc_json }} for {{ type_name }}: ${ {{ disc }} }`);
+        }
+    },
+
+    _toJsonObject(self: {{ type_name }}): any {
+        switch (self.{{ disc }}) {
+        {%- for variant in type.variants %}
+            case '{{ variant.name }}':
+                return {
+                    '{{ disc_json }}': '{{ variant.name }}',
+                    {% for field in type.fields -%}
+                        {% set field_expr %}self.{{ field.name | to_lower_camel_case }}{% endset -%}
+                        '{{ field.name }}': {{ m.field_to_json(field_expr, field.type, field.required, field.nullable) }},
+                    {% endfor -%}
+                    {% if variant.type == "ref" and variant.schema_ref is defined -%}
+                    '{{ content_json }}': {{ variant.schema_ref | to_upper_camel_case }}Serializer._toJsonObject(self.{{ content }}),
+                    {% elif variant.type == "struct" and variant.fields is defined and variant.fields | length > 0 -%}
+                    '{{ content_json }}': {
+                        {% for field in variant.fields -%}
+                            {% set field_expr %}self.{{ content }}.{{ field.name | to_lower_camel_case }}{% endset -%}
+                            '{{ field.name }}': {{ m.field_to_json(field_expr, field.type, field.required, field.nullable) }},
+                        {% endfor -%}
+                    },
+                    {% endif -%}
+                };
+        {%- endfor %}
+            default:
+                throw new Error(`Unexpected {{ disc_json }} for {{ type_name }}`);
+        }
+    },
+};
+
+{% else -%}
+{#- ==================== INTERNALLY TAGGED ==================== -#}
+
+{% if type.fields | length > 0 -%}
+interface _{{ type_name }}Base {
+    {% for field in type.fields -%}
+        {{ m.field_decl(field) }}
+    {% endfor -%}
+}
+{% endif %}
+
+{% for variant in type.variants -%}
+{% set variant_name = variant.name | to_upper_camel_case -%}
+{% if variant.type == "ref" and variant.schema_ref is defined -%}
+export interface {{ type_name }}{{ variant_name }} extends {% if type.fields | length > 0 %}_{{ type_name }}Base, {% endif %}{{ variant.schema_ref | to_upper_camel_case }} {
+    {{ disc }}: '{{ variant.name }}';
+}
+{% elif variant.type == "struct" and variant.fields is defined and variant.fields | length > 0 -%}
+export interface {{ type_name }}{{ variant_name }} {% if type.fields | length > 0 %}extends _{{ type_name }}Base {% endif %}{
+    {{ disc }}: '{{ variant.name }}';
+    {% for field in variant.fields -%}
+        {{ m.field_decl(field) }}
+    {% endfor -%}
+}
+{% else -%}
+export interface {{ type_name }}{{ variant_name }} {% if type.fields | length > 0 %}extends _{{ type_name }}Base {% endif %}{
+    {{ disc }}: '{{ variant.name }}';
+}
+{% endif -%}
+{% endfor %}
+
+{{ doc_comment }}
+export type {{ type_name }} =
+    {%- for variant in type.variants %}
+    | {{ type_name }}{{ variant.name | to_upper_camel_case }}
+    {%- endfor %};
+
+export const {{ type_name }}Serializer = {
+    _fromJsonObject(object: any): {{ type_name }} {
+        const {{ disc }} = object['{{ disc_json }}'];
+        {% if type.fields | length > 0 -%}
+        const baseFields = {
+            {% for field in type.fields -%}
+                {% set field_expr %}object['{{ field.name }}']{% endset -%}
+                {{ field.name | to_lower_camel_case }}: {{ m.field_from_json(field_expr, field.type, field.required, field.nullable) }},
+            {% endfor -%}
+        };
+        {% endif %}
+        switch ({{ disc }}) {
+        {%- for variant in type.variants %}
+            case '{{ variant.name }}':
+                return {
+                    {% if type.fields | length > 0 %}...baseFields,{% endif %}
+                    {% if variant.type == "ref" and variant.schema_ref is defined -%}
+                    ...{{ variant.schema_ref | to_upper_camel_case }}Serializer._fromJsonObject(object),
+                    {% elif variant.type == "struct" and variant.fields is defined and variant.fields | length > 0 -%}
+                    {% for field in variant.fields -%}
+                        {% set field_expr %}object['{{ field.name }}']{% endset -%}
+                        {{ field.name | to_lower_camel_case }}: {{ m.field_from_json(field_expr, field.type, field.required, field.nullable) }},
+                    {% endfor -%}
+                    {% endif -%}
+                    {{ disc }}: '{{ variant.name }}',
+                };
+        {%- endfor %}
+            default:
+                throw new Error(`Unexpected {{ disc_json }} for {{ type_name }}: ${ {{ disc }} }`);
+        }
+    },
+
+    _toJsonObject(self: {{ type_name }}): any {
+        switch (self.{{ disc }}) {
+        {%- for variant in type.variants %}
+            case '{{ variant.name }}':
+                return {
+                    {% for field in type.fields -%}
+                        {% set field_expr %}self.{{ field.name | to_lower_camel_case }}{% endset -%}
+                        '{{ field.name }}': {{ m.field_to_json(field_expr, field.type, field.required, field.nullable) }},
+                    {% endfor -%}
+                    {% if variant.type == "ref" and variant.schema_ref is defined -%}
+                    ...{{ variant.schema_ref | to_upper_camel_case }}Serializer._toJsonObject(self),
+                    {% elif variant.type == "struct" and variant.fields is defined and variant.fields | length > 0 -%}
+                    {% for field in variant.fields -%}
+                        {% set field_expr %}self.{{ field.name | to_lower_camel_case }}{% endset -%}
+                        '{{ field.name }}': {{ m.field_to_json(field_expr, field.type, field.required, field.nullable) }},
+                    {% endfor -%}
+                    {% endif -%}
+                    '{{ disc_json }}': '{{ variant.name }}',
+                };
+        {%- endfor %}
+            default:
+                throw new Error(`Unexpected {{ disc_json }} for {{ type_name }}`);
+        }
+    },
+};
+{% endif %}

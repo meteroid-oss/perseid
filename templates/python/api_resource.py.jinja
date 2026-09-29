@@ -1,0 +1,133 @@
+{% from "types/macros.py.jinja" import docstring, py_ident, py_type -%}
+# this file is @generated
+{% if resource.subresources | length > 0 -%}
+    {{ panic("resource `" ~ resource.name ~ "` has subresources, which the Python templates do not support yet") }}
+{%- endif -%}
+
+{% set resource_class_name = resource.name | to_upper_camel_case -%}
+import typing as t
+from datetime import datetime
+from decimal import Decimal
+
+from ..models import (
+{% for c in referenced_components -%}
+    {{ c | to_upper_camel_case }},
+{% endfor -%}
+)
+from .common import ApiBaseAsync, ApiBaseSync, decode_response, serialize_query_params
+{% for is_async in [true, false] %}
+{%- set class_suffix %}{% if is_async %}Async{% endif %}{% endset %}
+{%- set base_class %}{% if is_async %}ApiBaseAsync{% else %}ApiBaseSync{% endif %}{% endset %}
+{%- set def_kw %}{% if is_async %}async def{% else %}def{% endif %}{% endset %}
+{%- set request_fn %}{% if is_async %}await self._request_asyncio{% else %}self._request_sync{% endif %}{% endset %}
+
+
+class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
+    """{{ resource.name | to_snake_case | replace("_", " ") }} API."""
+{%- if resource.operations | length == 0 %}
+
+    pass
+{%- endif %}
+{%- for op in resource.operations %}
+{%- if op.response_is_binary %}
+{%- set return_type = "bytes" %}
+{%- elif op.response_is_text %}
+{%- set return_type = "str" %}
+{%- elif op.response_body_schema_name is defined %}
+{%- set return_type = op.response_body_schema_name | to_upper_camel_case %}
+{%- else %}
+{%- set return_type = "None" %}
+{%- endif %}
+{%- set has_response = op.response_body_schema_name is defined or op.response_is_binary or op.response_is_text %}
+{%- set has_options = op | has_query_or_header_params %}
+
+    {{ def_kw }} {{ py_ident(op.name) }}(
+        self,
+{%- for p in op.path_params %}
+        {{ py_ident(p) }}: str,
+{%- endfor %}
+{%- if op.request_body_schema_name is defined %}
+        {{ py_ident(op.request_body_schema_name) }}: {{ op.request_body_schema_name | to_upper_camel_case }},
+{%- endif %}
+{%- if has_options %}
+        *,
+{#- Required parameters are emitted first for readability; they are all
+    keyword-only, so the ordering carries no semantics. -#}
+{%- for required_pass in [true, false] %}
+{%- for p in op.query_params if p.required == required_pass %}
+        {{ py_ident(p.name) }}: {% if p.required %}{{ py_type(p.type) }},{% else %}t.Optional[{{ py_type(p.type) }}] = None,{% endif %}
+{%- endfor %}
+{%- for p in op.header_params if p.required == required_pass %}
+        {{ py_ident(p.name) }}: {% if p.required %}str,{% else %}t.Optional[str] = None,{% endif %}
+{%- endfor %}
+{%- endfor %}
+{%- endif %}
+    ) -> {{ return_type }}:
+{%- set params_doc %}
+{%- for p in op.query_params if p.description is defined %}
+:param {{ py_ident(p.name) }}: {{ p.description | replace("\n", " ") }}
+{%- endfor %}
+{%- endset %}
+{%- set doc %}
+{%- if op.description is defined %}{{ op.description }}{% endif %}
+{%- if op.deprecated %}{% if op.description is defined %}
+
+{% endif %}.. deprecated:: This operation is deprecated.{% endif %}
+{%- if params_doc | trim %}{% if op.description is defined or op.deprecated %}
+
+{% endif %}{{ params_doc | trim }}{% endif %}
+{%- endset %}
+{%- if doc | trim %}
+        {{ docstring(doc | trim) | indent(8) }}
+{%- endif %}
+        {% if has_response %}response = {% endif %}{{ request_fn }}(
+            method="{{ op.method }}",
+            path="{{ op.path }}",
+{%- if op.path_params | length > 0 %}
+            path_params={
+{%- for p in op.path_params %}
+                "{{ p }}": {{ py_ident(p) }},
+{%- endfor %}
+            },
+{%- endif %}
+{%- if op.query_params | length > 0 %}
+            query_params=serialize_query_params(
+                {
+{%- for p in op.query_params %}
+                    "{{ p.name }}": {{ py_ident(p.name) }},
+{%- endfor %}
+                },
+{%- set comma_joined %}
+{%- for p in op.query_params if (p.type.is_list() or p.type.is_set()) and not p.explode -%}
+"{{ p.name }}",
+{%- endfor -%}
+{%- endset %}
+{%- if comma_joined | trim %}
+                comma_joined=({{ comma_joined | trim }}),
+{%- endif %}
+            ),
+{%- endif %}
+{%- if op.header_params | length > 0 %}
+            header_params={
+{%- for p in op.header_params %}
+                "{{ p.name }}": {{ py_ident(p.name) }},
+{%- endfor %}
+            },
+{%- endif %}
+{%- if op.request_body_schema_name is defined %}
+{%- if op.request_body_is_form %}
+            form_body={{ py_ident(op.request_body_schema_name) }}.to_dict(),
+{%- else %}
+            json_body={{ py_ident(op.request_body_schema_name) }}.to_dict(),
+{%- endif %}
+{%- endif %}
+        )
+{%- if op.response_is_binary %}
+        return response.content
+{%- elif op.response_is_text %}
+        return response.text
+{%- elif op.response_body_schema_name is defined %}
+        return decode_response(response, {{ op.response_body_schema_name | to_upper_camel_case }})
+{%- endif %}
+{%- endfor %}
+{% endfor %}

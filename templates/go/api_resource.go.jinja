@@ -1,0 +1,94 @@
+{% from "types/macros.go.jinja" import go_local, go_query_scalar, go_header_type -%}
+{% set resource_type_name = resource.name | to_upper_camel_case -%}
+// this file is @generated
+package {{ sdk.package_name }}
+
+import (
+	"context"
+	"net/http"
+)
+
+{% for op in resource.operations %}{% if op | has_query_or_header_params %}
+{% set options_type_name = resource_type_name ~ (op.name | to_upper_camel_case) ~ "Options" %}
+// {{ options_type_name }} carries the query and header parameters of
+// {{ resource_type_name }}.{{ op.name | to_upper_camel_case }}.
+//
+// Optional parameters are pointers; leave them nil to omit them.
+type {{ options_type_name }} struct {
+{% for p in op.query_params %}{% if not loop.first %}
+{% endif %}{% if p.description is defined %}{{ p.description | to_doc_comment(style="go") }}
+{% endif %}{{ p.name | to_upper_camel_case }} {% if not p.required and not (p.type.is_list() or p.type.is_set()) %}*{% endif %}{{ p.type.to_go() }}
+{% endfor %}{% for p in op.header_params %}
+{{ p.name | to_upper_camel_case }} {% if not p.required %}*{% endif %}{{ go_header_type(p) }}
+{% endfor %}}
+{% endif %}{% endfor %}
+
+// {{ resource_type_name }} groups the {{ resource.name | to_snake_case | replace("_", " ") }} operations of the {{ sdk.client_name }} API.
+type {{ resource_type_name }} struct {
+	client *Client
+}
+
+{% for op in resource.operations %}
+{% set has_params = op | has_query_or_header_params %}
+{% set has_required_params = op | has_required_query_or_header_params %}
+{% set options_type_name = resource_type_name ~ (op.name | to_upper_camel_case) ~ "Options" %}
+{% if op.request_body_schema_name is defined %}{% set body_var = go_local(op.request_body_schema_name) %}{% endif %}
+{% if op.response_is_binary %}{% set ret_type = "[]byte" %}{% set ret_zero = "nil" %}
+{% elif op.response_is_text %}{% set ret_type = "string" %}{% set ret_zero = '""' %}
+{% elif op.response_body_schema_name is defined %}{% set ret_type = "*" ~ (op.response_body_schema_name | to_upper_camel_case) %}{% set ret_zero = "nil" %}
+{% else %}{% set ret_type = "" %}{% endif %}
+{% if op.description is defined %}{{ op.description | to_doc_comment(style="go") }}
+{% endif %}{% if op.deprecated %}// Deprecated: this operation is deprecated in the {{ sdk.client_name }} API.
+{% endif %}func (a *{{ resource_type_name }}) {{ op.name | to_upper_camel_case }}(ctx context.Context{% for p in op.path_params %}, {{ go_local(p) }} string{% endfor %}{% if op.request_body_schema_name is defined %}, {{ body_var }} {{ op.request_body_schema_name | to_upper_camel_case }}{% endif %}{% if has_params %}, options {% if not has_required_params %}*{% endif %}{{ options_type_name }}{% endif %}) ({% if ret_type %}{{ ret_type }}, {% endif %}error) {
+	req := newRequest(http.Method{{ op.method | to_upper_camel_case }}, "{{ op.path }}")
+{% for p in op.path_params %}	req.SetPathParam("{{ p }}", {{ go_local(p) }})
+{% endfor %}
+{%- if has_params %}
+{% if not has_required_params %}	if options != nil {
+{% endif %}
+{%- for p in op.query_params %}
+{%- set field = "options." ~ (p.name | to_upper_camel_case) %}
+{%- if p.type.is_list() or p.type.is_set() %}
+{%- set item_expr = go_query_scalar(p.type.inner_type(), "item") %}
+	if len({{ field }}) > 0 {
+{% if p.explode | default(true) %}		for _, item := range {{ field }} {
+			req.AddQueryParam("{{ p.name }}", {{ item_expr }})
+		}
+{% else %}		vals := make([]string, 0, len({{ field }}))
+		for _, item := range {{ field }} {
+			vals = append(vals, {{ item_expr }})
+		}
+		req.SetQueryParamCSV("{{ p.name }}", vals)
+{% endif %}	}
+{% elif p.required %}	req.SetQueryParam("{{ p.name }}", {{ go_query_scalar(p.type, field) }})
+{% else %}	if {{ field }} != nil {
+		req.SetQueryParam("{{ p.name }}", {{ go_query_scalar(p.type, "*" ~ field) }})
+	}
+{% endif %}
+{%- endfor %}
+{%- for p in op.header_params %}
+{%- set field = "options." ~ (p.name | to_upper_camel_case) %}
+{%- if p.required %}	req.SetHeader("{{ p.name }}", {{ field }})
+{% else %}	if {{ field }} != nil {
+		req.SetHeader("{{ p.name }}", *{{ field }})
+	}
+{% endif %}
+{%- endfor %}
+{%- if not has_required_params %}	}
+{% endif %}
+{%- endif %}
+{%- if op.request_body_schema_name is defined %}
+{% if op.request_body_is_form %}	req.SetFormBody({{ body_var }})
+{% else %}	req.SetJSONBody({{ body_var }})
+{% endif %}
+{%- endif %}
+{% if op.response_is_binary %}	return a.client.executeBinary(ctx, req)
+{% elif op.response_is_text %}	return a.client.executeText(ctx, req)
+{% elif op.response_body_schema_name is defined %}	var out {{ op.response_body_schema_name | to_upper_camel_case }}
+	if err := a.client.execute(ctx, req, &out); err != nil {
+		return {{ ret_zero }}, err
+	}
+	return &out, nil
+{% else %}	return a.client.execute(ctx, req, nil)
+{% endif %}}
+{% endfor %}

@@ -1,0 +1,168 @@
+// this file is @generated
+pub mod client;
+
+{% for resource in api.resources -%}
+    mod {{ resource.name | to_snake_case }};
+{% endfor %}
+
+pub use self::{
+    client::{ {{ sdk.client_name }}, {{ sdk.client_name }}Options},
+    {% for resource in api.resources -%}
+        {% set resource_type_name = resource.name | to_upper_camel_case -%}
+        {{ resource.name | to_snake_case }}::{
+            {{ resource_type_name }},
+            {% for op in resource.operations -%}
+                {% if op | has_query_or_header_params -%}
+                    {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options,
+                {% endif -%}
+            {% endfor -%}
+        },
+    {% endfor -%}
+};
+
+{# Generate client.rs with resource accessors #}
+{% set client_rs %}// this file is @generated
+//! {{ sdk.client_name }} API client.
+
+use std::{sync::Arc, time::Duration};
+
+use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
+
+use crate::Configuration;
+
+const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Options for configuring the {{ sdk.client_name }} client.
+#[derive(Debug, Clone)]
+pub struct {{ sdk.client_name }}Options {
+    /// Enable debug logging.
+    pub debug: bool,
+
+    /// Custom server URL. Defaults to `{{ sdk.default_base_url }}`.
+    pub server_url: Option<String>,
+
+    /// Timeout for HTTP requests.
+    ///
+    /// The timeout is applied from when the request starts connecting until
+    /// the response body has finished. If set to `None`, requests never time
+    /// out.
+    ///
+    /// Default: 15 seconds.
+    pub timeout: Option<Duration>,
+
+    /// Number of retries.
+    ///
+    /// The number of times the client will retry if a server-side error
+    /// or timeout is received.
+    ///
+    /// Default: 2
+    pub num_retries: Option<u32>,
+
+    /// Retry Schedule.
+    ///
+    /// List of delays to wait before each retry attempt.
+    /// Takes precedence over `num_retries`.
+    pub retry_schedule: Option<Vec<Duration>>,
+}
+
+impl Default for {{ sdk.client_name }}Options {
+    fn default() -> Self {
+        Self {
+            debug: false,
+            server_url: None,
+            timeout: Some(Duration::from_secs(15)),
+            num_retries: None,
+            retry_schedule: None,
+        }
+    }
+}
+
+/// {{ sdk.client_name }} API client.
+///
+/// This is the main entry point for interacting with the {{ sdk.client_name }} API.
+///
+/// # Example
+///
+/// ```no_run
+/// use {{ sdk.rust_crate }}::api::{ {{ sdk.client_name }}, {{ sdk.client_name }}Options};
+///
+/// # async fn example() -> Result<(), {{ sdk.rust_crate }}::error::Error> {
+/// let client = {{ sdk.client_name }}::new("your-api-key".to_string(), None);
+///
+/// // Access API resources
+/// // Access the generated resources through `client`.
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone)]
+pub struct {{ sdk.client_name }} {
+    pub(super) cfg: Arc<Configuration>,
+}
+
+impl {{ sdk.client_name }} {
+    /// Create a new {{ sdk.client_name }} client with the given API key.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - Your {{ sdk.client_name }} API key
+    /// * `options` - Optional configuration options
+    pub fn new(token: String, options: Option<{{ sdk.client_name }}Options>) -> Self {
+        let options = options.unwrap_or_default();
+
+        let cfg = Arc::new(Configuration {
+            user_agent: Some(format!("{{ sdk.user_agent_prefix }}-rust/{CRATE_VERSION}")),
+            client: HyperClient::builder(TokioExecutor::new()).build(crate::make_connector()),
+            timeout: options.timeout,
+            base_path: options
+                .server_url
+                .unwrap_or_else(|| "{{ sdk.default_base_url }}".to_string())
+                .trim_end_matches('/').to_owned(),
+            bearer_access_token: Some(token),
+            num_retries: options.num_retries.unwrap_or(2),
+            retry_schedule: options.retry_schedule,
+        });
+
+        Self { cfg }
+    }
+
+    /// Creates a new `{{ sdk.client_name }}` API client with a different token,
+    /// re-using all of the settings and the Hyper client from
+    /// an existing `{{ sdk.client_name }}` instance.
+    ///
+    /// This can be used to change the token without incurring
+    /// the cost of TLS initialization.
+    pub fn with_token(&self, token: String) -> Self {
+        let cfg = Arc::new(Configuration {
+            base_path: self.cfg.base_path.clone(),
+            user_agent: self.cfg.user_agent.clone(),
+            bearer_access_token: Some(token),
+            client: self.cfg.client.clone(),
+            timeout: self.cfg.timeout,
+            num_retries: self.cfg.num_retries,
+            retry_schedule: self.cfg.retry_schedule.clone(),
+        });
+
+        Self { cfg }
+    }
+{% for resource in api.resources %}
+    /// Access the {{ resource.name | to_snake_case | replace("_", " ") }} API.
+    pub fn {{ resource.name | to_snake_case }}(&self) -> super::{{ resource.name | to_upper_camel_case }}<'_> {
+        super::{{ resource.name | to_upper_camel_case }}::new(&self.cfg)
+    }
+{% endfor %}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{{ sdk.client_name }};
+
+    #[test]
+    fn test_client_send_sync() {
+        fn require_send_sync<T: Send + Sync>(_: T) {}
+
+        let client = {{ sdk.client_name }}::new(String::new(), None);
+        require_send_sync(client);
+    }
+}
+{% endset %}
+{% set _ = generate_extra_file(output_dir ~ "/client.rs", client_rs) %}

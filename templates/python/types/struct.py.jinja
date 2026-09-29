@@ -1,0 +1,65 @@
+{% from "types/macros.py.jinja" import docstring, field_ident, field_type, py_ident -%}
+import dataclasses
+import typing as t
+from datetime import datetime
+from decimal import Decimal
+
+from ..serialization import BaseModel
+{% for c in referenced_components -%}
+from .{{ c | to_snake_case }} import {{ c | to_upper_camel_case }}
+{% endfor %}
+
+{% set json_keys %}
+    {#- Keyed by the *attribute* name, i.e. `py_ident(...)` and not a bare
+        `to_snake_case`: a field named after a Python keyword (`class`, `from`,
+        ...) is exposed as `class_` / `from_`, and a snake_case key would
+        silently miss the lookup and serialize under the wrong wire key. -#}
+    {%- for field in type.fields if not field.flatten -%}
+        {%- set attr = py_ident(field.name) -%}
+        {%- if attr != field.name -%}
+            "{{ attr }}": "{{ field.name }}",
+        {%- endif -%}
+    {%- endfor -%}
+{% endset -%}
+
+{% set flattened %}
+    {%- for field in type.fields if field.flatten -%}
+        "{{ field_ident(field) }}",
+    {%- endfor -%}
+{% endset -%}
+
+
+@dataclasses.dataclass
+class {{ type.name | to_upper_camel_case }}(BaseModel):
+    {% if type.description is defined -%}
+        {{ docstring(type.description) | indent(4) }}
+    {% endif %}
+
+    {%- if json_keys | trim %}
+    _JSON_KEYS: t.ClassVar[t.Mapping[str, str]] = { {{ json_keys | trim }} }
+    {%- endif %}
+
+    {%- if flattened | trim %}
+    _FLATTENED: t.ClassVar[t.Tuple[str, ...]] = ( {{ flattened | trim }} )
+    {%- endif %}
+
+    {#- Dataclass fields without a default must come first, so mandatory
+        fields are emitted before optional ones. -#}
+    {%- for required_pass in [true, false] %}
+        {%- for field in type.fields %}
+            {%- set is_required = field.required and not field.nullable %}
+            {%- if is_required == required_pass %}
+
+    {{ field_ident(field) }}: {{ field_type(field) }}
+                {%- if not is_required %} = None{% endif %}
+                {%- if field.description is defined %}
+    {{ docstring(field.description) | indent(4) }}
+                {%- endif %}
+            {%- endif %}
+        {%- endfor %}
+    {%- endfor %}
+
+    {%- if type.fields | length == 0 %}
+
+    pass
+    {%- endif %}

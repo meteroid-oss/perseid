@@ -1,0 +1,26 @@
+{% from "types/macros.go.jinja" import go_field_type, go_json_tag, go_deprecated -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+{#- Collect every rendered Go type in this file so we know which standard library
+    packages to import. Matching on the rendered type string keeps working for
+    arbitrarily nested containers. -#}
+{% set rendered_types %}{% for field in type.fields %}{% if field.flatten %}{{ field.type.to_go() }}{% else %}{{ go_field_type(field) }}{% endif %} {% endfor %}{% endset -%}
+package {{ sdk.package_name }}
+{% if "time.Time" in rendered_types and "json.RawMessage" in rendered_types %}
+import (
+	"encoding/json"
+	"time"
+)
+{% elif "time.Time" in rendered_types %}
+import "time"
+{% elif "json.RawMessage" in rendered_types %}
+import "encoding/json"
+{% endif %}
+{{ doc_comment }}
+{% if type.deprecated %}{{ go_deprecated("type") }}
+{% endif %}type {{ type_name }} struct {
+{% for field in type.fields %}{% if not loop.first %}
+{% endif %}{% if field.description is defined %}{{ field.description | to_doc_comment(style="go") }}
+{% endif %}{% if field.type.is_datetime() %}// RFC 3339 timestamp.
+{% endif %}{% if field.deprecated %}{{ go_deprecated("field") }}
+{% endif %}{% if field.flatten %}{{ field.type.to_go() }}{% else %}{{ field.name | to_upper_camel_case }} {{ go_field_type(field) }} {{ go_json_tag(field) }}{% endif %}
+{% endfor %}}

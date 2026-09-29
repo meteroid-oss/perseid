@@ -1,0 +1,28 @@
+{
+  "rust": {
+    "request.rs": "request.rs",
+    "connector.rs": "connector.rs",
+    "configuration.rs": "configuration.rs"
+  },
+  "typescript": {
+    "request.ts": "request.ts",
+    "datetime.ts": "datetime.ts"
+  },
+  "python": {
+    "api/common.py": "api/common.py",
+    "serialization.py": "serialization.py"
+  },
+  "java": {
+    "MaybeUnset.java": "MaybeUnset.java",
+    "MaybeUnsetSerializer.java": "MaybeUnsetSerializer.java",
+    "@@CLIENT_NAME@@HttpClient.java": "@@CLIENT_NAME@@HttpClient.java",
+    "@@CLIENT_NAME@@Options.java": "@@CLIENT_NAME@@Options.java",
+    "Utils.java": "Utils.java"
+  },
+  "go": {
+    "request.go": "request.go",
+    "@@PACKAGE_NAME@@.go": "@@PACKAGE_NAME@@.go",
+    "collections.go": "collections.go",
+    "nullable.go": "nullable.go"
+  }
+}

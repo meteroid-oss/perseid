@@ -1,0 +1,62 @@
+{% from "types/macros.py.jinja" import docstring, py_ident -%}
+{#- Discriminated unions.
+
+    Only the shapes the input schema represents are supported; anything
+    else must fail the codegen loudly rather than silently degrade. -#}
+{% if type.variants | has_non_ref_struct_enum_variants -%}
+    {{ panic("struct enum `" ~ type.name ~ "` has inline struct variants, which the Python templates do not support yet") }}
+{%- endif -%}
+{% if type.fields | length > 0 -%}
+    {{ panic("struct enum `" ~ type.name ~ "` has variant-independent fields, which the Python templates do not support yet") }}
+{%- endif -%}
+
+{% set discriminator_attr = py_ident(type.discriminator_field) -%}
+{% if type.repr == "adjacently_tagged" -%}
+    {% set content_attr = py_ident(type.content_field) -%}
+{% else -%}
+    {% set content_attr = "content" -%}
+{% endif -%}
+{% if content_attr == discriminator_attr -%}
+    {{ panic("struct enum `" ~ type.name ~ "` discriminator and content fields collide") }}
+{%- endif -%}
+
+import dataclasses
+import typing as t
+
+from ..serialization import BaseModel, TaggedUnionModel
+{% for c in referenced_components -%}
+from .{{ c | to_snake_case }} import {{ c | to_upper_camel_case }}
+{% endfor %}
+
+
+@dataclasses.dataclass
+class {{ type.name | to_upper_camel_case }}(TaggedUnionModel):
+    {% if type.description is defined -%}
+        {{ docstring(type.description) | indent(4) }}
+    {% endif %}
+    _DISCRIMINATOR: t.ClassVar[str] = "{{ type.discriminator_field }}"
+    _DISCRIMINATOR_ATTR: t.ClassVar[str] = "{{ discriminator_attr }}"
+    _CONTENT_ATTR: t.ClassVar[str] = "{{ content_attr }}"
+    {%- if type.repr == "adjacently_tagged" %}
+    _CONTENT_KEY: t.ClassVar[t.Optional[str]] = "{{ type.content_field }}"
+    {%- elif type.repr == "internally_tagged" %}
+    _CONTENT_KEY: t.ClassVar[t.Optional[str]] = None
+    {%- else %}
+    {{ panic("unsupported struct enum representation `" ~ type.repr ~ "` for `" ~ type.name ~ "`") }}
+    {%- endif %}
+    _VARIANTS: t.ClassVar[t.Mapping[str, t.Optional[t.Type[BaseModel]]]] = {
+    {%- for variant in type.variants %}
+        "{{ variant.name }}": {% if variant.schema_ref is defined %}{{ variant.schema_ref | to_upper_camel_case }}{% else %}None{% endif %},
+    {%- endfor %}
+    }
+
+    {{ discriminator_attr }}: t.Literal[
+    {%- for variant in type.variants %}
+        "{{ variant.name }}",
+    {%- endfor %}
+    ]
+    {{ content_attr }}: t.Union[
+    {%- for variant in type.variants %}
+        {% if variant.schema_ref is defined %}{{ variant.schema_ref | to_upper_camel_case }}{% else %}None{% endif %},
+    {%- endfor %}
+    ]

@@ -1,0 +1,6 @@
+{#- A bare type alias cannot carry a docstring on Python < 3.12, so the schema
+    description is kept as a comment. -#}
+{% if type.description is defined -%}
+# {{ type.description | replace("\n", "\n# ") }}
+{% endif -%}
+{{ type.name | to_upper_camel_case }} = str

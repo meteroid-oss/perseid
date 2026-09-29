@@ -1,0 +1,124 @@
+{% from "types/macros.go.jinja" import go_deprecated -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+{% set disc_field = type.discriminator_field | to_upper_camel_case -%}
+{#- Go has no sum types, so a tagged union becomes a struct carrying the
+    discriminator plus one pointer per variant, with hand-rolled JSON codecs.
+
+    Only the shapes that actually occur in the input schema are supported. Any
+    other shape is a hard error rather than a silently degraded type. -#}
+{% if type.repr != "internally_tagged" -%}
+{{ panic("go codegen: struct enum `" ~ type.name ~ "` uses the `" ~ type.repr ~ "` representation, which the Go templates do not implement yet") }}
+{%- endif -%}
+{% if type.fields | length > 0 -%}
+{{ panic("go codegen: struct enum `" ~ type.name ~ "` has variant-independent fields, which the Go templates do not implement yet") }}
+{%- endif -%}
+{% for variant in type.variants -%}
+{% if variant.type != "ref" -%}
+{{ panic("go codegen: struct enum `" ~ type.name ~ "` has an inline-struct variant `" ~ variant.name ~ "`, which the Go templates do not implement yet") }}
+{%- endif -%}
+{% endfor -%}
+package {{ sdk.package_name }}
+
+import "encoding/json"
+
+{{ doc_comment }}
+{% if type.deprecated %}{{ go_deprecated("type") }}
+{% endif %}// {{ type_name }} is a tagged union discriminated by the {{ type.discriminator_field }} field.
+//
+// When [{{ type_name }}.IsKnown] reports true, exactly one variant pointer is
+// set, matching {{ disc_field }}. A variant added to the API after this SDK
+// version was released still decodes without error, but with every variant
+// pointer nil: always give a `switch` on {{ disc_field }} a `default:` branch (or
+// check IsKnown first) instead of dereferencing a pointer unconditionally. The
+// unknown variant's JSON is available from [{{ type_name }}.Raw].
+type {{ type_name }} struct {
+// {{ disc_field }} selects the active variant. Compare it against the
+// {{ type_name }}* constants.
+{{ disc_field }} string `json:"{{ type.discriminator_field }}"`
+
+{% for variant in type.variants %}{% if variant.schema_ref is defined %}// {{ variant.name | to_upper_camel_case }} is set when {{ disc_field }} is {{ type_name }}{{ variant.name | to_upper_camel_case }}.
+{{ variant.name | to_upper_camel_case }} *{{ variant.schema_ref | to_upper_camel_case }} `json:"-"`
+{% endif %}{% endfor %}
+// raw keeps the payload of a variant this SDK version does not know about, so
+// that decoding and re-encoding an unknown variant preserves every field and
+// value. It is not byte-for-byte identical: `encoding/json` compacts the
+// whitespace and escapes `<`, `>` and `&` as `\u003c`, `\u003e` and `\u0026`.
+raw json.RawMessage
+}
+
+// Discriminator values for {{ type_name }}.
+const (
+{% for variant in type.variants %}{{ type_name }}{{ variant.name | to_upper_camel_case }} = "{{ variant.name }}"
+{% endfor %})
+
+{% for variant in type.variants %}{% if variant.schema_ref is defined %}// New{{ type_name }}{{ variant.name | to_upper_camel_case }} builds a {{ type_name }} holding the {{ variant.name }} variant.
+func New{{ type_name }}{{ variant.name | to_upper_camel_case }}(value {{ variant.schema_ref | to_upper_camel_case }}) {{ type_name }} {
+	return {{ type_name }}{ {{ disc_field }}: {{ type_name }}{{ variant.name | to_upper_camel_case }}, {{ variant.name | to_upper_camel_case }}: &value}
+}
+
+{% endif %}{% endfor %}
+// IsKnown reports whether {{ disc_field }} is one of the variants this SDK version
+// knows about, i.e. one of the {{ type_name }}* constants. It is false for a
+// variant added to the API later, whose payload is then only available from
+// [{{ type_name }}.Raw].
+func (u {{ type_name }}) IsKnown() bool {
+	switch u.{{ disc_field }} {
+	case {% for variant in type.variants if variant.schema_ref is defined %}{% if not loop.first %}, {% endif %}{{ type_name }}{{ variant.name | to_upper_camel_case }}{% endfor %}:
+		return true
+	}
+	return false
+}
+
+// Raw returns the JSON of a variant this SDK version does not know about, as
+// decoded (see [{{ type_name }}.IsKnown]). It is nil for a known variant, and
+// for a value that was not decoded from JSON. The returned slice is a copy.
+func (u {{ type_name }}) Raw() json.RawMessage {
+	if u.IsKnown() || len(u.raw) == 0 {
+		return nil
+	}
+	return append(json.RawMessage(nil), u.raw...)
+}
+
+// MarshalJSON implements json.Marshaler.
+func (u {{ type_name }}) MarshalJSON() ([]byte, error) {
+	switch u.{{ disc_field }} {
+{% for variant in type.variants %}{% if variant.schema_ref is defined %}	case {{ type_name }}{{ variant.name | to_upper_camel_case }}:
+		if u.{{ variant.name | to_upper_camel_case }} == nil {
+			return nil, &UnionError{Union: "{{ type_name }}", Discriminator: u.{{ disc_field }}, Reason: "variant payload is nil"}
+		}
+		return marshalUnionVariant("{{ type.discriminator_field }}", u.{{ disc_field }}, u.{{ variant.name | to_upper_camel_case }})
+{% endif %}{% endfor %}	}
+
+	if len(u.raw) > 0 {
+		return u.raw, nil
+	}
+	if u.{{ disc_field }} == "" {
+		return nil, &UnionError{Union: "{{ type_name }}", Discriminator: "", Reason: "no variant set"}
+	}
+	return nil, &UnionError{Union: "{{ type_name }}", Discriminator: u.{{ disc_field }}, Reason: "unknown discriminator"}
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+//
+// Payloads carrying an unrecognized discriminator are kept rather than rejected,
+// so a newer API version does not break older SDK builds. Re-encoding such a
+// value reproduces the same JSON document, though not necessarily the same
+// bytes: `encoding/json` compacts whitespace and escapes `<`, `>` and `&`.
+func (u *{{ type_name }}) UnmarshalJSON(data []byte) error {
+	var tag struct {
+		{{ disc_field }} string `json:"{{ type.discriminator_field }}"`
+	}
+	if err := json.Unmarshal(data, &tag); err != nil {
+		return err
+	}
+
+	*u = {{ type_name }}{ {{ disc_field }}: tag.{{ disc_field }} }
+	switch tag.{{ disc_field }} {
+{% for variant in type.variants %}{% if variant.schema_ref is defined %}	case {{ type_name }}{{ variant.name | to_upper_camel_case }}:
+		u.{{ variant.name | to_upper_camel_case }} = new({{ variant.schema_ref | to_upper_camel_case }})
+		return json.Unmarshal(data, u.{{ variant.name | to_upper_camel_case }})
+{% endif %}{% endfor %}	default:
+		u.raw = append(json.RawMessage(nil), data...)
+		return nil
+	}
+}
