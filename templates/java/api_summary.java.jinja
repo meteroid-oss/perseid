@@ -18,15 +18,21 @@ import java.util.Map;
  * <p>Example usage:
  * <pre>{@code
  * // Initialize with API key
- * {{ sdk.client_name }} client = new {{ sdk.client_name }}("your-api-key");
+ * {{ sdk.client_name }} {{ sdk.client_name | to_lower_camel_case }} = new {{ sdk.client_name }}("your-api-key");
  *
  * // Or with custom options
  * {{ sdk.client_name }}Options options = new {{ sdk.client_name }}Options();
- * options.setServerUrl("https://api.example.com");
- * {{ sdk.client_name }} client = new {{ sdk.client_name }}("your-api-key", options);
+ * options.setServerUrl("{{ sdk.default_base_url | replace("://", "://custom.") }}");
+ * {{ sdk.client_name }} {{ sdk.client_name | to_lower_camel_case }} = new {{ sdk.client_name }}("your-api-key", options);
  *
  * // Access API resources
+ {% if sdk.example -%}
+ {% for line in sdk.example | lines -%}
+ * {{ line }}
+ {% endfor -%}
+ {% else -%}
  * // Resource accessors depend on your OpenAPI specification.
+ {% endif -%}
  * }</pre>
  */
 @Getter

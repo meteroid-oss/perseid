@@ -57,13 +57,19 @@ export type {{ sdk.client_name }}Options = {
 const DEFAULT_BASE_URL = "{{ sdk.default_base_url }}";
 
 /**
- * {{ sdk.client_name }} API client.
+ * {{ sdk.client_name }} API client{% if sdk.tagline %} for {{ sdk.tagline }}{% endif %}.
  *
  * @example
  * ```typescript
- * const client = new {{ sdk.client_name }}("your-api-key");
+ * const {{ sdk.client_name | to_lower_camel_case }} = new {{ sdk.client_name }}("your-api-key");
  *
+ {% if sdk.example -%}
+ {% for line in sdk.example | lines -%}
+ *{% if line %} {{ line }}{% endif %}
+ {% endfor -%}
+ {% else -%}
  * // Access the generated resources through the client.
+ {% endif -%}
  * ```
  */
 export class {{ sdk.client_name }} {

@@ -84,7 +84,11 @@ class {{ sdk.client_name }}:
         from {{ sdk.package_name }} import {{ sdk.client_name }}
 
         client = {{ sdk.client_name }}("your-api-key")
+        {% if sdk.example -%}
+        {{ sdk.example | replace("\n", "\n        ") }}
+        {% else -%}
         # Access the generated resources through client.
+        {% endif -%}
     """
 
     _cfg: Configuration
@@ -139,7 +143,11 @@ class {{ sdk.client_name }}Async:
         from {{ sdk.package_name }} import {{ sdk.client_name }}Async
 
         async with {{ sdk.client_name }}Async("your-api-key") as client:
+            {% if sdk.async_example -%}
+            {{ sdk.async_example | replace("\n", "\n            ") }}
+            {% else -%}
             pass  # Access the generated resources through client.
+            {% endif -%}
     """
 
     _cfg: Configuration

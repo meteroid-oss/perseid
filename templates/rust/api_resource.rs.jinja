@@ -16,13 +16,12 @@ use crate::{error::Result, models::*, Configuration};
         {% endfor -%}
     }
     {% endif -%}
-
-    {% if op | has_query_or_header_params -%}
+    {% if op | has_query_or_header_params %}
     #[derive(Default)]
     pub struct {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options {
         {% for p in op.query_params -%}
             {% set ty = p.type.to_rust() -%}
-            {% if not p.required %}{% set ty %}Option<{{ ty }}>{% endset %}{% endif -%}
+            {% if not p.required %}{% set ty %}Option<{{ ty }}>{% endset %}{% endif %}
             {% if p.description is defined -%}
                 {{ p.description | to_doc_comment(style="rust") }}
             {% endif -%}
@@ -30,14 +29,14 @@ use crate::{error::Result, models::*, Configuration};
         {% endfor -%}
         {% for p in op.header_params -%}
             {% set ty = "String" -%}
-            {% if not p.required %}{% set ty %}Option<{{ ty }}>{% endset %}{% endif -%}
+            {% if not p.required %}{% set ty %}Option<{{ ty }}>{% endset %}{% endif %}
             {% if p.description is defined -%}
                 {{ p.description | to_doc_comment(style="rust") }}
             {% endif -%}
             pub {{ p.name | to_rust_ident }}: {{ ty }},
         {% endfor -%}
     }
-    {% endif -%}
+    {% endif %}
 {% endfor -%}
 
 pub struct {{ resource_type_name }}<'a> {
@@ -49,7 +48,7 @@ impl<'a> {{ resource_type_name }}<'a> {
         Self { cfg }
     }
 
-    {% for op in resource.operations -%}
+    {% for op in resource.operations %}
     {% set has_params = op | has_query_or_header_params -%}
     {% if op.description is defined -%}
         {{ op.description | to_doc_comment(style="rust") }}
@@ -70,6 +69,7 @@ impl<'a> {{ resource_type_name }}<'a> {
         {% elif op.request_body_kind == "multipart" -%}
         body: {% if op.request_body_optional %}Option<{% endif %}{{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body{% if op.request_body_optional %}>{% endif %},
         {% endif -%}
+
         {# body parameter struct -#}
         {% if op.request_body_schema_name is defined -%}
             {{ op.request_body_schema_name | to_snake_case }}: {% if op.request_body_optional %}Option<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_optional %}>{% endif %},
@@ -91,8 +91,8 @@ impl<'a> {{ resource_type_name }}<'a> {
         {% if has_params -%}
             {# unpack query / header parameter struct -#}
             let {{ param_struct_name }} {
-                {% for p in op.query_params %}{{ p.name | to_rust_ident }},{% endfor -%}
-                {% for p in op.header_params %}{{ p.name | to_rust_ident }},{% endfor -%}
+                {% for p in op.query_params %}{{ p.name | to_rust_ident }},{% endfor %}
+                {% for p in op.header_params %}{{ p.name | to_rust_ident }},{% endfor %}
             } = options
             {%- if not has_required_params %}.unwrap_or_default(){% endif -%}
             ;
@@ -114,6 +114,7 @@ impl<'a> {{ resource_type_name }}<'a> {
         };
         let form = {% if op.request_body_optional %}body.map(make_form).transpose()?{% else %}Some(make_form(body)?){% endif %};
         {% endif -%}
+
         {# make the request #}
         crate::request::Request::new(http1::Method::{{ op.method | upper }}, "{{ op.path }}")
 
@@ -173,5 +174,5 @@ impl<'a> {{ resource_type_name }}<'a> {
             .await
         {% endif -%}
     }
-    {% endfor -%}
+    {% endfor %}
 }

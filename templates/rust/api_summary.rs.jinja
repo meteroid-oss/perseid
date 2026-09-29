@@ -29,6 +29,12 @@ pub use self::{
     {% endfor -%}
 };
 
+{% set streaming = namespace(events=false) -%}
+{% for resource in api.resources -%}
+{% for op in resource.operations -%}
+{% if op.response_is_event_stream %}{% set streaming.events = true %}{% endif -%}
+{% endfor -%}
+{% endfor -%}
 {# Generate client.rs with resource accessors #}
 {% set client_rs %}// this file is @generated
 //! {{ sdk.client_name }} API client.
@@ -53,9 +59,10 @@ pub struct {{ sdk.client_name }}Options {
     /// Timeout for HTTP requests.
     ///
     /// The timeout is applied from when the request starts connecting until
-    /// the response body has finished. For SSE this covers opening the stream only.
+    /// the response body has finished. {% if streaming.events %}For SSE this covers opening the stream only.
     /// If set to `None`, requests never time
-    /// out.
+    /// out.{% else %}If set to `None`, requests never time
+    /// out.{% endif %}
     ///
     /// Default: 15 seconds.
     pub timeout: Option<Duration>,
@@ -94,13 +101,19 @@ impl Default for {{ sdk.client_name }}Options {
 /// # Example
 ///
 /// ```no_run
-/// use {{ sdk.rust_crate }}::api::{ {{ sdk.client_name }}, {{ sdk.client_name }}Options};
+/// use {{ sdk.rust_crate }}::api::{{ "{" }}{{ sdk.client_name }}, {{ sdk.client_name }}Options};
 ///
 /// # async fn example() -> Result<(), {{ sdk.rust_crate }}::error::Error> {
 /// let client = {{ sdk.client_name }}::new("your-api-key".to_string(), None);
 ///
 /// // Access API resources
+{% if sdk.example -%}
+{% for line in sdk.example | lines -%}
+/// {{ line }}
+{% endfor -%}
+{% else -%}
 /// // Access the generated resources through `client`.
+{% endif -%}
 /// # Ok(())
 /// # }
 /// ```
@@ -125,8 +138,7 @@ impl {{ sdk.client_name }} {
             timeout: options.timeout,
             base_path: options
                 .server_url
-                .unwrap_or_else(|| "{{ sdk.default_base_url }}".to_string())
-                .trim_end_matches('/').to_owned(),
+                .unwrap_or_else(|| "{{ sdk.default_base_url }}".to_string()),
             bearer_access_token: Some(token),
             num_retries: options.num_retries.unwrap_or(2),
             retry_schedule: options.retry_schedule,
@@ -166,6 +178,17 @@ impl {{ sdk.client_name }} {
 mod tests {
     use super::{{ sdk.client_name }};
 
+    {% if sdk.send_sync_probe -%}
+    #[test]
+    fn test_future_send_sync() {
+        fn require_send_sync<T: Send + Sync>(_: T) {}
+
+        {% for line in sdk.send_sync_probe | lines -%}
+        {{ line }}
+        {% endfor -%}
+        require_send_sync(fut);
+    }
+    {% else -%}
     #[test]
     fn test_client_send_sync() {
         fn require_send_sync<T: Send + Sync>(_: T) {}
@@ -173,6 +196,7 @@ mod tests {
         let client = {{ sdk.client_name }}::new(String::new(), None);
         require_send_sync(client);
     }
+    {% endif -%}
 }
 {% endset %}
 {% set _ = generate_extra_file(output_dir ~ "/client.rs", client_rs) %}
