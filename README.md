@@ -1,8 +1,9 @@
 <p align="center"><img src=".github/cover.png" alt="perseid: OpenAPI in, idiomatic SDKs out" width="100%"></p>
 
-**The SDK pipeline Fern, Speakeasy and Stainless sell, open source and GitHub-native.**
+**GitHub-native SDK generation. No cloud, no subscription.**
 Change your OpenAPI spec, and idiomatic Rust, TypeScript, Python, Go and Java SDKs regenerate
-and land as pull requests, in one repository or one per language. One static binary, no account.
+and land as pull requests, in one repository or one per language. One static binary, running in
+your CI: an open-source alternative to Fern, Speakeasy and Stainless.
 
 ```sh
 curl -fsSL https://sh.meteroid.com/perseid | sh
