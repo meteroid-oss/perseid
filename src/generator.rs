@@ -41,6 +41,17 @@ pub(crate) fn generate(
         .rsplit_once(".")
         .context("template name must contain '.'")?;
 
+    if tpl_file_ext != "rs"
+        && api
+            .resources
+            .values()
+            .any(Resource::requires_streaming_runtime)
+    {
+        bail!(
+            "multipart uploads, binary uploads and event streams currently require the Rust target"
+        );
+    }
+
     let tpl_kind = match tpl_base_name {
         "api_resource" => TemplateKind::ApiResource,
         "operation_options" => TemplateKind::OperationOptions,

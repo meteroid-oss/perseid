@@ -281,6 +281,15 @@ fn promote_inline_enums_in_resource(
     }
     for op in &mut resource.operations {
         let op_id = op.id.clone();
+        for field in &mut op.multipart_fields {
+            let base = format!("{}_{}", op_id, field.field.name);
+            promote_field_type(
+                &mut field.field.r#type,
+                &base,
+                existing_by_values,
+                new_types,
+            )?;
+        }
         for param in &mut op.query_params {
             let base = format!("{}_{}", op_id, param.name);
             promote_field_type(&mut param.r#type, &base, existing_by_values, new_types)?;
@@ -890,7 +899,7 @@ pub(crate) struct Field {
 }
 
 impl Field {
-    fn from_schema(name: String, s: Schema, required: bool) -> anyhow::Result<Self> {
+    pub(crate) fn from_schema(name: String, s: Schema, required: bool) -> anyhow::Result<Self> {
         let obj = match s {
             Schema::Bool(_) => bail!("unsupported bool schema"),
             Schema::Object(o) => o,

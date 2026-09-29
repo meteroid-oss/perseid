@@ -2,7 +2,9 @@
   "rust": {
     "request.rs": "request.rs",
     "connector.rs": "connector.rs",
-    "configuration.rs": "configuration.rs"
+    "configuration.rs": "configuration.rs",
+    "upload.rs": "upload.rs",
+    "event_stream.rs": "event_stream.rs"
   },
   "typescript": {
     "request.ts": "request.ts",

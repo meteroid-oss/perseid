@@ -1,12 +1,3 @@
-{#
-    This example template is a simplified version of the one originally from
-    https://github.com/svix/svix-webhooks/tree/main/codegen
-
-    It currently depends on the (non-generated) `crate::error::Result`,
-    `crate::Configuration` and `crate::request::Request`
-
-    A PR to make it more generic (e.g. use reqwest directly) would be welcome
--#}
 // this file is @generated
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
 
@@ -14,12 +5,24 @@
 use crate::{error::Result, models::*, Configuration};
 
 {% for op in resource.operations -%}
-    {% if op | has_query_or_header_params %}
+    {% if op.request_body_kind == "multipart" -%}
+    /// Multipart form fields. File readers are streamed and are not retried.
+    pub struct {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body {
+        {% for field in op.multipart_fields -%}
+        {% if field.description is defined -%}
+        {{ field.description | to_doc_comment(style="rust") }}
+        {% endif -%}
+        pub {{ field.name | to_rust_ident }}: {% if not field.required or field.nullable %}Option<{% endif %}{% if field.is_file %}crate::api::Upload{% else %}{{ field.type.to_rust() }}{% endif %}{% if not field.required or field.nullable %}>{% endif %},
+        {% endfor -%}
+    }
+    {% endif -%}
+
+    {% if op | has_query_or_header_params -%}
     #[derive(Default)]
     pub struct {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options {
         {% for p in op.query_params -%}
             {% set ty = p.type.to_rust() -%}
-            {% if not p.required %}{% set ty %}Option<{{ ty }}>{% endset %}{% endif %}
+            {% if not p.required %}{% set ty %}Option<{{ ty }}>{% endset %}{% endif -%}
             {% if p.description is defined -%}
                 {{ p.description | to_doc_comment(style="rust") }}
             {% endif -%}
@@ -27,14 +30,14 @@ use crate::{error::Result, models::*, Configuration};
         {% endfor -%}
         {% for p in op.header_params -%}
             {% set ty = "String" -%}
-            {% if not p.required %}{% set ty %}Option<{{ ty }}>{% endset %}{% endif %}
+            {% if not p.required %}{% set ty %}Option<{{ ty }}>{% endset %}{% endif -%}
             {% if p.description is defined -%}
                 {{ p.description | to_doc_comment(style="rust") }}
             {% endif -%}
             pub {{ p.name | to_rust_ident }}: {{ ty }},
         {% endfor -%}
     }
-    {% endif %}
+    {% endif -%}
 {% endfor -%}
 
 pub struct {{ resource_type_name }}<'a> {
@@ -46,7 +49,7 @@ impl<'a> {{ resource_type_name }}<'a> {
         Self { cfg }
     }
 
-    {% for op in resource.operations %}
+    {% for op in resource.operations -%}
     {% set has_params = op | has_query_or_header_params -%}
     {% if op.description is defined -%}
         {{ op.description | to_doc_comment(style="rust") }}
@@ -62,6 +65,11 @@ impl<'a> {{ resource_type_name }}<'a> {
             {{ p | to_rust_ident }}: String,
         {% endfor -%}
 
+        {% if op.request_body_kind == "binary" -%}
+        body: {% if op.request_body_optional %}Option<{% endif %}crate::api::Upload{% if op.request_body_optional %}>{% endif %},
+        {% elif op.request_body_kind == "multipart" -%}
+        body: {% if op.request_body_optional %}Option<{% endif %}{{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body{% if op.request_body_optional %}>{% endif %},
+        {% endif -%}
         {# body parameter struct -#}
         {% if op.request_body_schema_name is defined -%}
             {{ op.request_body_schema_name | to_snake_case }}: {% if op.request_body_optional %}Option<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_optional %}>{% endif %},
@@ -79,17 +87,33 @@ impl<'a> {{ resource_type_name }}<'a> {
                 options: Option<{{ param_struct_name }}>,
             {%- endif -%}
         {% endif -%}
-    ) -> Result<{% if op.response_is_binary %}bytes::Bytes{% elif op.response_is_text %}String{% elif op.response_body_schema_name is defined %}crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}{% else %}(){% endif %}> {
+    ) -> Result<{% if op.response_is_event_stream %}crate::api::EventStream{% elif op.response_is_binary %}bytes::Bytes{% elif op.response_is_text %}String{% elif op.response_body_schema_name is defined %}crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}{% else %}(){% endif %}> {
         {% if has_params -%}
             {# unpack query / header parameter struct -#}
             let {{ param_struct_name }} {
-                {% for p in op.query_params %}{{ p.name | to_rust_ident }},{% endfor %}
-                {% for p in op.header_params %}{{ p.name | to_rust_ident }},{% endfor %}
+                {% for p in op.query_params %}{{ p.name | to_rust_ident }},{% endfor -%}
+                {% for p in op.header_params %}{{ p.name | to_rust_ident }},{% endfor -%}
             } = options
             {%- if not has_required_params %}.unwrap_or_default(){% endif -%}
             ;
         {% endif -%}
 
+        {% if op.request_body_kind == "multipart" -%}
+        let make_form = |body: {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body| -> Result<crate::api::upload::Multipart> {
+            let mut form = crate::api::upload::Multipart::new();
+            {% for field in op.multipart_fields -%}
+            {% if not field.required or field.nullable -%}
+            if let Some(value) = body.{{ field.name | to_rust_ident }} {
+                form = form.{% if field.is_file %}file{% else %}field{% endif %}("{{ field.name }}", value)?;
+            }
+            {% else -%}
+            form = form.{% if field.is_file %}file{% else %}field{% endif %}("{{ field.name }}", body.{{ field.name | to_rust_ident }})?;
+            {% endif -%}
+            {% endfor -%}
+            Ok(form)
+        };
+        let form = {% if op.request_body_optional %}body.map(make_form).transpose()?{% else %}Some(make_form(body)?){% endif %};
+        {% endif -%}
         {# make the request #}
         crate::request::Request::new(http1::Method::{{ op.method | upper }}, "{{ op.path }}")
 
@@ -118,6 +142,11 @@ impl<'a> {{ resource_type_name }}<'a> {
             .with_optional_header_param("{{ p.name }}", {{ p.name | to_rust_ident }})
         {% endfor -%}
 
+        {% if op.request_body_kind == "binary" -%}
+            .with_upload_body({% if op.request_body_optional %}body{% else %}Some(body){% endif %})
+        {% elif op.request_body_kind == "multipart" -%}
+            .with_multipart_body(form)
+        {% endif -%}
         {% if op.request_body_schema_name is defined -%}
             {% if op.request_body_is_form -%}
             .with_form_body_param({{ op.request_body_schema_name | to_snake_case }})
@@ -126,7 +155,10 @@ impl<'a> {{ resource_type_name }}<'a> {
             {% endif -%}
         {% endif -%}
 
-        {% if op.response_is_binary -%}
+        {% if op.response_is_event_stream -%}
+            .execute_event_stream(self.cfg)
+            .await
+        {% elif op.response_is_binary -%}
             .execute_binary(self.cfg)
             .await
         {% elif op.response_is_text -%}
@@ -141,5 +173,5 @@ impl<'a> {{ resource_type_name }}<'a> {
             .await
         {% endif -%}
     }
-    {% endfor %}
+    {% endfor -%}
 }

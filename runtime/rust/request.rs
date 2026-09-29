@@ -4,15 +4,24 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use http1::header::{HeaderValue, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, USER_AGENT};
-use http_body_util::{BodyExt as _, Full};
+use http1::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, USER_AGENT};
+use http_body_util::BodyExt as _;
 use hyper::body::Bytes;
 use itertools::Itertools as _;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use rand::Rng;
 use serde::de::DeserializeOwned;
 
+use crate::api::{
+    upload::{Multipart, RequestBody},
+    EventStream, Upload,
+};
 use crate::{error::Error, Configuration};
+
+enum ResponseBody {
+    Buffered(Option<Bytes>),
+    Events(EventStream),
+}
 
 pub(crate) enum Auth {
     None,
@@ -20,7 +29,6 @@ pub(crate) enum Auth {
 }
 
 /// HTTP request builder with retry logic.
-#[derive(Clone)]
 pub(crate) struct Request {
     method: http1::Method,
     path: &'static str,
@@ -30,6 +38,9 @@ pub(crate) struct Request {
     header_params: HashMap<&'static str, String>,
     serialized_body: Option<String>,
     body_is_form: bool,
+    upload: Option<Upload>,
+    multipart: Option<Multipart>,
+    body_error: Option<Error>,
 }
 
 impl Request {
@@ -43,11 +54,17 @@ impl Request {
             serialized_body: None,
             no_return_type: false,
             body_is_form: false,
+            upload: None,
+            multipart: None,
+            body_error: None,
         }
     }
 
     pub fn with_body_param<T: serde::Serialize>(mut self, param: T) -> Self {
-        self.serialized_body = Some(serde_json::to_string(&param).unwrap());
+        match serde_json::to_string(&param) {
+            Ok(body) => self.serialized_body = Some(body),
+            Err(error) => self.body_error = Some(Error::generic(error)),
+        }
         self
     }
 
@@ -59,8 +76,21 @@ impl Request {
     }
 
     pub fn with_form_body_param<T: serde::Serialize>(mut self, param: T) -> Self {
-        self.serialized_body = Some(serde_urlencoded::to_string(&param).unwrap());
+        match serde_urlencoded::to_string(&param) {
+            Ok(body) => self.serialized_body = Some(body),
+            Err(error) => self.body_error = Some(Error::generic(error)),
+        }
         self.body_is_form = true;
+        self
+    }
+
+    pub fn with_upload_body(mut self, body: Option<Upload>) -> Self {
+        self.upload = body;
+        self
+    }
+
+    pub fn with_multipart_body(mut self, body: Option<Multipart>) -> Self {
+        self.multipart = body;
         self
     }
 
@@ -155,102 +185,137 @@ impl Request {
         }
     }
 
-    async fn execute_with_backoff(mut self, conf: &Configuration) -> Result<Option<Bytes>, Error> {
-        let no_return_type = self.no_return_type;
+    pub async fn execute_event_stream(
+        mut self,
+        conf: &Configuration,
+    ) -> Result<EventStream, Error> {
+        self.header_params
+            .insert("accept", "text/event-stream".into());
+        match self.send(conf, true).await? {
+            ResponseBody::Events(stream) => Ok(stream),
+            ResponseBody::Buffered(_) => unreachable!(),
+        }
+    }
+
+    async fn execute_with_backoff(self, conf: &Configuration) -> Result<Option<Bytes>, Error> {
+        match self.send(conf, false).await? {
+            ResponseBody::Buffered(body) => Ok(body),
+            ResponseBody::Events(_) => unreachable!(),
+        }
+    }
+
+    async fn send(
+        mut self,
+        conf: &Configuration,
+        event_stream: bool,
+    ) -> Result<ResponseBody, Error> {
+        if let Some(error) = self.body_error.take() {
+            return Err(error);
+        }
         if self.method == http1::Method::POST && !self.header_params.contains_key("idempotency-key")
         {
             self.header_params
                 .insert("idempotency-key", format!("auto_{}", uuid::Uuid::new_v4()));
         }
-
-        const MAX_BACKOFF: Duration = Duration::from_secs(5);
-
-        let retry_schedule = match &conf.retry_schedule {
-            Some(schedule) => schedule,
-            None => &std::iter::successors(Some(Duration::from_millis(20)), |last_backoff| {
-                Some(MAX_BACKOFF.min(*last_backoff * 2))
+        self.header_params.insert(
+            "@@HEADER_PREFIX@@-req-id",
+            rand::rng().random::<u32>().to_string(),
+        );
+        let replayable = self.upload.as_ref().is_none_or(Upload::replayable)
+            && self.multipart.as_ref().is_none_or(Multipart::replayable);
+        let default_schedule: Vec<_> = (0..conf.num_retries)
+            .scan(Duration::from_millis(20), |delay, _| {
+                let result = *delay;
+                *delay = (*delay * 2).min(Duration::from_secs(5));
+                Some(result)
             })
-            .take(conf.num_retries as usize)
-            .collect(),
-        };
-        let mut retries = retry_schedule.iter();
-
-        let mut request = self.build_request(conf)?;
-        request
-            .headers_mut()
-            .insert("@@HEADER_PREFIX@@-req-id", rand::rng().random::<u32>().into());
-
-        let mut retry_count = 0;
-
-        let execute_request = async |request| {
-            let response = conf.client.request(request).await.map_err(Error::generic)?;
-
-            let status = response.status();
-            if !status.is_success() {
-                Err(Error::from_response(status, response.into_body()).await)
-            } else if no_return_type {
-                Ok(None)
-            } else {
+            .collect();
+        let schedule = conf.retry_schedule.as_ref().unwrap_or(&default_schedule);
+        let mut retries = schedule.iter();
+        let mut retry_count = 0u32;
+        loop {
+            let request = self.build_request(conf)?;
+            let send = async {
+                let response = conf.client.request(request).await.map_err(Error::generic)?;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(Error::from_response(status, response.into_body()).await);
+                }
+                if event_stream {
+                    let content_type = response
+                        .headers()
+                        .get(CONTENT_TYPE)
+                        .and_then(|h| h.to_str().ok())
+                        .unwrap_or("")
+                        .split(';')
+                        .next()
+                        .unwrap_or("")
+                        .trim();
+                    if !content_type.eq_ignore_ascii_case("text/event-stream") {
+                        return Err(Error::generic(std::io::Error::new(
+                            std::io::ErrorKind::InvalidData,
+                            "expected a text/event-stream response",
+                        )));
+                    }
+                    return Ok(ResponseBody::Events(EventStream::new(response.into_body())));
+                }
+                if self.no_return_type {
+                    return Ok(ResponseBody::Buffered(None));
+                }
                 let bytes = response
                     .into_body()
                     .collect()
                     .await
                     .map_err(Error::generic)?
                     .to_bytes();
-                Ok(Some(bytes))
-            }
-        };
-
-        loop {
-            let request_fut = execute_request(request.clone());
-            let res = if let Some(duration) = conf.timeout {
-                tokio::time::timeout(duration, request_fut)
-                    .await
-                    .map_err(Error::generic)?
-            } else {
-                request_fut.await
+                Ok(ResponseBody::Buffered(Some(bytes)))
             };
-
-            let next_backoff = retries.next().copied();
-
-            match res {
-                Ok(result) => return Ok(result),
-                // Client errors are not retried.
-                Err(e) if e.status().is_some_and(|s| s.as_u16() < 500) => return Err(e),
-                e @ Err(_) => {
-                    if next_backoff.is_none() {
-                        return e;
+            let result = if let Some(timeout) = conf.timeout {
+                match tokio::time::timeout(timeout, send).await {
+                    Ok(result) => result,
+                    Err(error) => Err(Error::generic(error)),
+                }
+            } else {
+                send.await
+            };
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    if !replayable || error.status().is_some_and(|status| status.as_u16() < 500) {
+                        return Err(error);
                     }
+                    let Some(delay) = retries.next() else {
+                        return Err(error);
+                    };
+                    tokio::time::sleep(*delay).await;
+                    retry_count += 1;
+                    self.header_params
+                        .insert("@@HEADER_PREFIX@@-retry-count", retry_count.to_string());
                 }
             }
-
-            tokio::time::sleep(next_backoff.expect("next_backoff is always Some")).await;
-            retry_count += 1;
-
-            request
-                .headers_mut()
-                .insert("@@HEADER_PREFIX@@-retry-count", retry_count.into());
         }
     }
 
-    fn build_request(self, conf: &Configuration) -> Result<http1::Request<Full<Bytes>>, Error> {
+    fn build_request(
+        &mut self,
+        conf: &Configuration,
+    ) -> Result<http1::Request<RequestBody>, Error> {
         const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
         const PATH: &AsciiSet = &FRAGMENT.add(b'#').add(b'?').add(b'{').add(b'}');
         const PATH_SEGMENT: &AsciiSet = &PATH.add(b'/').add(b'%');
 
         let mut path = self.path.to_owned();
-        for (k, v) in self.path_params {
+        for (k, v) in &self.path_params {
             // replace {id} with the value of the id path param
-            let percent_encoded_path_param_value =
-                utf8_percent_encode(&v, PATH_SEGMENT).to_string();
+            let percent_encoded_path_param_value = utf8_percent_encode(v, PATH_SEGMENT).to_string();
             path = path.replace(&format!("{{{k}}}"), &percent_encoded_path_param_value);
         }
 
         let mut uri = format!("{}{}", conf.base_path, path);
 
         let mut query_string = url::form_urlencoded::Serializer::new("".to_owned());
-        for (key, val) in self.query_params {
-            query_string.append_pair(key, &val);
+        for (key, val) in &self.query_params {
+            query_string.append_pair(key, val);
         }
 
         let query_string_str = query_string.finish();
@@ -260,21 +325,32 @@ impl Request {
         }
 
         let uri = http1::Uri::try_from(uri).map_err(Error::generic)?;
-        let mut req_builder = http1::Request::builder().uri(uri).method(self.method);
-
-        let mut request = if let Some(body) = self.serialized_body {
-            let req_headers = req_builder.headers_mut().unwrap();
-            let content_type = if self.body_is_form {
-                "application/x-www-form-urlencoded"
-            } else {
-                "application/json"
-            };
-            req_headers.insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
-            req_headers.insert(CONTENT_LENGTH, body.len().into());
-            req_builder.body(Full::from(body)).map_err(Error::generic)?
+        let mut req_builder = http1::Request::builder()
+            .uri(uri)
+            .method(self.method.clone());
+        let (body, content_type) = if let Some(form) = &mut self.multipart {
+            (form.body()?, Some(form.content_type()))
+        } else if let Some(upload) = &mut self.upload {
+            (upload.body()?, Some("application/octet-stream".to_owned()))
+        } else if let Some(body) = &self.serialized_body {
+            (
+                Upload::bytes(body.clone()).body()?,
+                Some(if self.body_is_form {
+                    "application/x-www-form-urlencoded".to_owned()
+                } else {
+                    "application/json".to_owned()
+                }),
+            )
         } else {
-            req_builder.body(Full::default()).map_err(Error::generic)?
+            (RequestBody::empty(), None)
         };
+        if let Some(content_type) = content_type {
+            req_builder = req_builder.header(CONTENT_TYPE, content_type);
+            if let Some(length) = body.length() {
+                req_builder = req_builder.header(CONTENT_LENGTH, length);
+            }
+        }
+        let mut request = req_builder.body(body).map_err(Error::generic)?;
 
         let request_headers = request.headers_mut();
 
@@ -301,9 +377,9 @@ impl Request {
             request_headers.insert(USER_AGENT, value);
         }
 
-        for (k, v) in self.header_params {
+        for (k, v) in &self.header_params {
             let v = v.try_into().map_err(Error::generic)?;
-            request_headers.insert(k, v);
+            request_headers.insert(*k, v);
         }
 
         Ok(request)

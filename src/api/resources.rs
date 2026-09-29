@@ -11,7 +11,7 @@ use crate::cli_v1::IncludeMode;
 
 use super::{
     get_schema_name,
-    types::{FieldType, resolve_schema_ref_in_field_type_public, serialize_field_type},
+    types::{Field, FieldType, resolve_schema_ref_in_field_type_public, serialize_field_type},
 };
 
 /// The API operations of the API client we generate.
@@ -80,6 +80,9 @@ fn resolve_schema_refs_in_resource(resource: &mut Resource, string_alias_names: 
 
     // Resolve in operations
     for op in &mut resource.operations {
+        for field in &mut op.multipart_fields {
+            resolve_schema_ref_in_field_type_public(&mut field.field.r#type, string_alias_names);
+        }
         for param in &mut op.query_params {
             resolve_schema_ref_in_field_type_public(&mut param.r#type, string_alias_names);
         }
@@ -123,6 +126,19 @@ impl Resource {
         }
     }
 
+    pub(crate) fn requires_streaming_runtime(&self) -> bool {
+        self.operations.iter().any(|op| {
+            op.response_is_event_stream
+                || matches!(
+                    op.request_body_kind,
+                    RequestBodyKind::Binary | RequestBodyKind::Multipart
+                )
+        }) || self
+            .subresources
+            .values()
+            .any(Self::requires_streaming_runtime)
+    }
+
     pub(crate) fn referenced_components(&self) -> BTreeSet<&str> {
         let mut res = BTreeSet::new();
 
@@ -131,6 +147,11 @@ impl Resource {
         }
 
         for operation in &self.operations {
+            for field in &operation.multipart_fields {
+                if let Some(name) = field.field.r#type.referenced_schema() {
+                    res.insert(name);
+                }
+            }
             for param in &operation.query_params {
                 if let Some(name) = param.r#type.referenced_schema() {
                     res.insert(name);
@@ -152,6 +173,76 @@ impl Resource {
 
         res
     }
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RequestBodyKind {
+    #[default]
+    None,
+    Json,
+    Form,
+    Binary,
+    Multipart,
+}
+
+#[derive(Deserialize, Serialize)]
+pub(crate) struct MultipartField {
+    #[serde(flatten)]
+    pub(crate) field: Field,
+    is_file: bool,
+}
+
+fn resolve_multipart_schema(
+    mut schema: Schema,
+    schemas: &IndexMap<String, openapi::SchemaObject>,
+) -> anyhow::Result<schemars::schema::SchemaObject> {
+    let mut visited = BTreeSet::new();
+    loop {
+        let Schema::Object(object) = schema else {
+            bail!("multipart fields must have typed schemas");
+        };
+        if let Some(reference) = &object.reference {
+            if !visited.insert(reference.clone()) {
+                bail!("cyclic multipart schema reference");
+            }
+            let name =
+                get_schema_name(Some(reference)).context("invalid multipart schema reference")?;
+            schema = schemas
+                .get(&name)
+                .context("missing multipart schema")?
+                .json_schema
+                .clone();
+        } else {
+            return Ok(object);
+        }
+    }
+}
+
+fn multipart_fields(
+    schema: Schema,
+    schemas: &IndexMap<String, openapi::SchemaObject>,
+) -> anyhow::Result<Vec<MultipartField>> {
+    let object = resolve_multipart_schema(schema, schemas)?
+        .object
+        .context("multipart body must declare object properties")?;
+    object
+        .properties
+        .into_iter()
+        .map(|(name, mut schema)| {
+            let mut resolved = resolve_multipart_schema(schema.clone(), schemas)?;
+            if resolved.array.is_some() {
+                bail!("multipart array fields require an explicit encoding implementation");
+            }
+            let is_file = resolved.format.as_deref() == Some("binary");
+            if is_file {
+                resolved.format = None;
+                schema = Schema::Object(resolved);
+            }
+            let field = Field::from_schema(name.clone(), schema, object.required.contains(&name))?;
+            Ok(MultipartField { field, is_file })
+        })
+        .collect()
 }
 
 /// A named HTTP endpoint.
@@ -194,6 +285,10 @@ pub(crate) struct Operation {
     /// True if the request body is application/x-www-form-urlencoded instead of JSON.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     request_body_is_form: bool,
+    #[serde(default)]
+    request_body_kind: RequestBodyKind,
+    #[serde(default)]
+    pub(crate) multipart_fields: Vec<MultipartField>,
     /// Name of the response body type, if any (only for JSON responses).
     #[serde(skip_serializing_if = "Option::is_none")]
     response_body_schema_name: Option<String>,
@@ -203,6 +298,8 @@ pub(crate) struct Operation {
     /// True if the response is text (e.g., text/plain, text/html).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     response_is_text: bool,
+    #[serde(default)]
+    response_is_event_stream: bool,
     /// Schemas of the JSON bodies this operation returns on 4xx/5xx responses.
     ///
     /// Not rendered per operation: collected so that `referenced_components` pulls the error
@@ -387,10 +484,36 @@ impl Operation {
             .and_then(|b| b.as_item())
             .is_some_and(|b| !b.required);
         let mut request_body_is_form = false;
+        let mut request_body_kind = RequestBodyKind::None;
+        let mut multipart_fields_out = Vec::new();
         let request_body_schema_name = op.request_body.and_then(|b| match b {
             ReferenceOr::Item(mut req_body) => {
                 assert!(req_body.extensions.is_empty());
                 assert_eq!(req_body.content.len(), 1);
+                if req_body
+                    .content
+                    .swap_remove("application/octet-stream")
+                    .is_some()
+                {
+                    request_body_kind = RequestBodyKind::Binary;
+                    return None;
+                }
+                if let Some(body) = req_body.content.swap_remove("multipart/form-data") {
+                    request_body_kind = RequestBodyKind::Multipart;
+                    if !body.encoding.is_empty() {
+                        tracing::error!("custom multipart encoding is not supported");
+                        return None;
+                    }
+                    match body
+                        .schema
+                        .context("missing multipart schema")
+                        .and_then(|s| multipart_fields(s.json_schema, component_schemas))
+                    {
+                        Ok(fields) => multipart_fields_out = fields,
+                        Err(error) => tracing::error!(%error, "unsupported multipart body"),
+                    }
+                    return None;
+                }
                 let is_form = req_body
                     .content
                     .contains_key("application/x-www-form-urlencoded");
@@ -403,9 +526,12 @@ impl Operation {
                             .swap_remove("application/x-www-form-urlencoded")
                     })
                     .expect("should have JSON or form-urlencoded body");
-                if is_form {
-                    request_body_is_form = true;
-                }
+                request_body_is_form = is_form;
+                request_body_kind = if is_form {
+                    RequestBodyKind::Form
+                } else {
+                    RequestBodyKind::Json
+                };
                 assert!(body.extensions.is_empty());
                 match body.schema.expect("no body schema?!").json_schema {
                     Schema::Bool(_) => {
@@ -482,9 +608,12 @@ impl Operation {
             request_body_all_optional,
             request_body_optional,
             request_body_is_form,
+            request_body_kind,
+            multipart_fields: multipart_fields_out,
             response_body_schema_name,
             response_is_binary: response_kind == ResponseKind::Binary,
             response_is_text: response_kind == ResponseKind::Text,
+            response_is_event_stream: response_kind == ResponseKind::EventStream,
             error_response_schema_names,
         };
         Some((res_path, op))
@@ -565,6 +694,7 @@ enum ResponseKind {
     Json,
     Binary,
     Text,
+    EventStream,
 }
 
 /// Returns (schema_name, response_kind) for a response.
@@ -574,6 +704,10 @@ fn response_body_info(resp: ReferenceOr<openapi::Response>) -> (Option<String>, 
             assert!(resp_body.extensions.is_empty());
             if resp_body.content.is_empty() {
                 return (None, ResponseKind::None);
+            }
+
+            if resp_body.content.contains_key("text/event-stream") {
+                return (None, ResponseKind::EventStream);
             }
 
             // Check for binary response types
@@ -658,4 +792,47 @@ pub(crate) struct QueryParam {
 
 fn default_explode() -> bool {
     true
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn multipart_resolves_referenced_binary_fields() {
+        let schemas =
+            serde_json::from_value(json!({"File": {"type":"string", "format":"binary"}})).unwrap();
+        let schema = serde_json::from_value(json!({"type":"object", "required":["file"], "properties":{"file":{"$ref":"#/components/schemas/File"}}})).unwrap();
+        let fields = multipart_fields(schema, &schemas).unwrap();
+        assert!(fields[0].is_file);
+        assert_eq!(fields[0].field.name, "file");
+    }
+
+    #[test]
+    fn multipart_rejects_array_encodings_instead_of_emitting_json_files() {
+        let schema = serde_json::from_value(json!({"type":"object", "properties":{"files":{"type":"array","items":{"type":"string","format":"binary"}}}})).unwrap();
+        assert!(
+            multipart_fields(schema, &IndexMap::new())
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("array fields")
+        );
+    }
+
+    #[test]
+    fn multipart_cyclic_references_fail_without_recursing() {
+        let schemas =
+            serde_json::from_value(json!({"Cycle": {"$ref":"#/components/schemas/Cycle"}}))
+                .unwrap();
+        let schema = serde_json::from_value(json!({"$ref":"#/components/schemas/Cycle"})).unwrap();
+        assert!(
+            multipart_fields(schema, &schemas)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("cyclic")
+        );
+    }
 }
