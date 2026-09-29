@@ -25,6 +25,8 @@ pub struct Config {
     pub header_prefix: Option<String>,
     pub user_agent: Option<String>,
     pub patch_nullable: Option<bool>,
+    /// Installs the Standard Webhooks signature verifier in every SDK.
+    pub webhooks: Option<bool>,
     #[serde(default)]
     pub context: BTreeMap<String, Value>,
     /// Directory mirroring `templates/<lang>/…` and `runtime/<lang>/…` to override built-ins.
@@ -62,6 +64,7 @@ pub struct Target {
     pub header_prefix: Option<String>,
     pub user_agent: Option<String>,
     pub patch_nullable: Option<bool>,
+    pub webhooks: Option<bool>,
     #[serde(default)]
     pub context: BTreeMap<String, Value>,
 }
@@ -174,6 +177,7 @@ impl Config {
             "user_agent_prefix": pick(&target.user_agent, &self.user_agent, &kebab),
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
             "patch_nullable": target.patch_nullable.or(self.patch_nullable).unwrap_or(false),
+            "webhooks": target.webhooks.or(self.webhooks).unwrap_or(false),
             "version": version,
             "extra_exports": target.exports,
         });
