@@ -7,6 +7,7 @@ use std::{
     collections::VecDeque,
     io,
     pin::Pin,
+    sync::{Mutex, PoisonError},
     task::{Context, Poll},
 };
 use tokio::io::{AsyncRead, ReadBuf};
@@ -22,10 +23,34 @@ pub struct Upload {
     content_type: String,
 }
 
+/// Makes a `Send` reader `Sync` so request futures stay `Send + Sync`.
+struct SyncReader(Mutex<Pin<Box<dyn AsyncRead + Send>>>);
+
+impl SyncReader {
+    fn new(reader: impl AsyncRead + Send + 'static) -> Self {
+        Self(Mutex::new(Box::pin(reader)))
+    }
+}
+
+impl AsyncRead for SyncReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let reader = self
+            .get_mut()
+            .0
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner);
+        reader.as_mut().poll_read(cx, buf)
+    }
+}
+
 enum Source {
     Bytes(Bytes),
     Reader {
-        reader: Option<Pin<Box<dyn AsyncRead + Send>>>,
+        reader: Option<SyncReader>,
         length: Option<u64>,
     },
 }
@@ -42,7 +67,7 @@ impl Upload {
     pub fn reader(reader: impl AsyncRead + Send + 'static, length: Option<u64>) -> Self {
         Self {
             source: Source::Reader {
-                reader: Some(Box::pin(reader)),
+                reader: Some(SyncReader::new(reader)),
                 length,
             },
             filename: None,
@@ -188,7 +213,7 @@ impl Multipart {
 enum Segment {
     Bytes(Bytes),
     Reader {
-        reader: Pin<Box<dyn AsyncRead + Send>>,
+        reader: SyncReader,
         remaining: Option<u64>,
         tail: Option<Bytes>,
     },
@@ -255,7 +280,7 @@ impl Body for RequestBody {
                         .map(|n| n.saturating_add(1).min(buffer.len() as u64) as usize)
                         .unwrap_or(buffer.len());
                     let mut read = ReadBuf::new(&mut buffer[..capacity]);
-                    match reader.as_mut().poll_read(cx, &mut read) {
+                    match Pin::new(&mut *reader).poll_read(cx, &mut read) {
                         Poll::Pending => return Poll::Pending,
                         Poll::Ready(Err(error)) => Err(error),
                         Poll::Ready(Ok(())) => {
