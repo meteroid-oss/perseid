@@ -76,6 +76,51 @@ fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathB
     (runtime, tasks)
 }
 
+fn extension(language: &str) -> &str {
+    match language {
+        "rust" => "rs",
+        "typescript" => "ts",
+        "python" => "py",
+        other => other,
+    }
+}
+
+/// Directories never scanned for stale files: dependencies, build output and VCS metadata.
+fn skipped(name: &str) -> bool {
+    name.starts_with('.')
+        || name.starts_with("perseid-stage-")
+        || matches!(
+            name,
+            "node_modules" | "target" | "build" | "dist" | "vendor" | "__pycache__" | "venv"
+        )
+}
+
+/// Collects `extension` files under `root` (relative to `dir`), so directories that no longer
+/// receive any generated file are still checked for leftovers.
+fn scan_sources(
+    dir: &Path,
+    root: &Path,
+    extension: &str,
+    out: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+    let Ok(entries) = std::fs::read_dir(dir.join(root)) else {
+        return Ok(());
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let path = clean(&root.join(&name));
+        if entry.file_type()?.is_dir() {
+            if !skipped(&name.to_string_lossy()) {
+                scan_sources(dir, &path, extension, out)?;
+            }
+        } else if path.extension().is_some_and(|e| e == extension) {
+            out.insert(path);
+        }
+    }
+    Ok(())
+}
+
 /// Renders templates, then runtime files, into `stage`. Returns their paths relative to it.
 fn render(
     config: &Config,
@@ -92,12 +137,7 @@ fn render(
         assets_dir.path(),
     )?;
     let (runtime, tasks) = layout(language, context);
-    let extension = match language {
-        "rust" => "rs",
-        "typescript" => "ts",
-        "python" => "py",
-        other => other,
-    };
+    let extension = extension(language);
     let filters = config.filters();
     let mut produced = Vec::new();
     for (template, output) in tasks {
@@ -236,16 +276,20 @@ pub fn sdk(
         dirs.insert(path.parent().unwrap_or(Path::new("")).to_owned());
     }
     let produced: BTreeSet<_> = produced.into_iter().collect();
+    let mut candidates = BTreeSet::new();
     for relative in dirs {
         let Ok(entries) = std::fs::read_dir(dir.join(&relative)) else {
             continue;
         };
         for entry in entries {
-            let path = relative.join(entry?.file_name());
-            if dir.join(&path).is_file() && !produced.contains(&path) && generated(&dir.join(&path))
-            {
-                changes.push((Change::Removed(path), None));
-            }
+            candidates.insert(relative.join(entry?.file_name()));
+        }
+    }
+    let (runtime, _) = layout(sdk.language, &context);
+    scan_sources(dir, &runtime, extension(sdk.language), &mut candidates)?;
+    for path in candidates {
+        if dir.join(&path).is_file() && !produced.contains(&path) && generated(&dir.join(&path)) {
+            changes.push((Change::Removed(path), None));
         }
     }
     if !options.check {

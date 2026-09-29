@@ -85,3 +85,33 @@ fn ejected_templates_override_the_built_ins() {
     let client = fs::read_to_string(dir.path().join("go/client.go")).unwrap();
     assert!(client.contains("// customized"), "{client}");
 }
+
+#[test]
+fn stale_generated_files_are_removed_from_directories_without_output() {
+    let dir = project();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let marker = "// this file is @generated\n";
+    let write = |path: &str, content: &str| {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    };
+    write("rust/src/retired/old.rs", marker);
+    write("rust/src/retired/mine.rs", "// handwritten\n");
+    write("rust/target/debug/build.rs", marker);
+    write("go/retired/old.go", marker);
+
+    let (ok, out) = perseid(dir.path(), &["generate", "--check", "--no-format"]);
+    assert!(!ok);
+    assert!(out.contains("- src/retired/old.rs"), "{out}");
+    assert!(out.contains("- retired/old.go"), "{out}");
+    assert!(!out.contains("target"), "{out}");
+
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(!dir.path().join("rust/src/retired/old.rs").exists());
+    assert!(!dir.path().join("go/retired/old.go").exists());
+    assert!(dir.path().join("rust/src/retired/mine.rs").exists());
+    assert!(dir.path().join("rust/target/debug/build.rs").exists());
+}
