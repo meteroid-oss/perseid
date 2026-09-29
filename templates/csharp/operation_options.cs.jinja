@@ -1,0 +1,26 @@
+{% import "macros.cs.jinja" as m -%}
+{% set class_name = (resource.name | to_upper_camel_case) ~ (operation.name | to_upper_camel_case) ~ "Options" -%}
+// this file is @generated
+#pragma warning disable CS0612, CS0618 // generated code may use deprecated API
+using System;
+using System.Collections.Generic;
+using {{ sdk.package_name }}.Models;
+
+namespace {{ sdk.package_name }};
+
+/// <summary>Query and header parameters of <see cref="{{ resource.name | to_upper_camel_case }}Api.{{ operation.name | to_upper_camel_case }}Async"/>.</summary>
+public sealed class {{ class_name }}
+{
+{% for p in operation.query_params -%}
+{% if p.description is defined %}
+    {{ m.doc(p.description) }}
+{% endif -%}
+    public {% if p.required %}required {% endif %}{{ p.type.to_csharp() }}{% if not p.required %}?{% endif %} {{ m.member(p.name, class_name) }} { get; set; }
+{% endfor -%}
+{% for p in operation.header_params -%}
+{% if p.description is defined %}
+    {{ m.doc(p.description) }}
+{% endif -%}
+    public {% if p.required %}required {% endif %}string{% if not p.required %}?{% endif %} {{ m.member(p.name, class_name) }} { get; set; }
+{% endfor -%}
+}

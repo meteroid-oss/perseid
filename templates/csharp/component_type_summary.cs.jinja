@@ -1,0 +1,29 @@
+{% set _ = set_summary_filename(sdk.client_name ~ "JsonContext.cs") -%}
+// this file is @generated
+#pragma warning disable CS0612, CS0618 // generated code may use deprecated API
+using System.Text.Json.Serialization;
+
+namespace {{ sdk.package_name }}.Models;
+
+/// <summary>
+/// Source-generated JSON metadata for every model: trimming and native AOT safe. Pass
+/// <c>{{ sdk.client_name }}JsonContext.Default.Options</c> to <c>JsonSerializer</c> to (de)serialize models yourself.
+/// </summary>
+[JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+{% for _, type in api.types | items -%}
+{% if type.kind not in ["string_alias", "alias"] -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+[JsonSerializable(typeof({{ type_name }}))]
+{% if type.kind == "struct_enum" -%}
+{% for variant in type.variants -%}
+{% if variant.type == "struct" and variant.fields | default([]) | length > 0 -%}
+{% set class = variant.name | to_rust_variant -%}
+{% if class == type_name %}{% set class = class ~ "Value" %}{% endif -%}
+{% if class in [type.discriminator_field | to_rust_variant, "Unrecognized"] %}{% set class = class ~ "Variant" %}{% endif -%}
+[JsonSerializable(typeof({{ type_name }}.{{ class }}Data), TypeInfoPropertyName = "{{ type_name }}{{ class }}Data")]
+{% endif -%}
+{% endfor -%}
+{% endif -%}
+{% endif -%}
+{% endfor -%}
+public sealed partial class {{ sdk.client_name }}JsonContext : JsonSerializerContext { }

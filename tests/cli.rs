@@ -240,3 +240,34 @@ fn swagger_2_is_rejected_with_a_hint() {
     assert!(!ok);
     assert!(out.contains("swagger2openapi"), "{out}");
 }
+
+#[test]
+fn csharp_init_and_generate_lay_out_a_dotnet_project() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        "tests/fixtures/petstore.yaml",
+        dir.path().join("openapi.yaml"),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "csharp"]);
+    assert!(ok, "{out}");
+    let sdk = dir.path().join("csharp");
+    let project = fs::read_to_string(sdk.join("Petstore/Petstore.csproj")).unwrap();
+    assert!(project.contains("<Version>0.1.0</Version>"), "{project}");
+    assert!(sdk.join("Petstore.sln").exists());
+
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    for file in [
+        "PetstoreClient.cs",
+        "Api/PetsApi.cs",
+        "Api/PetsListPetsOptions.cs",
+        "Models/Pet.cs",
+        "Models/PetstoreJsonContext.cs",
+        "ApiTransport.cs",
+    ] {
+        assert!(sdk.join("Petstore").join(file).exists(), "{file}: {out}");
+    }
+    let api = fs::read_to_string(sdk.join("Petstore/Api/PetsApi.cs")).unwrap();
+    assert!(api.contains("public Task<Pet> GetPetAsync("), "{api}");
+}

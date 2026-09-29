@@ -1,0 +1,97 @@
+{% import "macros.cs.jinja" as m -%}
+{% set resource_type_name = (resource.name | to_upper_camel_case) ~ "Api" -%}
+{% set _ = set_summary_filename(resource_type_name ~ ".cs") -%}
+// this file is @generated
+#pragma warning disable CS0612, CS0618 // generated code may use deprecated API
+using System;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+using {{ sdk.package_name }}.Models;
+
+namespace {{ sdk.package_name }};
+
+/// <summary>The <c>{{ resource.name }}</c> operations. Get it from <see cref="{{ sdk.client_name }}Client.{{ resource.name | to_upper_camel_case }}"/>.</summary>
+public sealed partial class {{ resource_type_name }}
+{
+    private readonly ApiTransport _transport;
+
+    internal {{ resource_type_name }}(ApiTransport transport)
+    {
+        _transport = transport;
+    }
+{% set api_resource_extra %}extensions/{{ resource.name | to_snake_case }}.cs{% endset %}
+{% include api_resource_extra ignore missing %}
+{% for op in resource.operations -%}
+{% set options_type = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Options" -%}
+{% set has_options = op | has_query_or_header_params -%}
+{% set required_options = op | has_required_query_or_header_params -%}
+{% set body_type = op.request_body_schema_name | default("") | to_upper_camel_case -%}
+{% set body = m.param(op.request_body_schema_name | default("body")) -%}
+{% if op.response_is_binary -%}
+{% set returns = "Task<byte[]>" -%}
+{% elif op.response_is_text -%}
+{% set returns = "Task<string>" -%}
+{% elif op.response_body_schema_name is defined -%}
+{% set returns = "Task<" ~ (op.response_body_schema_name | to_upper_camel_case) ~ ">" -%}
+{% else -%}
+{% set returns = "Task" -%}
+{% endif %}
+{% if op.description is defined -%}
+    {{ m.doc(op.description) }}
+{% endif -%}
+{% if op.deprecated %}    [Obsolete]
+{% endif -%}
+    public {{ returns }} {{ op.name | to_upper_camel_case }}Async(
+{% for p in op.path_params %}        string {{ m.param(p) }},
+{% endfor -%}
+{% if op.request_body_schema_name is defined -%}
+{% if op.request_body_optional %}        {{ body_type }}? {{ body }} = null,
+{% else %}        {{ body_type }} {{ body }},
+{% endif -%}
+{% endif -%}
+{% if has_options -%}
+{% if required_options %}        {{ options_type }} options,
+{% else %}        {{ options_type }}? options = null,
+{% endif -%}
+{% endif -%}
+        CancellationToken cancellationToken = default
+    )
+    {
+{% for p in op.path_params %}        ArgumentException.ThrowIfNullOrEmpty({{ m.param(p) }});
+{% endfor -%}
+{% if op.request_body_schema_name is defined and not op.request_body_optional %}        ArgumentNullException.ThrowIfNull({{ body }});
+{% endif -%}
+{% if required_options %}        ArgumentNullException.ThrowIfNull(options);
+{% endif -%}
+{% set path = namespace(value=op.path) -%}
+{% for p in op.path_params -%}
+{% set path.value = path.value | replace("{" ~ p ~ "}", "{Uri.EscapeDataString(" ~ m.param(p) ~ ")}") -%}
+{% endfor %}
+        var request = new ApiRequest(HttpMethod.{{ op.method | to_upper_camel_case }}, {% if op.path_params %}${% endif %}"{{ path.value }}");
+{% for p in op.query_params -%}
+{% set explode = p.explode | default(true) -%}
+        request.AddQuery("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.name, options_type) }}{% if (p.type.is_list() or p.type.is_set()) and not explode %}, explode: false{% endif %});
+{% endfor -%}
+{% for p in op.header_params -%}
+        request.SetHeader("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.name, options_type) }});
+{% endfor -%}
+{% if op.request_body_schema_name is defined -%}
+{% set setter = "SetFormBody" if op.request_body_is_form else "SetJsonBody" -%}
+{% if op.request_body_optional %}        if ({{ body }} is not null)
+        {
+            request.{{ setter }}({{ body }}, {{ sdk.client_name }}JsonContext.Default.{{ body_type }});
+        }
+{% else %}        request.{{ setter }}({{ body }}, {{ sdk.client_name }}JsonContext.Default.{{ body_type }});
+{% endif -%}
+{% endif -%}
+{% if op.response_is_binary %}        return _transport.SendBytesAsync(request, cancellationToken);
+{% elif op.response_is_text %}        return _transport.SendTextAsync(request, cancellationToken);
+{% elif op.response_body_schema_name is defined %}        return _transport.SendJsonAsync(request, {{ sdk.client_name }}JsonContext.Default.{{ op.response_body_schema_name | to_upper_camel_case }}, cancellationToken);
+{% else %}        return _transport.SendAsync(request, cancellationToken);
+{% endif -%}
+    }
+{% set api_operation_extra %}extensions/{{ resource.name | to_snake_case }}_{{ op.name | to_snake_case }}.cs{% endset %}
+{% include api_operation_extra ignore missing %}
+{% endfor -%}
+}

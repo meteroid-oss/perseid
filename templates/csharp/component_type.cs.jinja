@@ -1,0 +1,13 @@
+{% if type.kind == "struct" -%}
+    {% include "types/struct.cs.jinja" -%}
+{%- elif type.kind == "string_enum" -%}
+    {% include "types/string_enum.cs.jinja" -%}
+{%- elif type.kind == "integer_enum" -%}
+    {% include "types/integer_enum.cs.jinja" -%}
+{%- elif type.kind == "struct_enum" -%}
+    {% include "types/struct_enum.cs.jinja" -%}
+{%- elif type.kind == "string_alias" or type.kind == "alias" -%}
+    {# C# has no type aliases: references to them are inlined. #}
+{%- else -%}
+    {{ panic("csharp codegen: unsupported schema kind `" ~ type.kind ~ "` for type `" ~ type.name ~ "`") }}
+{%- endif %}

@@ -1,0 +1,144 @@
+{% import "macros.cs.jinja" as m -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+{% set tag_json = type.discriminator_field -%}
+{% set tag_prop = m.member(type.discriminator_field, type_name) -%}
+{% set adjacent = type.repr == "adjacently_tagged" -%}
+{% if type.repr != "internally_tagged" and not adjacent -%}
+{{ panic("csharp codegen: unsupported struct enum representation `" ~ type.repr ~ "` for type `" ~ type.name ~ "`") }}
+{% endif -%}
+{% macro variant_class(variant) -%}
+{% set name = m.member(variant.name, type_name) -%}
+{% if name in [tag_prop, "Unrecognized"] %}{{ name }}Variant{% else %}{{ name }}{% endif %}
+{%- endmacro -%}
+{% macro base_init() -%}
+{% if type.fields | length > 0 %} {
+    {% for field in type.fields -%}
+    {% set ty = m.field_type(field) -%}
+    {{ m.member(field.name, type_name) }} = {% if field.required %}Json.Deserialize<{{ ty }}>(Json.Property(root, "{{ field.name }}"), options){% else %}Json.Optional<{{ ty }}>(root, "{{ field.name }}", options){% endif %},
+    {% endfor -%}
+}{% endif %}
+{%- endmacro -%}
+{% set nested = namespace(names="|") -%}
+{% for variant in type.variants %}{% set nested.names = nested.names ~ variant_class(variant) ~ "|" %}{% endfor -%}
+{% macro ref_type(name) -%}
+{% set ty = name | to_upper_camel_case -%}
+{% if ("|" ~ ty ~ "|") in nested.names %}global::{{ sdk.package_name }}.Models.{% endif %}{{ ty }}
+{%- endmacro -%}
+// this file is @generated
+{% include "types/usings.cs.jinja" %}
+
+namespace {{ sdk.package_name }}.Models;
+
+{% if type.description is defined -%}
+{{ m.doc(type.description) }}
+{% endif -%}
+/// <remarks>
+/// Match on the nested variant records. <see cref="Unrecognized"/> holds variants added to the API
+/// after this SDK version, as raw JSON.
+/// </remarks>
+{% if type.deprecated %}[Obsolete]
+{% endif -%}
+[JsonConverter(typeof({{ type_name }}Converter))]
+public abstract partial record {{ type_name }}
+{
+    private {{ type_name }}() { }
+
+    /// <summary>The <c>{{ tag_json }}</c> tag of this variant.</summary>
+    public abstract string {{ tag_prop }} { get; }
+{% with fields = type.fields, owner = type_name %}{% include "types/fields.cs.jinja" %}{% endwith %}
+{% for variant in type.variants -%}
+{% set class = variant_class(variant) %}
+    /// <summary>The <c>{{ variant.name }}</c> variant.</summary>
+{% if variant.type == "ref" and variant.schema_ref is defined -%}
+    public sealed record {{ class }}({{ ref_type(variant.schema_ref) }} Value) : {{ type_name }}
+{% elif variant.type == "struct" and variant.fields | default([]) | length > 0 -%}
+    public sealed record {{ class }}({{ class }}Data Value) : {{ type_name }}
+{% else -%}
+    public sealed record {{ class }}() : {{ type_name }}
+{% endif -%}
+    {
+        public override string {{ tag_prop }} => "{{ variant.name }}";
+    }
+{% if variant.type == "struct" and variant.fields | default([]) | length > 0 %}
+    /// <summary>The fields of the <c>{{ variant.name }}</c> variant.</summary>
+    public sealed partial record {{ class }}Data
+    {
+{% with fields = variant.fields, owner = class ~ "Data" %}{% include "types/fields.cs.jinja" %}{% endwith %}
+    }
+{% endif -%}
+{% endfor %}
+    /// <summary>A variant unknown to this SDK version, kept as the raw JSON object.</summary>
+    public sealed record Unrecognized(string Tag, JsonElement Raw) : {{ type_name }}
+    {
+        public override string {{ tag_prop }} => Tag;
+    }
+}
+
+internal sealed class {{ type_name }}Converter : JsonConverter<{{ type_name }}>
+{
+    public override {{ type_name }} Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options
+    )
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        var root = document.RootElement;
+        return Json.Tag(root, "{{ tag_json }}") switch
+        {
+{% for variant in type.variants -%}
+{% set class = variant_class(variant) -%}
+{% set source %}{% if adjacent %}Json.Property(root, "{{ type.content_field }}"){% else %}root{% endif %}{% endset -%}
+            "{{ variant.name }}" => new {{ type_name }}.{{ class }}(
+{%- if variant.type == "ref" and variant.schema_ref is defined -%}
+                Json.Deserialize<{{ variant.schema_ref | to_upper_camel_case }}>({{ source }}, options)
+{%- elif variant.type == "struct" and variant.fields | default([]) | length > 0 -%}
+                Json.Deserialize<{{ type_name }}.{{ class }}Data>({{ source }}, options)
+{%- endif -%}
+            ){{ base_init() }},
+{% endfor -%}
+            var tag => new {{ type_name }}.Unrecognized(tag ?? string.Empty, root.Clone()){{ base_init() }},
+        };
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        {{ type_name }} value,
+        JsonSerializerOptions options
+    )
+    {
+        if (value is {{ type_name }}.Unrecognized unrecognized)
+        {
+            unrecognized.Raw.WriteTo(writer);
+            return;
+        }
+        var fields = new List<KeyValuePair<string, JsonNode?>>();
+{% for field in type.fields -%}
+{% set prop = m.member(field.name, type_name) -%}
+{% if field.required -%}
+        fields.Add(new("{{ field.name }}", Json.ToNode(value.{{ prop }}, options)));
+{% else -%}
+        if (value.{{ prop }} is not null)
+        {
+            fields.Add(new("{{ field.name }}", Json.ToNode(value.{{ prop }}, options)));
+        }
+{% endif -%}
+{% endfor -%}
+        switch (value)
+        {
+{% for variant in type.variants -%}
+{% set class = variant_class(variant) -%}
+{% if (variant.type == "ref" and variant.schema_ref is defined) or (variant.type == "struct" and variant.fields | default([]) | length > 0) -%}
+            case {{ type_name }}.{{ class }} variant:
+{% if adjacent -%}
+                fields.Add(new("{{ type.content_field }}", Json.ToNode(variant.Value, options)));
+{% else -%}
+                fields.AddRange(Json.ToObject(variant.Value, options));
+{% endif -%}
+                break;
+{% endif -%}
+{% endfor -%}
+        }
+        Json.WriteTagged(writer, "{{ tag_json }}", value.{{ tag_prop }}, fields, options);
+    }
+}

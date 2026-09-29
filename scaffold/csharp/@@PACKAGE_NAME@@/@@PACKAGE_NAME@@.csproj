@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>@@PACKAGE_NAME@@</RootNamespace>
+    <Nullable>enable</Nullable>
+    <IsAotCompatible>true</IsAotCompatible>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageId>@@PACKAGE_NAME@@</PackageId>
+    <Version>@@VERSION@@</Version>
+    <Authors>@@CLIENT_NAME@@</Authors>
+    <Description>.NET SDK for the @@CLIENT_NAME@@ API.</Description>
+    <PackageTags>@@USER_AGENT_PREFIX@@;api;sdk</PackageTags>
+  </PropertyGroup>
+</Project>

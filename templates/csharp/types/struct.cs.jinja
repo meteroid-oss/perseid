@@ -1,0 +1,16 @@
+{% import "macros.cs.jinja" as m -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+// this file is @generated
+{% include "types/usings.cs.jinja" %}
+
+namespace {{ sdk.package_name }}.Models;
+
+{% if type.description is defined -%}
+{{ m.doc(type.description) }}
+{% endif -%}
+{% if type.deprecated %}[Obsolete]
+{% endif -%}
+public sealed partial record {{ type_name }}
+{
+{% with fields = type.fields, owner = type_name %}{% include "types/fields.cs.jinja" %}{% endwith %}
+}

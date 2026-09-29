@@ -1,0 +1,35 @@
+{% macro doc(text) -%}
+/// <summary>
+{{ text | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") | to_doc_comment(style="csharp") }}
+/// </summary>
+{%- endmacro %}
+
+{# A lowerCamelCase parameter name, `@`-escaped when it is a C# keyword. -#}
+{% macro param(name) -%}
+{% set id = name | to_lower_camel_case -%}
+{% if id in ["abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked",
+    "class", "const", "continue", "decimal", "default", "delegate", "do", "double", "else", "enum",
+    "event", "explicit", "extern", "false", "finally", "fixed", "float", "for", "foreach", "goto",
+    "if", "implicit", "in", "int", "interface", "internal", "is", "lock", "long", "namespace", "new",
+    "null", "object", "operator", "out", "override", "params", "private", "protected", "public",
+    "readonly", "ref", "return", "sbyte", "sealed", "short", "sizeof", "stackalloc", "static",
+    "string", "struct", "switch", "this", "throw", "true", "try", "typeof", "uint", "ulong",
+    "unchecked", "unsafe", "ushort", "using", "virtual", "void", "volatile", "while"] -%}
+@{{ id }}
+{%- elif id in ["request", "options", "cancellationToken"] -%}
+{{ id }}Param
+{%- else -%}
+{{ id }}
+{%- endif %}
+{%- endmacro %}
+
+{# A PascalCase member name, which C# forbids to equal its enclosing type's. -#}
+{% macro member(name, owner) -%}
+{% set id = name | to_rust_variant -%}
+{% if id == owner %}{{ id }}Value{% else %}{{ id }}{% endif %}
+{%- endmacro %}
+
+{# The property type of a model field or query parameter. -#}
+{% macro field_type(field) -%}
+{{ field.type.to_csharp() }}{% if field.nullable or not field.required %}?{% endif %}
+{%- endmacro %}

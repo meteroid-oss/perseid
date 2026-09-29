@@ -1,0 +1,60 @@
+{% set _ = set_summary_filename(sdk.client_name ~ "Client.cs") -%}
+// this file is @generated
+#pragma warning disable CS0612, CS0618 // generated code may use deprecated API
+using System;
+using System.Net.Http;
+
+namespace {{ sdk.package_name }};
+
+/// <summary>
+/// Entry point of the {{ sdk.client_name }} API{% if sdk.tagline %} for {{ sdk.tagline }}{% endif %}. Thread-safe: create one and reuse it.
+/// </summary>
+/// <example>
+/// <code>
+/// using var client = new {{ sdk.client_name }}Client("your-api-key");
+{% if sdk.example -%}
+{% for line in sdk.example | trim | lines -%}
+/// {{ line | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") }}
+{% endfor -%}
+{% endif -%}
+/// </code>
+/// With <c>IHttpClientFactory</c>: <c>new {{ sdk.client_name }}Client(factory.CreateClient("{{ sdk.client_name | to_kebab_case }}"), "your-api-key")</c>.
+/// </example>
+public sealed partial class {{ sdk.client_name }}Client : IDisposable
+{
+{% for resource in api.resources -%}
+{% if resource.subresources | length > 0 -%}
+{{ panic("csharp codegen: subresources are not supported (resource `" ~ resource.name ~ "`)") }}
+{% endif -%}
+{% endfor -%}
+    private readonly ApiTransport _transport;
+
+    /// <summary>Creates a client with its own connection pool.</summary>
+    /// <param name="token">Bearer token sent with every request, if not null.</param>
+    /// <param name="options">Base URL, timeout and retries.</param>
+    public {{ sdk.client_name }}Client(string? token, {{ sdk.client_name }}ClientOptions? options = null)
+        : this(new ApiTransport(token, options ?? new(), http: null)) { }
+
+    /// <summary>
+    /// Creates a client sending requests through <paramref name="httpClient"/>, for instance one from
+    /// <c>IHttpClientFactory</c>. The caller keeps ownership of it.
+    /// </summary>
+    /// <param name="httpClient">The HTTP client, whose own <c>Timeout</c> also applies.</param>
+    /// <param name="token">Bearer token sent with every request, if not null.</param>
+    /// <param name="options">Base URL, timeout and retries.</param>
+    public {{ sdk.client_name }}Client(HttpClient httpClient, string? token, {{ sdk.client_name }}ClientOptions? options = null)
+        : this(new ApiTransport(token, options ?? new(), httpClient ?? throw new ArgumentNullException(nameof(httpClient)))) { }
+
+    private {{ sdk.client_name }}Client(ApiTransport transport)
+    {
+        _transport = transport;
+{% for resource in api.resources -%}
+        {{ resource.name | to_upper_camel_case }} = new {{ resource.name | to_upper_camel_case }}Api(transport);
+{% endfor -%}
+    }
+{% for resource in api.resources %}
+    public {{ resource.name | to_upper_camel_case }}Api {{ resource.name | to_upper_camel_case }} { get; }
+{% endfor %}
+    /// <summary>Releases the connection pool, unless the caller owns the <see cref="HttpClient"/>.</summary>
+    public void Dispose() => _transport.Dispose();
+}

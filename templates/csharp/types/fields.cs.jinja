@@ -1,0 +1,25 @@
+{#- Properties of `fields`, inside a type named `owner`. -#}
+{% for field in fields -%}
+{% set ty = m.field_type(field) -%}
+{% set patch = sdk.patch_nullable and owner is endingwith "Patch" and field.nullable -%}
+{% if field.description is defined %}
+{{ m.doc(field.description) }}
+{%- endif %}
+[JsonPropertyName("{{ field.name }}")]
+{% if patch -%}
+[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+[JsonConverter(typeof(MaybeUnsetConverter<{{ ty }}>))]
+{% elif field.required and field.nullable -%}
+[JsonIgnore(Condition = JsonIgnoreCondition.Never)]
+{% endif -%}
+{% if "decimal" in ty -%}
+[JsonNumberHandling(JsonNumberHandling.AllowReadingFromString | JsonNumberHandling.WriteAsString)]
+{% endif -%}
+{% if field.deprecated %}[Obsolete]
+{% endif -%}
+{% if patch -%}
+public MaybeUnset<{{ ty }}> {{ m.member(field.name, owner) }} { get; set; }
+{% else -%}
+public {% if field.required %}required {% endif %}{{ ty }} {{ m.member(field.name, owner) }} { get; set; }
+{% endif %}
+{% endfor -%}

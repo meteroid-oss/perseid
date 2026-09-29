@@ -1,0 +1,32 @@
+{% import "macros.cs.jinja" as m -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+// this file is @generated
+using System.Text.Json.Serialization;
+
+namespace {{ sdk.package_name }}.Models;
+
+{% if type.description is defined -%}
+{{ m.doc(type.description) }}
+{% else -%}
+/// <summary>
+/// One of the known values below, or any other string a newer API version sends.
+/// </summary>
+{% endif -%}
+[JsonConverter(typeof(StringEnumConverter<{{ type_name }}>))]
+public readonly partial record struct {{ type_name }}(string Value) : IStringEnum<{{ type_name }}>
+{
+{% for value in type.values -%}
+{% set name = m.member(value, type_name) -%}
+{% if name in ["Value", "FromValue", "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
+    /// <summary><c>{{ value }}</c></summary>
+    public static {{ type_name }} {{ name }} { get; } = new("{{ value }}");
+{% endfor %}
+    /// <summary>Whether this SDK version knows the value.</summary>
+    public bool IsKnown => Value is {% for value in type.values %}"{{ value }}"{% if not loop.last %} or {% endif %}{% endfor %};
+
+    public static {{ type_name }} FromValue(string value) => new(value);
+
+    public static implicit operator {{ type_name }}(string value) => new(value);
+
+    public override string ToString() => Value ?? string.Empty;
+}
