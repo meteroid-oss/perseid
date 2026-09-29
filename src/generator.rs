@@ -23,16 +23,6 @@ enum TemplateKind {
     Summary,
 }
 
-pub(crate) fn generate(
-    api: Api,
-    tpl_name: String,
-    output_dir: &Utf8Path,
-    no_postprocess: bool,
-    sdk: serde_json::Value,
-) -> anyhow::Result<Vec<Utf8PathBuf>> {
-    generate_with_output_context(api, tpl_name, output_dir, no_postprocess, sdk, None)
-}
-
 pub(crate) fn generate_with_output_context(
     mut api: Api,
     tpl_name: String,

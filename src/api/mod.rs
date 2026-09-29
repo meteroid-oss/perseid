@@ -1,11 +1,10 @@
-use std::collections::{BTreeSet, btree_map};
+use std::collections::BTreeSet;
 
 pub(crate) mod resources;
 pub(crate) mod struct_enum;
 pub(crate) mod types;
 
 use aide::openapi;
-use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::IncludeMode;
@@ -62,64 +61,6 @@ impl Api {
     pub(crate) fn inline_aliases(&mut self) -> anyhow::Result<()> {
         types::inline_aliases(&mut self.types, &mut self.resources)
     }
-
-    pub(crate) fn merge(mut self, other: Self) -> anyhow::Result<Self> {
-        merge_resources(&mut self.resources, other.resources);
-        merge_types(&mut self.types, other.types)?;
-        Ok(self)
-    }
-}
-
-fn merge_resources(dst: &mut Resources, src: Resources) {
-    for (k, v) in src {
-        match dst.entry(k) {
-            btree_map::Entry::Vacant(entry) => {
-                entry.insert(v);
-            }
-            btree_map::Entry::Occupied(mut entry) => {
-                let Resource {
-                    name,
-                    operations,
-                    subresources,
-                } = v;
-                let dst_r = entry.get_mut();
-
-                // Resource name must be equal to the dot-separated key path to
-                // the resource. This invariant can be violated by hand-editing
-                // the .ron file, but it's fine to crash in that case.
-                assert_eq!(name, dst_r.name, "invalid resource name");
-
-                dst_r.operations.extend(operations);
-                merge_resources(&mut dst_r.subresources, subresources);
-            }
-        }
-    }
-}
-
-fn merge_types(dst: &mut Types, src: Types) -> anyhow::Result<()> {
-    let mut mismatching_types = vec![];
-    for (name, ty) in src {
-        match dst.entry(name) {
-            btree_map::Entry::Vacant(entry) => {
-                entry.insert(ty);
-            }
-            btree_map::Entry::Occupied(entry) => {
-                if *entry.get() != ty {
-                    mismatching_types.push(entry.key().clone());
-                }
-            }
-        }
-    }
-
-    if !mismatching_types.is_empty() {
-        eprintln!("Found {} mismatching types", mismatching_types.len());
-        for m in mismatching_types {
-            eprintln!("mismatching definitions for {m}")
-        }
-        bail!("mismatching definitions found");
-    }
-
-    Ok(())
 }
 
 pub(crate) fn get_schema_name(maybe_ref: Option<&str>) -> Option<String> {

@@ -1,6 +1,6 @@
 mod api;
 pub mod assets;
-pub(crate) mod cli_v2;
+mod value_vec;
 mod codesamples;
 pub mod config;
 mod format;

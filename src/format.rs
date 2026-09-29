@@ -81,6 +81,10 @@ pub fn format(language: &str, cwd: &Path, files: &[PathBuf]) -> Result<()> {
     if files.is_empty() {
         return Ok(());
     }
+    // Style comes from the flags alone, so an SDK's own biome config can't change or break it.
+    let isolated = tempfile::tempdir()?;
+    std::fs::write(isolated.path().join("biome.json"), "{}")?;
+    let biome_config = format!("--config-path={}", isolated.path().display());
     for (candidates, args) in passes {
         let Some(command) = candidates.iter().find(|c| on_path(c[0])) else {
             eprintln!(
@@ -93,6 +97,7 @@ pub fn format(language: &str, cwd: &Path, files: &[PathBuf]) -> Result<()> {
             let output = Command::new(command[0])
                 .args(&command[1..])
                 .args(*args)
+                .args((language == "typescript").then_some(&biome_config))
                 .args(chunk)
                 .current_dir(cwd)
                 .output()?;
