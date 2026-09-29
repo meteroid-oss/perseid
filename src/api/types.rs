@@ -172,6 +172,82 @@ fn resolve_schema_ref_in_field_type(
     }
 }
 
+/// Replace every reference to a [`TypeData::Alias`] type by the alias target, for
+/// targets whose templates cannot declare named aliases.
+pub(crate) fn inline_aliases(types: &mut Types, resources: &mut Resources) -> anyhow::Result<()> {
+    let aliases = resolve_alias_targets(types)?;
+    if aliases.is_empty() {
+        return Ok(());
+    }
+    for ty in types.values_mut() {
+        ty.data
+            .for_each_field_type(|field_type| field_type.inline_aliases(&aliases));
+        if let TypeData::StructEnum {
+            repr:
+                StructEnumRepr::AdjacentlyTagged { variants, .. }
+                | StructEnumRepr::InternallyTagged { variants },
+            ..
+        } = &ty.data
+        {
+            for variant in variants {
+                if let EnumVariantType::Ref {
+                    schema_ref: Some(name),
+                    ..
+                } = &variant.content
+                {
+                    ensure!(
+                        !aliases.contains_key(name),
+                        "alias schema `{name}` cannot be a union variant"
+                    );
+                }
+            }
+        }
+    }
+    for resource in resources.values_mut() {
+        resource.inline_aliases(&aliases)?;
+    }
+    Ok(())
+}
+
+fn resolve_alias_targets(types: &Types) -> anyhow::Result<BTreeMap<String, FieldType>> {
+    fn resolve<'a>(
+        name: &'a str,
+        raw: &BTreeMap<&'a str, &'a FieldType>,
+        resolved: &mut BTreeMap<String, FieldType>,
+        stack: &mut Vec<&'a str>,
+    ) -> anyhow::Result<()> {
+        if resolved.contains_key(name) {
+            return Ok(());
+        }
+        ensure!(!stack.contains(&name), "cyclic alias schema `{name}`");
+        stack.push(name);
+        let source = raw[name];
+        if let Some(inner) = source.referenced_schema()
+            && raw.contains_key(inner)
+        {
+            resolve(inner, raw, resolved, stack)?;
+        }
+        let mut target = source.clone();
+        target.inline_aliases(resolved);
+        stack.pop();
+        resolved.insert(name.to_owned(), target);
+        Ok(())
+    }
+
+    let raw: BTreeMap<&str, &FieldType> = types
+        .iter()
+        .filter_map(|(name, ty)| match &ty.data {
+            TypeData::Alias { target } => Some((name.as_str(), &**target)),
+            _ => None,
+        })
+        .collect();
+    let mut resolved = BTreeMap::new();
+    for name in raw.keys() {
+        resolve(name, &raw, &mut resolved, &mut Vec::new())?;
+    }
+    Ok(resolved)
+}
+
 /// Promote every inline `FieldType::StringEnum` into a named top-level
 /// `TypeData::StringEnum` and rewrite the field to `FieldType::SchemaRef`.
 ///
@@ -607,6 +683,24 @@ pub(crate) enum TypeData {
 }
 
 impl TypeData {
+    fn for_each_field_type(&mut self, mut visit: impl FnMut(&mut FieldType)) {
+        match self {
+            Self::Alias { target } => visit(target),
+            Self::Struct { fields } => fields.iter_mut().for_each(|f| visit(&mut f.r#type)),
+            Self::StructEnum { fields, repr, .. } => {
+                fields.iter_mut().for_each(|f| visit(&mut f.r#type));
+                let (StructEnumRepr::AdjacentlyTagged { variants, .. }
+                | StructEnumRepr::InternallyTagged { variants }) = repr;
+                for variant in variants {
+                    if let EnumVariantType::Struct { fields } = &mut variant.content {
+                        fields.iter_mut().for_each(|f| visit(&mut f.r#type));
+                    }
+                }
+            }
+            Self::StringEnum { .. } | Self::IntegerEnum { .. } | Self::StringAlias => {}
+        }
+    }
+
     pub(super) fn from_object_schema(
         obj: ObjectValidation,
         subschemas: Option<Box<SubschemaValidation>>,
@@ -1210,7 +1304,7 @@ impl FieldType {
             Self::List { inner } | Self::Set { inner } => {
                 format!("List<{}>", inner.to_csharp_typename()).into()
             }
-            Self::SchemaRef { name, .. } => filter_schema_ref(name, "Object"),
+            Self::SchemaRef { name, .. } => Cow::Borrowed(name.as_str()),
             Self::StringConst { .. } => "string".into(),
             Self::StringEnum { .. } => unreachable_inline_enum(),
         }
@@ -1233,7 +1327,7 @@ impl FieldType {
             Self::List { inner } | Self::Set { inner } => {
                 format!("[]{}", inner.to_go_typename()).into()
             }
-            Self::SchemaRef { name, .. } => filter_schema_ref(name, "map[string]any"),
+            Self::SchemaRef { name, .. } => Cow::Borrowed(name.as_str()),
             Self::StringConst { .. } => "string".into(),
             Self::StringEnum { .. } => unreachable_inline_enum(),
         }
@@ -1258,7 +1352,7 @@ impl FieldType {
             Self::JsonObject => "Map<String,Any>".into(),
             Self::List { inner } => format!("List<{}>", inner.to_kotlin_typename()).into(),
             Self::Set { inner } => format!("Set<{}>", inner.to_kotlin_typename()).into(),
-            Self::SchemaRef { name, .. } => filter_schema_ref(name, "Map<String,Any>"),
+            Self::SchemaRef { name, .. } => Cow::Borrowed(name.as_str()),
             Self::StringConst { .. } => "String".into(),
             Self::StringEnum { .. } => unreachable_inline_enum(),
         }
@@ -1287,7 +1381,7 @@ impl FieldType {
             Self::Map { value_ty } => {
                 format!("{{ [key: string]: {} }}", value_ty.to_js_typename()).into()
             }
-            Self::SchemaRef { name, .. } => filter_schema_ref(name, "any"),
+            Self::SchemaRef { name, .. } => Cow::Borrowed(name.as_str()),
             Self::StringConst { .. } => "string".into(),
             Self::StringEnum { .. } => unreachable_inline_enum(),
         }
@@ -1307,7 +1401,7 @@ impl FieldType {
             Self::Uri | Self::String => "String".into(),
             Self::Decimal => "rust_decimal::Decimal".into(),
             // FIXME: Depends on those chrono imports being in scope, not that great..
-            Self::DateTime => "String".into(),
+            Self::DateTime => "DateTime<Utc>".into(),
             Self::JsonObject => "serde_json::Value".into(),
             // FIXME: Treat set differently? (BTreeSet)
             Self::List { inner } | Self::Set { inner } => {
@@ -1324,13 +1418,24 @@ impl FieldType {
         }
     }
 
-    pub(crate) fn referenced_schema(&self) -> Option<&str> {
+    pub(crate) fn inline_aliases(&mut self, aliases: &BTreeMap<String, FieldType>) {
         match self {
             Self::SchemaRef { name, .. } => {
-                // Workaround: the `BackgroundTaskFinishedEvent2` struct has a field with type of `Data`
-                // which corresponds to an untagged enum. We skip this reference for now.
-                Some(name)
+                if let Some(target) = aliases.get(name) {
+                    *self = target.clone();
+                }
             }
+            Self::List { inner } | Self::Set { inner } => {
+                Arc::make_mut(inner).inline_aliases(aliases);
+            }
+            Self::Map { value_ty } => Arc::make_mut(value_ty).inline_aliases(aliases),
+            _ => {}
+        }
+    }
+
+    pub(crate) fn referenced_schema(&self) -> Option<&str> {
+        match self {
+            Self::SchemaRef { name, .. } => Some(name),
             Self::List { inner: ty } | Self::Set { inner: ty } | Self::Map { value_ty: ty } => {
                 ty.referenced_schema()
             }
@@ -1346,7 +1451,7 @@ impl FieldType {
             Self::String => "str".into(),
             Self::Decimal => "Decimal".into(),
             Self::DateTime => "datetime".into(),
-            Self::SchemaRef { name, .. } => filter_schema_ref(name, "t.Dict[str, t.Any]"),
+            Self::SchemaRef { name, .. } => Cow::Borrowed(name.as_str()),
             Self::Uri => "str".into(),
             Self::JsonObject => "t.Dict[str, t.Any]".into(),
             Self::Set { inner } | Self::List { inner } => {
@@ -1388,7 +1493,7 @@ impl FieldType {
                 {
                     return "String".into();
                 }
-                filter_schema_ref(name, "Object")
+                Cow::Borrowed(name.as_str())
             }
             // backwards compat
             FieldType::StringConst { .. } => "TypeEnum".into(),
@@ -1683,10 +1788,6 @@ where
     }
 }
 
-fn filter_schema_ref<'a>(name: &'a str, _json_obj_typename: &'a str) -> Cow<'a, str> {
-    Cow::Borrowed(name)
-}
-
 #[cold]
 #[inline(never)]
 fn unreachable_inline_enum() -> ! {
@@ -1757,6 +1858,82 @@ mod tests {
             ty.referenced_components(),
             BTreeSet::from(["Left", "Right"])
         );
+    }
+
+    fn types_from(schemas: serde_json::Value) -> Types {
+        schemas
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, s)| {
+                let ty = Type::from_schema(name.clone(), schema(s.clone())).unwrap();
+                (name.clone(), ty)
+            })
+            .collect()
+    }
+
+    fn field_type<'a>(types: &'a Types, ty: &str, field: &str) -> &'a FieldType {
+        let TypeData::Struct { fields } = &types[ty].data else {
+            panic!("{ty} is not a struct");
+        };
+        &fields.iter().find(|f| f.name == field).unwrap().r#type
+    }
+
+    #[test]
+    fn inlining_replaces_alias_references_and_chains() {
+        let mut types = types_from(json!({
+            "Widgets": {"type": "array", "items": {"$ref": "#/components/schemas/Widget"}},
+            "Batch": {"$ref": "#/components/schemas/Widgets"},
+            "Widget": {"type": "object", "properties": {"id": {"type": "string"}}},
+            "Holder": {"type": "object", "properties": {
+                "batch": {"$ref": "#/components/schemas/Batch"},
+                "labels": {"type": "array", "items": {"$ref": "#/components/schemas/Widgets"}},
+                "widget": {"$ref": "#/components/schemas/Widget"}
+            }}
+        }));
+        inline_aliases(&mut types, &mut Resources::new()).unwrap();
+
+        let widget = FieldType::SchemaRef {
+            name: "Widget".into(),
+            inner: None,
+        };
+        let FieldType::List { inner } = field_type(&types, "Holder", "batch") else {
+            panic!("alias chain was not inlined");
+        };
+        assert_eq!(**inner, widget);
+        let FieldType::List { inner } = field_type(&types, "Holder", "labels") else {
+            panic!("nested alias was not inlined");
+        };
+        assert!(matches!(&**inner, FieldType::List { .. }));
+        assert_eq!(field_type(&types, "Holder", "widget"), &widget);
+        assert_eq!(
+            types["Batch"].referenced_components(),
+            BTreeSet::from(["Widget"])
+        );
+    }
+
+    #[test]
+    fn cyclic_aliases_are_rejected() {
+        let mut types = types_from(json!({
+            "A": {"$ref": "#/components/schemas/B"},
+            "B": {"$ref": "#/components/schemas/A"}
+        }));
+        let error = inline_aliases(&mut types, &mut Resources::new()).unwrap_err();
+        assert!(error.to_string().contains("cyclic alias"));
+    }
+
+    #[test]
+    fn scalar_and_untyped_components_are_aliases() {
+        for (name, value) in [
+            ("Count", json!({"type": "integer", "format": "int64"})),
+            ("Flag", json!({"type": "boolean"})),
+            ("Ratio", json!({"type": "number"})),
+            ("Anything", json!({})),
+            ("Ids", json!({"type": "array", "items": {"type": "string"}})),
+        ] {
+            let ty = Type::from_schema(name.into(), schema(value)).unwrap();
+            assert!(matches!(ty.data, TypeData::Alias { .. }), "{name}");
+        }
     }
 
     #[test]

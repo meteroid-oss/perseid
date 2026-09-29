@@ -21,6 +21,8 @@
     {% include "types/struct_enum.ts.jinja" -%}
 {% elif type.kind == "string_alias" -%}
     {% include "types/string_alias.ts.jinja" -%}
+{% elif type.kind == "alias" -%}
+    {% include "types/alias.ts.jinja" -%}
 {% else -%}
     {# Fail loudly rather than silently emitting nothing for an unhandled kind. #}
     {{ panic("typescript codegen: unsupported schema kind `" ~ type.kind ~ "` for type `" ~ type.name ~ "`") }}
