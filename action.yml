@@ -1,5 +1,5 @@
-name: Perseid
-description: Generate SDKs from an OpenAPI spec and open pull requests with the result
+name: Perseid OpenAPI SDK Generator
+description: Generate idiomatic Rust, TypeScript, Python, Go and Java SDKs from OpenAPI and open pull requests. No cloud, no subscription.
 branding:
   icon: package
   color: purple
@@ -9,7 +9,7 @@ inputs:
     description: Arguments passed to perseid
     default: generate --pr
   version:
-    description: Perseid version (default, the action's own tag, else latest)
+    description: Perseid version (default, the one matching this action's ref)
     default: ''
   token:
     description: GitHub token, needs contents and pull-requests write on every target repository
@@ -26,9 +26,11 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        PERSEID_VERSION: ${{ inputs.version || (startsWith(github.action_ref, 'v') && github.action_ref) || 'latest' }}
+        PERSEID_VERSION: ${{ inputs.version }}
         PERSEID_INSTALL: ${{ runner.temp }}/perseid
       run: |
+        # The binary matching this action's own code, whether it's used @v0, @v0.2.1 or @<sha>.
+        export PERSEID_VERSION="${PERSEID_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_ACTION_PATH/Cargo.toml" | head -1)}"
         sh "$GITHUB_ACTION_PATH/install.sh"
         echo "$PERSEID_INSTALL" >> "$GITHUB_PATH"
         languages=$(grep -oE '^\[(rust|typescript|python|go|java)[].]' perseid.toml | tr -d '[].' | sort -u | tr '\n' ' ')
