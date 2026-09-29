@@ -1,6 +1,5 @@
 mod api;
 pub mod assets;
-mod value_vec;
 mod codesamples;
 pub mod config;
 mod format;
@@ -12,6 +11,7 @@ mod postprocessing;
 pub mod pr;
 pub mod spec;
 mod template;
+mod value_vec;
 
 pub use crate::{
     codesamples::{CodeSample, CodesampleTemplates, generate_codesamples},
