@@ -654,7 +654,9 @@ class LifecycleTests(unittest.TestCase):
             "perseid.toml",
         ):
             self.assertTrue((destination / path).exists(), path)
-        (destination / "openapi.json").write_text(json.dumps(SPEC))
+        (destination / "openapi.json").write_text(
+            json.dumps({**SPEC, "openapi": "3.0.3"})
+        )
         self.cli("sync", "--config", str(destination / "perseid.toml"))
         self.cli(
             "generate", "--no-format", "--config", str(destination / "perseid.toml")
@@ -690,6 +692,8 @@ class LifecycleTests(unittest.TestCase):
             "--directory",
             ".",
             "--sdk-only",
+            "--base-url",
+            "https://api.example.test",
             "--go-module",
             "github.com/testing/go-sdk",
             "--output",
@@ -697,6 +701,138 @@ class LifecycleTests(unittest.TestCase):
         )
         self.assertTrue((dedicated / "go.mod").exists())
         self.assertFalse((dedicated / "perseid.toml").exists())
+        self.assertIn(
+            'default_base_url = "https://api.example.test"',
+            (dedicated / ".perseid/overrides.toml").read_text(),
+        )
+
+    def test_init_binary_only_workflows_and_backend_conflicts(self):
+        destination = self.home / "clients"
+        backend = self.home / "backend"
+        backend.mkdir()
+        args = [
+            "init",
+            "--name",
+            "example",
+            "--language",
+            "typescript",
+            "--output",
+            str(destination),
+            "--repository",
+            "testing/clients",
+            "--source-repository",
+            "testing/backend",
+            "--source-ref",
+            "production",
+            "--spec",
+            "apis/generated/openapi.json",
+            "--backend-directory",
+            str(backend),
+            "--base-url",
+            "https://api.example.com",
+        ]
+        # Init works with no Git, shell, compiler, formatter, or package manager on PATH.
+        result = self.cli(
+            *args, env={**self.env, "PATH": str(self.home / "empty-path")}
+        )
+        self.assertIn("Commit and push", result.stdout)
+        update = (destination / ".github/workflows/update-sdks.yml").read_text()
+        self.assertIn("actions/setup-node", update)
+        self.assertNotIn("rust-toolchain", update)
+        self.assertNotIn("setup-java", update)
+        self.assertIn("perseid sync", update)
+        self.assertIn("perseid generate --pr", update)
+        setup = (destination / ".perseid/setup-ci.sh").read_text()
+        self.assertNotIn("cargo install", setup)
+        self.assertIn("sha256sum --check", setup)
+        self.assertIn("@biomejs/biome@2.1.4", setup)
+        self.run_command(["bash", "-n", destination / ".perseid/setup-ci.sh"])
+        notifier = (backend / ".github/workflows/notify-openapi.yml").read_text()
+        self.assertIn('branches: ["production"]', notifier)
+        self.assertIn('paths: ["apis/generated/openapi.json"]', notifier)
+        self.assertIn('ORCHESTRATOR: "testing/clients"', notifier)
+        self.assertNotIn("perseid generate", notifier)
+        config = (destination / "perseid.toml").read_text()
+        self.assertIn('git = "https://github.com/testing/backend.git"', config)
+        self.assertIn('default_base_url = "https://api.example.com"', config)
+        self.assertNotIn("@@", update + setup + notifier)
+        # A conflict in the second repository prevents writes to the first too.
+        another = self.home / "conflicting-clients"
+        args[args.index(str(destination))] = str(another)
+        self.assertIn("overwrite", self.cli(*args, success=False).stderr)
+        self.assertFalse(another.exists())
+        # Existing files in a planned directory must also fail before any writes.
+        (backend / ".github/workflows/notify-openapi.yml").unlink()
+        another.mkdir()
+        (another / ".github").write_text("handwritten file")
+        self.assertIn("needs a directory", self.cli(*args, success=False).stderr)
+        self.assertEqual(list(another.iterdir()), [another / ".github"])
+        (another / ".github").unlink()
+        args.remove("--backend-directory")
+        args.remove(str(backend))
+        args.append("--no-workflows")
+        self.cli(*args)
+        self.assertFalse((another / ".github").exists())
+
+    def test_bootstrap_installer_checks_archive_before_extracting(self):
+        import hashlib
+        import tarfile
+
+        destination = self.home / "go-client"
+        self.cli(
+            "init",
+            "--name",
+            "example",
+            "--language",
+            "go",
+            "--go-module",
+            "github.com/testing/client",
+            "--output",
+            str(destination),
+        )
+        artifacts = self.home / "artifacts"
+        artifacts.mkdir()
+        archive = artifacts / "perseid-x86_64-unknown-linux-musl.tar.gz"
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(BINARY, arcname="perseid")
+        checksum = artifacts / "SHA256SUMS"
+        checksum.write_text(
+            hashlib.sha256(archive.read_bytes()).hexdigest()
+            + "  "
+            + archive.name
+            + "\n"
+        )
+        fake_bin = self.home / "fake-bin"
+        fake_bin.mkdir()
+        curl = fake_bin / "curl"
+        curl.write_text(
+            '#!/usr/bin/env bash\nset -eu\nurl=\noutput=\nwhile [ $# -gt 0 ]; do\n case $1 in\n  https://*) url=$1 ;;\n  -o) shift; output=$1 ;;\n esac\n shift\ndone\ncp "$ARTIFACTS/${url##*/}" "$output"\n'
+        )
+        curl.chmod(0o755)
+        runner = self.home / "runner"
+        github_path = self.home / "github-path"
+        env = {
+            **self.env,
+            "PATH": str(fake_bin) + os.pathsep + self.env["PATH"],
+            "ARTIFACTS": str(artifacts),
+            "RUNNER_TEMP": str(runner),
+            "GITHUB_PATH": str(github_path),
+        }
+        self.run_command(["bash", destination / ".perseid/setup-ci.sh"], env=env)
+        installed = runner / "perseid-tools/bin/perseid"
+        self.assertEqual(installed.read_bytes(), BINARY.read_bytes())
+        self.assertIn(str(installed.parent), github_path.read_text())
+        shutil.rmtree(runner)
+        checksum.write_text("0" * 64 + "  " + archive.name + "\n")
+        self.run_command(
+            ["bash", destination / ".perseid/setup-ci.sh"], env=env, success=False
+        )
+        self.assertFalse(installed.exists())
+        checksum.write_text("")
+        self.run_command(
+            ["bash", destination / ".perseid/setup-ci.sh"], env=env, success=False
+        )
+        self.assertFalse(installed.exists())
 
     def prepare_release(self, probe, publish):
         self.configure(

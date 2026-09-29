@@ -207,10 +207,13 @@ partial failure to reconcile them.
 ## Bootstrapping and destination overrides
 
 Create one or several SDK packages with their runtime dependencies and customizable
-support files (entry points/errors). Init refuses file conflicts before writing:
+support files (entry points/errors), GitHub Actions workflows, and a pinned binary/formatter
+setup script. Init itself needs only the binary and refuses file conflicts before
+writing. For the shortest CI setup see [getting started](getting-started.md).
+For local generation:
 
 ```sh
-perseid init --name acme --language rust --language typescript --spec openapi.json
+perseid init --name acme --language rust --language typescript --spec openapi.json --no-workflows
 perseid sync
 perseid generate
 perseid generate --check
@@ -224,7 +227,11 @@ perseid init --name acme --language go --directory . --sdk-only \
   --go-module github.com/acme/go-sdk
 ```
 
-`--sdk-only` omits `perseid.toml`; the controller supplies source/repository settings.
+`--sdk-only` omits `perseid.toml` and orchestration workflows; the controller supplies source/repository settings.
+`--source-repository owner/backend --spec path/to/openapi.json` configures a Git
+source. Add `--backend-directory ../backend --repository owner/clients` to install
+the backend notifier too. `--base-url` supplies the generated clients’ default URL.
+Workflows and setup scripts are embedded at release time, never fetched from main.
 Go requires the intended import path explicitly. Java scaffolding uses Gradle
 without downloading a wrapper; install Gradle or add your usual wrapper. The
 TypeScript check installs dependencies in staging and creates `package-lock.json`
@@ -413,3 +420,14 @@ There is no separate new workflow to learn behind “propose.” See Fern's
 and [SDK commands](https://buildwithfern.com/learn/cli-api-reference/cli-reference/sdk-commands).
 Spec synchronization and package publication remain explicit commands so a local
 regeneration does not implicitly refresh upstream inputs or publish a package.
+
+
+### Generated CI and private external SDK repositories
+
+The generated Update SDKs workflow uses `PERSEID_TOKEN` for private Git sources and
+external SDK delivery. The default Check SDKs workflow has no private credentials:
+it checks co-located targets and public external targets. If you configure private
+external targets, add a read-only GitHub App token and `gh auth setup-git` to a
+trusted check job, or run the destination checks in their own repositories. Do not
+expose a token to arbitrary fork PR hooks. Update SDKs already builds/checks every
+target before it opens any PR.

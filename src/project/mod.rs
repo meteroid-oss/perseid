@@ -1,5 +1,6 @@
 //! Native project lifecycle. No interpreter or hosted service is required.
 pub mod assets;
+mod bootstrap;
 pub mod config;
 mod github;
 pub mod init;

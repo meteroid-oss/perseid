@@ -19,12 +19,18 @@ A root `perseid.toml` supplies the spec source and targets; language presets avo
 repeating template tasks. SDK repositories own independent versions and local
 `.perseid/overrides.toml` customizations. GitHub is optional for local generation.
 
+Download a [released binary](https://github.com/meteroid-oss/perseid/releases), then:
+
 ```sh
-perseid init --name example --language rust --language typescript --spec openapi.json
-perseid sync
-perseid generate --check
-perseid generate --pr --dry-run
+./perseid init --name example --language rust --language typescript --spec openapi.json
 ```
+
+Init writes the config, SDK scaffolding, and GitHub workflows. Commit the spec and
+created files; CI downloads the pinned release, installs the selected SDK tools,
+and opens generation PRs. The [getting-started guide](docs/getting-started.md)
+includes the one-time GitHub credential setup and private-backend notification.
+For local generation use `perseid sync` then `perseid generate`; formatters must
+be on PATH, or use Docker.
 
 See the [orchestration guide](docs/orchestration.md) and
 [small configuration example](examples/perseid.toml). The existing interfaces

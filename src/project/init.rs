@@ -24,6 +24,23 @@ pub struct Init {
     /// Public Go module import path; required when selecting Go.
     #[arg(long)]
     pub go_module: Option<String>,
+    /// GitHub backend repository (owner/name). --spec is its committed OpenAPI path.
+    #[arg(long, conflicts_with = "sdk_only")]
+    pub source_repository: Option<String>,
+    #[arg(long, default_value = "main")]
+    pub source_ref: String,
+    /// Also install the notifier in this existing backend checkout.
+    #[arg(long, requires_all = ["source_repository", "repository"])]
+    pub backend_directory: Option<PathBuf>,
+    /// GitHub orchestration repository (owner/name), used by the backend notifier.
+    #[arg(long)]
+    pub repository: Option<String>,
+    /// Default API URL used by generated clients.
+    #[arg(long)]
+    pub base_url: Option<String>,
+    /// Scaffold for local generation without GitHub Actions.
+    #[arg(long)]
+    pub no_workflows: bool,
 }
 pub fn run(args: &Init) -> Result<()> {
     ensure!(
@@ -50,7 +67,34 @@ pub fn run(args: &Init) -> Result<()> {
             "Invalid Go module path"
         );
     }
+    for repository in [&args.repository, &args.source_repository]
+        .into_iter()
+        .flatten()
+    {
+        let parts = repository.split('/').collect::<Vec<_>>();
+        ensure!(
+            parts.len() == 2
+                && parts.iter().all(|p| !p.is_empty()
+                    && *p != "."
+                    && *p != ".."
+                    && p.bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))),
+            "Repository must be owner/name"
+        );
+    }
+    ensure!(
+        !args.spec.contains("${{") && !args.source_ref.contains("${{"),
+        "Source path/ref cannot contain GitHub expressions"
+    );
+    ensure!(!args.source_ref.is_empty(), "Source ref must not be empty");
+    ensure!(
+        !(args.no_workflows && args.backend_directory.is_some()),
+        "--backend-directory requires workflows"
+    );
     let root = std::env::current_dir()?.join(&args.output);
+    // Validate all ancestor components too, including an existing output symlink.
+    let root = absolute_checked(&root)?;
+    io::relative(&root, &args.spec)?;
     let package = args.name.replace('-', "_");
     let client = package
         .split('_')
@@ -60,7 +104,8 @@ pub fn run(args: &Init) -> Result<()> {
     let mut files: BTreeMap<PathBuf, String> = BTreeMap::new();
     let mut targets = serde_json::Map::new();
     let mut overrides = serde_json::Map::new();
-    for language in languages {
+    for language in &languages {
+        let language = *language;
         let directory = args.directory.as_deref().unwrap_or(language);
         let base = io::relative(&root, directory)?;
         let mut add = |path: &str, text: &str| -> Result<()> {
@@ -143,8 +188,16 @@ pub fn run(args: &Init) -> Result<()> {
             }
             _ => unreachable!(),
         };
-        targets.insert(language.clone(), json!({"directory":directory}));
+        targets.insert(
+            language.clone(),
+            json!({"directory":directory,"prepare":{}}),
+        );
         let mut custom = json!({"check_commands":[check],"sdk":{"package_name":package,"client_name":client,"rust_crate":package,"java_package":format!("com.{package}")}});
+        if args.sdk_only
+            && let Some(base_url) = &args.base_url
+        {
+            custom["sdk"]["default_base_url"] = base_url.clone().into();
+        }
         if language == "typescript" {
             custom["check_commands"] = json!([
                 "if test -f package-lock.json; then npm ci --ignore-scripts; else npm install --ignore-scripts; fi",
@@ -168,7 +221,20 @@ pub fn run(args: &Init) -> Result<()> {
         overrides.insert(language.clone(), custom);
     }
     if !args.sdk_only {
-        let config = json!({"name":args.name,"perseid_version":env!("CARGO_PKG_VERSION"),"source":{"file":args.spec},"targets":targets});
+        let source = if let Some(repository) = &args.source_repository {
+            json!({"git":format!("https://github.com/{repository}.git"),"ref":args.source_ref,"path":args.spec})
+        } else {
+            json!({"file":args.spec})
+        };
+        let mut config = json!({"name":args.name,"perseid_version":env!("CARGO_PKG_VERSION"),"source":source,"targets":targets});
+        if let Some(base_url) = &args.base_url {
+            config["sdk"] = json!({"default_base_url":base_url});
+        }
+        if !args.no_workflows {
+            for (path, content) in super::bootstrap::files(&languages) {
+                files.insert(io::relative(&root, path)?, content);
+            }
+        }
         files.insert(
             io::relative(&root, "perseid.toml")?,
             toml::to_string_pretty(&config)?,
@@ -184,8 +250,31 @@ pub fn run(args: &Init) -> Result<()> {
             .collect::<String>();
         files.insert(ignore, text + "*.egg-info/\n");
     }
+    if let Some(backend) = &args.backend_directory {
+        let backend = std::fs::canonicalize(backend)?;
+        ensure!(backend.is_dir(), "Backend checkout must be a directory");
+        ensure!(
+            backend != root,
+            "Backend and orchestration repositories must be different"
+        );
+        files.insert(
+            io::relative(&backend, ".github/workflows/notify-openapi.yml")?,
+            super::bootstrap::notification(
+                args.repository.as_deref().unwrap(),
+                &args.source_ref,
+                &args.spec,
+            ),
+        );
+    }
     // Validate every destination before writing anything; no force/overwrite mode.
     for path in files.keys() {
+        for parent in path.parent().into_iter().flat_map(|p| p.ancestors()) {
+            ensure!(
+                !parent.exists() || parent.is_dir(),
+                "Init needs a directory at {}; no files written",
+                parent.display()
+            );
+        }
         ensure!(
             !path.exists(),
             "Init would overwrite {}; no files written",
@@ -197,18 +286,40 @@ pub fn run(args: &Init) -> Result<()> {
     }
     let paths = files
         .keys()
-        .map(|p| p.strip_prefix(&root).unwrap().display().to_string())
+        .map(|p| p.strip_prefix(&root).unwrap_or(p).display().to_string())
         .collect::<Vec<_>>();
     let next = if args.sdk_only {
         Value::String(
             "Configure this destination in the controller, then run sync and generate".into(),
         )
-    } else {
+    } else if args.no_workflows {
         json!(["perseid sync", "perseid generate"])
+    } else {
+        json!([
+            "Configure the PERSEID_TOKEN secret for private/cross-repository access",
+            "Commit and push the created files to main; Update SDKs opens the first generation PR"
+        ])
     };
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({"created":paths,"next":next}))?
     );
     Ok(())
+}
+
+/// Normalize parent components before checking each existing ancestor for symlinks.
+fn absolute_checked(path: &std::path::Path) -> Result<PathBuf> {
+    use std::path::Component;
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::CurDir => (),
+            part => normalized.push(part.as_os_str()),
+        }
+    }
+    let anchor = normalized.ancestors().last().unwrap();
+    io::relative(anchor, normalized.strip_prefix(anchor)?)
 }
