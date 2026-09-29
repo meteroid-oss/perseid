@@ -1,13 +1,14 @@
 <p align="center"><img src=".github/cover.png" alt="perseid: OpenAPI in, idiomatic SDKs out" width="100%"></p>
 
-**OpenAPI in, idiomatic SDKs out.** Rust, TypeScript, Python, Go and Java from one static binary.
-No account, no Docker, no JVM. An open-source, self-hosted alternative to Fern, Speakeasy and Stainless.
+**The SDK pipeline Fern, Speakeasy and Stainless sell, open source and GitHub-native.**
+Change your OpenAPI spec, and idiomatic Rust, TypeScript, Python, Go and Java SDKs regenerate
+and land as pull requests, in one repository or one per language. One static binary, no account.
 
 ```sh
 curl -fsSL https://sh.meteroid.com/perseid | sh
 
 perseid init       # finds openapi.json, writes perseid.toml and package skeletons
-perseid generate   # five formatted SDKs, in seconds
+perseid generate   # formatted SDKs for every language, in seconds
 ```
 
 ```ts
@@ -85,6 +86,18 @@ Output goes through `rustfmt`, `biome`, `ruff`, `gofmt` and `google-java-format`
 SDK's own formatter configuration. Locally, missing `biome` or `ruff` run pinned through `npx` or
 `uvx`. The GitHub Action reads the languages from `perseid.toml` and installs only the pinned
 native formatters they need: no JVM, Node or Python setup.
+
+## Status
+
+Early, and honest about it:
+
+- **OpenAPI 3.1** only, JSON or YAML. 3.0 documents are rejected for now; upgrading them
+  automatically is planned.
+- Proven on [Meteroid's API](https://github.com/meteroid-oss/meteroid-clients) and our test
+  specs, not yet on hundreds of APIs. Unsupported constructs make generation fail instead of
+  being skipped: an issue with the spec attached is the fastest way to get one supported.
+- Not there yet: pagination helpers, auth other than bearer tokens, streaming outside Rust,
+  publishing to package registries (keep your usual release workflow). C# is next.
 
 ## License
 
