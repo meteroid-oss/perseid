@@ -79,6 +79,24 @@ jobs:
 
 For pull request checks, pass `command: generate --check`.
 
+## Self-hosted runners and other CIs
+
+`ghcr.io/meteroid-oss/perseid` bundles perseid, git, gh and every pinned formatter.
+
+```yaml
+jobs:
+  sdks:
+    runs-on: self-hosted
+    container: ghcr.io/meteroid-oss/perseid:0.2.0
+    steps:
+      - uses: actions/checkout@v4
+      - run: gh auth setup-git && perseid generate --pr
+        env:
+          GH_TOKEN: ${{ secrets.SDK_TOKEN }}
+```
+
+Or anywhere: `docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/work" ghcr.io/meteroid-oss/perseid generate --check`.
+
 ## Formatting
 
 Output goes through `rustfmt`, `biome`, `ruff`, `gofmt` and `google-java-format`, with your

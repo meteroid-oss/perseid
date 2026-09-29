@@ -60,3 +60,13 @@ jobs:
         run: go vet ./...
       - working-directory: ${{ runner.temp }}/sdk/java
         run: gradle build --no-daemon
+
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          docker build -t perseid .
+          docker run --rm -v "$PWD/tests/fixtures:/work" perseid init --spec petstore.yaml
+          docker run --rm -v "$PWD/tests/fixtures:/work" perseid generate
+          docker run --rm -v "$PWD/tests/fixtures:/work" perseid generate --check
