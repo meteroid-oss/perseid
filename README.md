@@ -10,6 +10,20 @@ perseid init       # finds openapi.json, writes perseid.toml and package skeleto
 perseid generate   # five formatted SDKs, in seconds
 ```
 
+```ts
+const petstore = new Petstore("sk_live_...");
+const pets = await petstore.pets.listPets({ limit: 10, status: "available" });
+```
+
+```python
+petstore = Petstore("sk_live_...")
+pets = petstore.pets.list_pets(limit=10, status=PetStatus.AVAILABLE)
+```
+
+```go
+pets, err := petstore.New("sk_live_...", nil).Pets().ListPets(ctx, &petstore.PetsListPetsOptions{Limit: petstore.Ptr[int32](10)})
+```
+
 It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients), and descends from
 the generator [Svix](https://github.com/svix/svix-webhooks) uses for its own client libraries.
 
