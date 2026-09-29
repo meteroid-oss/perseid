@@ -1,4 +1,4 @@
-# perseid
+<p align="center"><img src=".github/cover.png" alt="perseid: OpenAPI in, idiomatic SDKs out" width="100%"></p>
 
 **OpenAPI in, idiomatic SDKs out.** Rust, TypeScript, Python, Go and Java from one static binary.
 No account, no Docker, no JVM. An open-source, self-hosted alternative to Fern, Speakeasy and Stainless.
