@@ -461,6 +461,12 @@ pub(crate) struct Type {
     pub data: TypeData,
 }
 
+fn has_open_additional_properties(obj: &ObjectValidation) -> bool {
+    obj.additional_properties
+        .as_deref()
+        .is_some_and(|schema| *schema != Schema::Bool(false))
+}
+
 impl Type {
     pub(crate) fn from_schema(name: String, s: SchemaObject) -> anyhow::Result<Self> {
         let metadata = s.metadata.clone().unwrap_or_default();
@@ -471,7 +477,7 @@ impl Type {
             || (s.instance_type == Some(InstanceType::Object.into())
                 && s.object
                     .as_ref()
-                    .is_some_and(|o| o.properties.is_empty() && o.additional_properties.is_some()))
+                    .is_some_and(|o| o.properties.is_empty() && has_open_additional_properties(o)))
             || (s.instance_type.is_none() && s.subschemas.is_none());
         if is_alias {
             return Ok(Self {
@@ -706,7 +712,7 @@ impl TypeData {
         subschemas: Option<Box<SubschemaValidation>>,
     ) -> anyhow::Result<Self> {
         ensure!(
-            obj.additional_properties.is_none(),
+            !has_open_additional_properties(&obj),
             "additionalProperties not yet supported"
         );
         ensure!(obj.max_properties.is_none(), "unsupported: maxProperties");
@@ -1934,6 +1940,26 @@ mod tests {
             let ty = Type::from_schema(name.into(), schema(value)).unwrap();
             assert!(matches!(ty.data, TypeData::Alias { .. }), "{name}");
         }
+    }
+
+    #[test]
+    fn closed_objects_are_structs() {
+        let empty = Type::from_schema(
+            "Empty".into(),
+            schema(json!({"type": "object", "additionalProperties": false})),
+        )
+        .unwrap();
+        assert!(matches!(empty.data, TypeData::Struct { ref fields } if fields.is_empty()));
+        let closed = Type::from_schema(
+            "Closed".into(),
+            schema(json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {"id": {"type": "string"}}
+            })),
+        )
+        .unwrap();
+        assert!(matches!(closed.data, TypeData::Struct { ref fields } if fields.len() == 1));
     }
 
     #[test]
