@@ -1,0 +1,83 @@
+openapi: 3.1.0
+info:
+  title: Petstore API
+  version: 1.0.0
+servers:
+  - url: https://petstore.example.com/
+paths:
+  /pets:
+    get:
+      operationId: list_pets
+      tags: [pets]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, format: int32 } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/PetStatus' } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PetList' }
+    post:
+      operationId: create_pet
+      tags: [pets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PetCreate' }
+      responses:
+        '201':
+          description: created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pet' }
+  /pets/{pet_id}:
+    get:
+      operationId: get_pet
+      tags: [pets]
+      parameters:
+        - { name: pet_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Pet' }
+    delete:
+      operationId: delete_pet
+      tags: [pets]
+      parameters:
+        - { name: pet_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '204': { description: deleted }
+components:
+  schemas:
+    PetStatus:
+      type: string
+      enum: [available, pending, sold]
+    PetCreate:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        tag: { type: [string, 'null'] }
+        status: { oneOf: [{ type: 'null' }, { allOf: [{ $ref: '#/components/schemas/PetStatus' }] }] }
+    Pet:
+      type: object
+      required: [id, name, created_at, nickname]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        nickname: { type: [string, 'null'] }
+        age: { type: [integer, 'null'], format: int32 }
+        tag: { type: string }
+        status: { oneOf: [{ type: 'null' }, { allOf: [{ $ref: '#/components/schemas/PetStatus' }] }] }
+        created_at: { type: string, format: date-time }
+    PetList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Pet' }

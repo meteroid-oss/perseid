@@ -110,8 +110,9 @@ native formatters they need: no JVM, Node or Python setup.
 
 Early, and honest about it:
 
-- **OpenAPI 3.1** only, JSON or YAML. 3.0 documents are rejected for now; upgrading them
-  automatically is planned.
+- **OpenAPI 3.0 and 3.1**, JSON or YAML. 3.0 documents are upgraded to 3.1 on load
+  (`nullable`, boolean `exclusiveMinimum`/`exclusiveMaximum`). Swagger 2.0 is rejected: convert
+  it first, for example with `npx swagger2openapi`.
 - Proven on [Meteroid's API](https://github.com/meteroid-oss/meteroid-clients) and our test
   specs, not yet on hundreds of APIs. Unsupported constructs make generation fail instead of
   being skipped: an issue with the spec attached is the fastest way to get one supported.
