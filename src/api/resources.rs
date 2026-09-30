@@ -545,6 +545,21 @@ pub(crate) struct Operation {
 }
 
 impl Operation {
+    /// Whether the response is a list of items: an array, a paginated or `*List` schema, or an
+    /// operation id saying so.
+    pub(crate) fn returns_list(&self) -> bool {
+        self.response_body_is_list
+            || self
+                .x_pagination
+                .as_ref()
+                .is_some_and(|value| value != &serde_json::Value::Bool(false))
+            || self
+                .response_body_schema_name
+                .as_deref()
+                .is_some_and(|name| name.ends_with("List") || name.ends_with("Page"))
+            || self.id.to_snake_case().starts_with("list")
+    }
+
     fn from_openapi(
         path: &str,
         method: &str,

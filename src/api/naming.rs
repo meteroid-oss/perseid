@@ -47,7 +47,12 @@ fn name_resource(
         .iter()
         .map(|op| match op.stream {
             true => None,
-            false => derive(&resource.name, &op.method, &op.path),
+            false => derive(
+                &resource.name,
+                &op.method,
+                &op.path,
+                is_collection(resource, op),
+            ),
         })
         .collect();
     // `PUT` replaces what `PATCH` updates on the same path.
@@ -149,9 +154,22 @@ fn stream_name(ops: &[Operation], base: &[String], twin: usize) -> String {
     }
 }
 
+/// Whether a `GET` of the operation's path lists: it returns a list, or items live below it.
+fn is_collection(resource: &Resource, op: &Operation) -> bool {
+    let item = format!("{}/{{", op.path.trim_end_matches('/'));
+    op.returns_list()
+        || resource.operations.iter().any(|other| {
+            other
+                .path
+                .strip_prefix(&item)
+                .is_some_and(|rest| rest.ends_with('}') && !rest.contains('/'))
+        })
+}
+
 /// `GET /customers` is `list`, `POST /customers/{id}/sources` `create_source` and
 /// `POST /invoices/{id}/finalize` `finalize`, in the resources named after their first segment.
-pub(crate) fn derive(resource: &str, method: &str, path: &str) -> Option<String> {
+/// A `GET` of a singular noun with no items below it (`collection`) retrieves rather than lists.
+pub(crate) fn derive(resource: &str, method: &str, path: &str, collection: bool) -> Option<String> {
     let segments: Vec<&str> = path
         .split('/')
         .filter(|s| !s.is_empty())
@@ -163,6 +181,11 @@ pub(crate) fn derive(resource: &str, method: &str, path: &str) -> Option<String>
         .collect();
     let is_param = |s: &str| s.starts_with('{');
     let own = singular(&resource.to_snake_case()).replace('_', "");
+    let singleton = !collection
+        && segments
+            .iter()
+            .rfind(|s| !is_param(s) && !is_prefix(s))
+            .is_some_and(|s| !is_plural(&s.to_snake_case()));
     let rest: Vec<&str> = match segments
         .iter()
         .position(|s| !is_param(s) && singular(&s.to_snake_case()).replace('_', "") == own)
@@ -180,6 +203,7 @@ pub(crate) fn derive(resource: &str, method: &str, path: &str) -> Option<String>
         .collect();
     let name = if rest.is_empty() {
         match method {
+            "get" if singleton => "retrieve",
             "get" => "list",
             "post" => "create",
             "put" | "patch" => "update",
@@ -214,7 +238,7 @@ pub(crate) fn derive(resource: &str, method: &str, path: &str) -> Option<String>
         let verb = is_verb(&tail);
         match method {
             "get" if verb => action(&tail),
-            "get" if is_plural(&tail) => format!("list_{}", noun(&tail)),
+            "get" if collection || is_plural(&tail) => format!("list_{}", noun(&tail)),
             "get" => format!("retrieve_{}", noun(&tail)),
             "post" if !verb && is_plural(&tail) => format!("create_{}", noun(&singular(&tail))),
             "post" => action(&tail),
@@ -286,7 +310,7 @@ mod tests {
 
     #[test]
     fn crud_paths_get_resource_method_names() {
-        let name = |method, path| derive("customers", method, path);
+        let name = |method, path| derive("customers", method, path, false);
         assert_eq!(name("get", "/v1/customers").as_deref(), Some("list"));
         assert_eq!(name("post", "/v1/customers").as_deref(), Some("create"));
         assert_eq!(
@@ -310,7 +334,7 @@ mod tests {
 
     #[test]
     fn sub_paths_name_their_action_and_noun() {
-        let name = |method, path| derive("customers", method, path).unwrap();
+        let name = |method, path| derive("customers", method, path, false).unwrap();
         assert_eq!(name("get", "/v1/customers/search"), "search");
         assert_eq!(name("get", "/v1/customers/{c}/sources"), "list_sources");
         assert_eq!(name("post", "/v1/customers/{c}/sources"), "create_source");
@@ -342,16 +366,16 @@ mod tests {
         assert_eq!(name("get", "/v1/customers/{c}/download"), "download");
         assert_eq!(name("post", "/v1/customers/{c}/add_lines"), "add_lines");
         assert_eq!(
-            derive("add_ons", "get", "/addons/{id}").unwrap(),
+            derive("add_ons", "get", "/addons/{id}", false).unwrap(),
             "retrieve"
         );
         assert_eq!(name("post", "/customers/{c}/archive"), "archive");
         assert_eq!(
-            derive("pet", "get", "/pet/findByStatus").unwrap(),
+            derive("pet", "get", "/pet/findByStatus", false).unwrap(),
             "find_by_status"
         );
         assert_eq!(
-            derive("store", "get", "/store/order/{id}").unwrap(),
+            derive("store", "get", "/store/order/{id}", false).unwrap(),
             "retrieve_order"
         );
     }
@@ -359,18 +383,34 @@ mod tests {
     #[test]
     fn resources_missing_from_the_path_name_its_nouns() {
         assert_eq!(
-            derive("billing", "get", "/api/v1/invoices").unwrap(),
+            derive("billing", "get", "/api/v1/invoices", false).unwrap(),
             "list_invoices"
         );
         assert_eq!(
-            derive("billing", "post", "/invoices").unwrap(),
+            derive("billing", "post", "/invoices", false).unwrap(),
             "create_invoice"
         );
         assert_eq!(
-            derive("billing", "get", "/invoices/{id}").unwrap(),
+            derive("billing", "get", "/invoices/{id}", false).unwrap(),
             "retrieve_invoice"
         );
-        assert_eq!(derive("billing", "get", "/{id}"), Some("retrieve".into()));
+        assert_eq!(
+            derive("billing", "get", "/{id}", false),
+            Some("retrieve".into())
+        );
+    }
+
+    #[test]
+    fn singular_paths_without_items_are_retrieved() {
+        let name = |path, collection| derive("balance", "get", path, collection).unwrap();
+        assert_eq!(name("/v1/balance", false), "retrieve");
+        assert_eq!(name("/v1/balance", true), "list");
+        assert_eq!(name("/v1/balance/history", false), "retrieve_history");
+        assert_eq!(name("/v1/balance/history", true), "list_history");
+        assert_eq!(
+            derive("usage", "get", "/v1/usage/costs", false).unwrap(),
+            "list_costs"
+        );
     }
 
     #[test]
