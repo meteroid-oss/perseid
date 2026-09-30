@@ -35,6 +35,12 @@ inputs:
       Enable GitHub auto-merge (squash) on the SDK pull requests, and on the release PRs they lead to
       (label `perseid:auto-release`, read by the scaffolded sdk-release.yml)
     default: 'false'
+  ci-workflows:
+    description: >-
+      Workflow files (space or newline separated) to dispatch on `perseid/update` once its pull
+      request is opened or updated in this repository, when `token` is the default GITHUB_TOKEN,
+      whose pushes start no workflow. The job needs `actions: write`
+    default: ''
 
 runs:
   using: composite
@@ -147,6 +153,7 @@ runs:
         BUMP: ${{ steps.bump.outputs.bump }}
         NOTES: ${{ steps.bump.outputs.notes }}
         AUTO_MERGE: ${{ inputs.auto-merge }}
+        DISPATCH: ${{ inputs.token == github.token && inputs.ci-workflows || '' }}
       run: |
         gh auth setup-git
         git config user.name >/dev/null || git config --global user.name 'github-actions[bot]'
@@ -159,5 +166,10 @@ runs:
               --description "Auto-merge the release PR this change leads to"
             gh pr edit "$url" --add-label perseid:auto-release
             gh pr merge "$url" --auto --squash
+          done
+        fi
+        if [ -n "$DISPATCH" ] && grep -q "^$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pull/" "$RUNNER_TEMP/perseid.out"; then
+          for workflow in $DISPATCH; do
+            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref perseid/update
           done
         fi

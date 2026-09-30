@@ -21,7 +21,92 @@ jobs:
 The Action installs the perseid version matching its own ref and runs `generate --pr`: it commits
 to `perseid/update` and opens or updates a pull request, in this repository or in the SDK
 repositories named by `repo`. For pull request checks, pass `command: generate --check`, which
-fails on drift.
+fails on drift. See [Tokens](#tokens) for which `token` to pass.
+
+## Tokens
+
+Events caused by the default `GITHUB_TOKEN` start no workflow, except `workflow_dispatch` and
+`repository_dispatch`; pull requests it opens or updates only get `pull_request` runs waiting for
+"Approve workflows to run"
+([GitHub docs](https://docs.github.com/en/actions/concepts/security/github_token)).
+
+**SDKs in this repository**: no token needed. Give the job `contents: write`,
+`pull-requests: write` and `actions: write`, and list your CI workflows in `ci-workflows`: with the
+default token, the Action dispatches them on `perseid/update` after opening or updating the pull
+request. Each needs `on: workflow_dispatch`. Checks of dispatched runs show on the branch and in
+the Actions tab, but neither in the pull request's checks nor as required status checks, which only
+count runs from `push`, `pull_request`, `pull_request_review`, `pull_request_target`, `deployment` and
+`deployment_status`
+([GitHub docs](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)).
+Approving the waiting `pull_request` runs by hand does count. To gate merges on dispatched runs,
+have the workflow post a commit status and require that context:
+
+```yaml
+on: [pull_request, workflow_dispatch]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v5
+      - run: npm ci && npm test
+      - if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          STATE: ${{ job.status == 'success' && 'success' || 'failure' }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f context=sdk-ci -f state="$STATE" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+```
+
+The scaffolded `sdk-release.yml` does the same for release PRs when the `SDK_CI_WORKFLOWS`
+repository variable lists workflow files and no other token is configured.
+
+**SDKs in other repositories**: the default token cannot reach them. Either:
+
+- a fine-grained personal access token limited to the SDK repositories, with Contents and Pull
+  requests read and write, stored as a secret (`SDK_TOKEN` above);
+- or, for organizations, your own GitHub App, whose installation tokens expire after an hour and are
+  therefore minted in the workflow, never stored:
+  1. create a GitHub App (organization settings, Developer settings, GitHub Apps), webhook off,
+     with repository permissions Contents and Pull requests read and write;
+  2. install it on the spec and SDK repositories;
+  3. store its App ID as the `SDK_APP_ID` variable and a generated private key as the
+     `SDK_APP_PRIVATE_KEY` secret;
+  4. mint the token in the job:
+
+```yaml
+    steps:
+      - uses: actions/checkout@v4
+      - id: app
+        if: vars.SDK_APP_ID != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.SDK_APP_ID }}
+          private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: acme-node,acme-python   # the SDK repositories
+      - uses: meteroid-oss/perseid@v0
+        with:
+          token: ${{ steps.app.outputs.token || secrets.SDK_TOKEN }}
+```
+
+Pull requests and merges made with either token start workflows like a person's would, so SDK CI,
+auto-merge and releases work without dispatching.
+
+**Releases**: the scaffolded `sdk-release.yml` mints the same way when `SDK_APP_ID` (variable or
+secret) and `SDK_APP_PRIVATE_KEY` are set, scoped to its own repository, and otherwise uses the
+`RELEASE_TOKEN` secret (a fine-grained personal access token) or the default token. With the
+default token, release PRs get no CI unless dispatched, and auto-merged release PRs publish nothing.
+
+**Repository settings**: "Allow GitHub Actions to create and approve pull requests" (Settings,
+Actions, General) is needed only when perseid or release-please run with the default token. It
+also lets any workflow approve pull requests, which can satisfy a required review in branch
+protection with no human in the loop, so keep "Workflow permissions" read-only by default and grant
+write per job, as the examples do.
 
 ## Self-hosted runners and other CIs
 
@@ -66,8 +151,11 @@ That is only safe while the SDKs accept unknown enum values, which generated SDK
 
 - "Allow auto-merge" in the repository settings;
 - required status checks, through branch protection or rulesets: without any, GitHub merges at once;
-- a GitHub App token as the Action's `token` and as the `RELEASE_TOKEN` secret, since merges made
-  with the default `GITHUB_TOKEN` trigger no workflow, so nothing would be released or published.
+- checks that run on the pull requests: a non-default token, or `ci-workflows` plus a required
+  commit status (see [Tokens](#tokens));
+- a non-default token for both the Action and `sdk-release.yml` (a GitHub App through `SDK_APP_ID`,
+  or a personal access token): auto-merges enabled with the default `GITHUB_TOKEN` push commits
+  that trigger no workflow, so nothing would be released or published.
 
 ## Formatting
 

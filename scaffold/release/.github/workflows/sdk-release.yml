@@ -25,19 +25,47 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write
+    env:
+      SDK_APP_ID: ${{ vars.SDK_APP_ID || secrets.SDK_APP_ID }}
     outputs:
       paths: ${{ steps.release.outputs.paths_released }}
       releases: ${{ toJSON(steps.release.outputs) }}
     steps:
+      # GitHub App installation tokens expire after an hour, so they are minted on each run.
+      - id: app
+        if: env.SDK_APP_ID != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ env.SDK_APP_ID }}
+          private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
       - id: release
         uses: googleapis/release-please-action@v5
         with:
-          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          token: ${{ steps.app.outputs.token || secrets.RELEASE_TOKEN || github.token }}
+      # Release PRs pushed with the default token start no workflow: dispatch the CI workflows
+      # listed in the SDK_CI_WORKFLOWS variable on their branch instead.
+      - if: steps.release.outputs.pr && vars.SDK_CI_WORKFLOWS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TOKEN: ${{ steps.app.outputs.token || secrets.RELEASE_TOKEN || github.token }}
+          DEFAULT_TOKEN: ${{ github.token }}
+          BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          WORKFLOWS: ${{ vars.SDK_CI_WORKFLOWS }}
+        run: |
+          [ "$TOKEN" = "$DEFAULT_TOKEN" ] || exit 0
+          for workflow in $WORKFLOWS; do
+            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+          done
       # Auto-merges the release PR when the pushed commit came from a PR labeled by the perseid
       # Action's `auto-merge: true`. A merge made with the default token triggers no publish.
       - if: steps.release.outputs.pr
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.RELEASE_TOKEN || github.token }}
           PR: ${{ fromJSON(steps.release.outputs.pr).number }}
         run: |
           labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[].labels[].name] | join(" ")')
