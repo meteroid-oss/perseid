@@ -61,9 +61,10 @@ Four extension points, none of which needs a fork:
    `middleware` in the TypeScript options (`(request, next) => Response`), `middleware` and
    `async_middleware` in the Python options, `Options.Middleware` in Go (a `RoundTripper` wrapper),
    `getInterceptors()` in Java (OkHttp interceptors, also added to your own client given to
-   `setHttpClient`) and `Middleware` in Rust.
+   `setHttpClient`), `Middleware` in Rust and `Handlers` in the C# options (`DelegatingHandler`s,
+   also run in front of your own `HttpClient`).
 3. **Resource snippets.** A file at `.perseid/templates/<lang>/extensions/<resource>.<ext>` is inlined
-   in the body of that resource's class (Rust, TypeScript, Java, and Python where
+   in the body of that resource's class (Rust, TypeScript, Java, C#, and Python where
    `<resource>_async.py` targets the async class), to add custom methods.
 4. **Ejected templates and runtime.** `perseid eject <lang>` copies the built-ins to `.perseid/`; files
    you keep there override the built-ins, and `context` tables in `perseid.toml` reach templates as `sdk.*`.
@@ -130,7 +131,8 @@ new Webhook("whsec_...").verify(rawBody, request.headers); // throws WebhookVeri
 ```
 
 It is `Webhook` in every language (`Webhook::new(secret)?.verify(&body, &headers)` in Rust,
-`NewWebhook(secret)` then `Verify(body, r.Header)` in Go). Payload models come from `webhooks` and
+`NewWebhook(secret)` then `Verify(body, r.Header)` in Go, `new Webhook(secret).Verify(body, name =>
+Request.Headers[name])` in C#). Payload models come from `webhooks` and
 `x-webhooks` in the spec. In Rust the verifier lives behind the `webhooks` cargo feature that `init`
 adds to `Cargo.toml` and `lib.rs`.
 
@@ -194,6 +196,14 @@ existing SDKs opt in. Every Go method takes trailing options for one call:
 `WithHeader`, `WithTimeout`, `WithIdempotencyKey` and `WithMaxRetries`. Retries cover network
 errors, 408, 429 and 5xx, honor `Retry-After` up to a minute and add jitter to the backoff.
 
+The C# SDK targets .NET 8 with nullable reference types and System.Text.Json source generation
+(trimming and AOT safe). Every method is async and takes a `RequestOptions` (`Headers`, `Timeout`,
+`MaxRetries`, `IdempotencyKey`) then a `CancellationToken`; pass your own `HttpClient`, e.g. from
+`IHttpClientFactory`, or an `HttpMessageHandler` in the options. Enum values and union variants
+newer than the SDK are kept (`IsKnown`, `Unrecognized`). With `patch_nullable = true`, which `init`
+sets in `[csharp]`, nullable optional fields of PATCH bodies are `MaybeUnset<T>`: assign `null` to
+send `null`, leave them unset to omit them.
+
 ## Authentication
 
 Clients read `components.securitySchemes` and honor the `security` of each operation, including
@@ -204,7 +214,7 @@ alternative that is fully configured:
 |---|---|
 | `http` bearer, `oauth2`, `openIdConnect` | the constructor token, or a token provider called before each request |
 | `http` basic | `basicAuth` / `basic_auth` / `BasicAuth` / `setBasicAuth` |
-| `apiKey` in a header, query parameter or cookie | the constructor token, or per scheme in `apiKeys` / `api_keys` |
+| `apiKey` in a header, query parameter or cookie | the constructor token, or per scheme in `apiKeys` / `api_keys` / `ApiKeys` |
 
 ```ts
 new Acme("sk_live_...");                                          // unchanged
@@ -250,12 +260,13 @@ for pager.Next() { customer := pager.Current() }   // or range over pager.All() 
 ```
 
 Rust has `let mut customers = client.customers().list_customers_iter(None); customers.next().await`,
-Java a `Paginator<Customer>` from `listCustomersIter()` that is `Iterable` and has `stream()`.
+Java a `Paginator<Customer>` from `listCustomersIter()` that is `Iterable` and has `stream()`, C# an
+`IAsyncEnumerable<Customer>` from `ListCustomersIterAsync()` for `await foreach`.
 
 ## Streaming
 
 `text/event-stream` responses return an event stream (`for await`, `for`, `Next()`, `Iterable`,
-`next().await`), `multipart/form-data` bodies a typed `...Body` with `Upload` files, and
+`next().await`, `await foreach`), `multipart/form-data` bodies a typed `...Body` with `Upload` files, and
 `application/octet-stream` bodies accept bytes or streams. Streamed uploads are not retried.
 
 ## From your API repository to SDK pull requests
@@ -350,9 +361,8 @@ Early, and honest about it:
   discriminator are typed as untyped JSON, with a warning. A variant missing from the
   discriminator `mapping` is tagged with the `const` or `enum` of its discriminator property,
   falling back to its schema name.
-- Not there yet: a built-in OAuth2 token exchange (bring a token provider), and auth,
-  pagination and streaming in C#. C# generation fails on upload and event stream operations,
-  naming them for `exclude` in its `[csharp]` table.
+- Not there yet: a built-in OAuth2 token exchange (bring a token provider). C# dates are
+  `DateTimeOffset`s, so fractions of a second beyond 100 nanoseconds are rounded.
 
 ## License
 

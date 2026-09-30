@@ -266,24 +266,6 @@ impl Resource {
         }
     }
 
-    /// Ids of the operations with multipart or binary uploads, or event stream responses.
-    pub(crate) fn streaming_operations(&self) -> Vec<&str> {
-        let own = self.operations.iter().filter(|op| {
-            op.response_is_event_stream
-                || matches!(
-                    op.request_body_kind,
-                    RequestBodyKind::Binary | RequestBodyKind::Multipart
-                )
-        });
-        own.map(|op| op.id.as_str())
-            .chain(
-                self.subresources
-                    .values()
-                    .flat_map(Self::streaming_operations),
-            )
-            .collect()
-    }
-
     /// Schemas sent as the body of a PATCH operation, where `null` and absent differ.
     pub(crate) fn patch_bodies(&self) -> BTreeSet<&str> {
         let own = self.operations.iter().filter(|op| op.method == "patch");

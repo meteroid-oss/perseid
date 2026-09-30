@@ -97,7 +97,7 @@ using var cancelled = new CancellationTokenSource();
 cancelled.Cancel();
 try
 {
-    await client.Pets.GetPetAsync("p1", cancelled.Token);
+    await client.Pets.GetPetAsync("p1", cancellationToken: cancelled.Token);
     Check(false, "cancellation must throw");
 }
 catch (OperationCanceledException) { }

@@ -8,8 +8,8 @@ using {{ sdk.package_name }}.Models;
 
 namespace {{ sdk.package_name }};
 
-/// <summary>Query and header parameters of <see cref="{{ resource.name | to_upper_camel_case }}Api.{{ operation.name | to_upper_camel_case }}Async"/>.</summary>
-public sealed class {{ class_name }}
+/// <summary>Query and header parameters of <see cref="{{ m.resource_class(resource.name) }}.{{ operation.name | to_upper_camel_case }}Async"/>.</summary>
+public sealed record {{ class_name }}
 {
 {% for p in operation.query_params -%}
 {% if p.description is defined %}

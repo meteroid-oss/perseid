@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Generates the petstore SDK with webhooks enabled and runs the language's extension tests.
-# usage: tests/sdk/run.sh <rust|typescript|python|go|java>
+# usage: tests/sdk/run.sh <rust|typescript|python|go|java|csharp>
 set -euo pipefail
 lang=${1:?usage: run.sh <language>}
 here=$(cd "$(dirname "$0")" && pwd)
@@ -47,4 +47,9 @@ GRADLE
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
     cd "$work/torture" && perseid init java && perseid generate java
     cp -r "$here/java/_torture/." java/ && cd java && gradle_test ;;
+  csharp)
+    rm -rf _torture && dotnet test Tests
+    mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
+    cd "$work/torture" && perseid init csharp && perseid generate csharp
+    cp -r "$here/csharp/_torture/." csharp/ && cd csharp && dotnet test Tests ;;
 esac

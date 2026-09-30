@@ -16,7 +16,7 @@
     "string", "struct", "switch", "this", "throw", "true", "try", "typeof", "uint", "ulong",
     "unchecked", "unsafe", "ushort", "using", "virtual", "void", "volatile", "while"] -%}
 @{{ id }}
-{%- elif id in ["request", "options", "cancellationToken"] -%}
+{%- elif id in ["request", "options", "requestOptions", "cancellationToken", "form", "param", "ct", "pagination"] -%}
 {{ id }}Param
 {%- else -%}
 {{ id }}
@@ -29,6 +29,20 @@
 {% if id == owner %}{{ id }}Value{% else %}{{ id }}{% endif %}
 {%- endmacro %}
 
+{# The class of a resource: `ActivityApi` for both `activity` and a renamed `activity_api`. -#}
+{% macro resource_class(name) -%}
+{% set id = name | to_upper_camel_case -%}
+{{ id }}{% if not id is endingwith "Api" %}Api{% endif %}
+{%- endmacro %}
+
+{# A model name, qualified when a runtime type of the root namespace would shadow it. -#}
+{% macro model(name) -%}
+{% set id = name | to_upper_camel_case -%}
+{% if id in ["ApiRequest", "ApiTransport", "ApiException", "ApiAuth", "RequestOptions", "Upload",
+    "MultipartBody", "EventStream", "SseEvent", "Pagination", "Paginator", "Credentials",
+    "BasicCredentials", "SecurityScheme", "SchemeKind", "Webhook"] %}Models.{% endif %}{{ id }}
+{%- endmacro %}
+
 {# The property type of a model field or query parameter. -#}
 {% macro field_type(field) -%}
 {{ field.type.to_csharp() }}{% if field.nullable or not field.required %}?{% endif %}
@@ -38,7 +52,7 @@
 {# The C# type of an operation's JSON request body, empty without one. -#}
 {% macro body_type(op) -%}
 {% if op.request_body_schema_name is defined -%}
-{% if op.request_body_is_list %}List<{% endif %}{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}
+{% if op.request_body_is_list %}List<{% endif %}{{ model(op.request_body_schema_name) }}{% if op.request_body_is_list %}>{% endif %}
 {%- elif op.request_body_json_type is defined -%}
 {{ op.request_body_json_type.to_csharp() }}
 {%- endif %}
@@ -49,11 +63,12 @@
 {% if op.response_body_json_type is defined -%}
 {{ op.response_body_json_type.to_csharp() }}
 {%- elif op.response_body_schema_name is defined -%}
-{% if op.response_body_is_list %}List<{% endif %}{{ op.response_body_schema_name | to_upper_camel_case }}{% if op.response_body_is_list %}>{% endif %}
+{% if op.response_body_is_list %}List<{% endif %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %}>{% endif %}
 {%- endif %}
 {%- endmacro %}
 
 {# The `JsonContext` property of a body type: its name, or a flattened name for generics. -#}
 {% macro type_info(type) -%}
+{% set type = type | replace("Models.", "") -%}
 {% if "<" in type %}Json{{ type | to_upper_camel_case }}{% else %}{{ type }}{% endif %}
 {%- endmacro %}

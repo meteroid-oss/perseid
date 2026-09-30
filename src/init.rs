@@ -79,6 +79,9 @@ pub fn run(init: Init, root: &Path) -> Result<Vec<PathBuf>> {
                 "module = \"github.com/{name}/{name}-go\"\ninitialisms = true\npatch_nullable = true\n"
             );
         }
+        if language == "csharp" {
+            toml += "patch_nullable = true\n";
+        }
         added = true;
     }
     if added || !config_path.exists() {

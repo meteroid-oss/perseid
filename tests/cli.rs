@@ -208,7 +208,7 @@ fn files(dir: &Path) -> Vec<(String, String)> {
 
 #[test]
 fn openapi_3_0_generates_the_same_sdks_as_the_3_1_equivalent() {
-    let langs = ["rust", "typescript", "python", "go", "java"];
+    let langs = ["rust", "typescript", "python", "go", "java", "csharp"];
     let old = project_from("petstore-30.yaml", &langs);
     let new = project_from("petstore-nullable-31.yaml", &langs);
     for dir in [&old, &new] {
@@ -273,22 +273,54 @@ fn csharp_init_and_generate_lay_out_a_dotnet_project() {
 }
 
 #[test]
-fn csharp_names_the_streaming_operations_it_cannot_generate() {
+fn csharp_generates_streaming_auth_and_pagination() {
     let dir = project_from("features.yaml", &["csharp"]);
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
-    assert!(!ok, "{out}");
-    for op in ["stream_events", "upload_file", "upload_content"] {
-        assert!(out.contains(op), "{op}: {out}");
-    }
-
-    let config = dir.path().join("perseid.toml");
-    let text = fs::read_to_string(&config).unwrap().replace(
-        "[csharp]\n",
-        "[csharp]\nexclude = [\"stream_events\", \"upload_file\", \"upload_content\"]\n",
+    assert!(ok, "{out}");
+    let read =
+        |path: &str| fs::read_to_string(dir.path().join("csharp/Features").join(path)).unwrap();
+    let streaming = read("Api/StreamingApi.cs");
+    assert!(
+        streaming.contains("public Task<EventStream> StreamEventsAsync("),
+        "{streaming}"
     );
-    fs::write(&config, text).unwrap();
+    assert!(
+        streaming.contains("public sealed class StreamingUploadFileBody"),
+        "{streaming}"
+    );
+    assert!(streaming.contains("Upload body,"), "{streaming}");
+    let widgets = read("Api/WidgetsApi.cs");
+    assert!(
+        widgets.contains("public IAsyncEnumerable<Widget> ListWidgetsIterAsync("),
+        "{widgets}"
+    );
+    let client = read("FeaturesClient.cs");
+    assert!(
+        client.contains("public FeaturesApiKeys ApiKeys"),
+        "{client}"
+    );
+    assert!(read("Api/RecordsApi.cs").contains(r#"request.Security = [["api_key_query"]];"#));
+}
+
+#[test]
+fn csharp_extension_snippets_are_included_in_resource_classes() {
+    let dir = project_from("petstore.yaml", &["csharp"]);
+    let extensions = dir.path().join(".perseid/templates/csharp/extensions");
+    fs::create_dir_all(&extensions).unwrap();
+    fs::write(
+        extensions.join("pets.cs"),
+        "public int CustomMethod() => 42;\n",
+    )
+    .unwrap();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
+    let pets = fs::read_to_string(dir.path().join("csharp/Petstore/Api/PetsApi.cs")).unwrap();
+    let class = pets.find("public sealed partial class PetsApi").unwrap();
+    let method = pets.find("public int CustomMethod() => 42;").unwrap();
+    assert!(
+        class < method && method < pets.rfind('}').unwrap(),
+        "{pets}"
+    );
 }
 
 fn json(path: &Path) -> serde_json::Value {
@@ -573,7 +605,7 @@ fn field_names(model: &serde_json::Value, ty: &str) -> Vec<String> {
 
 #[test]
 fn torture_fixture_generates_every_language() {
-    let langs = ["rust", "typescript", "python", "go", "java"];
+    let langs = ["rust", "typescript", "python", "go", "java", "csharp"];
     let dir = project_from("torture.yaml", &langs);
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
@@ -655,6 +687,14 @@ fn torture_fixture_generates_every_language() {
     assert!(read("python/torture/api/class_.py").contains("class Class(ApiBaseSync)"));
     assert!(read("go/widgets.go").contains("([]Widget, error)"));
     assert!(read("java/src/main/java/com/torture/api/Widgets.java").contains("List<Widget>"));
+    let activity = read("csharp/Torture/Api/ActivityApi.cs");
+    assert!(
+        activity.contains("public sealed partial class ActivityApi"),
+        "{activity}"
+    );
+    assert!(
+        read("csharp/Torture/TortureClient.cs").contains("public ActivityApi ActivityApi { get; }")
+    );
 }
 
 #[test]

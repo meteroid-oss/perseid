@@ -32,7 +32,11 @@ namespace {{ sdk.package_name }}.Models;
 {% set generic = namespace(types=[]) -%}
 {% for resource in api.resources -%}
 {% for op in resource.operations -%}
-{% for ty in [m.body_type(op), m.response_type(op)] if "<" in ty and ty not in generic.types -%}
+{% set op_types = namespace(list=[m.body_type(op), m.response_type(op)]) -%}
+{% for field in op.multipart_fields if not field.is_file -%}
+{% set op_types.list = op_types.list + [field.type.to_csharp()] -%}
+{% endfor -%}
+{% for ty in op_types.list if "<" in ty and ty not in generic.types -%}
 {% set generic.types = generic.types + [ty] -%}
 [JsonSerializable(typeof({{ ty }}), TypeInfoPropertyName = "{{ m.type_info(ty) }}")]
 {% endfor -%}

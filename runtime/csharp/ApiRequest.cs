@@ -3,6 +3,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -18,12 +19,20 @@ internal sealed class ApiRequest(HttpMethod method, string path)
     private readonly List<KeyValuePair<string, string>> _query = [];
     private byte[]? _json;
     private List<KeyValuePair<string, string>>? _form;
+    private Upload? _upload;
+    private MultipartBody? _multipart;
 
     public HttpMethod Method { get; } = method;
 
     public string Path { get; } = path;
 
     public Dictionary<string, string> Headers { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The operation's security requirement, when it differs from the API-wide one.</summary>
+    public string[][]? Security { get; set; }
+
+    /// <summary>Whether the body can only be sent once, which rules out retries.</summary>
+    public bool IsOneShot => _upload?.IsStream == true || _multipart?.IsOneShot == true;
 
     /// <summary>Adds a query parameter unless <paramref name="value"/> is null. Lists repeat the
     /// parameter (OpenAPI <c>explode: true</c>) or are comma-joined.</summary>
@@ -99,15 +108,22 @@ internal sealed class ApiRequest(HttpMethod method, string path)
         }
     }
 
-    public Uri BuildUri(string baseUrl)
+    /// <summary>Sets a raw <c>application/octet-stream</c> body, unless the upload names its type.</summary>
+    public void SetUploadBody(Upload body) => _upload = body;
+
+    public void SetMultipartBody(MultipartBody body) => _multipart = body;
+
+    public Uri BuildUri(string baseUrl, IEnumerable<KeyValuePair<string, string>> extraQuery)
     {
         var url = new StringBuilder(baseUrl.TrimEnd('/')).Append(Path);
-        for (var i = 0; i < _query.Count; i++)
+        var first = true;
+        foreach (var (name, value) in _query.Concat(extraQuery))
         {
-            url.Append(i == 0 ? '?' : '&')
-                .Append(Uri.EscapeDataString(_query[i].Key))
+            url.Append(first ? '?' : '&')
+                .Append(Uri.EscapeDataString(name))
                 .Append('=')
-                .Append(Uri.EscapeDataString(_query[i].Value));
+                .Append(Uri.EscapeDataString(value));
+            first = false;
         }
         return new Uri(url.ToString());
     }
@@ -124,7 +140,11 @@ internal sealed class ApiRequest(HttpMethod method, string path)
             };
             return content;
         }
-        return _form is null ? null : new FormUrlEncodedContent(_form);
+        if (_form is not null)
+        {
+            return new FormUrlEncodedContent(_form);
+        }
+        return _upload?.CreateContent() ?? _multipart?.CreateContent();
     }
 
     private static string Format(object value) =>

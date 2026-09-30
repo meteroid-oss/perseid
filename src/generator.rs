@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, str::FromStr};
 
-use anyhow::{Context as _, bail, ensure};
+use anyhow::{Context as _, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
 use heck::{ToLowerCamelCase, ToSnakeCase as _, ToUpperCamelCase as _};
@@ -52,17 +52,6 @@ pub(crate) fn generate_with_output_context(
         api.inline_string_alias_bodies()?;
     }
     if tpl_file_ext == "cs" {
-        let streaming: Vec<&str> = api
-            .resources
-            .values()
-            .flat_map(Resource::streaming_operations)
-            .collect();
-        ensure!(
-            streaming.is_empty(),
-            "multipart uploads, binary uploads and event streams are not supported in C# yet, \
-             leave them out with `exclude = [\"{}\"]` in the [csharp] table",
-            streaming.join("\", \"")
-        );
         api.inline_flattened_fields()?;
     }
 

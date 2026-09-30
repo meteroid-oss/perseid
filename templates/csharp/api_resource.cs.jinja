@@ -1,6 +1,7 @@
 {% import "macros.cs.jinja" as m -%}
-{% set resource_type_name = (resource.name | to_upper_camel_case) ~ "Api" -%}
+{% set resource_type_name = m.resource_class(resource.name) -%}
 {% set _ = set_summary_filename(resource_type_name ~ ".cs") -%}
+{% set context = sdk.client_name ~ "JsonContext.Default" -%}
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // generated code may use deprecated API
 using System;
@@ -25,14 +26,23 @@ public sealed partial class {{ resource_type_name }}
 {% set api_resource_extra %}extensions/{{ resource.name | to_snake_case }}.cs{% endset %}
 {% include api_resource_extra ignore missing %}
 {% for op in resource.operations -%}
+{% set method_name = (op.name | to_upper_camel_case) ~ "Async" -%}
 {% set options_type = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Options" -%}
 {% set has_options = op | has_query_or_header_params -%}
 {% set required_options = op | has_required_query_or_header_params -%}
 {% set has_body = op.request_body_schema_name is defined or op.request_body_json_type is defined -%}
 {% set body_type = m.body_type(op) -%}
 {% set body = m.param(op.request_body_schema_name | default("body")) -%}
+{% if op.request_body_kind == "binary" -%}
+{% set body_type = "Upload" -%}
+{% elif op.request_body_kind == "multipart" -%}
+{% set body_type = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Body" -%}
+{% endif -%}
+{% set takes_body = has_body or op.request_body_kind in ["binary", "multipart"] -%}
 {% set response_type = m.response_type(op) -%}
-{% if op.response_is_binary -%}
+{% if op.response_is_event_stream -%}
+{% set returns = "Task<EventStream>" -%}
+{% elif op.response_is_binary -%}
 {% set returns = "Task<byte[]>" -%}
 {% elif op.response_is_text -%}
 {% set returns = "Task<string>" -%}
@@ -46,10 +56,10 @@ public sealed partial class {{ resource_type_name }}
 {% endif -%}
 {% if op.deprecated %}    [Obsolete]
 {% endif -%}
-    public {{ returns }} {{ op.name | to_upper_camel_case }}Async(
+    public {{ returns }} {{ method_name }}(
 {% for p in op.path_params %}        string {{ m.param(p) }},
 {% endfor -%}
-{% if has_body -%}
+{% if takes_body -%}
 {% if op.request_body_optional %}        {{ body_type }}? {{ body }} = null,
 {% else %}        {{ body_type }} {{ body }},
 {% endif -%}
@@ -59,12 +69,13 @@ public sealed partial class {{ resource_type_name }}
 {% else %}        {{ options_type }}? options = null,
 {% endif -%}
 {% endif -%}
+        RequestOptions? requestOptions = null,
         CancellationToken cancellationToken = default
     )
     {
 {% for p in op.path_params %}        ArgumentException.ThrowIfNullOrEmpty({{ m.param(p) }});
 {% endfor -%}
-{% if has_body and not op.request_body_optional %}        ArgumentNullException.ThrowIfNull({{ body }});
+{% if takes_body and not op.request_body_optional %}        ArgumentNullException.ThrowIfNull({{ body }});
 {% endif -%}
 {% if required_options %}        ArgumentNullException.ThrowIfNull(options);
 {% endif -%}
@@ -73,6 +84,9 @@ public sealed partial class {{ resource_type_name }}
 {% set path.value = path.value | replace("{" ~ p ~ "}", "{Uri.EscapeDataString(" ~ m.param(p) ~ ")}") -%}
 {% endfor %}
         var request = new ApiRequest(HttpMethod.{{ op.method | to_upper_camel_case }}, {% if op.path_params %}${% endif %}"{{ path.value }}");
+{% if op.security is defined -%}
+        request.Security = {{ op.security | tojson }};
+{% endif -%}
 {% for p in op.query_params -%}
 {% set explode = p.explode | default(true) -%}
         request.AddQuery("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.name, options_type) }}{% if (p.type.is_list() or p.type.is_set()) and not explode %}, explode: false{% endif %});
@@ -84,18 +98,121 @@ public sealed partial class {{ resource_type_name }}
 {% set setter = "SetFormBody" if op.request_body_is_form else "SetJsonBody" -%}
 {% if op.request_body_optional %}        if ({{ body }} is not null)
         {
-            request.{{ setter }}({{ body }}, {{ sdk.client_name }}JsonContext.Default.{{ m.type_info(body_type) }});
+            request.{{ setter }}({{ body }}, {{ context }}.{{ m.type_info(body_type) }});
         }
-{% else %}        request.{{ setter }}({{ body }}, {{ sdk.client_name }}JsonContext.Default.{{ m.type_info(body_type) }});
+{% else %}        request.{{ setter }}({{ body }}, {{ context }}.{{ m.type_info(body_type) }});
+{% endif -%}
+{% elif op.request_body_kind == "binary" -%}
+{% if op.request_body_optional %}        if ({{ body }} is not null)
+        {
+            request.SetUploadBody({{ body }});
+        }
+{% else %}        request.SetUploadBody({{ body }});
+{% endif -%}
+{% elif op.request_body_kind == "multipart" -%}
+{% if op.request_body_optional %}        if ({{ body }} is not null)
+        {
+{% endif %}        var form = new MultipartBody();
+{% for field in op.multipart_fields -%}
+{% set value = body ~ "." ~ m.member(field.name, body_type) -%}
+{% set add %}form.{% if field.is_file %}File("{{ field.name }}", {{ value }}){% else %}Field("{{ field.name }}", {{ value }}, {{ context }}.Options){% endif %};{% endset -%}
+{% if field.required and not field.nullable %}        {{ add }}
+{% else %}        if ({{ value }} is not null)
+        {
+            {{ add }}
+        }
+{% endif -%}
+{% endfor %}        request.SetMultipartBody(form);
+{% if op.request_body_optional %}        }
 {% endif -%}
 {% endif -%}
-{% if op.response_is_binary %}        return _transport.SendBytesAsync(request, cancellationToken);
-{% elif op.response_is_text %}        return _transport.SendTextAsync(request, cancellationToken);
-{% elif response_type %}        return _transport.SendJsonAsync(request, {{ sdk.client_name }}JsonContext.Default.{{ m.type_info(response_type) }}, cancellationToken);
-{% else %}        return _transport.SendAsync(request, cancellationToken);
+{% if op.response_is_event_stream %}        return _transport.SendEventStreamAsync(request, requestOptions, cancellationToken);
+{% elif op.response_is_binary %}        return _transport.SendBytesAsync(request, requestOptions, cancellationToken);
+{% elif op.response_is_text %}        return _transport.SendTextAsync(request, requestOptions, cancellationToken);
+{% elif response_type %}        return _transport.SendJsonAsync(request, {{ context }}.{{ m.type_info(response_type) }}, requestOptions, cancellationToken);
+{% else %}        return _transport.SendAsync(request, requestOptions, cancellationToken);
 {% endif -%}
     }
+{% if op.pagination is defined -%}
+{% set pg = op.pagination -%}
+{% set param = op.query_params | selectattr("name", "equalto", pg.param) | first -%}
+{% set property = m.member(pg.param, options_type) %}
+    /// <summary>Iterates with <c>await foreach</c> over every item of <see cref="{{ method_name }}"/>, fetching further pages on demand.</summary>
+{% if op.deprecated %}    [Obsolete]
+{% endif -%}
+    public IAsyncEnumerable<{{ m.model(pg.item_schema) }}> {{ op.name | to_upper_camel_case }}IterAsync(
+{% for p in op.path_params %}        string {{ m.param(p) }},
+{% endfor -%}
+{% if takes_body -%}
+{% if op.request_body_optional %}        {{ body_type }}? {{ body }} = null,
+{% else %}        {{ body_type }} {{ body }},
+{% endif -%}
+{% endif -%}
+{% if required_options %}        {{ options_type }} options,
+{% else %}        {{ options_type }}? options = null,
+{% endif -%}
+        RequestOptions? requestOptions = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+{% for p in op.path_params %}        ArgumentException.ThrowIfNullOrEmpty({{ m.param(p) }});
+{% endfor -%}
+{% if takes_body and not op.request_body_optional %}        ArgumentNullException.ThrowIfNull({{ body }});
+{% endif -%}
+{% if required_options %}        ArgumentNullException.ThrowIfNull(options);
+{% endif -%}
+{% set first = "options" if required_options else "(options ?? new())" %}
+        var pagination = new Pagination({{ pg.items | tojson }})
+        {
+{% if pg.next_cursor is defined %}            NextCursor = {{ pg.next_cursor | tojson }},
+{% endif -%}
+{% if pg.item_cursor is defined %}            ItemCursor = {{ pg.item_cursor | tojson }},
+{% endif -%}
+{% if pg.has_more is defined %}            HasMore = {{ pg.has_more | tojson }},
+{% endif -%}
+{% if pg.total_pages is defined %}            TotalPages = {{ pg.total_pages | tojson }},
+{% endif -%}
+{% if pg.total is defined %}            Total = {{ pg.total | tojson }},
+{% endif -%}
+            FirstPage = {{ pg.first_page }},
+        };
+        return Paginator.{% if pg.style == "cursor" %}CursorAsync{% else %}NumberedAsync{% endif %}(
+            pagination,
+{% if pg.style != "cursor" %}            pages: {{ "true" if pg.style == "page" else "false" }},
+{% endif %}            options{% if not required_options %}?{% endif %}.{{ property }},
+            (param, ct) =>
+                {{ method_name }}(
+{% for p in op.path_params %}                    {{ m.param(p) }},
+{% endfor -%}
+{% if takes_body %}                    {{ body }},
+{% endif %}                    {{ first }} with { {{ property }} = {% if pg.style == "cursor" %}param{% else %}({{ param.type.to_csharp() }})param{% endif %} },
+                    requestOptions,
+                    ct
+                ),
+            {{ context }}.{{ m.type_info(response_type) }},
+            {{ context }}.{{ m.type_info(m.model(pg.item_schema)) }},
+            cancellationToken
+        );
+    }
+{% endif -%}
 {% set api_operation_extra %}extensions/{{ resource.name | to_snake_case }}_{{ op.name | to_snake_case }}.cs{% endset %}
 {% include api_operation_extra ignore missing %}
 {% endfor -%}
 }
+{% for op in resource.operations if op.request_body_kind == "multipart" %}
+{% set class_name = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Body" %}
+/// <summary>The <c>multipart/form-data</c> fields of <see cref="{{ resource_type_name }}.{{ op.name | to_upper_camel_case }}Async"/>.</summary>
+public sealed class {{ class_name }}
+{
+{% for field in op.multipart_fields -%}
+{% if field.description is defined %}
+    {{ m.doc(field.description) }}
+{% endif -%}
+{% if field.is_file -%}
+    public {% if field.required %}required {% endif %}Upload{% if field.nullable or not field.required %}?{% endif %} {{ m.member(field.name, class_name) }} { get; set; }
+{% else -%}
+    public {% if field.required %}required {% endif %}{{ m.field_type(field) }} {{ m.member(field.name, class_name) }} { get; set; }
+{% endif -%}
+{% endfor -%}
+}
+{% endfor -%}

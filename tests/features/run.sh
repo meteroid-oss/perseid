@@ -30,4 +30,22 @@ GRADLE
     mkdir -p tests && cp "$here/smoke.rs" tests/
     cargo add -q --dev tokio --features macros,rt-multi-thread
     cargo test -q --test smoke ;;
+  csharp)
+    mkdir -p smoke && cp "$here/Smoke.cs" smoke/
+    project=$(ls ./*/*.csproj | grep -v '^./smoke/' | head -n 1)
+    cat > smoke/Smoke.csproj <<CSPROJ
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../$project" />
+  </ItemGroup>
+</Project>
+CSPROJ
+    dotnet run --project smoke ;;
 esac
