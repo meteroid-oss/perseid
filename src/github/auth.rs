@@ -13,15 +13,20 @@ use super::{
 /// perseid's OAuth App, for the device flow. Public by design: device flow clients have no secret.
 const CLIENT_ID: &str = "Ov23liBrNho4EP0xC7Ob";
 
-/// A user token, from the environment, the gh CLI, or the device flow. Never written anywhere.
-pub fn token(ui: &Ui) -> Result<(String, &'static str)> {
+/// A user token from the environment or the gh CLI.
+pub fn stored_token() -> Option<(String, &'static str)> {
     for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
         if let Some(token) = std::env::var(var).ok().filter(|t| !t.trim().is_empty()) {
-            return Ok((token.trim().to_owned(), var));
+            return Some((token.trim().to_owned(), var));
         }
     }
-    if let Some(token) = gh_token() {
-        return Ok((token, "gh"));
+    gh_token().map(|token| (token, "gh"))
+}
+
+/// A user token, from the environment, the gh CLI, or the device flow. Never written anywhere.
+pub fn token(ui: &Ui) -> Result<(String, &'static str)> {
+    if let Some(found) = stored_token() {
+        return Ok(found);
     }
     let client_id = match std::env::var("PERSEID_GITHUB_CLIENT_ID") {
         Ok(id) => id,

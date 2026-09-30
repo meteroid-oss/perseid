@@ -121,6 +121,10 @@ runs:
       run: |
         if [ "$BUMP" != auto ]; then echo "bump=$BUMP" >> "$GITHUB_OUTPUT"; exit 0; fi
         spec=$(sed -n 's/^spec *= *"\(.*\)".*/\1/p' perseid.toml | head -1)
+        # A spec pushed from another repository is kept as openapi.<its extension>.
+        case "$spec" in github:*)
+          case "${spec##*.}" in json|yaml|yml) spec="openapi.${spec##*.}" ;; *) spec=openapi.json ;; esac ;;
+        esac
         if [ -z "$BASE" ] && [ -f "$spec" ] && [ -n "${BEFORE//0/}" ] &&
           git fetch --quiet --depth 1 origin "$BEFORE" && git show "$BEFORE:./$spec" > "$RUNNER_TEMP/base-spec"; then
           BASE=$RUNNER_TEMP/base-spec

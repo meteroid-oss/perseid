@@ -39,22 +39,30 @@ enum Command {
         /// Skip the release-please files and the SDK release workflow.
         #[arg(long)]
         no_release: bool,
-        /// Set up GitHub: SDK repositories, a GitHub App and the workflow opening SDK pull requests.
-        #[arg(long)]
+        /// Deprecated: run `perseid setup` after `perseid init`.
+        #[arg(long, hide = true)]
         github: bool,
-        /// Account owning the SDK repositories and the App (default: the spec repository's).
-        #[arg(long, requires = "github")]
-        github_owner: Option<String>,
-        /// Answer every question with its default.
+        /// With --github, apply the setup without asking.
+        #[arg(long, short, hide = true)]
+        yes: bool,
+        /// With --github, print URLs instead of opening them in a browser.
+        #[arg(long, hide = true)]
+        no_browser: bool,
+    },
+    /// Set up GitHub as perseid.toml describes: repositories, keys, secrets, the App and workflows.
+    Setup {
+        /// Apply the plan without asking.
         #[arg(long, short)]
         yes: bool,
+        /// Print the plan and exit: 0 when in sync, 2 when changes are pending.
+        #[arg(long, conflicts_with = "yes")]
+        dry_run: bool,
         /// Print URLs instead of opening them in a browser.
         #[arg(long)]
         no_browser: bool,
-        /// Commit the GitHub workflow to the default branch instead of opening a pull request.
-        #[arg(long, requires = "github")]
-        push: bool,
     },
+    /// Check the GitHub setup without changing it: pending changes, last sync, pull requests, runs.
+    Status,
     /// Generate SDKs.
     Generate {
         /// Languages to generate (default: all configured).
@@ -105,18 +113,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             base_url,
             no_release,
             github,
-            github_owner,
             yes,
             no_browser,
-            push,
         } => {
             let root = cli.config.parent().map(|p| cwd.join(p)).unwrap_or(cwd);
-            let options = perseid::github::Options {
-                owner: github_owner,
-                yes,
-                browser: !no_browser,
-                push,
-            };
             let init = init::Init {
                 languages,
                 spec,
@@ -124,27 +124,27 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 base_url,
                 release: !no_release,
             };
-            let ui = perseid::github::Ui::new(&options);
-            let created = match github {
-                true => init::run_with(init, &root, |path| {
-                    perseid::github::layout(path, &ui, options.owner.as_deref())
-                })?,
-                false => init::run(init, &root)?,
-            };
-            for path in created {
+            for path in init::run(init, &root)? {
                 println!("+ {}", path.strip_prefix(&root).unwrap_or(&path).display());
             }
-            let config_path = root.join(config::FILE);
-            let offered = !github && !yes && perseid::github::offered(&root);
-            if offered && ui.confirm("Set up GitHub automation?", true)? {
-                perseid::github::layout(&config_path, &ui, None)?;
-                perseid::github::setup(&config_path, &options)?;
-            } else if github {
-                perseid::github::setup(&config_path, &options)?;
-            } else {
-                println!("\nnext: perseid generate");
+            if github {
+                eprintln!("\n`perseid init --github` is now `perseid init`, then `perseid setup`");
+                let options = setup_options(yes, false, no_browser);
+                return perseid::github::setup(&root.join(config::FILE), &options);
             }
+            println!(
+                "\nNext: `perseid setup` to automate the SDKs on GitHub, or `perseid generate` to write them here"
+            );
         }
+        Command::Setup {
+            yes,
+            dry_run,
+            no_browser,
+        } => {
+            let options = setup_options(yes, dry_run, no_browser);
+            return perseid::github::setup(&cli.config, &options);
+        }
+        Command::Status => return perseid::github::status(&cli.config),
         Command::Generate {
             languages,
             check,
@@ -155,7 +155,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
         } => {
             let (config, root) = Config::load(&cli.config)?;
             let spec = generate::load_spec(&config, &root)?;
-            let info: serde_json::Value = serde_json::from_str(&spec)?;
             let options = Options {
                 check,
                 format: !no_format,
@@ -163,7 +162,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let sdks = config.sdks(&languages)?;
             let dirs = sdks
                 .iter()
-                .map(|sdk| match sdk.repo {
+                .map(|sdk| match &sdk.repo {
                     Some(repo) => {
                         let checkout = pr::checkout(repo, &root)?;
                         if !check {
@@ -204,7 +203,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 let notes = notes
                     .map(|path| std::fs::read_to_string(&path).context("reading --notes"))
                     .transpose()?;
-                deliver(&config, &root, &dirs, &info, &changes, bump, notes)?;
+                deliver(&config, &root, &dirs, &spec, &changes, bump, notes)?;
             }
         }
         Command::Eject { language } => {
@@ -226,15 +225,25 @@ fn run(cli: Cli) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn setup_options(yes: bool, dry_run: bool, no_browser: bool) -> perseid::github::Options {
+    perseid::github::Options {
+        yes,
+        dry_run,
+        browser: !no_browser,
+    }
+}
+
 fn deliver(
     config: &Config,
     root: &std::path::Path,
     dirs: &[PathBuf],
-    spec: &serde_json::Value,
+    spec: &str,
     changes: &BTreeMap<String, Vec<generate::Change>>,
     bump: Bump,
     notes: Option<String>,
 ) -> Result<()> {
+    let origin = pr::origin(config, root, spec);
+    let spec: serde_json::Value = serde_json::from_str(spec)?;
     let mut repos: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
     for dir in dirs {
         let top = pr::toplevel(dir)?;
@@ -249,7 +258,8 @@ fn deliver(
     }
     if let Ok(top) = pr::toplevel(root)
         && let Some(paths) = repos.get_mut(&top)
-        && let Ok(spec_path) = std::path::absolute(root.join(&config.spec))
+        && let config::Source::File(file) = config.source()
+        && let Ok(spec_path) = std::path::absolute(root.join(file))
         && let Ok(relative) = spec_path.strip_prefix(&top)
     {
         paths.push(relative.to_string_lossy().into_owned());
@@ -260,7 +270,8 @@ fn deliver(
         spec["info"]["version"].as_str().unwrap_or_default()
     );
     let mut body = format!(
-        "Generated by [perseid](https://github.com/meteroid-oss/perseid).\n\n```\n{}\n```",
+        "Generated by [perseid](https://github.com/meteroid-oss/perseid){}.\n\n```\n{}\n```",
+        origin.map_or_else(String::new, |o| format!(" from {o}")),
         generate::summary(changes)
     );
     if let Some(notes) = notes {

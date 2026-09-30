@@ -24,7 +24,7 @@ jobs:
       - name: Lint the scaffolded release workflow
         run: |
           bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
-          ./actionlint scaffold/release/.github/workflows/*.yml
+          ./actionlint scaffold/release/.github/workflows/*.yml target/tmp/*.yml
 
   # A fresh `init` + `generate` must give SDKs that build and type-check, for a toy spec, the
   # torture fixture (unions, recursion, reserved words...) and a real API.

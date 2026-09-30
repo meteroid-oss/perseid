@@ -1,11 +1,10 @@
+use std::collections::BTreeSet;
+
 use anyhow::{Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 
-use super::{
-    Ui,
-    api::{GitHub, check},
-};
+use super::api::{GitHub, check};
 use crate::config::{Config, Sdk};
 
 pub struct File {
@@ -36,7 +35,7 @@ pub fn read(api: &GitHub, repo: &str, branch: &str, path: &str) -> Result<Option
     Ok(Some(String::from_utf8(BASE64.decode(encoded)?)?))
 }
 
-fn head(api: &GitHub, repo: &str, branch: &str) -> Result<Option<String>> {
+pub fn head(api: &GitHub, repo: &str, branch: &str) -> Result<Option<String>> {
     let url = format!("/repos/{repo}/git/ref/heads/{branch}");
     let reply = api.send("GET", &url, None)?;
     if matches!(reply.status, 404 | 409) {
@@ -127,37 +126,54 @@ pub fn commit(
     Ok(Outcome::Committed)
 }
 
-/// Commits the release-please files and `sdk-release.yml` an SDK repository lacks, with the
-/// user's token: the App that later pushes SDK updates can't write workflow files.
-pub fn release(api: &GitHub, config: &Config, repo: &str, sdks: &[&Sdk], ui: &Ui) -> Result<()> {
-    let info = api.get(&format!("/repos/{repo}"))?;
-    let branch = default_branch(&info);
-    let files = crate::init::release_scaffold(config, sdks, |path| read(api, repo, &branch, path))?;
-    let paths: Vec<_> = files.iter().map(|(p, _)| p.clone()).collect();
-    let files: Vec<File> = files
+/// The release-please files and `sdk-release.yml` a repository holding `sdks` lacks, which the
+/// user's token commits: the App that later pushes SDK updates can't write workflow files.
+pub fn release_files(
+    api: &GitHub,
+    config: &Config,
+    repo: &str,
+    branch: &str,
+    sdks: &[&Sdk],
+) -> Result<Vec<File>> {
+    let files = crate::init::release_scaffold(config, sdks, |path| read(api, repo, branch, path))?;
+    Ok(files
         .into_iter()
         .map(|(path, content)| File {
             path,
             content,
             executable: false,
         })
-        .collect();
-    match commit(
-        api,
-        repo,
-        &branch,
-        &branch,
-        &files,
-        "ci: release the SDK with release-please",
-    )? {
-        Outcome::Unchanged => ui.ok(&format!("{repo} has its release workflow")),
-        Outcome::Committed => ui.ok(&format!("{repo}: committed {}", paths.join(", "))),
+        .collect())
+}
+
+/// Every file path of `branch`, empty when the repository or branch is missing.
+pub fn paths(api: &GitHub, repo: &str, branch: &str) -> Result<BTreeSet<String>> {
+    let url = format!("/repos/{repo}/git/trees/{branch}?recursive=1");
+    let reply = api.send("GET", &url, None)?;
+    if matches!(reply.status, 404 | 409) {
+        return Ok(BTreeSet::new());
     }
-    Ok(())
+    let tree = check("GET", &url, reply)?;
+    Ok(tree["tree"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| e["type"] == "blob")
+        .filter_map(|e| e["path"].as_str().map(str::to_owned))
+        .collect())
 }
 
 pub fn default_branch(repo: &Value) -> String {
     repo["default_branch"].as_str().unwrap_or("main").to_owned()
+}
+
+/// The URL of the open pull request from `branch` of `repo`.
+pub fn open_pull(api: &GitHub, repo: &str, branch: &str) -> Result<Option<String>> {
+    let owner = repo.split('/').next().unwrap_or_default();
+    let reply = api.find(&format!(
+        "/repos/{repo}/pulls?head={owner}:{branch}&state=open"
+    ))?;
+    Ok(reply.and_then(|open| open[0]["html_url"].as_str().map(str::to_owned)))
 }
 
 /// The URL of the open pull request from `branch`, and whether it was just opened.
@@ -169,12 +185,8 @@ pub fn pull_request(
     title: &str,
     body: &str,
 ) -> Result<(String, bool)> {
-    let owner = repo.split('/').next().unwrap_or_default();
-    let open = api.get(&format!(
-        "/repos/{repo}/pulls?head={owner}:{branch}&state=open"
-    ))?;
-    if let Some(url) = open[0]["html_url"].as_str() {
-        return Ok((url.to_owned(), false));
+    if let Some(url) = open_pull(api, repo, branch)? {
+        return Ok((url, false));
     }
     let created = api.post(
         &format!("/repos/{repo}/pulls"),

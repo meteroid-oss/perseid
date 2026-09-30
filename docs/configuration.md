@@ -18,15 +18,17 @@ package = "@acme/sdk"
 package = "com.acme.sdk"
 [csharp]                            # Acme namespace and NuGet package by default
 [go]
-module = "github.com/acme/acme-go"
-repo = "acme/acme-go"               # lives in its own repository
+repo = "acme/acme-go"               # lives in its own repository, module github.com/acme/acme-go
 ```
 
 ## Top level
 
 | Key | |
 |---|---|
-| `spec` | Path or URL of the OpenAPI document (3.0 or 3.1, JSON or YAML) |
+| `spec` | Path or URL of the OpenAPI document (3.0 or 3.1, JSON or YAML), or `github:owner/repo/path` for a spec another repository pushes here (kept as `openapi.json`, or `.yaml` after its extension) |
+| `repo` | Default repository of every SDK: `"acme/api-{lang}"` gives each its own (`{lang}` is `node`, `python`, `go`, `java`, `rust` or `dotnet`), `"acme/api-sdks"` holds them all, each in a folder named after its language. Without it, SDKs live here |
+| `push_spec` | `owner/name` of a separate SDKs repository this repository sends its spec to, which generates the SDKs from its own `perseid.toml`; the SDK tables here only seed that file when `perseid setup` creates it. See [repository layouts](ci.md#repository-layouts) |
+| `generate` | The command writing the spec in the API repository's CI when it isn't committed, run from its root before pushing the spec |
 | `name` | UpperCamelCase client name; package names derive from it |
 | `base_url`, `header_prefix`, `user_agent`, `version`, `patch_nullable` | Defaults for every SDK |
 | `webhooks` | Install the [webhook verifier](customizing.md#webhooks) |
@@ -47,7 +49,9 @@ repo = "acme/acme-go"               # lives in its own repository
 Every table takes `path`, `repo`, `package`, `version`, `base_url`, `header_prefix`, `user_agent`,
 `webhooks`, `patch_nullable`, `method_names`, `names`, `timeout`, `typed_unions`, `untagged_unions`, `exclude`
 (operation ids left out of that SDK only) and a `context` table. A table with
-`repo = "owner/name"` generates into that repository, checked out under `.perseid/repos`.
+`repo = "owner/name"` generates into that repository, checked out under `.perseid/repos`, at its
+root, or in a folder named after the language when several SDKs share the repository; `path`
+overrides either. Both override the top-level `repo`.
 
 Language-specific keys:
 

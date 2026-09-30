@@ -16,8 +16,16 @@ pub const LANGUAGES: [&str; 6] = ["rust", "typescript", "python", "go", "java", 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// Path (relative to perseid.toml) or http(s) URL of the OpenAPI document.
+    /// Path (relative to perseid.toml), http(s) URL, or `github:owner/repo/path` of a spec another
+    /// repository pushes here.
     pub spec: String,
+    /// Default repository of every SDK: `owner/name-{lang}` gives each its own, `owner/name` holds
+    /// them all in folders named after their language.
+    pub repo: Option<String>,
+    /// `owner/name` of a repository receiving the spec, which generates the SDKs itself.
+    pub push_spec: Option<String>,
+    /// Command producing the spec in the API repository's CI, when it isn't committed.
+    pub generate: Option<String>,
     /// Client name: `Acme` gives the `Acme` client and the `acme` package.
     pub name: String,
     pub base_url: Option<String>,
@@ -170,9 +178,65 @@ fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Pagination>
 
 pub struct Sdk<'a> {
     pub language: &'static str,
-    pub repo: Option<&'a str>,
+    pub repo: Option<String>,
     pub path: String,
     target: &'a Target,
+}
+
+/// Where the spec comes from, as `spec` says.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Source<'a> {
+    File(&'a str),
+    Url(&'a str),
+    /// A file of another GitHub repository, pushed here as a snapshot next to perseid.toml.
+    GitHub {
+        repo: String,
+        path: &'a str,
+    },
+}
+
+impl Source<'_> {
+    pub fn parse(spec: &str) -> Result<Source<'_>> {
+        if spec.starts_with("http://") || spec.starts_with("https://") {
+            return Ok(Source::Url(spec));
+        }
+        let Some(rest) = spec.strip_prefix("github:") else {
+            return Ok(Source::File(spec));
+        };
+        let mut parts = rest.splitn(3, '/');
+        match (parts.next(), parts.next(), parts.next()) {
+            (Some(owner), Some(name), Some(path))
+                if !owner.is_empty() && !name.is_empty() && !path.is_empty() =>
+            {
+                Ok(Source::GitHub {
+                    repo: format!("{owner}/{name}"),
+                    path,
+                })
+            }
+            _ => anyhow::bail!(
+                "`spec = \"{spec}\"` must read github:owner/repo/path/to/openapi.json"
+            ),
+        }
+    }
+}
+
+/// The file holding the spec another repository pushes, named after it: `openapi.yaml`, …
+pub fn snapshot(path: &str) -> String {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .filter(|e| ["json", "yaml", "yml"].contains(e))
+        .unwrap_or("json");
+    format!("openapi.{extension}")
+}
+
+/// The conventional repository suffix of a language's SDK, `{lang}` in `repo`.
+pub fn suffix(language: &str) -> &str {
+    match language {
+        "typescript" => "node",
+        "csharp" => "dotnet",
+        other => other,
+    }
 }
 
 impl Config {
@@ -222,6 +286,11 @@ impl Config {
                 "`int64` must be \"number\", \"bigint\" or \"string\", not {int64:?}"
             );
         }
+        let source = Source::parse(&config.spec)?;
+        ensure!(
+            config.push_spec.is_none() || matches!(source, Source::File(_)),
+            "`push_spec` sends a spec file of this repository: `spec` must be its path"
+        );
         let root = std::path::absolute(path)?.parent().unwrap().to_owned();
         Ok((config, root))
     }
@@ -275,18 +344,29 @@ impl Config {
             &self.java,
             &self.csharp,
         ];
-        let sdks = LANGUAGES
+        let all: Vec<_> = LANGUAGES
             .into_iter()
             .zip(targets)
             .filter_map(|(language, target)| Some((language, target.as_ref()?)))
-            .filter(|(language, _)| selected.is_empty() || selected.iter().any(|s| s == language))
-            .map(|(language, target)| Sdk {
+            .map(|(language, target)| {
+                let repo = target.repo.clone().or_else(|| {
+                    let repo = self.repo.as_deref()?;
+                    Some(repo.replace("{lang}", suffix(language)))
+                });
+                (language, target, repo)
+            })
+            .collect();
+        let shared = |repo: &str| all.iter().filter(|a| a.2.as_deref() == Some(repo)).count() > 1;
+        let sdks = all
+            .iter()
+            .filter(|(language, ..)| selected.is_empty() || selected.iter().any(|s| s == language))
+            .map(|(language, target, repo)| Sdk {
                 language,
-                repo: target.repo.as_deref(),
-                path: target
-                    .path
-                    .clone()
-                    .unwrap_or_else(|| if target.repo.is_some() { "." } else { language }.into()),
+                path: target.path.clone().unwrap_or_else(|| match repo {
+                    Some(repo) if !shared(repo) => ".".into(),
+                    _ => (*language).into(),
+                }),
+                repo: repo.clone(),
                 target,
             })
             .collect::<Vec<_>>();
@@ -295,6 +375,26 @@ impl Config {
             "nothing to generate: add a [rust], [typescript], [python], [go], [java] or [csharp] table"
         );
         Ok(sdks)
+    }
+
+    pub fn source(&self) -> Source<'_> {
+        Source::parse(&self.spec).unwrap_or(Source::File(&self.spec))
+    }
+
+    /// The Go module path of the repository and folder the SDK lives in.
+    fn go_module(&self, sdk: &Sdk) -> String {
+        let repo = sdk.repo.clone().or_else(|| {
+            let url = self.repository.as_deref()?;
+            Some(url.strip_prefix("https://github.com/")?.to_owned())
+        });
+        match (repo, sdk.path.as_str()) {
+            (Some(repo), ".") => format!("github.com/{repo}"),
+            (Some(repo), path) => format!("github.com/{repo}/{path}"),
+            (None, _) => {
+                let name = self.name.to_kebab_case();
+                format!("github.com/{name}/{name}-go")
+            }
+        }
     }
 
     /// Values exposed to templates as `sdk`, for an SDK checked out at `dir`.
@@ -323,7 +423,7 @@ impl Config {
             "rust_crate": if language == "rust" { package.replace('-', "_") } else { snake.clone() },
             "java_package": if language == "java" { package.clone() } else { format!("com.{snake}") },
             "npm_package": if language == "typescript" { &package } else { &kebab },
-            "go_module": target.module,
+            "go_module": target.module.clone().unwrap_or_else(|| self.go_module(sdk)),
             "default_base_url": pick(&target.base_url, &self.base_url, "http://localhost"),
             "user_agent_prefix": pick(&target.user_agent, &self.user_agent, &kebab),
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
@@ -651,6 +751,74 @@ mod tests {
             context("spec = \"s\"\nname = \"Acme\"\n[rust]\n", "rust")["timeout"],
             60
         );
+    }
+
+    fn layout(toml: &str) -> Vec<(String, Option<String>, String)> {
+        let config: Config = toml::from_str(toml).unwrap();
+        let sdks = config.sdks(&[]).unwrap();
+        sdks.iter()
+            .map(|s| (s.language.to_owned(), s.repo.clone(), s.path.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_repo_pattern_gives_each_sdk_its_own_repository() {
+        let toml =
+            "spec = \"s\"\nname = \"Acme\"\nrepo = \"acme/api-{lang}\"\n[typescript]\n[csharp]\n";
+        let repo = |r: &str| Some(r.to_owned());
+        assert_eq!(
+            layout(toml),
+            [
+                ("typescript".into(), repo("acme/api-node"), ".".into()),
+                ("csharp".into(), repo("acme/api-dotnet"), ".".into()),
+            ]
+        );
+        let config: Config = toml::from_str(&format!("{toml}[go]\n")).unwrap();
+        let go = config.sdks(&["go".into()]).unwrap().remove(0);
+        let module = config.context(&go, Path::new("/nonexistent"))["go_module"].clone();
+        assert_eq!(module, "github.com/acme/api-go");
+    }
+
+    #[test]
+    fn a_shared_repo_holds_each_sdk_in_a_folder_unless_overridden() {
+        let toml = "spec = \"s\"\nname = \"Acme\"\nrepo = \"acme/sdks\"\n[python]\n[go]\n\
+                    [typescript]\nrepo = \"acme/js\"\n[rust]\npath = \"crates/acme\"\n";
+        let repo = |r: &str| Some(r.to_owned());
+        assert_eq!(
+            layout(toml),
+            [
+                ("rust".into(), repo("acme/sdks"), "crates/acme".into()),
+                ("typescript".into(), repo("acme/js"), ".".into()),
+                ("python".into(), repo("acme/sdks"), "python".into()),
+                ("go".into(), repo("acme/sdks"), "go".into()),
+            ]
+        );
+        let config: Config = toml::from_str(toml).unwrap();
+        let go = config.sdks(&["go".into()]).unwrap().remove(0);
+        let module = config.context(&go, Path::new("/nonexistent"))["go_module"].clone();
+        assert_eq!(module, "github.com/acme/sdks/go");
+        assert_eq!(
+            layout("spec = \"s\"\nname = \"Acme\"\n[rust]\n"),
+            [("rust".into(), None, "rust".into())]
+        );
+    }
+
+    #[test]
+    fn specs_come_from_a_file_a_url_or_another_repository() {
+        assert_eq!(
+            Source::parse("api/openapi.yaml").unwrap(),
+            Source::File("api/openapi.yaml")
+        );
+        assert_eq!(
+            Source::parse("github:acme/api/spec/openapi.yaml").unwrap(),
+            Source::GitHub {
+                repo: "acme/api".into(),
+                path: "spec/openapi.yaml"
+            }
+        );
+        assert!(Source::parse("github:acme/api").is_err());
+        assert_eq!(snapshot("spec/openapi.yaml"), "openapi.yaml");
+        assert_eq!(snapshot("swagger"), "openapi.json");
     }
 
     #[test]

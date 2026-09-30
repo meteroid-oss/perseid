@@ -56,11 +56,51 @@ impl GitHub {
     }
 
     pub fn send(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Reply> {
+        let (status, text, scopes) =
+            self.exchange(method, path, body, "application/vnd.github+json")?;
+        Ok(Reply {
+            status,
+            body: serde_json::from_str(&text).unwrap_or(Value::Null),
+            scopes,
+        })
+    }
+
+    /// The raw bytes of a file of a repository, `None` when it or the repository is missing.
+    pub fn raw(&self, repo: &str, branch: &str, path: &str) -> Result<Option<Vec<u8>>> {
+        let url = format!("/repos/{repo}/contents/{path}?ref={branch}");
+        let (status, text, scopes) =
+            self.exchange("GET", &url, None, "application/vnd.github.raw")?;
+        match status {
+            404 | 409 => Ok(None),
+            200 => Ok(Some(text.into_bytes())),
+            _ => {
+                let body = serde_json::from_str(&text).unwrap_or(Value::Null);
+                check(
+                    "GET",
+                    &url,
+                    Reply {
+                        status,
+                        body,
+                        scopes,
+                    },
+                )
+                .map(|_| None)
+            }
+        }
+    }
+
+    fn exchange(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        accept: &str,
+    ) -> Result<(u16, String, Option<String>)> {
         let url = format!("{}{path}", self.base);
         let mut request = http::Request::builder()
             .method(method)
             .uri(&url)
-            .header("Accept", "application/vnd.github+json")
+            .header("Accept", accept)
             .header("X-GitHub-Api-Version", "2022-11-28");
         if let Some(token) = &self.token {
             request = request.header("Authorization", format!("Bearer {token}"));
@@ -79,12 +119,12 @@ impl GitHub {
             .get("x-oauth-scopes")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
-        let text = response.body_mut().read_to_string()?;
-        Ok(Reply {
-            status: response.status().as_u16(),
-            body: serde_json::from_str(&text).unwrap_or(Value::Null),
-            scopes,
-        })
+        let text = response
+            .body_mut()
+            .with_config()
+            .limit(100 * 1024 * 1024)
+            .read_to_string()?;
+        Ok((response.status().as_u16(), text, scopes))
     }
 
     pub fn get(&self, path: &str) -> Result<Value> {
@@ -106,6 +146,10 @@ impl GitHub {
 
     pub fn put(&self, path: &str, body: Value) -> Result<Value> {
         self.expect("PUT", path, Some(&body))
+    }
+
+    pub fn delete(&self, path: &str) -> Result<()> {
+        self.expect("DELETE", path, None).map(|_| ())
     }
 
     pub fn patch(&self, path: &str, body: Value) -> Result<Value> {

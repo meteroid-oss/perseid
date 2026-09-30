@@ -27,6 +27,8 @@ schemars = "0.8.21"
 serde = { version = "1.0.215", features = ["derive", "rc"] }
 serde_json = { version = "1.0.133", features = ["preserve_order"] }
 serde_norway = "0.9"
+sha2 = "0.10"
+ssh-key = { version = "0.6", features = ["ed25519", "rand_core", "std"] }
 tempfile = "3.14.0"
 toml = "0.8.23"
 tracing = "0.1.41"

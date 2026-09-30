@@ -13,11 +13,11 @@ One static binary, running in your CI: an open-source and headless alternative t
 In the repository holding your `openapi.json`:
 
 ```sh
-npx perseid init --github
+npx perseid init    # writes perseid.toml: where the SDKs live, next to the API or in their own repositories
+npx perseid setup   # plans, then sets up GitHub: repositories, keys, workflows, a pull request to merge
 ```
 
-It generates the SDKs, creates their repositories, sets up a GitHub App and opens a pull request
-with the workflow. Merge it, and every spec change lands as SDK pull requests, then releases.
+Merge the pull request, and every spec change lands as SDK pull requests, then releases.
 
 Just trying it? `npx perseid init && npx perseid generate` writes the SDKs locally. Also installable
 with `curl -fsSL https://sh.meteroid.com/perseid | sh` or as the `ghcr.io/meteroid-oss/perseid`
@@ -58,8 +58,8 @@ It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients),
 
 ## In your CI
 
-`perseid init --github` writes the workflow for you: it runs the `meteroid-oss/perseid@v0` Action
-on every spec change. To set it up by hand, or on self-hosted runners and other CIs with the
+`perseid setup` writes the workflow for you: it runs the `meteroid-oss/perseid@v0` Action
+on every spec change, and `perseid status` tells how it fares. To set it up by hand, or on self-hosted runners and other CIs with the
 `ghcr.io/meteroid-oss/perseid` image, see [CI and releases](docs/ci.md).
 
 ## Docs

@@ -10,7 +10,7 @@ use crypto_box::aead::{OsRng, rand_core::RngCore};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde_json::{Value, json};
 
-use super::{Ui, api::GitHub, api::web_base, secrets::variable};
+use super::{Ui, api::GitHub, api::web_base};
 
 const WAIT: Duration = Duration::from_secs(15 * 60);
 
@@ -21,33 +21,13 @@ pub struct App {
     pub pem: Option<String>,
 }
 
-/// The App already set up for `spec` if the user keeps it, or a new one.
-pub fn obtain(api: &GitHub, spec: &str, owner: &Owner, name: &str, ui: &Ui) -> Result<App> {
-    if let Some(id) = variable(api, spec, "SDK_APP_ID")? {
-        let slug = variable(api, spec, "SDK_APP_SLUG")?;
-        let label = slug.as_deref().unwrap_or(&id);
-        if ui.confirm(
-            &format!("{spec} already uses the GitHub App {label}, keep it?"),
-            true,
-        )? {
-            ui.ok(&format!("Using the GitHub App {label}"));
-            return Ok(App {
-                id,
-                slug,
-                pem: None,
-            });
-        }
-    }
-    create(owner, spec, name, ui)
-}
-
 pub struct Owner {
     pub login: String,
     pub organization: bool,
 }
 
 /// Creates the App through GitHub's manifest flow, a browser round trip to a local callback.
-fn create(owner: &Owner, spec: &str, name: &str, ui: &Ui) -> Result<App> {
+pub fn create(owner: &Owner, spec: &str, name: &str, ui: &Ui) -> Result<App> {
     let listener = TcpListener::bind("127.0.0.1:0").context("listening for GitHub's callback")?;
     let port = listener.local_addr()?.port();
     let mut bytes = [0u8; 16];
@@ -251,7 +231,7 @@ pub fn install(app: &App, owner: &Owner, repos: &[String], ui: &Ui) -> Result<()
         }
         if Instant::now() > deadline {
             bail!(
-                "the App isn't installed on {} yet: install it from {url}, then run `perseid init --github` again",
+                "the App isn't installed on {} yet: install it from {url}, then run `perseid setup` again",
                 missing.join(", ")
             );
         }

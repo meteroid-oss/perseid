@@ -57,6 +57,32 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
     run(dir, "git", args)
 }
 
+/// Where the generated spec comes from, for pull request descriptions: the commit of the
+/// repository that pushed it, or the URL and a digest of what it served.
+pub fn origin(config: &crate::config::Config, root: &Path, spec: &str) -> Option<String> {
+    use sha2::Digest;
+    match config.source() {
+        crate::config::Source::GitHub { .. } => {
+            let text = std::fs::read_to_string(root.join(SOURCE)).ok()?;
+            let source: serde_json::Value = serde_json::from_str(&text).ok()?;
+            let (repo, sha) = (source["repo"].as_str()?, source["sha"].as_str()?);
+            let short = sha.get(..7)?;
+            Some(format!(
+                "[{repo}@{short}](https://github.com/{repo}/commit/{sha})"
+            ))
+        }
+        crate::config::Source::Url(url) => {
+            let digest = sha2::Sha256::digest(spec.as_bytes());
+            let hex: String = digest.iter().take(6).map(|b| format!("{b:02x}")).collect();
+            Some(format!("<{url}> (sha256 `{hex}`)"))
+        }
+        crate::config::Source::File(_) => None,
+    }
+}
+
+/// Where a repository receiving the spec records which commit it comes from.
+pub const SOURCE: &str = ".perseid/source.json";
+
 /// A fresh checkout of the default branch of `repo`, in a disposable directory under `.perseid/`.
 pub fn checkout(repo: &str, root: &Path) -> Result<PathBuf> {
     let url = if repo.contains(':') {
@@ -171,7 +197,27 @@ pub fn open(
 
 #[cfg(test)]
 mod tests {
-    use super::Bump;
+    use super::{Bump, SOURCE, origin};
+
+    #[test]
+    fn pull_requests_name_where_the_spec_comes_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = |spec: &str| -> crate::config::Config {
+            toml::from_str(&format!("spec = \"{spec}\"\nname = \"Acme\"\n")).unwrap()
+        };
+        let source =
+            "{ \"repo\": \"acme/api\", \"path\": \"openapi.json\", \"sha\": \"a1b2c3d4e5\" }";
+        crate::fsx::write(&dir.path().join(SOURCE), source.as_bytes()).unwrap();
+        assert_eq!(
+            origin(&config("github:acme/api/openapi.json"), dir.path(), "{}").as_deref(),
+            Some("[acme/api@a1b2c3d](https://github.com/acme/api/commit/a1b2c3d4e5)")
+        );
+        assert_eq!(
+            origin(&config("https://acme.dev/openapi.json"), dir.path(), "{}").as_deref(),
+            Some("<https://acme.dev/openapi.json> (sha256 `44136fa355b3`)")
+        );
+        assert_eq!(origin(&config("openapi.json"), dir.path(), "{}"), None);
+    }
 
     #[test]
     fn bump_round_trips_through_conventional_titles() {
