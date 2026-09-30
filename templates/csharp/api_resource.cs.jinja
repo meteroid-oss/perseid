@@ -4,7 +4,9 @@
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // generated code may use deprecated API
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using {{ sdk.package_name }}.Models;
@@ -26,14 +28,16 @@ public sealed partial class {{ resource_type_name }}
 {% set options_type = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Options" -%}
 {% set has_options = op | has_query_or_header_params -%}
 {% set required_options = op | has_required_query_or_header_params -%}
-{% set body_type = op.request_body_schema_name | default("") | to_upper_camel_case -%}
+{% set has_body = op.request_body_schema_name is defined or op.request_body_json_type is defined -%}
+{% set body_type = m.body_type(op) -%}
 {% set body = m.param(op.request_body_schema_name | default("body")) -%}
+{% set response_type = m.response_type(op) -%}
 {% if op.response_is_binary -%}
 {% set returns = "Task<byte[]>" -%}
 {% elif op.response_is_text -%}
 {% set returns = "Task<string>" -%}
-{% elif op.response_body_schema_name is defined -%}
-{% set returns = "Task<" ~ (op.response_body_schema_name | to_upper_camel_case) ~ ">" -%}
+{% elif response_type -%}
+{% set returns = "Task<" ~ response_type ~ ">" -%}
 {% else -%}
 {% set returns = "Task" -%}
 {% endif %}
@@ -45,7 +49,7 @@ public sealed partial class {{ resource_type_name }}
     public {{ returns }} {{ op.name | to_upper_camel_case }}Async(
 {% for p in op.path_params %}        string {{ m.param(p) }},
 {% endfor -%}
-{% if op.request_body_schema_name is defined -%}
+{% if has_body -%}
 {% if op.request_body_optional %}        {{ body_type }}? {{ body }} = null,
 {% else %}        {{ body_type }} {{ body }},
 {% endif -%}
@@ -60,7 +64,7 @@ public sealed partial class {{ resource_type_name }}
     {
 {% for p in op.path_params %}        ArgumentException.ThrowIfNullOrEmpty({{ m.param(p) }});
 {% endfor -%}
-{% if op.request_body_schema_name is defined and not op.request_body_optional %}        ArgumentNullException.ThrowIfNull({{ body }});
+{% if has_body and not op.request_body_optional %}        ArgumentNullException.ThrowIfNull({{ body }});
 {% endif -%}
 {% if required_options %}        ArgumentNullException.ThrowIfNull(options);
 {% endif -%}
@@ -76,18 +80,18 @@ public sealed partial class {{ resource_type_name }}
 {% for p in op.header_params -%}
         request.SetHeader("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.name, options_type) }});
 {% endfor -%}
-{% if op.request_body_schema_name is defined -%}
+{% if has_body -%}
 {% set setter = "SetFormBody" if op.request_body_is_form else "SetJsonBody" -%}
 {% if op.request_body_optional %}        if ({{ body }} is not null)
         {
-            request.{{ setter }}({{ body }}, {{ sdk.client_name }}JsonContext.Default.{{ body_type }});
+            request.{{ setter }}({{ body }}, {{ sdk.client_name }}JsonContext.Default.{{ m.type_info(body_type) }});
         }
-{% else %}        request.{{ setter }}({{ body }}, {{ sdk.client_name }}JsonContext.Default.{{ body_type }});
+{% else %}        request.{{ setter }}({{ body }}, {{ sdk.client_name }}JsonContext.Default.{{ m.type_info(body_type) }});
 {% endif -%}
 {% endif -%}
 {% if op.response_is_binary %}        return _transport.SendBytesAsync(request, cancellationToken);
 {% elif op.response_is_text %}        return _transport.SendTextAsync(request, cancellationToken);
-{% elif op.response_body_schema_name is defined %}        return _transport.SendJsonAsync(request, {{ sdk.client_name }}JsonContext.Default.{{ op.response_body_schema_name | to_upper_camel_case }}, cancellationToken);
+{% elif response_type %}        return _transport.SendJsonAsync(request, {{ sdk.client_name }}JsonContext.Default.{{ m.type_info(response_type) }}, cancellationToken);
 {% else %}        return _transport.SendAsync(request, cancellationToken);
 {% endif -%}
     }

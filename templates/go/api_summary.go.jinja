@@ -1,10 +1,10 @@
-{% from "types/macros.go.jinja" import go_security -%}
+{% from "types/macros.go.jinja" import go_ident, go_security -%}
 {% set _ = set_summary_filename("client.go") -%}
 // this file is @generated
 package {{ sdk.package_name }}
 
 var securitySchemes = map[string]securityScheme{
-{% for scheme in api.security_schemes %}	"{{ scheme.name }}": {kind: "{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, location: "{{ scheme.in }}", param: "{{ scheme.param }}"{% endif %}},
+{% for scheme in api.security_schemes %}	{{ scheme.name | tojson }}: {kind: "{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, location: "{{ scheme.in }}", param: {{ scheme.param | tojson }}{% endif %}},
 {% endfor %}}
 
 // defaultSecurity lists the alternatives of security schemes most operations accept.
@@ -21,7 +21,7 @@ type Client struct {
 // New builds a Client authenticated with the given API token.
 //
 // Pass nil options to use the defaults: {{ sdk.default_base_url }} as the server,
-// a 15 second per-request timeout and two retries on transient failures.
+// a 15 second timeout per attempt and two retries on transient failures.
 func New(token string, options *Options) *Client {
 	return &Client{cfg: newConfig(token, options)}
 }
@@ -33,8 +33,9 @@ func (c *Client) WithToken(token string) *Client {
 }
 
 {% for resource in api.resources %}
-// {{ resource.name | to_upper_camel_case }} returns the {{ resource.name | to_snake_case | replace("_", " ") }} API.
-func (c *Client) {{ resource.name | to_upper_camel_case }}() *{{ resource.name | to_upper_camel_case }} {
-	return &{{ resource.name | to_upper_camel_case }}{client: c}
+{% set name = go_ident(resource.name) %}
+// {{ name }} returns the {{ resource.name | to_snake_case | replace("_", " ") }} API.
+func (c *Client) {{ name }}() *{{ name }} {
+	return &{{ name }}{client: c}
 }
 {% endfor %}

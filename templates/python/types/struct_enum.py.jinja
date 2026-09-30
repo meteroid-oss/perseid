@@ -1,14 +1,38 @@
-{% from "types/macros.py.jinja" import docstring, py_ident -%}
-{#- Discriminated unions.
-
-    Only the shapes the input schema represents are supported; anything
-    else must fail the codegen loudly rather than silently degrade. -#}
+{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, model_imports, module_name, py_ident -%}
+{#- Discriminated unions: a model holding the discriminator and the variant
+    (`Shape(type="circle", content=Circle(...))`), or with `flat_unions` in
+    the `[python.context]` table, the plain union `Circle | Square`. -#}
 {% if type.variants | has_non_ref_struct_enum_variants -%}
     {{ panic("struct enum `" ~ type.name ~ "` has inline struct variants, which the Python templates do not support yet") }}
 {%- endif -%}
-{% if type.fields | length > 0 -%}
-    {{ panic("struct enum `" ~ type.name ~ "` has variant-independent fields, which the Python templates do not support yet") }}
-{%- endif -%}
+{% set class_name = type.name | to_upper_camel_case -%}
+{% set refs = type.variants | map(attribute="schema_ref") | list -%}
+{% set flat = sdk.flat_unions is defined and sdk.flat_unions and type.repr == "internally_tagged" and type.fields | length == 0
+    and refs | select | list | length == refs | length and refs | unique | list | length == refs | length -%}
+
+{% if flat -%}
+from __future__ import annotations
+
+import typing as t
+
+from ..serialization import Discriminator, UnknownVariant
+{% for c in refs | unique | sort %}
+from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
+{%- endfor %}
+
+{{ class_name }}: t.TypeAlias = t.Annotated[
+    {% for c in refs %}{{ c | to_upper_camel_case }} | {% endfor %}UnknownVariant,
+    Discriminator(
+        {{ py_str(type.discriminator_field) }},
+        {
+        {%- for variant in type.variants %}
+            {{ py_str(variant.name) }}: {{ variant.schema_ref | to_upper_camel_case }},
+        {%- endfor %}
+        },
+    ),
+]
+{{ docstring((type.description ~ "\n\n" if type.description is defined else "") ~ "Told apart by `" ~ type.discriminator_field ~ "`; a variant this SDK version does not know is an `UnknownVariant`.") }}
+{%- else -%}
 
 {% set discriminator_attr = py_ident(type.discriminator_field) -%}
 {% if type.repr == "adjacently_tagged" -%}
@@ -16,47 +40,53 @@
 {% else -%}
     {% set content_attr = "content" -%}
 {% endif -%}
-{% if content_attr == discriminator_attr -%}
-    {{ panic("struct enum `" ~ type.name ~ "` discriminator and content fields collide") }}
+{% set shared = type.fields | map(attribute="name") | map("ident", "snake", "python") | list -%}
+{% if content_attr == discriminator_attr or content_attr in shared or discriminator_attr in shared -%}
+    {{ panic("struct enum `" ~ type.name ~ "`: the discriminator, content and shared fields collide") }}
 {%- endif -%}
-
-import dataclasses
-import typing as t
-
-from ..serialization import BaseModel, TaggedUnionModel
-{% for c in referenced_components -%}
-from .{{ c | to_snake_case }} import {{ c | to_upper_camel_case }}
-{% endfor %}
+{% set runtime_names = ["TaggedUnionModel", "UnknownVariant"] -%}
+{% if type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
+    {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
+{% endif -%}
+{{ model_imports(referenced_components, runtime_names) }}
 
 
-@dataclasses.dataclass
-class {{ type.name | to_upper_camel_case }}(TaggedUnionModel):
+@dataclasses.dataclass(kw_only=True)
+class {{ class_name }}(TaggedUnionModel):
     {% if type.description is defined -%}
         {{ docstring(type.description) | indent(4) }}
     {% endif %}
-    _DISCRIMINATOR: t.ClassVar[str] = "{{ type.discriminator_field }}"
+    _DISCRIMINATOR: t.ClassVar[str] = {{ py_str(type.discriminator_field) }}
     _DISCRIMINATOR_ATTR: t.ClassVar[str] = "{{ discriminator_attr }}"
     _CONTENT_ATTR: t.ClassVar[str] = "{{ content_attr }}"
     {%- if type.repr == "adjacently_tagged" %}
-    _CONTENT_KEY: t.ClassVar[t.Optional[str]] = "{{ type.content_field }}"
-    {%- elif type.repr == "internally_tagged" %}
-    _CONTENT_KEY: t.ClassVar[t.Optional[str]] = None
-    {%- else %}
+    _CONTENT_KEY: t.ClassVar[str | None] = {{ py_str(type.content_field) }}
+    {%- elif type.repr != "internally_tagged" %}
     {{ panic("unsupported struct enum representation `" ~ type.repr ~ "` for `" ~ type.name ~ "`") }}
     {%- endif %}
-    _VARIANTS: t.ClassVar[t.Mapping[str, t.Optional[t.Type[BaseModel]]]] = {
+    _VARIANTS: t.ClassVar[t.Mapping[str, str | None]] = {
     {%- for variant in type.variants %}
-        "{{ variant.name }}": {% if variant.schema_ref is defined %}{{ variant.schema_ref | to_upper_camel_case }}{% else %}None{% endif %},
+        {{ py_str(variant.name) }}: {% if variant.schema_ref is defined %}"{{ variant.schema_ref | to_upper_camel_case }}"{% else %}None{% endif %},
     {%- endfor %}
     }
 
     {{ discriminator_attr }}: t.Literal[
     {%- for variant in type.variants %}
-        "{{ variant.name }}",
+        {{ py_str(variant.name) }},
     {%- endfor %}
     ]
-    {{ content_attr }}: t.Union[
-    {%- for variant in type.variants %}
-        {% if variant.schema_ref is defined %}{{ variant.schema_ref | to_upper_camel_case }}{% else %}None{% endif %},
+    {{ content_attr }}: (
+    {%- for c in refs | unique %}
+        {% if c %}{{ c | to_upper_camel_case }}{% else %}None{% endif %} |
     {%- endfor %}
-    ]
+        UnknownVariant
+    )
+    """The variant; an `UnknownVariant` when this SDK version does not know it."""
+    {%- for field in type.fields %}
+
+    {{ field_ident(field) }}: {{ field_decl(field) }}
+        {%- if field.description is defined %}
+    {{ docstring(field.description) | indent(4) }}
+        {%- endif %}
+    {%- endfor %}
+{%- endif %}

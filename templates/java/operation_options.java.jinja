@@ -1,31 +1,78 @@
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
+{% set class_name = resource_type_name ~ (operation.name | to_upper_camel_case) ~ "Options" -%}
+{% set params = operation.query_params + operation.header_params -%}
+{% set names = params | map(attribute="name") | list -%}
+{% set fields = names | idents("camel", "java", "operation `" ~ operation.id ~ "`") -%}
+{% set accessors = names | idents("pascal", "java", "operation `" ~ operation.id ~ "`") -%}
 // this file is @generated
 package {{ sdk.java_package }}.api;
 
 import java.util.Map;
 import java.util.Set;
 import java.util.List;
-import java.util.Optional;
+import java.util.Objects;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.net.URI;
-import lombok.NonNull;
-import lombok.Data;
-import lombok.NoArgsConstructor;
 {% for c in referenced_components -%}
 import {{ sdk.java_package }}.models.{{ c | to_upper_camel_case }};
 {% endfor -%}
 
-@Data
-public class {{ resource_type_name }}{{ operation.name | to_upper_camel_case }}Options{
-        {% for p in operation.query_params -%}
-        {% set p_ty = p.type.to_java() -%}
-        {% if p.description is defined -%}
-        {{ p.description | to_doc_comment(style="java") }}
+/** Optional parameters of {@code {{ operation.name | ident("camel", "java") }}}. */
+public class {{ class_name }} {
+    {% for p in params -%}
+    private {% if loop.index0 < operation.query_params | length %}{{ p.type.to_java() }}{% else %}String{% endif %} {{ fields[loop.index0] }};
+    {% endfor %}
+
+    {% for p in params -%}
+    {% set ty = p.type.to_java() if loop.index0 < operation.query_params | length else "String" -%}
+    {% set field = fields[loop.index0] -%}
+    {% set accessor = accessors[loop.index0] ~ ("_" if accessors[loop.index0] == "Class" else "") -%}
+    {% if p.description is defined -%}
+    {{ p.description | to_doc_comment(style="java") }}
+    {% endif -%}
+    public {{ class_name }} {{ field }}({{ ty }} {{ field }}) {
+        this.{{ field }} = {{ field }};
+        return this;
+    }
+
+    public {{ ty }} get{{ accessor }}() {
+        return {{ field }};
+    }
+
+    public void set{{ accessor }}({{ ty }} {{ field }}) {
+        this.{{ field }} = {{ field }};
+    }
+
+    {% endfor -%}
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        {% if params | length > 0 -%}
+        {{ class_name }} that = ({{ class_name }}) o;
+        return {% for field in fields %}Objects.equals({{ field }}, that.{{ field }}){% if not loop.last %} && {% endif %}{% endfor %};
+        {% else -%}
+        return true;
         {% endif -%}
-        {{ p_ty }} {{ p.name | to_lower_camel_case }};
-        {% endfor -%}
-        {% for p in operation.header_params -%}
-        String {{ p.name | to_lower_camel_case }};
-        {% endfor -%}
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash({{ fields | join(", ") }});
+    }
+
+    @Override
+    public String toString() {
+        return "{{ class_name }}{"
+            {% for field in fields -%}
+            + "{% if not loop.first %}, {% endif %}{{ field }}=" + {{ field }}
+            {% endfor -%}
+            + "}";
+    }
 }

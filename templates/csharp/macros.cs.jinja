@@ -33,3 +33,27 @@
 {% macro field_type(field) -%}
 {{ field.type.to_csharp() }}{% if field.nullable or not field.required %}?{% endif %}
 {%- endmacro %}
+
+
+{# The C# type of an operation's JSON request body, empty without one. -#}
+{% macro body_type(op) -%}
+{% if op.request_body_schema_name is defined -%}
+{% if op.request_body_is_list %}List<{% endif %}{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}
+{%- elif op.request_body_json_type is defined -%}
+{{ op.request_body_json_type.to_csharp() }}
+{%- endif %}
+{%- endmacro %}
+
+{# The C# type of an operation's JSON response, empty without one. -#}
+{% macro response_type(op) -%}
+{% if op.response_body_json_type is defined -%}
+{{ op.response_body_json_type.to_csharp() }}
+{%- elif op.response_body_schema_name is defined -%}
+{% if op.response_body_is_list %}List<{% endif %}{{ op.response_body_schema_name | to_upper_camel_case }}{% if op.response_body_is_list %}>{% endif %}
+{%- endif %}
+{%- endmacro %}
+
+{# The `JsonContext` property of a body type: its name, or a flattened name for generics. -#}
+{% macro type_info(type) -%}
+{% if "<" in type %}Json{{ type | to_upper_camel_case }}{% else %}{{ type }}{% endif %}
+{%- endmacro %}

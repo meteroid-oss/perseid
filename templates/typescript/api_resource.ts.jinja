@@ -3,15 +3,12 @@
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
 
 {% for c in referenced_components -%}
-import {
-    {{ c | to_upper_camel_case }},
-    {{ c | to_upper_camel_case }}Serializer,
-} from '../models/{{ c | to_lower_camel_case }}';
+import { type {{ c | to_upper_camel_case }}, {{ c | to_upper_camel_case }}Serializer } from "../models/{{ c | to_lower_camel_case }}.js";
 {% endfor -%}
 {% if resource.operations | selectattr("pagination", "defined") | list | length > 0 -%}
-import { paginate } from "../pagination";
+import { paginate } from "../pagination.js";
 {% endif -%}
-import { HttpMethod, {{ sdk.client_name }}Request, {{ sdk.client_name }}RequestContext } from "../request";
+import { {{ sdk.client_name }}Request, type {{ sdk.client_name }}RequestContext, type RequestOptions } from "../request.js";
 {% set kinds = resource.operations | map(attribute="request_body_kind") | list -%}
 {% set streams = resource.operations | selectattr("response_is_event_stream") | list | length > 0 -%}
 {% if streams or "binary" in kinds or "multipart" in kinds -%}
@@ -19,7 +16,7 @@ import {
     {% if streams %}type EventStream,{% endif %}
     {% if "multipart" in kinds %}MultipartBody, type Upload,{% endif %}
     {% if "binary" in kinds %}type UploadBody,{% endif %}
-} from "../streaming";
+} from "../streaming.js";
 {% endif %}
 
 {% for op in resource.operations -%}
@@ -30,7 +27,7 @@ import {
             {% if field.description is defined -%}
                 {{ field.description | to_doc_comment(style="js") }}
             {% endif -%}
-            {{ field.name | to_lower_camel_case }}{% if not field.required %}?{% endif %}: {% if field.is_file %}Upload{% else %}{{ m.js_type(field.type) }}{% endif %}{% if field.nullable %} | null{% endif %};
+            {{ field.name | ident("camel") }}{% if not field.required %}?{% endif %}: {% if field.is_file %}Upload{% else %}{{ m.js_type(field.type) }}{% endif %}{% if field.nullable %} | null{% endif %};
         {% endfor -%}
     }
 
@@ -38,16 +35,10 @@ import {
     {% if op | has_query_or_header_params -%}
     export interface {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options {
         {% for p in op.query_params -%}
-            {% if p.description is defined -%}
-                {{ p.description | to_doc_comment(style="js") }}
-            {% endif -%}
-            {{ p.name | to_lower_camel_case }}{% if not p.required %}?{% endif %}: {{ m.js_type(p.type) }};
+            {{ m.doc(p.description, false) }}{{ p.name | ident("camel") }}{% if not p.required %}?{% endif %}: {{ m.js_type(p.type) }};
         {% endfor -%}
         {% for p in op.header_params -%}
-            {% if p.description is defined -%}
-                {{ p.description | to_doc_comment(style="js") }}
-            {% endif -%}
-            {{ p.name | to_lower_camel_case }}{% if not p.required %}?{% endif %}: string;
+            {{ p.name | ident("camel") }}{% if not p.required %}?{% endif %}: string;
         {% endfor -%}
     }
 
@@ -67,75 +58,69 @@ export class {{ resource_type_name }} {
             {% set response_type = "Uint8Array" -%}
         {% elif op.response_is_text | default(false) -%}
             {% set response_type = "string" -%}
+        {% elif op.response_body_json_type is defined -%}
+            {% set response_type = m.js_type(op.response_body_json_type) -%}
         {% elif op.response_body_schema_name is defined -%}
             {% set response_type = op.response_body_schema_name | to_upper_camel_case -%}
+            {% if op.response_body_is_list %}{% set response_type = response_type ~ "[]" %}{% endif -%}
         {% else -%}
             {% set response_type = "void" -%}
         {% endif -%}
-        {{ op.description | default("") | with_javadoc_deprecation(op.deprecated) | to_doc_comment(style="js") }}
-        public {{ op.name | to_lower_camel_case }}(
-            {# path parameters -#}
+        {{ m.doc(op.description, op.deprecated) }}public {{ op.name | ident("camel") }}(
             {% for p in op.path_params -%}
-                {{ p | to_lower_camel_case }}: string,
+                {{ p | ident("camel", "typescript") }}: string,
             {% endfor -%}
 
-            {# body parameter -#}
             {% if op.request_body_schema_name is defined -%}
-                {% set body_arg = op.request_body_schema_name | to_lower_camel_case -%}
-                {{ body_arg }}: {{ op.request_body_schema_name | to_upper_camel_case }},
+                {% set body_arg = op.request_body_schema_name | ident("camel", "typescript") -%}
+                {% if body_arg in ["request", "options", "requestOptions"] %}{% set body_arg = "body" %}{% endif -%}
+                {{ body_arg }}: {{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}[]{% endif %},
+            {% elif op.request_body_json_type is defined -%}
+                body: {{ m.js_type(op.request_body_json_type) }},
             {% elif op.request_body_kind == "binary" -%}
                 body{% if op.request_body_optional %}?{% endif %}: UploadBody,
             {% elif op.request_body_kind == "multipart" -%}
                 body{% if op.request_body_optional %}?{% endif %}: {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body,
             {% endif -%}
 
-            {# query / header parameters -#}
             {% if op | has_query_or_header_params -%}
-                {% set options_ty -%}
-                    {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options
-                {%- endset -%}
-                options{% if not op | has_required_query_or_header_params %}?{% endif %}: {{ options_ty }},
+                options{% if not op | has_required_query_or_header_params %}?{% endif %}: {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options,
             {% endif -%}
+            requestOptions?: RequestOptions,
         ): Promise<{{ response_type }}> {
-            const request = new {{ sdk.client_name }}Request(HttpMethod.{{ op.method | upper }}, "{{ op.path }}");
+            const request = new {{ sdk.client_name }}Request("{{ op.method | upper }}", {{ op.path | tojson }});
 
-            {# path parameters -#}
             {% for p in op.path_params -%}
-                request.setPathParam("{{ p }}", {{ p | to_lower_camel_case }});
+                request.setPathParam({{ p | tojson }}, {{ p | ident("camel", "typescript") }});
             {% endfor -%}
             {% if op.security is defined -%}
                 request.setSecurity({{ op.security | tojson }});
             {% endif -%}
 
-            {# query parameters -#}
             {% for p in op.query_params -%}
-                {# `explode` defaults to true for OpenAPI `style: form`, and may be missing
-                   entirely when the codegen binary predates the `explode` IR field. -#}
-                {% set explode = p.explode | default(true) -%}
-                {% set accessor %}options{% if not p.required %}?{% endif %}.{{ p.name | to_lower_camel_case }}{% endset -%}
-                {% if (p.type.is_list() or p.type.is_set()) and explode -%}
-                    request.setExplodedQueryParam("{{ p.name }}", {{ accessor }});
+                {% set accessor %}options{% if not p.required %}?{% endif %}.{{ p.name | ident("camel") }}{% endset -%}
+                {% if (p.type.is_list() or p.type.is_set()) and p.explode | default(true) -%}
+                    request.setExplodedQueryParam({{ p.name | tojson }}, {{ accessor }});
                 {% else -%}
-                    request.setQueryParam("{{ p.name }}", {{ accessor }});
+                    request.setQueryParam({{ p.name | tojson }}, {{ accessor }});
                 {% endif -%}
             {% endfor -%}
 
-            {# header parameters -#}
             {% for p in op.header_params -%}
-                request.setHeaderParam("{{ p.name }}", options{% if not p.required %}?{% endif %}.{{ p.name | to_lower_camel_case }});
+                request.setHeaderParam({{ p.name | tojson }}, options{% if not p.required %}?{% endif %}.{{ p.name | ident("camel") }});
             {% endfor -%}
 
-            {# body parameter -#}
             {% if op.request_body_schema_name is defined -%}
+                {% set serializer = (op.request_body_schema_name | to_upper_camel_case) ~ "Serializer" -%}
                 {% if op.request_body_is_form | default(false) -%}
-                request.setFormBody(
-                    {{ op.request_body_schema_name | to_upper_camel_case }}Serializer._toJsonObject({{ body_arg }})
-                );
+                request.setFormBody({{ serializer }}.serialize({{ body_arg }}));
+                {% elif op.request_body_is_list -%}
+                request.setBody({{ body_arg }}.map((item) => {{ serializer }}.serialize(item)));
                 {% else -%}
-                request.setBody(
-                    {{ op.request_body_schema_name | to_upper_camel_case }}Serializer._toJsonObject({{ body_arg }})
-                );
+                request.setBody({{ serializer }}.serialize({{ body_arg }}));
                 {% endif -%}
+            {% elif op.request_body_json_type is defined -%}
+                request.setBody({{ m.to_json("body", op.request_body_json_type) }});
             {% endif -%}
 
             {% if op.request_body_kind == "binary" -%}
@@ -144,12 +129,12 @@ export class {{ resource_type_name }} {
                 {% if op.request_body_optional %}if (body !== undefined) { {% endif %}
                 const form = new MultipartBody();
                 {% for field in op.multipart_fields -%}
-                    {% set value = "body." ~ (field.name | to_lower_camel_case) -%}
+                    {% set value = "body." ~ (field.name | ident("camel")) -%}
                     {% if not field.required or field.nullable %}if ({{ value }} !== undefined && {{ value }} !== null) { {% endif -%}
                     {% if field.is_file -%}
-                    form.file("{{ field.name }}", {{ value }});
+                    form.file({{ field.name | tojson }}, {{ value }});
                     {% else -%}
-                    form.field("{{ field.name }}", {{ m.field_to_json(value, field.type, true, false) }});
+                    form.field({{ field.name | tojson }}, {{ m.to_json(value, field.type) }});
                     {% endif -%}
                     {% if not field.required or field.nullable %} } {% endif -%}
                 {% endfor -%}
@@ -158,33 +143,42 @@ export class {{ resource_type_name }} {
             {% endif -%}
 
             {% if op.response_is_event_stream -%}
-                return request.sendEventStream(this.requestCtx);
+                return request.sendEventStream(this.requestCtx, requestOptions);
             {% elif op.response_is_binary | default(false) -%}
-                return request.sendBinary(this.requestCtx);
+                return request.sendBinary(this.requestCtx, requestOptions);
             {% elif op.response_is_text | default(false) -%}
-                return request.sendText(this.requestCtx);
+                return request.sendText(this.requestCtx, requestOptions);
+            {% elif op.response_body_json_type is defined -%}
+                {% set parse = m.from_json("json", op.response_body_json_type) -%}
+                return request.send(this.requestCtx, (json: any) => {{ parse }}, requestOptions);
             {% elif op.response_body_schema_name is defined -%}
-                return request.send(
-                    this.requestCtx,
-                    {{ op.response_body_schema_name | to_upper_camel_case }}Serializer._fromJsonObject,
-                );
+                {% set serializer = (op.response_body_schema_name | to_upper_camel_case) ~ "Serializer" -%}
+                {% if op.response_body_is_list -%}
+                return request.send(this.requestCtx, (json: any[]) => json.map((item) => {{ serializer }}.parse(item)), requestOptions);
+                {% else -%}
+                return request.send(this.requestCtx, {{ serializer }}.parse, requestOptions);
+                {% endif -%}
             {% else -%}
-                return request.sendNoResponseBody(this.requestCtx);
+                return request.sendNoResponseBody(this.requestCtx, requestOptions);
             {% endif -%}
         }
 
         {% if op.pagination is defined -%}
         {% set pg = op.pagination -%}
-        {% set param_field = pg.param | to_lower_camel_case -%}
-        /** Iterates with `for await` over every item of `{{ op.name | to_lower_camel_case }}`, fetching further pages on demand. */
+        {% set param_field = pg.param | ident("camel") -%}
+        {% set options_ty = resource_type_name ~ (op.name | to_upper_camel_case) ~ "Options" -%}
+        /** Iterates with `for await` over every item of `{{ op.name | ident("camel") }}`, fetching further pages on demand. */
         public {{ op.name | to_lower_camel_case }}Iter(
             {% for p in op.path_params -%}
-                {{ p | to_lower_camel_case }}: string,
+                {{ p | ident("camel", "typescript") }}: string,
             {% endfor -%}
             {% if op.request_body_schema_name is defined -%}
-                {{ body_arg }}: {{ op.request_body_schema_name | to_upper_camel_case }},
+                {{ body_arg }}: {{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}[]{% endif %},
+            {% elif op.request_body_json_type is defined -%}
+                body: {{ m.js_type(op.request_body_json_type) }},
             {% endif -%}
             options{% if not op | has_required_query_or_header_params %}?{% endif %}: {{ options_ty }},
+            requestOptions?: RequestOptions,
         ): AsyncIterableIterator<{{ pg.item_schema | to_upper_camel_case }}> {
             return paginate(
                 {
@@ -194,7 +188,7 @@ export class {{ resource_type_name }} {
                     nextCursor: {{ pg.next_cursor | tojson }},
                     {% endif -%}
                     {% if pg.item_cursor is defined -%}
-                    itemCursor: "{{ pg.item_cursor }}",
+                    itemCursor: {{ pg.item_cursor | tojson }},
                     {% endif -%}
                     {% if pg.has_more is defined -%}
                     hasMore: {{ pg.has_more | tojson }},
@@ -209,13 +203,14 @@ export class {{ resource_type_name }} {
                 },
                 options?.{{ param_field }},
                 (param) =>
-                    this.{{ op.name | to_lower_camel_case }}(
-                        {% for p in op.path_params %}{{ p | to_lower_camel_case }}, {% endfor -%}
-                        {% if op.request_body_schema_name is defined %}{{ body_arg }}, {% endif -%}
+                    this.{{ op.name | ident("camel") }}(
+                        {% for p in op.path_params %}{{ p | ident("camel", "typescript") }}, {% endfor -%}
+                        {% if op.request_body_schema_name is defined %}{{ body_arg }}, {% elif op.request_body_json_type is defined %}body, {% endif -%}
                         { ...options, {{ param_field }}: param },
+                        requestOptions,
                     ),
-                {{ op.response_body_schema_name | to_upper_camel_case }}Serializer._toJsonObject,
-                {{ pg.item_schema | to_upper_camel_case }}Serializer._fromJsonObject,
+                {{ op.response_body_schema_name | to_upper_camel_case }}Serializer.serialize,
+                {{ pg.item_schema | to_upper_camel_case }}Serializer.parse,
             );
         }
 

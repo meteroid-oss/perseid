@@ -1,28 +1,52 @@
+{% import "types/macros.java.jinja" as m -%}
 // This file is @generated
 {% set ty_name = type.name | to_upper_camel_case -%}
+{{- m.check_name(ty_name) -}}
 package {{ sdk.java_package }}.models;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 import {{ sdk.java_package }}.Utils.ToQueryParam;
 
+{% if type.description is defined -%}
+{{ type.description | e | to_doc_comment(style="java") }}
+{% endif -%}
 public enum {{ ty_name }} implements ToQueryParam {
+    {% set ns = namespace(names=[]) -%}
+    {% for varname, value in type.variants %}{% set ns.names = ns.names + [varname] %}{% endfor -%}
+    {% set owner = "schema `" ~ type.name ~ "`" -%}
+    {% set unknown = "UNRECOGNIZED_VALUE" if "UNRECOGNIZED" in (ns.names | idents("shouty", "java", owner)) else "UNRECOGNIZED" -%}
+    {% set members = (ns.names + [unknown | lower]) | idents("shouty", "java", owner) -%}
     {% for varname, value in type.variants -%}
-    {{ varname | to_upper_snake_case }}({{ value }}) {% if loop.last %};{% else %},{% endif %}
+    {{ members[loop.index0] }}({{ value }}L),
     {% endfor -%}
+    /** A value this version of the SDK does not know, which serializes as null. */
+    {{ unknown }}(null);
 
-    private final long value;
+    private final Long value;
 
-    {{ ty_name }}(long value) {
+    {{ ty_name }}(Long value) {
         this.value = value;
     }
+
     @JsonValue
-    public long getValue() {
+    public Long getValue() {
         return this.value;
+    }
+
+    /** The constant for {@code value}, or {@link #{{ unknown }}} for an unknown value. */
+    @JsonCreator
+    public static {{ ty_name }} fromValue(long value) {
+        for ({{ ty_name }} known : values()) {
+            if (known.value != null && known.value == value) {
+                return known;
+            }
+        }
+        return {{ unknown }};
     }
 
     @Override
     public String toQueryParam() {
-        return Long.toString(this.value);
+        return String.valueOf(this.value);
     }
-
 }

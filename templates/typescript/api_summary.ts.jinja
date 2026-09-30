@@ -5,34 +5,35 @@
 {% endif -%}
 {% endfor -%}
 {% for resource in api.resources -%}
-import { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}";
+import { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}.js";
 {% endfor -%}
-import type { Security, SecurityScheme } from "./auth";
-import type { {{ sdk.client_name }}RequestContext } from "./request";
-import type { Middleware } from "./middleware";
-import type { XOR } from "./util";
+import type { Security, SecurityScheme } from "./auth.js";
+import type { Middleware } from "./middleware.js";
+import type { {{ sdk.client_name }}RequestContext } from "./request.js";
+import type { XOR } from "./util.js";
 
-export { ApiException } from "./util";
-export type { XOR } from "./util";
-export type { Middleware } from "./middleware";
+export { ApiException } from "./util.js";
+export type { XOR } from "./util.js";
+export type { Middleware } from "./middleware.js";
+export { parseJson, stringifyJson } from "./json.js";
+export { LIB_VERSION, type RequestOptions } from "./request.js";
 {% for module in sdk.extra_exports | default([]) -%}
-export * from "./{{ module }}";
+export * from "./{{ module }}.js";
 {% endfor -%}
 {% if sdk.webhooks and "webhook" not in sdk.extra_exports | default([]) -%}
-export * from "./webhook";
+export * from "./webhook.js";
 {% endif -%}
-export * from "./models/index";
-export { LIB_VERSION } from "./request";
-export type { EventStream, SseEvent, Upload, UploadBody } from "./streaming";
+export * from "./models/index.js";
+export type { EventStream, SseEvent, Upload, UploadBody } from "./streaming.js";
 {% set kinds = api.security_schemes | map(attribute="kind") | list %}
 {% for resource in api.resources -%}
-export { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}";
+export { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}.js";
 {% for op in resource.operations -%}
 {% if op.request_body_kind == "multipart" -%}
-export type { {{ resource.name | to_upper_camel_case }}{{ op.name | to_upper_camel_case }}Body } from "./api/{{ resource.name | to_lower_camel_case }}";
+export type { {{ resource.name | to_upper_camel_case }}{{ op.name | to_upper_camel_case }}Body } from "./api/{{ resource.name | to_lower_camel_case }}.js";
 {% endif -%}
 {% if op | has_query_or_header_params -%}
-export type { {{ resource.name | to_upper_camel_case }}{{ op.name | to_upper_camel_case }}Options } from "./api/{{ resource.name | to_lower_camel_case }}";
+export type { {{ resource.name | to_upper_camel_case }}{{ op.name | to_upper_camel_case }}Options } from "./api/{{ resource.name | to_lower_camel_case }}.js";
 {% endif -%}
 {% endfor -%}
 {% endfor %}
@@ -42,12 +43,9 @@ export type {{ sdk.client_name }}Options = {
   debug?: boolean;
   /** Custom API server URL. Defaults to `{{ sdk.default_base_url }}`. */
   serverUrl?: string;
-  /** Time in milliseconds to wait for requests to get a response. */
+  /** Time in milliseconds to wait for each attempt to get a response. */
   requestTimeout?: number;
-  /**
-   * Custom fetch implementation to use for HTTP requests.
-   * Useful for testing, adding custom middleware, or running in non-standard environments.
-   */
+  /** Custom fetch implementation, for tests or non-standard runtimes. */
   fetch?: typeof fetch;
   /** Wraps every HTTP attempt: caching, logging, custom headers. */
   middleware?: Middleware[];
@@ -67,20 +65,19 @@ export type {{ sdk.client_name }}Options = {
   apiKeys?: {
     {% for scheme in api.security_schemes if scheme.kind == "api_key" -%}
     /** Sent as the `{{ scheme.param }}` {% if scheme.in == "query" %}query parameter{% else %}{{ scheme.in }}{% endif %}. */
-    {{ scheme.name | to_lower_camel_case }}?: string;
+    {{ scheme.name | ident("camel") }}?: string;
     {% endfor -%}
   };
   {% endif -%}
 } & XOR<
   {
-    /** List of delays (in milliseconds) to wait before each retry attempt. */
+    /** Delays in milliseconds before each retry, instead of the default backoff. */
     retryScheduleInMs?: number[];
   },
   {
     /**
-     * The number of times the client will retry if a server-side error
-     * or timeout is received.
-     * Default: 2
+     * How many times a failed request is retried: connection errors, timeouts, 408, 429
+     * and 5xx responses. Default: 2
      */
     numRetries?: number;
   }
@@ -91,7 +88,7 @@ const DEFAULT_BASE_URL = "{{ sdk.default_base_url }}";
 const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
   schemes: {
     {% for scheme in api.security_schemes -%}
-    "{{ scheme.name }}": { kind: "{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, in: "{{ scheme.in }}", param: "{{ scheme.param }}"{% endif %} },
+    {{ scheme.name | tojson }}: { kind: "{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, in: "{{ scheme.in }}", param: {{ scheme.param | tojson }}{% endif %} },
     {% endfor -%}
   },
   security: {{ api.security | tojson }},
@@ -117,14 +114,11 @@ export class {{ sdk.client_name }} {
   private readonly requestCtx: {{ sdk.client_name }}RequestContext;
 
   /**
-   * Create a new {{ sdk.client_name }} client.
-   *
    * @param token API token for authentication{% if "api_key" in kinds %}, also the default API key{% endif %}
    * @param options Client configuration options
    */
   public constructor(token: string | null, options: {{ sdk.client_name }}Options = {}) {
-    const baseUrl: string = options.serverUrl ?? DEFAULT_BASE_URL;
-    const auth = {
+    this.requestCtx = {
       auth: AUTH,
       token,
       {% if "bearer" in kinds %}tokenProvider: options.tokenProvider,{% endif %}
@@ -132,50 +126,22 @@ export class {{ sdk.client_name }} {
       {% if "api_key" in kinds -%}
       apiKeys: {
         {% for scheme in api.security_schemes if scheme.kind == "api_key" -%}
-        "{{ scheme.name }}": options.apiKeys?.{{ scheme.name | to_lower_camel_case }},
+        {{ scheme.name | tojson }}: options.apiKeys?.{{ scheme.name | ident("camel") }},
         {% endfor -%}
       },
       {% endif -%}
-    };
-
-    if (options.retryScheduleInMs != null) {
-      this.requestCtx = {
-        ...auth,
-        baseUrl,
-        timeout: options.requestTimeout,
-        retryScheduleInMs: options.retryScheduleInMs,
-        debug: options.debug,
-        fetch: options.fetch,
-        middleware: options.middleware,
-      };
-      return;
-    }
-
-    if (options.numRetries != null) {
-      this.requestCtx = {
-        ...auth,
-        baseUrl,
-        timeout: options.requestTimeout,
-        numRetries: options.numRetries,
-        debug: options.debug,
-        fetch: options.fetch,
-        middleware: options.middleware,
-      };
-      return;
-    }
-
-    this.requestCtx = {
-      ...auth,
-      baseUrl,
+      baseUrl: options.serverUrl ?? DEFAULT_BASE_URL,
       timeout: options.requestTimeout,
       debug: options.debug,
       fetch: options.fetch,
       middleware: options.middleware,
+      retryScheduleInMs: options.retryScheduleInMs,
+      numRetries: options.numRetries,
     };
   }
 
   {% for resource in api.resources %}
-  /** Access the {{ resource.name | to_snake_case | replace("_", " ") }} API. */
+  /** The {{ resource.name | to_snake_case | replace("_", " ") }} API. */
   public get {{ resource.name | to_lower_camel_case }}(): {{ resource.name | to_upper_camel_case }} {
     return new {{ resource.name | to_upper_camel_case }}(this.requestCtx);
   }

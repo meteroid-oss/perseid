@@ -1,171 +1,68 @@
+{% import "types/macros.java.jinja" as m -%}
 // This file is @generated
-{% set class_ty = type.name | to_upper_camel_case  -%}
+{% set class_ty = type.name | to_upper_camel_case -%}
+{{- m.check_name(class_ty) -}}
+{% set owner = "schema `" ~ type.name ~ "`" -%}
+{% set vars = m.field_idents(type.fields, "camel", owner) | split(" ") | reject("equalto", "") | list -%}
+{% set pascals = m.field_idents(type.fields, "pascal", owner) | split(" ") | reject("equalto", "") | list -%}
 package {{ sdk.java_package }}.models;
 
-import {{ sdk.java_package }}.MaybeUnset;
-import {{ sdk.java_package }}.MaybeUnsetSerializer;
 import {{ sdk.java_package }}.Utils;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonFilter;
+import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.fasterxml.jackson.core.JsonProcessingException;
 
-import java.util.Map;
-import java.util.Set;
-import java.util.List;
-import java.util.Optional;
-import java.util.HashMap;
 import java.math.BigDecimal;
-import java.time.OffsetDateTime;
-import java.util.LinkedHashSet;
-import java.util.ArrayList;
 import java.net.URI;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
 
-import lombok.EqualsAndHashCode;
-import lombok.ToString;
-
-@ToString
-@EqualsAndHashCode
+{% if type.description is defined -%}
+{{ type.description | e | to_doc_comment(style="java") }}
+{% endif -%}
+{% if type.deprecated %}@Deprecated{% endif %}
 @JsonInclude(JsonInclude.Include.NON_NULL)
-@JsonAutoDetect(getterVisibility = Visibility.NONE,setterVisibility = Visibility.NONE)
-public class {{ type.name | to_upper_camel_case }} {
+@JsonIgnoreProperties(ignoreUnknown = true)
+@JsonAutoDetect(
+        getterVisibility = Visibility.NONE,
+        isGetterVisibility = Visibility.NONE,
+        setterVisibility = Visibility.NONE)
+public class {{ class_ty }} {
 {% for field in type.fields -%}
-    {% set field_ty = field.type.to_java() -%}
-    {% set field_annotation = "" -%}
+    {{ m.declaration(field, vars[loop.index0]) }}
+{% endfor %}
 
-    {# ensure json field name is correct -#}
-    {% if field.name != field.name | to_lower_camel_case -%}
-        {% set field_annotation %}@JsonProperty("{{ field.name }}"){% endset -%}
-    {% else -%}
-    {% set field_annotation %}@JsonProperty{% endset -%}
-    {% endif -%}
-
-    {# none nullable fields -#}
-    {% if sdk.patch_nullable and type.name is endingwith "Patch" and field.nullable -%}
-        {% set field_ty %}MaybeUnset<{{ field_ty }}>{% endset -%}
-    {% endif -%}
-    {{ field_annotation}} private {{ field_ty }} {{ field.name | to_lower_camel_case }};
-{% endfor -%}
-
-  public {{ type.name | to_upper_camel_case }} () {}
-
+    public {{ class_ty }}() {}
 
 {% for field in type.fields -%}
-    {% set f_ty = field.type.to_java() -%}
-    {% set f_varname = field.name | to_lower_camel_case -%}
-    {% set f_deprecated = "" -%}
-    {% if field.deprecated -%}
-        {% set f_deprecated = "@Deprecated" -%}
-    {% endif -%}
-
-
-    {{ f_deprecated }} public {{ class_ty }} {{ f_varname }}({{ f_ty }} {{ f_varname }}) {
-        {% if sdk.patch_nullable and type.name is endingwith "Patch" and field.nullable -%}
-        this.{{ f_varname }} = new MaybeUnset<>({{ f_varname }});
-        {% else -%}
-        this.{{ f_varname }} = {{ f_varname }};
-        {% endif -%}
-        return this;
-    }
-
-    {% if field.type.is_set() or  field.type.is_list() -%}
-    {{ f_deprecated }} public {{ class_ty }} add{{ f_varname | to_upper_camel_case }}Item ({{ field.type.inner_type().to_java() }} {{ f_varname  }}Item) {
-        if (this.{{ f_varname }} == null) {
-            {% if field.type.is_set() -%}
-                {% if sdk.patch_nullable and type.name is endingwith "Patch" and field.nullable -%}
-            this.{{ f_varname }} = new MaybeUnset<>(new LinkedHashSet<>());
-                {% else -%}
-            this.{{ f_varname }} = new LinkedHashSet<>();
-                {% endif -%}
-            {% else -%}
-                {% if sdk.patch_nullable and type.name is endingwith "Patch" and field.nullable -%}
-            this.{{ f_varname }} = new MaybeUnset<>(new ArrayList<>());
-                {% else -%}
-            this.{{ f_varname }} = new ArrayList<>();
-                {% endif -%}
-            {% endif -%}
-        }
-        {% if sdk.patch_nullable and type.name is endingwith "Patch" and field.nullable -%}
-        this.{{ f_varname }}.getValue().add({{ f_varname  }}Item);
-        {% else -%}
-        this.{{ f_varname }}.add({{ f_varname  }}Item);
-        {% endif %}
-        return this;
-    }
-    {% elif field.type.is_map() -%}
-    {{ f_deprecated }} public {{ class_ty }} put{{ f_varname | to_upper_camel_case  }}Item(String key, {{ field.type.value_type().to_java() }} {{ f_varname }}Item) {
-        if (this.{{ f_varname }} == null) {
-            {% if sdk.patch_nullable and type.name is endingwith "Patch" and field.nullable -%}
-            this.{{ f_varname }} = new MaybeUnset<>(new HashMap<>());
-            {% else -%}
-            this.{{ f_varname }} = new HashMap<>();
-            {% endif -%}
-        }
-        {% if sdk.patch_nullable and type.name is endingwith "Patch" and field.nullable -%}
-        this.{{ f_varname }}.getValue().put(key, {{ f_varname }}Item);
-        {% else -%}
-        this.{{ f_varname }}.put(key, {{ f_varname }}Item);
-        {% endif %}
-        return this;
-    }
-    {% endif -%}
-
-    /**
-    {% if field.description is defined -%}
-     * {{ field.description | e }}
-    {% else -%}
-     * Get {{ f_varname }}
-    {% endif -%}
-     *
-     * @return {{ f_varname  }}
-     */
-    {% if field.nullable or not field.required -%}
-    @javax.annotation.Nullable
-    {% else -%}
-    @javax.annotation.Nonnull
-    {% endif -%}
-    {{ f_deprecated }} public {{ f_ty }} get{{ f_varname | to_upper_camel_case }}() {
-        {% if sdk.patch_nullable and type.name is endingwith "Patch" and field.nullable -%}
-        if ({{ f_varname }} == null){
-            return null;
-        }
-        return {{ f_varname }}.getValue();
-        {% else -%}
-        return {{ f_varname }};
-        {% endif -%}
-    }
-
-    {{ f_deprecated }} public void set{{ f_varname | to_upper_camel_case }}({{ f_ty }} {{ f_varname }}) {
-        {% if sdk.patch_nullable and type.name is endingwith "Patch" and field.nullable -%}
-        this.{{ f_varname }} = new MaybeUnset<>({{ f_varname }});
-        {% else -%}
-        this.{{ f_varname }} = {{ f_varname }};
-        {% endif -%}
-
-    }
+    {{ m.accessors(field, vars[loop.index0], pascals[loop.index0], class_ty) }}
 
 {% endfor -%}
-    /**
-     * Create an instance of {{ class_ty }} given an JSON string
-     *
-     * @param jsonString JSON string
-     * @return An instance of {{ class_ty }}
-     * @throws JsonProcessingException if the JSON string is invalid with respect to {{ class_ty }}
-     */
-    public static {{ class_ty }} fromJson(String jsonString) throws JsonProcessingException {
-        return Utils.getObjectMapper().readValue(jsonString, {{ class_ty }}.class);
-    }
+    {{ m.value_methods(class_ty, vars) }}
 
     /**
-     * Convert an instance of {{ class_ty }} to an JSON string
+     * Parse {@code json} as {@code {{ class_ty }}}.
      *
-     * @return JSON string
+     * @throws JsonProcessingException if it is not valid JSON of this shape
      */
+    public static {{ class_ty }} fromJson(String json) throws JsonProcessingException {
+        return Utils.fromJson(json, {{ class_ty }}.class);
+    }
+
+    /** This {{ class_ty }} as JSON. */
     public String toJson() throws JsonProcessingException {
-        return Utils.getObjectMapper().writeValueAsString(this);
+        return Utils.toJson(this);
     }
 }

@@ -30,7 +30,8 @@ type request struct {
 	// err records a failure that happened while building the request (for
 	// instance a body that cannot be serialized) so it can be surfaced when the
 	// request is executed.
-	err error
+	err     error
+	options []RequestOption
 	// security overrides the API-wide requirement when not nil.
 	security [][]string
 	// newBody returns a streamed body for each attempt; oneShot bodies are not retried.
@@ -42,12 +43,13 @@ type request struct {
 	cancel   context.CancelFunc
 }
 
-func newRequest(method, path string) *request {
+func newRequest(method, path string, options []RequestOption) *request {
 	return &request{
 		method:  method,
 		path:    path,
 		query:   url.Values{},
 		headers: http.Header{},
+		options: options,
 	}
 }
 
@@ -166,6 +168,7 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 	}
 
 	cfg := c.cfg
+	call := cfg.callConfig(req.options)
 	security := req.security
 	if security == nil {
 		security = defaultSecurity
@@ -176,6 +179,9 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 	endpoint, err := req.url(cfg.serverURL)
 	if err != nil {
 		return nil, 0, err
+	}
+	for name, values := range call.headers {
+		req.headers[name] = values
 	}
 
 	// POSTs are made idempotent by default so that a retried request cannot
@@ -196,15 +202,15 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 	}
 
 	for attempt := 0; ; attempt++ {
-		body, status, retryable, err := c.attempt(ctx, req, endpoint, attempt)
-		if err == nil {
-			return body, status, nil
+		res := c.attempt(ctx, req, endpoint, attempt, call.timeout)
+		if res.err == nil {
+			return res.body, res.status, nil
 		}
-		if !retryable || req.oneShot || attempt >= len(cfg.retrySchedule) || ctx.Err() != nil {
-			return nil, 0, err
+		if !res.retryable || req.oneShot || attempt >= len(call.retrySchedule) || ctx.Err() != nil {
+			return nil, 0, res.err
 		}
 
-		timer := time.NewTimer(cfg.retrySchedule[attempt])
+		timer := time.NewTimer(call.delay(attempt, res.retryAfter))
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -214,9 +220,16 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 	}
 }
 
-// attempt performs one HTTP round trip and returns the response body and
-// status. The boolean result reports whether the failure is worth retrying.
-func (c *Client) attempt(ctx context.Context, req *request, endpoint string, attempt int) ([]byte, int, bool, error) {
+type attemptResult struct {
+	body       []byte
+	status     int
+	err        error
+	retryable  bool
+	retryAfter time.Duration
+}
+
+// attempt performs one HTTP round trip.
+func (c *Client) attempt(ctx context.Context, req *request, endpoint string, attempt int, timeout time.Duration) attemptResult {
 	cfg := c.cfg
 
 	cancel := context.CancelFunc(func() {})
@@ -225,11 +238,11 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	case req.stream:
 		// The timeout only covers opening a stream, which then lives until closed.
 		ctx, cancel = context.WithCancel(ctx)
-		if cfg.timeout > 0 {
-			defer time.AfterFunc(cfg.timeout, cancel).Stop()
+		if timeout > 0 {
+			defer time.AfterFunc(timeout, cancel).Stop()
 		}
-	case cfg.timeout > 0:
-		ctx, cancel = context.WithTimeout(ctx, cfg.timeout)
+	case timeout > 0:
+		ctx, cancel = context.WithTimeout(ctx, timeout)
 	}
 	defer func() {
 		if !keep {
@@ -243,13 +256,13 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	} else if req.newBody != nil {
 		var err error
 		if body, err = req.newBody(); err != nil {
-			return nil, 0, false, err
+			return attemptResult{err: err}
 		}
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, req.method, endpoint, body)
 	if err != nil {
-		return nil, 0, false, fmt.Errorf("@@PACKAGE_NAME@@: building request: %w", err)
+		return attemptResult{err: fmt.Errorf("@@PACKAGE_NAME@@: building request: %w", err)}
 	}
 
 	for name, values := range req.headers {
@@ -260,10 +273,8 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	if req.contentType != "" {
 		httpReq.Header.Set("Content-Type", req.contentType)
 	}
-	if httpReq.Header.Get("Accept") == "" {
-		httpReq.Header.Set("Accept", "application/json")
-	}
-	httpReq.Header.Set("User-Agent", cfg.userAgent)
+	setDefault(httpReq.Header, "Accept", "application/json")
+	setDefault(httpReq.Header, "User-Agent", cfg.userAgent)
 	if attempt > 0 {
 		httpReq.Header.Set("@@HEADER_PREFIX@@-retry-count", strconv.Itoa(attempt))
 	}
@@ -274,18 +285,18 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 
 	resp, err := cfg.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, 0, true, &TransportError{Method: req.method, Path: req.path, Err: err}
+		return attemptResult{retryable: true, err: &TransportError{Method: req.method, Path: req.path, Err: err}}
 	}
 	if req.stream && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		keep = true
 		req.response, req.cancel = resp, cancel
-		return nil, resp.StatusCode, false, nil
+		return attemptResult{status: resp.StatusCode}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, 0, true, &TransportError{Method: req.method, Path: req.path, Err: fmt.Errorf("reading response body: %w", err)}
+		return attemptResult{retryable: true, err: &TransportError{Method: req.method, Path: req.path, Err: fmt.Errorf("reading response body: %w", err)}}
 	}
 
 	if cfg.debug {
@@ -293,12 +304,41 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Only server-side failures are worth another attempt; a 4xx will fail
-		// again the same way.
-		return nil, resp.StatusCode, resp.StatusCode >= 500, newAPIError(resp.StatusCode, respBody)
+		return attemptResult{
+			status:     resp.StatusCode,
+			err:        newAPIError(resp.StatusCode, respBody),
+			retryable:  retryableStatus(resp.StatusCode),
+			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+		}
 	}
 
-	return respBody, resp.StatusCode, false, nil
+	return attemptResult{body: respBody, status: resp.StatusCode}
+}
+
+// retryableStatus reports whether a failed status may succeed later: timeouts,
+// rate limits and server errors. Other 4xx fail again the same way.
+func retryableStatus(status int) bool {
+	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500
+}
+
+// parseRetryAfter reads a Retry-After header, in seconds or as an HTTP date.
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseFloat(value, 64); err == nil && seconds > 0 {
+		return time.Duration(seconds * float64(time.Second))
+	}
+	if at, err := http.ParseTime(value); err == nil && at.After(now) {
+		return at.Sub(now)
+	}
+	return 0
+}
+
+func setDefault(header http.Header, name, value string) {
+	if header.Get(name) == "" {
+		header.Set(name, value)
+	}
 }
 
 // formValues turns a struct into form fields by round-tripping it through its
@@ -370,19 +410,32 @@ func formatUint(v uint64) string { return strconv.FormatUint(v, 10) }
 
 func formatFloat(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
 
-func formatTime(v time.Time) string { return v.UTC().Format(time.RFC3339) }
+func formatTime(v time.Time) string { return v.UTC().Format(time.RFC3339Nano) }
 
-// marshalUnionVariant encodes a tagged union: the variant payload is flattened
-// into the object and the discriminator is added alongside it.
-func marshalUnionVariant(tagField, tagValue string, payload any) ([]byte, error) {
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
+// formatValue formats a named type: enums through String, aliases as their value.
+func formatValue(v any) string {
+	switch v := v.(type) {
+	case time.Time:
+		return formatTime(v)
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return fmt.Sprint(v)
 	}
+}
 
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return nil, fmt.Errorf("@@PACKAGE_NAME@@: union variant %q must encode to a JSON object: %w", tagValue, err)
+// marshalUnionVariant encodes a tagged union: the variant payload and the fields
+// the variants share are merged into one object, with the discriminator.
+func marshalUnionVariant(tagField, tagValue string, payload any, shared ...any) ([]byte, error) {
+	fields := map[string]json.RawMessage{}
+	for _, part := range append([]any{payload}, shared...) {
+		encoded, err := json.Marshal(part)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(encoded, &fields); err != nil {
+			return nil, fmt.Errorf("@@PACKAGE_NAME@@: union variant %q must encode to a JSON object: %w", tagValue, err)
+		}
 	}
 	if fields == nil {
 		fields = map[string]json.RawMessage{}

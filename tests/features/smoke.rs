@@ -83,6 +83,6 @@ async fn streaming() {
         streaming.upload_file(body).await.unwrap().status,
         r#"count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc"#
     );
-    let raw = streaming.upload_content("f1".into(), Upload::bytes("raw")).await.unwrap();
+    let raw = streaming.upload_content("f1", Upload::bytes("raw")).await.unwrap();
     assert_eq!(raw.status, "application/octet-stream:raw");
 }

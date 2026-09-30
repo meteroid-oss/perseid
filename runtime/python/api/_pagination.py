@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import typing as t
 
-from ..serialization import BaseModel
+from ..serialization import BaseModel, from_json_value
 
 __all__ = ["Pagination", "paginate_async", "paginate_sync"]
 
-_M = t.TypeVar("_M", bound=BaseModel)
+_T = t.TypeVar("_T")
 Path = t.Sequence[str]
 
 
@@ -70,14 +70,14 @@ def paginate_sync(
     pagination: Pagination,
     start: t.Any,
     fetch_page: t.Callable[[t.Any], BaseModel],
-    item: t.Type[_M],
-) -> t.Iterator[_M]:
+    item: t.Type[_T],
+) -> t.Iterator[_T]:
     cursor = _Cursor(pagination, start)
     while True:
         page = fetch_page(cursor.param).to_dict()
         items = _at(page, pagination.items) or []
         for raw in items:
-            yield item.from_dict(raw)
+            yield t.cast(_T, from_json_value(item, raw))
         if not cursor.advance(page, items):
             return
 
@@ -86,13 +86,13 @@ async def paginate_async(
     pagination: Pagination,
     start: t.Any,
     fetch_page: t.Callable[[t.Any], t.Awaitable[BaseModel]],
-    item: t.Type[_M],
-) -> t.AsyncIterator[_M]:
+    item: t.Type[_T],
+) -> t.AsyncIterator[_T]:
     cursor = _Cursor(pagination, start)
     while True:
         page = (await fetch_page(cursor.param)).to_dict()
         items = _at(page, pagination.items) or []
         for raw in items:
-            yield item.from_dict(raw)
+            yield t.cast(_T, from_json_value(item, raw))
         if not cursor.advance(page, items):
             return

@@ -1,10 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use aide::openapi::{self, ReferenceOr};
 use anyhow::{Context as _, bail, ensure};
-use heck::ToSnakeCase as _;
+use heck::{ToSnakeCase as _, ToUpperCamelCase as _};
 use indexmap::IndexMap;
-use schemars::schema::{InstanceType, Schema};
+use itertools::Itertools as _;
+use schemars::schema::{InstanceType, Schema, SchemaObject, SingleOrVec};
 use serde::{Deserialize, Serialize};
 
 use crate::spec::IncludeMode;
@@ -14,7 +18,8 @@ use super::{
     pagination::{Candidate, Pagination},
     security::{Requirement, Security},
     types::{
-        Field, FieldType, Types, resolve_schema_ref_in_field_type_public, serialize_field_type,
+        Field, FieldType, TypeData, Types, resolve_schema_ref_in_field_type_public,
+        serialize_field_type, serialize_optional_field_type,
     },
 };
 use crate::config;
@@ -30,21 +35,21 @@ pub(crate) fn from_openapi(
     include_mode: IncludeMode,
     excluded_operations: &BTreeSet<String>,
     specified_operations: &BTreeSet<String>,
-) -> anyhow::Result<Resources> {
+) -> (Resources, Vec<String>) {
     let mut resources = BTreeMap::new();
+    let mut errors = Vec::new();
 
     for (path, pi) in paths {
-        let path_item = pi
-            .into_item()
-            .context("$ref paths are currently not supported")?;
-
-        if !path_item.parameters.is_empty() {
-            tracing::info!("parameters at the path item level are not currently supported");
+        let Some(path_item) = pi.into_item() else {
+            errors.push(format!(
+                "path `{path}`: `$ref` path items are not supported"
+            ));
             continue;
-        }
-
+        };
         for (method, op) in path_item {
-            if let Some((res_path, op)) = Operation::from_openapi(
+            let op_id = op.operation_id.clone().unwrap_or_default();
+            let _span = tracing::warn_span!("operation", name = %op_id).entered();
+            match Operation::from_openapi(
                 &path,
                 method,
                 op,
@@ -53,13 +58,26 @@ pub(crate) fn from_openapi(
                 excluded_operations,
                 specified_operations,
             ) {
-                let resource = get_or_insert_resource(&mut resources, res_path);
-                resource.operations.push(op);
+                Ok(Some((res_path, op))) => {
+                    get_or_insert_resource(&mut resources, res_path)
+                        .operations
+                        .push(op);
+                }
+                Ok(None) => {}
+                Err(e) => errors.push(format!(
+                    "operation `{op_id}` ({} {path}): {e:#}",
+                    method.to_uppercase()
+                )),
             }
         }
     }
+    for resource in resources.values_mut() {
+        if let Err(e) = resource.disambiguate_operation_names() {
+            errors.push(format!("{e:#}"));
+        }
+    }
 
-    Ok(resources)
+    (resources, errors)
 }
 
 pub(crate) fn referenced_components(resources: &Resources) -> impl Iterator<Item = &str> {
@@ -94,6 +112,62 @@ fn resolve_schema_refs_in_resource(resource: &mut Resource, string_alias_names: 
     }
 }
 
+/// Query parameters whose values are objects, which form-style query strings cannot carry.
+pub(crate) fn object_query_params(resources: &Resources, types: &Types) -> Vec<String> {
+    fn is_object(ty: &FieldType, types: &Types, depth: usize) -> bool {
+        match ty {
+            FieldType::JsonObject | FieldType::Map { .. } => true,
+            FieldType::List { inner } | FieldType::Set { inner } => is_object(inner, types, depth),
+            FieldType::SchemaRef { name, .. } => match types.get(name).map(|t| &t.data) {
+                Some(TypeData::Alias { target }) if depth < 16 => {
+                    is_object(target, types, depth + 1)
+                }
+                Some(TypeData::Struct { .. } | TypeData::StructEnum { .. }) => true,
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    let mut errors = Vec::new();
+    let mut stack: Vec<&Resource> = resources.values().collect();
+    while let Some(resource) = stack.pop() {
+        stack.extend(resource.subresources.values());
+        for op in &resource.operations {
+            for param in op
+                .query_params
+                .iter()
+                .filter(|p| is_object(&p.r#type, types, 0))
+            {
+                errors.push(format!(
+                    "operation `{}` ({} {}): query parameter `{}`: object values are not supported",
+                    op.id,
+                    op.method.to_uppercase(),
+                    op.path,
+                    param.name
+                ));
+            }
+        }
+    }
+    errors
+}
+
+/// A `pet` resource and a `Pet` schema would both be `Pet` in most SDKs: the resource becomes
+/// `pet_api`.
+pub(crate) fn rename_resources_named_like_types(resources: &mut Resources, types: &Types) {
+    let type_names: BTreeSet<String> = types.keys().map(|n| n.to_upper_camel_case()).collect();
+    let clashing: Vec<String> = resources
+        .keys()
+        .filter(|name| type_names.contains(&name.to_upper_camel_case()))
+        .cloned()
+        .collect();
+    for name in clashing {
+        let mut resource = resources.remove(&name).expect("listed above");
+        let renamed = format!("{name}_api");
+        resource.name.clone_from(&renamed);
+        resources.insert(renamed, resource);
+    }
+}
+
 fn get_or_insert_resource(resources: &mut Resources, path: Vec<String>) -> &mut Resource {
     let mut path_iter = path.into_iter();
     let mut name = path_iter.next().expect("path must be non-empty");
@@ -115,7 +189,7 @@ fn get_or_insert_resource(resources: &mut Resources, path: Vec<String>) -> &mut 
 }
 
 /// A named group of [`Operation`]s.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Resource {
     pub name: String,
     pub operations: Vec<Operation>,
@@ -128,16 +202,9 @@ impl Resource {
         aliases: &BTreeMap<String, FieldType>,
     ) -> anyhow::Result<()> {
         for operation in &mut self.operations {
-            let body_schemas = [
-                &operation.request_body_schema_name,
-                &operation.response_body_schema_name,
-            ];
-            for name in body_schemas.into_iter().flatten() {
-                ensure!(
-                    !aliases.contains_key(name),
-                    "alias schema `{name}` cannot be used as a request or response body"
-                );
-            }
+            operation
+                .inline_body_aliases(aliases)
+                .with_context(|| format!("operation `{}`", operation.id))?;
             for param in &mut operation.query_params {
                 param.r#type.inline_aliases(aliases);
             }
@@ -168,12 +235,61 @@ impl Resource {
         Ok(())
     }
 
+    /// Falls back to the full operation id for operations whose short names collide.
+    fn disambiguate_operation_names(&mut self) -> anyhow::Result<()> {
+        let key = |op: &Operation| op.name.to_snake_case();
+        let counts = self.operations.iter().map(key).counts();
+        for op in &mut self.operations {
+            if counts[&key(op)] > 1 {
+                op.name = op.id.clone();
+            }
+        }
+        let mut seen = BTreeMap::new();
+        for op in &self.operations {
+            if let Some(other) = seen.insert(key(op), &op.id) {
+                bail!(
+                    "operations `{other}` and `{}` both become `{}` in resource `{}`",
+                    op.id,
+                    key(op),
+                    self.name
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn new(name: String) -> Self {
         Self {
             name,
             operations: Vec::new(),
             subresources: BTreeMap::new(),
         }
+    }
+
+    /// Ids of the operations with multipart or binary uploads, or event stream responses.
+    pub(crate) fn streaming_operations(&self) -> Vec<&str> {
+        let own = self.operations.iter().filter(|op| {
+            op.response_is_event_stream
+                || matches!(
+                    op.request_body_kind,
+                    RequestBodyKind::Binary | RequestBodyKind::Multipart
+                )
+        });
+        own.map(|op| op.id.as_str())
+            .chain(
+                self.subresources
+                    .values()
+                    .flat_map(Self::streaming_operations),
+            )
+            .collect()
+    }
+
+    /// Schemas sent as the body of a PATCH operation, where `null` and absent differ.
+    pub(crate) fn patch_bodies(&self) -> BTreeSet<&str> {
+        let own = self.operations.iter().filter(|op| op.method == "patch");
+        own.filter_map(|op| op.request_body_schema_name.as_deref())
+            .chain(self.subresources.values().flat_map(Self::patch_bodies))
+            .collect()
     }
 
     pub(crate) fn referenced_components(&self) -> BTreeSet<&str> {
@@ -215,7 +331,7 @@ impl Resource {
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum RequestBodyKind {
     #[default]
@@ -226,7 +342,7 @@ enum RequestBodyKind {
     Multipart,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub(crate) struct MultipartField {
     #[serde(flatten)]
     pub(crate) field: Field,
@@ -286,7 +402,7 @@ fn multipart_fields(
 }
 
 /// A named HTTP endpoint.
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Operation {
     /// The operation ID from the spec.
     pub(crate) id: String,
@@ -329,9 +445,30 @@ pub(crate) struct Operation {
     request_body_kind: RequestBodyKind,
     #[serde(default)]
     pub(crate) multipart_fields: Vec<MultipartField>,
+    /// True if the request body is a JSON array of `request_body_schema_name`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    request_body_is_list: bool,
+    /// Type of a JSON request body that is not a named schema, e.g. a list of strings.
+    #[serde(
+        default,
+        serialize_with = "serialize_optional_field_type",
+        skip_serializing_if = "Option::is_none"
+    )]
+    request_body_json_type: Option<FieldType>,
     /// Name of the response body type, if any (only for JSON responses).
     #[serde(skip_serializing_if = "Option::is_none")]
     response_body_schema_name: Option<String>,
+    /// True if the response is a JSON array of `response_body_schema_name`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    response_body_is_list: bool,
+    /// Type of a JSON response that is not a named schema or a list of one, e.g. a map of
+    /// integers. It only holds values whose SDK type is their JSON value.
+    #[serde(
+        default,
+        serialize_with = "serialize_optional_field_type",
+        skip_serializing_if = "Option::is_none"
+    )]
+    response_body_json_type: Option<FieldType>,
     /// True if the response is binary (e.g., application/pdf, application/octet-stream).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     response_is_binary: bool,
@@ -356,11 +493,6 @@ pub(crate) struct Operation {
 }
 
 impl Operation {
-    #[tracing::instrument(
-        name = "operation_from_openapi",
-        skip_all,
-        fields(path = path, method = method, op_id),
-    )]
     fn from_openapi(
         path: &str,
         method: &str,
@@ -369,14 +501,11 @@ impl Operation {
         include_mode: IncludeMode,
         excluded_operations: &BTreeSet<String>,
         specified_operations: &BTreeSet<String>,
-    ) -> Option<(Vec<String>, Self)> {
-        let Some(op_id) = op.operation_id else {
-            // ignore operations without an operationId
-            return None;
-        };
-        tracing::Span::current().record("op_id", &op_id);
+    ) -> anyhow::Result<Option<(Vec<String>, Self)>> {
+        let op_id = op
+            .operation_id
+            .context("missing operationId (derived ids are added while reading the spec)")?;
 
-        // verbose, but very easy to understand
         let x_internal = op
             .extensions
             .get("x-internal")
@@ -388,77 +517,54 @@ impl Operation {
             IncludeMode::OnlySpecified => specified_operations.contains(&op_id),
         };
         if !include_operation || excluded_operations.contains(&op_id) {
-            return None;
+            return Ok(None);
         }
 
-        // Use tags as resource name, operation ID as operation name
-        let tag = op.tags.first().cloned().unwrap_or_else(|| {
-            // Derive resource from path: /api/v1/customers -> customers
-            path.split('/')
-                .find(|s| !s.is_empty() && *s != "api" && *s != "v1")
-                .unwrap_or("default")
-                .to_owned()
-        });
-        // Convert tag to resource name (e.g., "checkout-sessions" -> "checkout_sessions")
-        let resource_name = tag.to_snake_case();
-        let res_path = vec![resource_name];
-        let op_name = op_id.clone();
+        let tag = match op.tags.first() {
+            Some(tag) => tag.clone(),
+            None => resource_from_path(path),
+        };
+        let res_path = vec![tag.to_snake_case()];
+        // `repos/get-content` style ids already carry their resource.
+        let op_name = op_id.rsplit('/').next().unwrap_or(&op_id).to_owned();
 
         let mut path_params = Vec::new();
         let mut query_params = Vec::new();
         let mut header_params = Vec::new();
 
         for param in op.parameters {
+            let ReferenceOr::Item(param) = param else {
+                bail!("unresolved `$ref` parameter");
+            };
+            let name = param.parameter_data_ref().name.clone();
             match param {
-                ReferenceOr::Reference { .. } => {
-                    tracing::error!("$ref parameters are not currently supported");
-                    return None;
-                }
-                ReferenceOr::Item(openapi::Parameter::Path {
+                openapi::Parameter::Path {
                     parameter_data,
                     style: openapi::PathStyle::Simple,
-                }) => {
-                    assert!(parameter_data.required, "no optional path params");
-                    if let Err(e) = enforce_string_parameter(&parameter_data) {
-                        tracing::error!("unsupported path parameter: {e}");
-                        return None;
-                    }
-
+                } => {
+                    enforce_string_parameter(&parameter_data)
+                        .with_context(|| format!("path parameter `{name}`"))?;
                     path_params.push(parameter_data.name);
                 }
-                ReferenceOr::Item(openapi::Parameter::Header {
+                openapi::Parameter::Header {
                     parameter_data,
                     style: openapi::HeaderStyle::Simple,
-                }) => {
-                    if let Err(e) = enforce_string_parameter(&parameter_data) {
-                        tracing::error!("unsupported header parameter: {e}");
-                        return None;
-                    }
-
+                } => {
+                    enforce_string_parameter(&parameter_data)
+                        .with_context(|| format!("header parameter `{name}`"))?;
                     header_params.push(HeaderParam {
                         name: parameter_data.name,
                         required: parameter_data.required,
                     });
                 }
-                ReferenceOr::Item(openapi::Parameter::Query {
+                openapi::Parameter::Query {
                     parameter_data,
-                    allow_reserved: false,
                     style: openapi::QueryStyle::Form,
-                    allow_empty_value: None,
-                }) => {
-                    let name = parameter_data.name;
-                    let _guard = tracing::info_span!("field_type_from_openapi", name).entered();
-                    let r#type = match FieldType::from_openapi(parameter_data.format) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            tracing::error!("unsupported query parameter type: {e}");
-                            return None;
-                        }
-                    };
-
-                    // For `style: form`, OpenAPI's default is `explode: true` — arrays are
-                    // serialized as repeated parameters (e.g. `?tags=a&tags=b`). When
-                    // `explode: false`, arrays are comma-joined (e.g. `?tags=a,b`).
+                    ..
+                } => {
+                    let r#type = FieldType::from_openapi(parameter_data.format)
+                        .with_context(|| format!("query parameter `{name}`"))?;
+                    // `style: form` explodes arrays (`?tags=a&tags=b`) unless `explode: false`.
                     let explode = parameter_data.explode.unwrap_or(true);
 
                     query_params.push(QueryParam {
@@ -469,177 +575,36 @@ impl Operation {
                         explode,
                     });
                 }
-                ReferenceOr::Item(parameter) => {
-                    tracing::error!(
-                        ?parameter,
-                        "this kind of parameter is not currently supported"
-                    );
-                    return None;
+                openapi::Parameter::Query { style, .. } => {
+                    let style = serde_json::to_value(style).unwrap_or_default();
+                    bail!("query parameter `{name}`: style {style} is not supported")
+                }
+                openapi::Parameter::Path { style, .. } => {
+                    let style = serde_json::to_value(style).unwrap_or_default();
+                    bail!("path parameter `{name}`: style {style} is not supported")
+                }
+                openapi::Parameter::Cookie { .. } => {
+                    bail!("cookie parameter `{name}` is not supported")
                 }
             }
         }
-
-        let request_body_all_optional = op
-            .request_body
-            .as_ref()
-            .map(|r| {
-                match r {
-                    ReferenceOr::Reference { .. } => {
-                        unimplemented!("reference")
-                    }
-                    ReferenceOr::Item(body) => {
-                        if let Some(mt) = body
-                            .content
-                            .get("application/json")
-                            .or_else(|| body.content.get("application/x-www-form-urlencoded"))
-                        {
-                            match mt.schema.as_ref().map(|so| &so.json_schema) {
-                                Some(Schema::Object(schemars::schema::SchemaObject {
-                                    object: Some(ov),
-                                    ..
-                                })) => {
-                                    return ov.required.is_empty();
-                                }
-                                Some(Schema::Object(schemars::schema::SchemaObject {
-                                    reference: Some(s),
-                                    ..
-                                })) => {
-                                    if let Some(Schema::Object(schemars::schema::SchemaObject {
-                                        object: Some(ov),
-                                        ..
-                                    })) = component_schemas
-                                        .get(
-                                            &get_schema_name(Some(s)).expect("schema should exist"),
-                                        )
-                                        .map(|so| &so.json_schema)
-                                    {
-                                        return ov.required.is_empty();
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-                false
-            })
-            .unwrap_or_default();
 
         let request_body_optional = op
             .request_body
             .as_ref()
             .and_then(|b| b.as_item())
             .is_some_and(|b| !b.required);
-        let mut request_body_is_form = false;
-        let mut request_body_kind = RequestBodyKind::None;
-        let mut multipart_fields_out = Vec::new();
-        let request_body_schema_name = op.request_body.and_then(|b| match b {
-            ReferenceOr::Item(mut req_body) => {
-                assert!(req_body.extensions.is_empty());
-                assert_eq!(req_body.content.len(), 1);
-                if req_body
-                    .content
-                    .swap_remove("application/octet-stream")
-                    .is_some()
-                {
-                    request_body_kind = RequestBodyKind::Binary;
-                    return None;
-                }
-                if let Some(body) = req_body.content.swap_remove("multipart/form-data") {
-                    request_body_kind = RequestBodyKind::Multipart;
-                    if !body.encoding.is_empty() {
-                        tracing::error!("custom multipart encoding is not supported");
-                        return None;
-                    }
-                    match body
-                        .schema
-                        .context("missing multipart schema")
-                        .and_then(|s| multipart_fields(s.json_schema, component_schemas))
-                    {
-                        Ok(fields) => multipart_fields_out = fields,
-                        Err(error) => tracing::error!(%error, "unsupported multipart body"),
-                    }
-                    return None;
-                }
-                let is_form = req_body
-                    .content
-                    .contains_key("application/x-www-form-urlencoded");
-                let body = req_body
-                    .content
-                    .swap_remove("application/json")
-                    .or_else(|| {
-                        req_body
-                            .content
-                            .swap_remove("application/x-www-form-urlencoded")
-                    })
-                    .expect("should have JSON or form-urlencoded body");
-                request_body_is_form = is_form;
-                request_body_kind = if is_form {
-                    RequestBodyKind::Form
-                } else {
-                    RequestBodyKind::Json
-                };
-                assert!(body.extensions.is_empty());
-                match body.schema.expect("no body schema?!").json_schema {
-                    Schema::Bool(_) => {
-                        tracing::error!("unexpected bool schema");
-                        None
-                    }
-                    Schema::Object(obj) => {
-                        if !obj.is_ref() {
-                            tracing::error!(?obj, "unexpected non-$ref json body schema");
-                        }
-                        get_schema_name(obj.reference.as_deref())
-                    }
-                }
-            }
-            ReferenceOr::Reference { .. } => {
-                tracing::error!("$ref request bodies are not currently supported");
-                None
-            }
-        });
+        let mut request = RequestBody::default();
+        if let Some(body) = op.request_body {
+            let ReferenceOr::Item(body) = body else {
+                bail!("unresolved `$ref` request body");
+            };
+            request = RequestBody::from_openapi(body, component_schemas).context("request body")?;
+        }
 
-        let (response_body_schema_name, response_kind, error_response_schema_names) = op
-            .responses
-            .map(|r| {
-                assert_eq!(r.default, None);
-                assert!(r.extensions.is_empty());
-                let error_response_schema_names: BTreeSet<String> = r
-                    .responses
-                    .iter()
-                    .filter(|(st, _)| matches!(st, openapi::StatusCode::Code(400..)))
-                    .filter_map(|(_, resp)| response_body_info(resp.clone()).0)
-                    .collect();
-                let mut success_responses = r.responses.into_iter().filter(|(st, _)| {
-                    match st {
-                        openapi::StatusCode::Code(c) => match c {
-                            0..100 => tracing::error!("invalid status code < 100"),
-                            100..200 => tracing::error!("what is this? status code {c}..."),
-                            200..300 => return true,
-                            300..400 => tracing::error!("what is this? status code {c}..."),
-                            400.. => {}
-                        },
-                        openapi::StatusCode::Range(_) => {
-                            tracing::error!("unsupported status code range");
-                        }
-                    }
-
-                    false
-                });
-
-                let (_, resp) = success_responses
-                    .next()
-                    .expect("every operation must have one success response");
-                let (schema_name, kind) = response_body_info(resp);
-                for (_, resp) in success_responses {
-                    let (other_name, other_kind) = response_body_info(resp);
-                    assert_eq!(schema_name, other_name);
-                    assert_eq!(kind, other_kind);
-                }
-
-                (schema_name, kind, error_response_schema_names)
-            })
-            .unwrap_or((None, ResponseKind::None, BTreeSet::new()));
+        let responses = op.responses.unwrap_or_default();
+        let (response, error_response_schema_names) =
+            responses_from_openapi(responses, component_schemas)?;
 
         let x_pagination = op.extensions.get("x-pagination").cloned();
         let op = Operation {
@@ -652,22 +617,76 @@ impl Operation {
             path_params,
             header_params,
             query_params,
-            request_body_schema_name,
-            request_body_all_optional,
+            request_body_schema_name: request.schema_name,
+            request_body_is_list: request.is_list,
+            request_body_json_type: request.json_type,
+            request_body_all_optional: request.all_optional,
             request_body_optional,
-            request_body_is_form,
-            request_body_kind,
-            multipart_fields: multipart_fields_out,
-            response_body_schema_name,
-            response_is_binary: response_kind == ResponseKind::Binary,
-            response_is_text: response_kind == ResponseKind::Text,
-            response_is_event_stream: response_kind == ResponseKind::EventStream,
+            request_body_is_form: request.kind == RequestBodyKind::Form,
+            request_body_kind: request.kind,
+            multipart_fields: request.multipart_fields,
+            response_body_schema_name: response.schema_name,
+            response_body_is_list: response.is_list,
+            response_body_json_type: response.json_type,
+            response_is_binary: response.kind == ResponseKind::Binary,
+            response_is_text: response.kind == ResponseKind::Text,
+            response_is_event_stream: response.kind == ResponseKind::EventStream,
             error_response_schema_names,
             security: None,
             pagination: None,
             x_pagination,
         };
-        Some((res_path, op))
+        Ok(Some((res_path, op)))
+    }
+
+    /// Replaces alias bodies, which only Rust declares, by their target.
+    fn inline_body_aliases(&mut self, aliases: &BTreeMap<String, FieldType>) -> anyhow::Result<()> {
+        self.error_response_schema_names
+            .retain(|name| !aliases.contains_key(name));
+        if let Some(name) = self.response_body_schema_name.clone()
+            && let Some(target) = aliases.get(&name)
+        {
+            match target {
+                FieldType::List { inner } if !self.response_body_is_list => {
+                    let FieldType::SchemaRef { name: item, .. } = &**inner else {
+                        bail!("response schema `{name}` is not supported");
+                    };
+                    self.response_body_schema_name = Some(item.clone());
+                    self.response_body_is_list = true;
+                }
+                target if target.is_plain_json() => {
+                    let target = target.clone();
+                    self.response_body_json_type = Some(match self.response_body_is_list {
+                        true => FieldType::List {
+                            inner: Arc::new(target),
+                        },
+                        false => target,
+                    });
+                    self.response_body_schema_name = None;
+                    self.response_body_is_list = false;
+                }
+                _ => bail!("response schema `{name}` is not supported"),
+            }
+        }
+        if let Some(name) = self.request_body_schema_name.clone()
+            && let Some(target) = aliases.get(&name)
+        {
+            match target {
+                FieldType::List { inner } if !self.request_body_is_list => {
+                    let FieldType::SchemaRef { name: item, .. } = &**inner else {
+                        bail!("request body schema `{name}` is not supported");
+                    };
+                    self.request_body_schema_name = Some(item.clone());
+                    self.request_body_is_list = true;
+                }
+                target if target.is_plain_json() && !self.request_body_is_list => {
+                    self.request_body_json_type = Some(target.clone());
+                    self.request_body_schema_name = None;
+                }
+                _ => bail!("request body schema `{name}` is not supported"),
+            }
+        }
+        Ok(())
     }
 
     /// Applies `x-pagination`, or the first perseid.toml rule matching this operation.
@@ -719,6 +738,148 @@ impl Operation {
 
     pub(crate) fn has_query_or_header_params(&self) -> bool {
         !self.header_params.is_empty() || !self.query_params.is_empty()
+    }
+}
+
+/// The resource of an untagged operation: `/api/v2/things/{id}` belongs to `things`.
+fn resource_from_path(path: &str) -> String {
+    let is_version = |s: &str| {
+        s.starts_with(|c: char| c.is_ascii_digit())
+            || s.strip_prefix(['v', 'V'])
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    path.split('/')
+        .filter(|s| !s.is_empty() && !s.starts_with('{') && *s != "api" && !is_version(s))
+        .map(|s| s.split('.').next().unwrap_or(s))
+        .find(|s| !s.is_empty())
+        .unwrap_or("default")
+        .to_owned()
+}
+
+#[derive(Debug, Default)]
+struct RequestBody {
+    kind: RequestBodyKind,
+    schema_name: Option<String>,
+    is_list: bool,
+    json_type: Option<FieldType>,
+    all_optional: bool,
+    multipart_fields: Vec<MultipartField>,
+}
+
+impl RequestBody {
+    fn from_openapi(
+        mut body: openapi::RequestBody,
+        schemas: &IndexMap<String, openapi::SchemaObject>,
+    ) -> anyhow::Result<Self> {
+        let content_types = body.content.keys().join("`, `");
+        let (kind, media) = if let Some(media) = body.content.swap_remove("application/json") {
+            (RequestBodyKind::Json, media)
+        } else if let Some(media) = body
+            .content
+            .swap_remove("application/x-www-form-urlencoded")
+        {
+            (RequestBodyKind::Form, media)
+        } else if let Some(media) = body.content.swap_remove("multipart/form-data") {
+            ensure!(
+                media.encoding.is_empty(),
+                "custom multipart encodings are not supported"
+            );
+            let schema = media.schema.context("missing multipart schema")?;
+            return Ok(Self {
+                kind: RequestBodyKind::Multipart,
+                multipart_fields: multipart_fields(schema.json_schema, schemas)?,
+                ..Self::default()
+            });
+        } else if body
+            .content
+            .swap_remove("application/octet-stream")
+            .is_some()
+        {
+            return Ok(Self {
+                kind: RequestBodyKind::Binary,
+                ..Self::default()
+            });
+        } else {
+            bail!("content type `{content_types}` is not supported");
+        };
+        let Some(schema) = media.schema else {
+            ensure!(kind == RequestBodyKind::Json, "a form body needs a schema");
+            return Ok(Self {
+                kind,
+                json_type: Some(FieldType::JsonObject),
+                ..Self::default()
+            });
+        };
+        let Schema::Object(obj) = schema.json_schema else {
+            bail!("boolean schemas are not supported");
+        };
+        if kind == RequestBodyKind::Json
+            && let Some((name, is_list)) = named_or_list_of_named(&obj, schemas)
+            && is_list
+        {
+            return Ok(Self {
+                kind,
+                schema_name: Some(name),
+                is_list,
+                ..Self::default()
+            });
+        }
+        let Some(name) = get_schema_name(obj.reference.as_deref()) else {
+            let description = describe_schema(&obj);
+            let json_type = FieldType::from_schema_object(obj)?;
+            ensure!(
+                kind == RequestBodyKind::Json && json_type.is_plain_json(),
+                "only object schemas, lists of them and plain JSON values are supported, not \
+                 {description}"
+            );
+            return Ok(Self {
+                kind,
+                json_type: Some(json_type),
+                ..Self::default()
+            });
+        };
+        let all_optional = match schemas.get(&name).map(|s| &s.json_schema) {
+            Some(Schema::Object(obj)) => obj.object.as_ref().is_none_or(|o| o.required.is_empty()),
+            _ => false,
+        };
+        Ok(Self {
+            kind,
+            schema_name: Some(name),
+            all_optional,
+            ..Self::default()
+        })
+    }
+}
+
+/// A short description of an unsupported schema for error messages, never a dump of it.
+fn describe_schema(obj: &SchemaObject) -> String {
+    if let Some(subschemas) = &obj.subschemas {
+        if subschemas.one_of.is_some() {
+            return "a `oneOf` union".into();
+        }
+        if subschemas.any_of.is_some() {
+            return "an `anyOf` union".into();
+        }
+    }
+    match &obj.instance_type {
+        Some(SingleOrVec::Single(t)) => format!("type `{}`", instance_type_name(t)),
+        Some(SingleOrVec::Vec(types)) => format!(
+            "type `{}`",
+            types.iter().map(instance_type_name).join(" | ")
+        ),
+        None => "an untyped schema".into(),
+    }
+}
+
+fn instance_type_name(t: &InstanceType) -> &'static str {
+    match t {
+        InstanceType::Null => "null",
+        InstanceType::Boolean => "boolean",
+        InstanceType::Object => "object",
+        InstanceType::Array => "array",
+        InstanceType::Number => "number",
+        InstanceType::String => "string",
+        InstanceType::Integer => "integer",
     }
 }
 
@@ -781,7 +942,10 @@ fn enforce_string_parameter(parameter_data: &openapi::ParameterData) -> anyhow::
         return Ok(());
     }
 
-    bail!("unsupported path parameter type `{:?}`", obj.instance_type);
+    bail!(
+        "only scalar values are supported, not {}",
+        describe_schema(obj)
+    );
 }
 
 /// Response body type for code generation.
@@ -795,85 +959,168 @@ enum ResponseKind {
     EventStream,
 }
 
-/// Returns (schema_name, response_kind) for a response.
-fn response_body_info(resp: ReferenceOr<openapi::Response>) -> (Option<String>, ResponseKind) {
-    match resp {
-        ReferenceOr::Item(mut resp_body) => {
-            assert!(resp_body.extensions.is_empty());
-            if resp_body.content.is_empty() {
-                return (None, ResponseKind::None);
-            }
+#[derive(Debug, Default, PartialEq)]
+struct ResponseBody {
+    kind: ResponseKind,
+    schema_name: Option<String>,
+    is_list: bool,
+    json_type: Option<FieldType>,
+}
 
-            if resp_body.content.contains_key("text/event-stream") {
-                return (None, ResponseKind::EventStream);
+/// Picks the body the SDK decodes on success: the lowest 2xx status with content, or `default`
+/// when no 2xx is declared. Returns it with the JSON error schemas of 4xx, 5xx and `default`.
+fn responses_from_openapi(
+    responses: openapi::Responses,
+    schemas: &IndexMap<String, openapi::SchemaObject>,
+) -> anyhow::Result<(ResponseBody, BTreeSet<String>)> {
+    let mut success = Vec::new();
+    let mut errors = Vec::new();
+    for (status, response) in responses.responses {
+        let ReferenceOr::Item(response) = response else {
+            bail!("response `{status}`: unresolved `$ref` response");
+        };
+        match status {
+            openapi::StatusCode::Code(code @ 200..300) => success.push((code, status, response)),
+            openapi::StatusCode::Range(2) => success.push((299, status, response)),
+            openapi::StatusCode::Code(400..) | openapi::StatusCode::Range(4 | 5) => {
+                errors.push(response)
             }
-
-            // Check for binary response types
-            // Document downloads are returned as raw bytes; e-invoice XML stays byte-exact
-            // (it can be signed or hashed), so it is not decoded as text.
-            let binary_types = [
-                "application/pdf",
-                "application/xml",
-                "application/octet-stream",
-                "image/png",
-                "image/jpeg",
-                "image/gif",
-                "application/zip",
-                "application/gzip",
-            ];
-            for binary_type in binary_types {
-                if resp_body.content.contains_key(binary_type) {
-                    tracing::info!(content_type = binary_type, "detected binary response");
-                    return (None, ResponseKind::Binary);
-                }
-            }
-
-            // Check for text response types
-            let text_types = ["text/plain", "text/html", "text/csv", "text/x-sh"];
-            for text_type in text_types {
-                if resp_body.content.contains_key(text_type) {
-                    tracing::info!(content_type = text_type, "detected text response");
-                    return (None, ResponseKind::Text);
-                }
-            }
-
-            // Handle JSON responses
-            let Some(json_body) = resp_body.content.swap_remove("application/json") else {
-                tracing::error!(
-                    content_types = ?resp_body.content.keys().collect::<Vec<_>>(),
-                    "unsupported response body content type"
-                );
-                return (None, ResponseKind::None);
-            };
-            assert!(json_body.extensions.is_empty());
-            let schema_name = match json_body.schema.expect("no json body schema?!").json_schema {
-                Schema::Bool(_) => {
-                    tracing::error!("unexpected bool schema");
-                    None
-                }
-                Schema::Object(obj) => {
-                    if !obj.is_ref() {
-                        tracing::error!(?obj, "unexpected non-$ref json body schema");
-                    }
-                    get_schema_name(obj.reference.as_deref())
-                }
-            };
-            (schema_name, ResponseKind::Json)
+            // Informational and redirect responses have no body for the SDK to decode.
+            _ => {}
         }
-        ReferenceOr::Reference { .. } => {
-            tracing::error!("$ref response bodies are not currently supported");
-            (None, ResponseKind::None)
+    }
+    if let Some(default) = responses.default {
+        let ReferenceOr::Item(default) = default else {
+            bail!("response `default`: unresolved `$ref` response");
+        };
+        match success.is_empty() {
+            true => success.push((0, openapi::StatusCode::Code(0), default)),
+            false => errors.push(default),
         }
+    }
+    success.sort_by_key(|(code, ..)| *code);
+
+    let mut chosen: Option<(String, ResponseBody)> = None;
+    for (_, status, response) in success {
+        let status = match status {
+            openapi::StatusCode::Code(0) => "default".to_owned(),
+            status => status.to_string(),
+        };
+        let body = ResponseBody::from_openapi(response, schemas)
+            .with_context(|| format!("response `{status}`"))?;
+        match &chosen {
+            _ if body.kind == ResponseKind::None => {}
+            None => chosen = Some((status, body)),
+            Some((first, kept)) if *kept != body => tracing::warn!(
+                "responses `{first}` and `{status}` have different bodies, the SDK decodes `{first}`"
+            ),
+            Some(_) => {}
+        }
+    }
+    let error_schemas = errors
+        .into_iter()
+        .filter_map(|response| {
+            let schema = response.content.get("application/json")?.schema.as_ref()?;
+            let Schema::Object(obj) = &schema.json_schema else {
+                return None;
+            };
+            get_schema_name(obj.reference.as_deref())
+        })
+        .collect();
+    Ok((
+        chosen.map(|(_, body)| body).unwrap_or_default(),
+        error_schemas,
+    ))
+}
+
+impl ResponseBody {
+    fn from_openapi(
+        response: openapi::Response,
+        schemas: &IndexMap<String, openapi::SchemaObject>,
+    ) -> anyhow::Result<Self> {
+        let content = response.content;
+        let kind = |kind| Self {
+            kind,
+            ..Self::default()
+        };
+        if content.is_empty() {
+            return Ok(Self::default());
+        }
+        if content.contains_key("text/event-stream") {
+            return Ok(kind(ResponseKind::EventStream));
+        }
+        if let Some(json) = content.get("application/json") {
+            let Some(schema) = &json.schema else {
+                bail!("JSON response without a schema");
+            };
+            let Schema::Object(obj) = &schema.json_schema else {
+                bail!("boolean schemas are not supported");
+            };
+            if let Some((schema_name, is_list)) = named_or_list_of_named(obj, schemas) {
+                return Ok(Self {
+                    kind: ResponseKind::Json,
+                    schema_name: Some(schema_name),
+                    is_list,
+                    json_type: None,
+                });
+            }
+            let json_type = FieldType::from_schema_object(obj.clone())?;
+            ensure!(
+                json_type.is_plain_json(),
+                "only object schemas, lists of them and plain JSON values are supported, not {}",
+                describe_schema(obj)
+            );
+            return Ok(Self {
+                kind: ResponseKind::Json,
+                json_type: Some(json_type),
+                ..Self::default()
+            });
+        }
+        if content.keys().any(|k| k.starts_with("text/")) {
+            return Ok(kind(ResponseKind::Text));
+        }
+        Ok(kind(ResponseKind::Binary))
     }
 }
 
-#[derive(Deserialize, Serialize)]
+/// `$ref: X` or `{type: array, items: {$ref: X}}`, following references to array components.
+fn named_or_list_of_named(
+    obj: &SchemaObject,
+    schemas: &IndexMap<String, openapi::SchemaObject>,
+) -> Option<(String, bool)> {
+    let items = |obj: &SchemaObject| match obj.array.as_ref()?.items.as_ref()? {
+        SingleOrVec::Single(item) => match &**item {
+            Schema::Object(item) => get_schema_name(item.reference.as_deref()),
+            Schema::Bool(_) => None,
+        },
+        SingleOrVec::Vec(_) => None,
+    };
+    let Some(mut name) = get_schema_name(obj.reference.as_deref()) else {
+        return Some((items(obj)?, true));
+    };
+    for _ in 0..16 {
+        match schemas.get(&name).map(|s| &s.json_schema) {
+            Some(Schema::Object(target)) if target.reference.is_some() => {
+                name = get_schema_name(target.reference.as_deref())?;
+            }
+            Some(Schema::Object(target))
+                if target.instance_type == Some(InstanceType::Array.into()) =>
+            {
+                return Some((items(target)?, true));
+            }
+            _ => break,
+        }
+    }
+    Some((name, false))
+}
+
+#[derive(Clone, Deserialize, Serialize)]
 struct HeaderParam {
     name: String,
     required: bool,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct QueryParam {
     pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -931,6 +1178,197 @@ mod streaming_tests {
                 .unwrap()
                 .to_string()
                 .contains("cyclic")
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    fn schemas(value: Value) -> IndexMap<String, openapi::SchemaObject> {
+        serde_json::from_value(value).unwrap()
+    }
+
+    fn responses(value: Value) -> anyhow::Result<(ResponseBody, BTreeSet<String>)> {
+        let schemas = schemas(json!({
+            "Widgets": { "type": "array", "items": { "$ref": "#/components/schemas/Widget" } }
+        }));
+        responses_from_openapi(serde_json::from_value(value).unwrap(), &schemas)
+    }
+
+    fn json_body(schema: Value) -> Value {
+        json!({ "description": "", "content": { "application/json": { "schema": schema } } })
+    }
+
+    fn widget() -> Value {
+        json!({ "$ref": "#/components/schemas/Widget" })
+    }
+
+    #[test]
+    fn default_is_an_error_response_next_to_a_success() {
+        let (body, errors) = responses(json!({
+            "200": json_body(widget()),
+            "default": json_body(json!({ "$ref": "#/components/schemas/Error" })),
+            "4XX": json_body(json!({ "$ref": "#/components/schemas/Invalid" })),
+            "304": { "description": "not modified" }
+        }))
+        .unwrap();
+        assert_eq!(body.schema_name.as_deref(), Some("Widget"));
+        assert_eq!(errors, BTreeSet::from(["Error".into(), "Invalid".into()]));
+    }
+
+    #[test]
+    fn default_is_the_success_response_without_a_2xx() {
+        let (body, errors) = responses(json!({ "default": json_body(widget()) })).unwrap();
+        assert_eq!(body.schema_name.as_deref(), Some("Widget"));
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn the_lowest_2xx_with_a_body_is_decoded() {
+        let (body, _) = responses(json!({
+            "204": { "description": "" },
+            "202": json_body(widget()),
+            "201": { "description": "" }
+        }))
+        .unwrap();
+        assert_eq!(body.kind, ResponseKind::Json);
+        assert_eq!(body.schema_name.as_deref(), Some("Widget"));
+        let (body, _) = responses(json!({ "2XX": json_body(widget()) })).unwrap();
+        assert_eq!(body.schema_name.as_deref(), Some("Widget"));
+    }
+
+    #[test]
+    fn lists_of_named_schemas_and_plain_json_are_response_bodies() {
+        let (body, _) =
+            responses(json!({ "200": json_body(json!({ "type": "array", "items": widget() })) }))
+                .unwrap();
+        assert_eq!(
+            (body.schema_name.as_deref(), body.is_list),
+            (Some("Widget"), true)
+        );
+        let widgets = json!({ "$ref": "#/components/schemas/Widgets" });
+        let (body, _) = responses(json!({ "200": json_body(widgets) })).unwrap();
+        assert_eq!(
+            (body.schema_name.as_deref(), body.is_list),
+            (Some("Widget"), true)
+        );
+        let counts = json!({ "type": "object", "additionalProperties": { "type": "integer" } });
+        let (body, _) = responses(json!({ "200": json_body(counts) })).unwrap();
+        assert!(matches!(body.json_type, Some(FieldType::Map { .. })));
+        let error = responses(json!({ "200": json_body(json!({
+            "type": "object", "properties": { "a": { "type": "string" } }
+        })) }))
+        .err()
+        .unwrap();
+        assert!(format!("{error:#}").contains("response `200`"), "{error:#}");
+    }
+
+    #[test]
+    fn non_json_responses_are_text_or_binary() {
+        let content =
+            |media: &str| json!({ "200": { "description": "", "content": { media: {} } } });
+        let (body, _) = responses(content("text/csv")).unwrap();
+        assert_eq!(body.kind, ResponseKind::Text);
+        let (body, _) = responses(content("audio/mpeg")).unwrap();
+        assert_eq!(body.kind, ResponseKind::Binary);
+    }
+
+    fn request(content: Value) -> anyhow::Result<RequestBody> {
+        let schemas = schemas(json!({ "Widget": { "type": "object", "properties": {} } }));
+        let body = serde_json::from_value(json!({ "content": content })).unwrap();
+        RequestBody::from_openapi(body, &schemas)
+    }
+
+    #[test]
+    fn request_bodies_prefer_json_and_accept_lists_and_plain_json() {
+        let body = request(json!({
+            "application/xml": { "schema": widget() },
+            "application/json": { "schema": widget() }
+        }))
+        .unwrap();
+        assert_eq!(body.kind, RequestBodyKind::Json);
+        assert!(body.all_optional);
+        let list = json!({ "type": "array", "items": widget() });
+        let body = request(json!({ "application/json": { "schema": list } })).unwrap();
+        assert_eq!(
+            (body.schema_name.as_deref(), body.is_list),
+            (Some("Widget"), true)
+        );
+        let labels = json!({ "type": "array", "items": { "type": "string" } });
+        let body = request(json!({ "application/json": { "schema": labels } })).unwrap();
+        assert!(matches!(body.json_type, Some(FieldType::List { .. })));
+        let error = request(json!({ "text/plain": { "schema": { "type": "string" } } }));
+        assert!(error.unwrap_err().to_string().contains("`text/plain`"));
+    }
+
+    #[test]
+    fn untagged_operations_group_by_their_first_resource_segment() {
+        assert_eq!(resource_from_path("/api/v2/things/{id}/parts"), "things");
+        assert_eq!(
+            resource_from_path("/2010-04-01/Accounts/{Sid}.json"),
+            "Accounts"
+        );
+        assert_eq!(resource_from_path("/"), "default");
+    }
+
+    fn operation(id: &str) -> Operation {
+        let op = serde_json::from_value(json!({ "operationId": id })).unwrap();
+        let (_, op) = Operation::from_openapi(
+            "/x",
+            "get",
+            op,
+            &IndexMap::new(),
+            IncludeMode::OnlyPublic,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap()
+        .unwrap();
+        op
+    }
+
+    #[test]
+    fn prefixed_operation_ids_keep_their_short_name_unless_it_collides() {
+        let mut resource = Resource::new("repos".into());
+        resource.operations = vec![
+            operation("repos/get"),
+            operation("gists/get"),
+            operation("repos/list"),
+        ];
+        resource.disambiguate_operation_names().unwrap();
+        let names: Vec<_> = resource
+            .operations
+            .iter()
+            .map(|o| o.name.as_str())
+            .collect();
+        assert_eq!(names, ["repos/get", "gists/get", "list"]);
+    }
+
+    #[test]
+    fn unsupported_parameters_are_errors_naming_the_parameter() {
+        let op = serde_json::from_value(json!({
+            "operationId": "op",
+            "parameters": [{ "name": "ids", "in": "header", "schema": { "type": "array", "items": { "type": "string" } } }]
+        }))
+        .unwrap();
+        let error = Operation::from_openapi(
+            "/x",
+            "get",
+            op,
+            &IndexMap::new(),
+            IncludeMode::OnlyPublic,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(
+            format!("{error:#}"),
+            "header parameter `ids`: only scalar values are supported, not type `array`"
         );
     }
 }

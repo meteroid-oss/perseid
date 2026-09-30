@@ -26,7 +26,8 @@ jobs:
           bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
           ./actionlint scaffold/release/.github/workflows/*.yml
 
-  # A fresh `init` + `generate` must give SDKs that build, for a toy spec and a real one.
+  # A fresh `init` + `generate` must give SDKs that build and type-check, for a toy spec, the
+  # torture fixture (unions, recursion, reserved words...) and a real API.
   sdks:
     runs-on: ubuntu-24.04
     strategy:
@@ -35,6 +36,7 @@ jobs:
         spec:
           - tests/fixtures/petstore.yaml
           - tests/fixtures/features.yaml
+          - tests/fixtures/torture.yaml
           - https://raw.githubusercontent.com/meteroid-oss/meteroid-clients/main/spec/openapi.json
     steps:
       - uses: actions/checkout@v4
@@ -64,6 +66,10 @@ jobs:
         run: |
           mkdir sdk && cd sdk
           perseid init --spec "${{ startsWith(matrix.spec, 'https') && matrix.spec || format('{0}/{1}', github.workspace, matrix.spec) }}"
+          if [ "${{ endsWith(matrix.spec, 'features.yaml') }}" = true ]; then
+            # C# has no uploads or event streams yet.
+            sed -i '/^\[csharp\]/a exclude = ["stream_events", "upload_file", "upload_content"]' perseid.toml
+          fi
           perseid generate
           perseid generate --check
       - working-directory: ${{ runner.temp }}/sdk/rust
@@ -71,7 +77,11 @@ jobs:
       - working-directory: ${{ runner.temp }}/sdk/typescript
         run: npm install --no-audit --no-fund && npx tsc --noEmit
       - working-directory: ${{ runner.temp }}/sdk/python
-        run: uv venv && uv pip install -e . && uv run python -c "import $(sed -n 's/^name = "\(.*\)"/\1/p' pyproject.toml | tr - _)"
+        run: |
+          package=$(sed -n 's/^name = "\(.*\)"/\1/p' pyproject.toml | tr - _)
+          uv venv && uv pip install -e . mypy
+          uv run python -c "import $package"
+          uv run mypy --strict "$package"
       - working-directory: ${{ runner.temp }}/sdk/go
         run: go vet ./...
       - working-directory: ${{ runner.temp }}/sdk/java
@@ -87,7 +97,8 @@ jobs:
             tests/features/run.sh "$language" "$RUNNER_TEMP/sdk/$language"
           done
 
-  # Opt-in runtime (webhooks) and middleware, exercised by tests inside each generated SDK.
+  # Runtime behaviour (retries, idempotency, middleware, webhooks) and torture round trips,
+  # exercised by tests inside each generated SDK.
   extensions:
     runs-on: ubuntu-24.04
     strategy:

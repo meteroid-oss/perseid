@@ -23,14 +23,9 @@ func Ptr[T any](v T) *T {
 //	field = @@PACKAGE_NAME@@.Null[T]()   // explicit null, the server clears it
 //	field = @@PACKAGE_NAME@@.Set(value)  // set to value
 //
-// No generated model currently uses it: the SDK renders optional fields as
-// plain *T, which cannot send an explicit null. That matches the Rust client,
-// which renders the same fields as Option<T> with skip_serializing_if, so
-// nothing is lost relative to the reference SDK. Nullable is kept for callers
-// that build their own request payloads and need the third state, and as the
-// place to hook it up should the generated models ever need it. The Java
-// client's MaybeUnset covers the same three states (and is likewise unused by
-// its generated models).
+// With patch_nullable enabled, the optional nullable fields of PATCH request
+// bodies have this type. Decoding a JSON null leaves a *Nullable nil, as
+// encoding/json does for every pointer.
 type Nullable[T any] struct {
 	value T
 	null  bool

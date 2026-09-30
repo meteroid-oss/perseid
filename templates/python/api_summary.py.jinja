@@ -1,3 +1,4 @@
+{% from "types/macros.py.jinja" import py_ident, resource_module -%}
 # this file is @generated
 """{{ sdk.client_name }} API resources."""
 {%- set streaming = namespace(used=false) %}
@@ -13,7 +14,7 @@ from ._streaming import AsyncEventStream, EventStream, SseEvent, Upload
 from .client import {{ sdk.client_name }}, {{ sdk.client_name }}Async, {{ sdk.client_name }}Options
 {% for resource in api.resources -%}
     {% set cls = resource.name | to_upper_camel_case -%}
-    from .{{ resource.name | to_snake_case }} import {{ cls }}, {{ cls }}Async
+    from .{{ resource_module(resource.name) }} import {{ cls }}, {{ cls }}Async
     {%- for op in resource.operations if op.request_body_kind == "multipart" %}, {{ cls }}{{ op.name | to_upper_camel_case }}Body{% endfor %}
 {% endfor %}
 __all__ = [
@@ -42,6 +43,8 @@ __all__ = [
 {% set client_py %}# this file is @generated
 """{{ sdk.client_name }} API client."""
 
+from __future__ import annotations
+
 import dataclasses
 import typing as t
 
@@ -58,60 +61,61 @@ from .common import (
 from .middleware import AsyncMiddleware, SyncMiddleware
 {% for resource in api.resources -%}
     {% set cls = resource.name | to_upper_camel_case -%}
-    from .{{ resource.name | to_snake_case }} import {{ cls }}, {{ cls }}Async
+    from .{{ resource_module(resource.name) }} import {{ cls }}, {{ cls }}Async
 {% endfor %}
 
 @dataclasses.dataclass
 class {{ sdk.client_name }}Options:
     """Options for configuring the {{ sdk.client_name }} client."""
 
-    server_url: t.Optional[str] = None
+    server_url: str | None = None
     """Custom server URL. Defaults to `{{ sdk.default_base_url }}`."""
 
-    timeout: t.Optional[float] = DEFAULT_TIMEOUT
+    timeout: float | None = DEFAULT_TIMEOUT
     """Timeout for HTTP requests, in seconds. `None` disables the timeout."""
 
-    num_retries: t.Optional[int] = None
-    """Number of retries on server-side errors or timeouts. Defaults to 2."""
+    num_retries: int | None = None
+    """Number of retries on connection failures, 429, 5xx and timeouts. Defaults to 2."""
 
-    retry_schedule: t.Optional[t.List[float]] = None
-    """Explicit list of delays (seconds) before each retry. Takes precedence
-    over `num_retries`."""
+    retry_schedule: list[float] | None = None
+    """Explicit list of delays (seconds) before each retry, reduced by a random
+    jitter of up to 25%. Takes precedence over `num_retries`. A `Retry-After`
+    header of up to 60 seconds overrides it."""
 {%- if "bearer" in kinds %}
 
-    token_provider: t.Optional[TokenProvider] = None
+    token_provider: TokenProvider | None = None
     """Called before each request for a fresh bearer token, e.g. an OAuth2 access
     token. Takes precedence over the client token."""
 {%- endif %}
 {%- if "basic" in kinds %}
 
-    basic_auth: t.Optional[t.Tuple[str, str]] = None
+    basic_auth: tuple[str, str] | None = None
     """HTTP basic `(username, password)`."""
 {%- endif %}
 {%- if "api_key" in kinds %}
 
-    api_keys: t.Dict[str, str] = dataclasses.field(default_factory=dict)
+    api_keys: dict[str, str] = dataclasses.field(default_factory=dict)
     """API keys by security scheme name ({% for scheme in api.security_schemes if scheme.kind == "api_key" %}{% if not loop.first %}, {% endif %}`{{ scheme.name }}`{% endfor %}).
     Schemes left out use the client token."""
 {%- endif %}
 
-    middleware: t.List[SyncMiddleware] = dataclasses.field(default_factory=list)
+    middleware: list[SyncMiddleware] = dataclasses.field(default_factory=list)
     """Wraps every HTTP attempt of the synchronous client: caching, logging,
     custom headers. See `middleware.py`."""
 
-    async_middleware: t.List[AsyncMiddleware] = dataclasses.field(default_factory=list)
+    async_middleware: list[AsyncMiddleware] = dataclasses.field(default_factory=list)
     """The same, for the asyncio client."""
 
 
 SECURITY_SCHEMES = {
 {%- for scheme in api.security_schemes %}
-    "{{ scheme.name }}": SecurityScheme("{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, "{{ scheme.in }}", "{{ scheme.param }}"{% endif %}),
+    {{ scheme.name | tojson }}: SecurityScheme("{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, "{{ scheme.in }}", {{ scheme.param | tojson }}{% endif %}),
 {%- endfor %}
 }
 
 
 def _build_configuration(
-    token: t.Optional[str], options: t.Optional[{{ sdk.client_name }}Options]
+    token: str | None, options: {{ sdk.client_name }}Options | None
 ) -> Configuration:
     options = options if options is not None else {{ sdk.client_name }}Options()
     if options.retry_schedule is not None:
@@ -165,9 +169,9 @@ class {{ sdk.client_name }}:
 
     def __init__(
         self,
-        token: t.Optional[str],
-        options: t.Optional[{{ sdk.client_name }}Options] = None,
-        httpx_client: t.Optional[httpx.Client] = None,
+        token: str | None,
+        options: {{ sdk.client_name }}Options | None = None,
+        httpx_client: httpx.Client | None = None,
     ) -> None:
         self._cfg = _build_configuration(token, options)
         self._owns_httpx_client = httpx_client is None
@@ -177,7 +181,7 @@ class {{ sdk.client_name }}:
             else httpx.Client(timeout=self._cfg.timeout)
         )
 
-    def with_token(self, token: str) -> "{{ sdk.client_name }}":
+    def with_token(self, token: str) -> {{ sdk.client_name }}:
         """Return a client using a different token but the same connection pool."""
         clone = {{ sdk.client_name }}.__new__({{ sdk.client_name }})
         clone._cfg = dataclasses.replace(self._cfg, bearer_access_token=token)
@@ -189,14 +193,14 @@ class {{ sdk.client_name }}:
         if self._owns_httpx_client:
             self._httpx_client.close()
 
-    def __enter__(self) -> "{{ sdk.client_name }}":
+    def __enter__(self) -> {{ sdk.client_name }}:
         return self
 
     def __exit__(self, *exc_info: t.Any) -> None:
         self.close()
 {% for resource in api.resources %}
     @property
-    def {{ resource.name | to_snake_case }}(self) -> {{ resource.name | to_upper_camel_case }}:
+    def {{ py_ident(resource.name) }}(self) -> {{ resource.name | to_upper_camel_case }}:
         """Access the {{ resource.name | to_snake_case | replace("_", " ") }} API."""
         return {{ resource.name | to_upper_camel_case }}(self._cfg, self._httpx_client)
 {% endfor %}
@@ -224,9 +228,9 @@ class {{ sdk.client_name }}Async:
 
     def __init__(
         self,
-        token: t.Optional[str],
-        options: t.Optional[{{ sdk.client_name }}Options] = None,
-        httpx_client: t.Optional[httpx.AsyncClient] = None,
+        token: str | None,
+        options: {{ sdk.client_name }}Options | None = None,
+        httpx_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._cfg = _build_configuration(token, options)
         self._owns_httpx_client = httpx_client is None
@@ -236,7 +240,7 @@ class {{ sdk.client_name }}Async:
             else httpx.AsyncClient(timeout=self._cfg.timeout)
         )
 
-    def with_token(self, token: str) -> "{{ sdk.client_name }}Async":
+    def with_token(self, token: str) -> {{ sdk.client_name }}Async:
         """Return a client using a different token but the same connection pool."""
         clone = {{ sdk.client_name }}Async.__new__({{ sdk.client_name }}Async)
         clone._cfg = dataclasses.replace(self._cfg, bearer_access_token=token)
@@ -248,14 +252,14 @@ class {{ sdk.client_name }}Async:
         if self._owns_httpx_client:
             await self._httpx_client.aclose()
 
-    async def __aenter__(self) -> "{{ sdk.client_name }}Async":
+    async def __aenter__(self) -> {{ sdk.client_name }}Async:
         return self
 
     async def __aexit__(self, *exc_info: t.Any) -> None:
         await self.aclose()
 {% for resource in api.resources %}
     @property
-    def {{ resource.name | to_snake_case }}(self) -> {{ resource.name | to_upper_camel_case }}Async:
+    def {{ py_ident(resource.name) }}(self) -> {{ resource.name | to_upper_camel_case }}Async:
         """Access the {{ resource.name | to_snake_case | replace("_", " ") }} API."""
         return {{ resource.name | to_upper_camel_case }}Async(self._cfg, self._httpx_client)
 {% endfor %}

@@ -1,5 +1,5 @@
-{% from "types/macros.go.jinja" import go_deprecated -%}
-{% set type_name = type.name | to_upper_camel_case -%}
+{% from "types/macros.go.jinja" import go_deprecated, go_ident, go_const -%}
+{% set type_name = go_ident(type.name) -%}
 package {{ sdk.package_name }}
 
 {{ doc_comment }}
@@ -10,12 +10,12 @@ package {{ sdk.package_name }}
 //
 // The API may add new values over time; unknown values round-trip unchanged.
 const (
-{% for value in type.values %}{{ type_name }}{{ value | to_upper_camel_case }} {{ type_name }} = "{{ value }}"
+{% for value in type.values %}{{ go_const(type.name, value, type_names) }} {{ type_name }} = {{ value | tojson }}
 {% endfor %})
 
 // All{{ type_name }}Values lists every {{ type_name }} value known to this SDK version.
 var All{{ type_name }}Values = []{{ type_name }}{
-{% for value in type.values %}{{ type_name }}{{ value | to_upper_camel_case }},
+{% for value in type.values %}{{ go_const(type.name, value, type_names) }},
 {% endfor %}}
 
 // String returns the wire representation of the value.

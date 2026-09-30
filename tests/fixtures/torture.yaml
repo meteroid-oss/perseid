@@ -1,0 +1,1074 @@
+openapi: 3.1.0
+info:
+  title: Torture API
+  version: 1.0.0
+servers:
+- url: https://torture.example.com
+paths:
+  /things:
+    get:
+      operationId: list_things
+      tags:
+      - things
+      parameters:
+      - name: ids
+        in: query
+        schema:
+          type: array
+          items:
+            type: string
+      - name: csv_ids
+        in: query
+        explode: false
+        schema:
+          type: array
+          items:
+            type: string
+      - name: kind
+        in: query
+        schema:
+          $ref: '#/components/schemas/Kind'
+      - name: kinds
+        in: query
+        schema:
+          type: array
+          items:
+            $ref: '#/components/schemas/Kind'
+      - name: inline_mode
+        in: query
+        schema:
+          type: string
+          enum:
+          - fast
+          - slow
+      - name: since
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: day
+        in: query
+        schema:
+          type: string
+          format: date
+      - name: big
+        in: query
+        schema:
+          type: integer
+          format: int64
+      - name: flag
+        in: query
+        schema:
+          type: boolean
+      - name: ratio
+        in: query
+        schema:
+          type: number
+      - name: X-Trace-Id
+        in: header
+        schema:
+          type: string
+      - name: X-Required
+        in: header
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThingList'
+    post:
+      operationId: create_thing
+      tags:
+      - things
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThingCreate'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thing'
+        '201':
+          description: created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thing'
+        '422':
+          description: bad
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationError'
+  /things/{thing_id}:
+    get:
+      operationId: get_thing
+      tags:
+      - things
+      parameters:
+      - name: thing_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thing'
+    patch:
+      operationId: update_thing
+      tags:
+      - things
+      parameters:
+      - name: thing_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThingPatch'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thing'
+    delete:
+      operationId: delete_thing
+      tags:
+      - things
+      parameters:
+      - name: thing_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '204':
+          description: deleted
+  /things/{thing_id}/versions/{version}:
+    get:
+      operationId: get_thing_version
+      tags:
+      - things
+      parameters:
+      - name: thing_id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: version
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int32
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Thing'
+  /things/{thing_id}/pdf:
+    get:
+      operationId: download_thing
+      tags:
+      - things
+      parameters:
+      - name: thing_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: pdf
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+  /things/{thing_id}/csv:
+    get:
+      operationId: export_thing_csv
+      tags:
+      - things
+      parameters:
+      - name: thing_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: csv
+          content:
+            text/csv:
+              schema:
+                type: string
+  /shapes:
+    post:
+      operationId: echo_shape
+      tags:
+      - shapes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Shape'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Shape'
+  /unions:
+    post:
+      operationId: echo_unions
+      tags:
+      - unions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnionHolder'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnionHolder'
+  /reserved:
+    post:
+      operationId: echo_reserved
+      tags:
+      - class
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Reserved'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reserved'
+  /tree:
+    get:
+      operationId: get_tree
+      tags:
+      - tree
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TreeNode'
+  /ping:
+    get:
+      operationId: ping
+      responses:
+        '204':
+          description: pong
+  /composed:
+    get:
+      operationId: get_composed
+      tags:
+      - composed
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Composed'
+  /v2/widgets:
+    get:
+      operationId: list_widgets
+      tags:
+      - widgets
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - name: DateCreated<
+        in: query
+        schema:
+          type: string
+          format: date
+      - name: DateCreated>
+        in: query
+        schema:
+          type: string
+          format: date
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Widget'
+        default:
+          $ref: '#/components/responses/Error'
+    post:
+      operationId: create_widget
+      tags:
+      - widgets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - name
+              properties:
+                name:
+                  type: string
+                dimensions:
+                  type: object
+                  properties:
+                    width:
+                      type: number
+                    height:
+                      type: number
+                parts:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      sku:
+                        type: string
+      responses:
+        '201':
+          description: created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+        4XX:
+          $ref: '#/components/responses/Error'
+  /v2/widgets/{widget_id}:
+    parameters:
+    - $ref: '#/components/parameters/WidgetId'
+    get:
+      responses:
+        '200':
+          $ref: '#/components/responses/Widget'
+        '304':
+          description: not modified
+    put:
+      operationId: update_widget
+      tags:
+      - widgets
+      requestBody:
+        $ref: '#/components/requestBodies/WidgetUpdate'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/vnd.api+json:
+              schema:
+                $ref: '#/components/schemas/Widget'
+        '202':
+          description: accepted
+  /v2/widgets/counts:
+    get:
+      operationId: count_widgets
+      tags:
+      - widgets
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  type: integer
+  /v2/widgets/bulk:
+    post:
+      operationId: bulk_create_widgets
+      tags:
+      - widgets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/WidgetUpdate'
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WidgetList'
+  /v2/widgets/labels:
+    put:
+      operationId: set_widget_labels
+      tags:
+      - widgets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                type: string
+      responses:
+        '204':
+          description: ok
+  /v2/activity:
+    get:
+      operationId: list_activity
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityList'
+components:
+  schemas:
+    Kind:
+      type: string
+      description: String enum with odd values
+      enum:
+      - alpha
+      - beta-2
+      - Gamma Ray
+      - 3d
+      - ''
+      - 'null'
+      - class
+      - UPPER_CASE
+      - a.b
+      - "\xE9"
+    Priority:
+      type: integer
+      enum:
+      - 0
+      - 1
+      - 10
+      - -1
+      x-enum-varnames:
+      - Low
+      - Medium
+      - High
+      - Negative
+    Thing:
+      type: object
+      required:
+      - id
+      - name
+      - created_at
+      - kind
+      - count
+      - nullable_required
+      - tags
+      - metadata
+      - attrs
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          description: Display name
+        created_at:
+          type: string
+          format: date-time
+        birthday:
+          type: string
+          format: date
+        kind:
+          $ref: '#/components/schemas/Kind'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        count:
+          type: integer
+          format: int64
+        small:
+          type: integer
+          format: int32
+        unsigned:
+          type: integer
+          format: uint64
+        ratio:
+          type: number
+          format: double
+        f32:
+          type: number
+          format: float
+        amount:
+          type: string
+          format: decimal
+        blob:
+          type: string
+          format: byte
+        nullable_required:
+          type:
+          - string
+          - 'null'
+        nullable_optional:
+          type:
+          - integer
+          - 'null'
+          format: int64
+        nullable_ref:
+          oneOf:
+          - $ref: '#/components/schemas/Address'
+          - type: 'null'
+        anyof_nullable_ref:
+          anyOf:
+          - $ref: '#/components/schemas/Address'
+          - type: 'null'
+        anyof_nullable_str:
+          anyOf:
+          - type: string
+          - type: 'null'
+        tags:
+          type: array
+          items:
+            type: string
+        unique_tags:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        attrs:
+          type: object
+          additionalProperties: true
+        free:
+          type: object
+        anything: {}
+        nested_map:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              $ref: '#/components/schemas/Address'
+        status:
+          type: string
+          enum:
+          - active
+          - inactive
+          - on-hold
+        mode:
+          type: string
+          enum:
+          - only
+        with_default:
+          type: integer
+          format: int32
+          default: 42
+        str_default:
+          type: string
+          default: hello
+        secret:
+          type: string
+          writeOnly: true
+        link:
+          type: string
+          format: uri
+        email:
+          type: string
+          format: email
+        address:
+          $ref: '#/components/schemas/Address'
+        deprecated_field:
+          type: string
+          deprecated: true
+    ThingCreate:
+      type: object
+      required:
+      - name
+      - kind
+      properties:
+        name:
+          type: string
+        kind:
+          $ref: '#/components/schemas/Kind'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        secret:
+          type: string
+          writeOnly: true
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+    ThingPatch:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type:
+          - string
+          - 'null'
+        count:
+          type:
+          - integer
+          - 'null'
+          format: int64
+    ThingList:
+      type: object
+      required:
+      - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Thing'
+        next_cursor:
+          type:
+          - string
+          - 'null'
+    Address:
+      type: object
+      required:
+      - line1
+      properties:
+        line1:
+          type: string
+        city:
+          type: string
+    Empty:
+      type: object
+      properties: {}
+    FreeForm:
+      type: object
+      additionalProperties: true
+    StringMap:
+      type: object
+      additionalProperties:
+        type: integer
+        format: int64
+    Circle:
+      type: object
+      required:
+      - type
+      - radius
+      properties:
+        type:
+          type: string
+          const: circle
+        radius:
+          type: number
+    Square:
+      type: object
+      required:
+      - type
+      - side
+      properties:
+        type:
+          type: string
+          enum:
+          - square
+        side:
+          type: number
+    Shape:
+      oneOf:
+      - $ref: '#/components/schemas/Circle'
+      - $ref: '#/components/schemas/Square'
+      discriminator:
+        propertyName: type
+        mapping:
+          circle: '#/components/schemas/Circle'
+          square: '#/components/schemas/Square'
+    Cat:
+      type: object
+      required:
+      - pet_type
+      - meow
+      properties:
+        pet_type:
+          type: string
+        meow:
+          type: boolean
+    Dog:
+      type: object
+      required:
+      - pet_type
+      - bark
+      properties:
+        pet_type:
+          type: string
+        bark:
+          type: string
+    Pet:
+      oneOf:
+      - $ref: '#/components/schemas/Cat'
+      - $ref: '#/components/schemas/Dog'
+      discriminator:
+        propertyName: pet_type
+    InlineEvent:
+      type: object
+      required:
+      - event
+      oneOf:
+      - type: object
+        required:
+        - event
+        - id
+        properties:
+          event:
+            type: string
+            enum:
+            - created
+          id:
+            type: string
+      - type: object
+        required:
+        - event
+        - reason
+        properties:
+          event:
+            type: string
+            enum:
+            - deleted
+          reason:
+            type:
+            - string
+            - 'null'
+      discriminator:
+        propertyName: event
+      properties:
+        event:
+          type: string
+        at:
+          type: string
+          format: date-time
+    StringOrInt:
+      oneOf:
+      - type: string
+      - type: integer
+    CatOrDog:
+      oneOf:
+      - $ref: '#/components/schemas/Cat'
+      - $ref: '#/components/schemas/Dog'
+    AnyOfThing:
+      anyOf:
+      - $ref: '#/components/schemas/Address'
+      - $ref: '#/components/schemas/Circle'
+    UnionHolder:
+      type: object
+      required:
+      - shape
+      - shapes
+      properties:
+        shape:
+          $ref: '#/components/schemas/Shape'
+        shapes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Shape'
+        pet:
+          $ref: '#/components/schemas/Pet'
+        event:
+          $ref: '#/components/schemas/InlineEvent'
+        maybe_shape:
+          oneOf:
+          - $ref: '#/components/schemas/Shape'
+          - type: 'null'
+        shape_map:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Shape'
+        str_or_int:
+          $ref: '#/components/schemas/StringOrInt'
+        cat_or_dog:
+          $ref: '#/components/schemas/CatOrDog'
+        any_of:
+          $ref: '#/components/schemas/AnyOfThing'
+        inline_union:
+          oneOf:
+          - type: string
+          - type: array
+            items:
+              type: string
+        empty:
+          $ref: '#/components/schemas/Empty'
+        free_form:
+          $ref: '#/components/schemas/FreeForm'
+        counts:
+          $ref: '#/components/schemas/StringMap'
+        nested:
+          $ref: '#/components/schemas/Nested'
+    TreeNode:
+      type: object
+      required:
+      - value
+      - children
+      properties:
+        value:
+          type: string
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/TreeNode'
+        parent:
+          oneOf:
+          - $ref: '#/components/schemas/TreeNode'
+          - type: 'null'
+        next:
+          $ref: '#/components/schemas/TreeNode'
+    Base:
+      type: object
+      required:
+      - id
+      properties:
+        id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Composed:
+      allOf:
+      - $ref: '#/components/schemas/Base'
+      - type: object
+        required:
+        - extra
+        properties:
+          extra:
+            type: string
+      properties:
+        sibling_prop:
+          type: string
+      required:
+      - sibling_prop
+    Reserved:
+      type: object
+      required:
+      - type
+      - class
+      properties:
+        type:
+          type: string
+        class:
+          type: string
+        default:
+          type: string
+        async:
+          type: boolean
+        from:
+          type: string
+        self:
+          type: string
+        package:
+          type: string
+        import:
+          type: string
+        None:
+          type: string
+        'null':
+          type: string
+        interface:
+          type: string
+        func:
+          type: string
+        fn:
+          type: string
+        kebab-case:
+          type: string
+        camelCase:
+          type: string
+        PascalCase:
+          type: string
+        with space:
+          type: string
+        $dollar:
+          type: string
+        1leading:
+          type: string
+    ValidationError:
+      type: object
+      required:
+      - message
+      properties:
+        message:
+          type: string
+        fields:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+    Widget:
+      type: object
+      required:
+      - id
+      - name
+      properties:
+        id:
+          type: string
+          readOnly: true
+        name:
+          type: string
+        secret:
+          type: string
+          writeOnly: true
+        released_on:
+          type: string
+          format: date
+        owner:
+          allOf:
+          - $ref: '#/components/schemas/Address'
+          description: Where the owner lives
+        backup_owner:
+          anyOf:
+          - $ref: '#/components/schemas/Address'
+          - type: 'null'
+        version:
+          const: 2
+        kind:
+          type: string
+          enum:
+          - widget
+        reactions:
+          type: object
+          properties:
+            '+1':
+              type: integer
+            '-1':
+              type: integer
+    WidgetUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+    WidgetList:
+      type: array
+      items:
+        $ref: '#/components/schemas/Widget'
+    Problem:
+      type: object
+      required:
+      - title
+      properties:
+        title:
+          type: string
+    ActivityList:
+      type: object
+      required:
+      - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Activity'
+    Activity:
+      oneOf:
+      - $ref: '#/components/schemas/Opened'
+      - type: object
+        required:
+        - kind
+        - by
+        properties:
+          kind:
+            type: string
+            const: closed
+          by:
+            type: string
+      discriminator:
+        propertyName: kind
+        mapping:
+          opened: Opened
+          reopened: '#/components/schemas/Opened'
+    Opened:
+      type: object
+      required:
+      - kind
+      properties:
+        kind:
+          type: string
+        at:
+          type: string
+          format: date-time
+    Nested:
+      allOf:
+      - allOf:
+        - $ref: '#/components/schemas/Base'
+      - properties:
+          depth:
+            type: integer
+  parameters:
+    WidgetId:
+      name: widget_id
+      in: path
+      required: true
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        format: int32
+  requestBodies:
+    WidgetUpdate:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/WidgetUpdate'
+  responses:
+    Widget:
+      description: a widget
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Widget'
+    Error:
+      description: error
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'

@@ -1,16 +1,24 @@
+{% import "types/macros.ts.jinja" as m -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+{% set ns = namespace(names=[]) -%}
+{% for name, value in type.variants %}{% set ns.names = ns.names + [name] %}{% endfor -%}
+{% set members = ns.names | idents("pascal", none, "schema `" ~ type.name ~ "`") -%}
 {{ doc_comment }}
-export enum {{ type.name | to_upper_camel_case }} {
+export const {{ type_name }} = {
     {% for name, value in type.variants -%}
-    {{ name | to_upper_camel_case }} = {{ value }},
+    {{ members[loop.index0] }}: {{ value }},
     {% endfor -%}
-}
+} as const;
 
-export const {{ type.name | to_upper_camel_case }}Serializer = {
-    _fromJsonObject(object: any): {{ type.name | to_upper_camel_case }} {
-        return object;
+export type {{ type_name }} = (typeof {{ type_name }})[keyof typeof {{ type_name }}];
+
+export const {{ type_name }}Serializer = {
+    parse(json: any): {{ type_name }} {
+        return json;
     },
 
-    _toJsonObject(self: {{ type.name | to_upper_camel_case }}): any {
-        return self;
-    }
-}
+    serialize(value: {{ type_name }}): any {
+        return value;
+    },
+{{ m.legacy_aliases(type_name) }}
+};

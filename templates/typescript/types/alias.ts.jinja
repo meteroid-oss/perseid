@@ -1,6 +1,6 @@
 {% from "types/macros.ts.jinja" import js_type -%}
 {% for c in referenced_components -%}
-import type { {{ c | to_upper_camel_case }} } from "./{{ c | to_lower_camel_case }}";
+import type { {{ c | to_upper_camel_case }} } from "./{{ c | to_lower_camel_case }}.js";
 {% endfor -%}
 
 {{ doc_comment }}

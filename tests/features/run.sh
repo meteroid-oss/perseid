@@ -15,6 +15,7 @@ case $lang in
   typescript)
     mkdir -p smoke && cp "$here/smoke.ts" smoke/
     npx tsc --outDir smoke-build --rootDir . --strict --target es2020 --module commonjs --lib es2020,dom --types node --skipLibCheck smoke/smoke.ts
+    echo '{"type":"commonjs"}' > smoke-build/package.json
     node smoke-build/smoke/smoke.js ;;
   python) cp "$here/smoke.py" . && uv run --no-project python smoke.py ;;
   go) cp "$here/smoke_test.go" . && go test -run TestSmoke -count=1 . ;;

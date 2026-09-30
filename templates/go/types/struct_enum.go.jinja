@@ -1,25 +1,34 @@
-{% from "types/macros.go.jinja" import go_deprecated -%}
-{% set type_name = type.name | to_upper_camel_case -%}
-{% set disc_field = type.discriminator_field | to_upper_camel_case -%}
-{#- Go has no sum types, so a tagged union becomes a struct carrying the
-    discriminator plus one pointer per variant, with hand-rolled JSON codecs.
-
-    Only the shapes that actually occur in the input schema are supported. Any
-    other shape is a hard error rather than a silently degraded type. -#}
+{% from "types/macros.go.jinja" import go_deprecated, go_ident, go_export, go_const, go_field_type, go_json_tag -%}
+{% set type_name = go_ident(type.name) -%}
+{% set disc_field = go_export(type.discriminator_field) -%}
+{#- Go has no sum types: a tagged union is a struct holding the discriminator,
+    the fields every variant shares and one pointer per variant. -#}
 {% if type.repr != "internally_tagged" -%}
 {{ panic("go codegen: struct enum `" ~ type.name ~ "` uses the `" ~ type.repr ~ "` representation, which the Go templates do not implement yet") }}
-{%- endif -%}
-{% if type.fields | length > 0 -%}
-{{ panic("go codegen: struct enum `" ~ type.name ~ "` has variant-independent fields, which the Go templates do not implement yet") }}
 {%- endif -%}
 {% for variant in type.variants -%}
 {% if variant.type != "ref" -%}
 {{ panic("go codegen: struct enum `" ~ type.name ~ "` has an inline-struct variant `" ~ variant.name ~ "`, which the Go templates do not implement yet") }}
 {%- endif -%}
 {% endfor -%}
+{% set shared = type.fields | rejectattr("name", "equalto", type.discriminator_field) | list -%}
+{% for field in shared if field.flatten -%}
+{{ panic("go codegen: struct enum `" ~ type.name ~ "` flattens `" ~ field.name ~ "` into its shared fields, which the Go templates do not implement yet") }}
+{%- endfor -%}
+{% set known = type.variants | selectattr("schema_ref", "defined") | list -%}
+{#- A variant field must not clash with the discriminator, a shared field or a method. -#}
+{% set ns = namespace(reserved=[disc_field, "Raw", "IsKnown", "MarshalJSON", "UnmarshalJSON"]) -%}
+{% for field in shared %}{% set ns.reserved = ns.reserved + [go_export(field.name)] %}{% endfor -%}
+{% macro variant_field(variant) %}{% set name = go_export(variant.name) %}{{ name ~ "Variant" if name in ns.reserved else name }}{% endmacro -%}
+{% set rendered_types %}{% for field in shared %}{{ go_field_type(field) }} {% endfor %}{% endset -%}
 package {{ sdk.package_name }}
 
-import "encoding/json"
+{% if "time.Time" in rendered_types %}import (
+	"encoding/json"
+	"time"
+)
+{% else %}import "encoding/json"
+{% endif %}
 
 {{ doc_comment }}
 {% if type.deprecated %}{{ go_deprecated("type") }}
@@ -35,10 +44,13 @@ type {{ type_name }} struct {
 // {{ disc_field }} selects the active variant. Compare it against the
 // {{ type_name }}* constants.
 {{ disc_field }} string `json:"{{ type.discriminator_field }}"`
-
-{% for variant in type.variants %}{% if variant.schema_ref is defined %}// {{ variant.name | to_upper_camel_case }} is set when {{ disc_field }} is {{ type_name }}{{ variant.name | to_upper_camel_case }}.
-{{ variant.name | to_upper_camel_case }} *{{ variant.schema_ref | to_upper_camel_case }} `json:"-"`
-{% endif %}{% endfor %}
+{% for field in shared %}
+{% if field.description is defined %}{{ field.description | to_doc_comment(style="go") }}
+{% endif %}{{ go_export(field.name) }} {{ go_field_type(field) }} {{ go_json_tag(field) }}
+{% endfor %}
+{% for variant in known %}// {{ variant_field(variant) }} is set when {{ disc_field }} is {{ go_const(type.name, variant.name, type_names) }}.
+{{ variant_field(variant) }} *{{ go_ident(variant.schema_ref) }} `json:"-"`
+{% endfor %}
 // raw keeps the payload of a variant this SDK version does not know about, so
 // that decoding and re-encoding an unknown variant preserves every field and
 // value. It is not byte-for-byte identical: `encoding/json` compacts the
@@ -48,25 +60,25 @@ raw json.RawMessage
 
 // Discriminator values for {{ type_name }}.
 const (
-{% for variant in type.variants %}{{ type_name }}{{ variant.name | to_upper_camel_case }} = "{{ variant.name }}"
+{% for variant in type.variants %}{{ go_const(type.name, variant.name, type_names) }} = {{ variant.name | tojson }}
 {% endfor %})
 
-{% for variant in type.variants %}{% if variant.schema_ref is defined %}// New{{ type_name }}{{ variant.name | to_upper_camel_case }} builds a {{ type_name }} holding the {{ variant.name }} variant.
-func New{{ type_name }}{{ variant.name | to_upper_camel_case }}(value {{ variant.schema_ref | to_upper_camel_case }}) {{ type_name }} {
-	return {{ type_name }}{ {{ disc_field }}: {{ type_name }}{{ variant.name | to_upper_camel_case }}, {{ variant.name | to_upper_camel_case }}: &value}
+{% for variant in known %}// New{{ type_name }}{{ go_export(variant.name) }} builds a {{ type_name }} holding the {{ variant.name }} variant.
+func New{{ type_name }}{{ go_export(variant.name) }}(value {{ go_ident(variant.schema_ref) }}) {{ type_name }} {
+	return {{ type_name }}{ {{ disc_field }}: {{ go_const(type.name, variant.name, type_names) }}, {{ variant_field(variant) }}: &value}
 }
 
-{% endif %}{% endfor %}
+{% endfor %}
 // IsKnown reports whether {{ disc_field }} is one of the variants this SDK version
 // knows about, i.e. one of the {{ type_name }}* constants. It is false for a
 // variant added to the API later, whose payload is then only available from
 // [{{ type_name }}.Raw].
 func (u {{ type_name }}) IsKnown() bool {
-	switch u.{{ disc_field }} {
-	case {% for variant in type.variants if variant.schema_ref is defined %}{% if not loop.first %}, {% endif %}{{ type_name }}{{ variant.name | to_upper_camel_case }}{% endfor %}:
+{% if known %}	switch u.{{ disc_field }} {
+	case {% for variant in known %}{% if not loop.first %}, {% endif %}{{ go_const(type.name, variant.name, type_names) }}{% endfor %}:
 		return true
 	}
-	return false
+{% endif %}	return false
 }
 
 // Raw returns the JSON of a variant this SDK version does not know about, as
@@ -81,13 +93,16 @@ func (u {{ type_name }}) Raw() json.RawMessage {
 
 // MarshalJSON implements json.Marshaler.
 func (u {{ type_name }}) MarshalJSON() ([]byte, error) {
-	switch u.{{ disc_field }} {
-{% for variant in type.variants %}{% if variant.schema_ref is defined %}	case {{ type_name }}{{ variant.name | to_upper_camel_case }}:
-		if u.{{ variant.name | to_upper_camel_case }} == nil {
+{% if shared %}	shared := struct {
+{% for field in shared %}		{{ go_export(field.name) }} {{ go_field_type(field) }} {{ go_json_tag(field) }}
+{% endfor %}	}{ {% for field in shared %}{% if not loop.first %}, {% endif %}{{ go_export(field.name) }}: u.{{ go_export(field.name) }}{% endfor %} }
+{% endif %}	switch u.{{ disc_field }} {
+{% for variant in known %}	case {{ go_const(type.name, variant.name, type_names) }}:
+		if u.{{ variant_field(variant) }} == nil {
 			return nil, &UnionError{Union: "{{ type_name }}", Discriminator: u.{{ disc_field }}, Reason: "variant payload is nil"}
 		}
-		return marshalUnionVariant("{{ type.discriminator_field }}", u.{{ disc_field }}, u.{{ variant.name | to_upper_camel_case }})
-{% endif %}{% endfor %}	}
+		return marshalUnionVariant("{{ type.discriminator_field }}", u.{{ disc_field }}, u.{{ variant_field(variant) }}{% if shared %}, shared{% endif %})
+{% endfor %}	}
 
 	if len(u.raw) > 0 {
 		return u.raw, nil
@@ -107,17 +122,18 @@ func (u {{ type_name }}) MarshalJSON() ([]byte, error) {
 func (u *{{ type_name }}) UnmarshalJSON(data []byte) error {
 	var tag struct {
 		{{ disc_field }} string `json:"{{ type.discriminator_field }}"`
-	}
+{% for field in shared %}		{{ go_export(field.name) }} {{ go_field_type(field) }} {{ go_json_tag(field) }}
+{% endfor %}	}
 	if err := json.Unmarshal(data, &tag); err != nil {
 		return err
 	}
 
-	*u = {{ type_name }}{ {{ disc_field }}: tag.{{ disc_field }} }
+	*u = {{ type_name }}{ {{ disc_field }}: tag.{{ disc_field }}{% for field in shared %}, {{ go_export(field.name) }}: tag.{{ go_export(field.name) }}{% endfor %} }
 	switch tag.{{ disc_field }} {
-{% for variant in type.variants %}{% if variant.schema_ref is defined %}	case {{ type_name }}{{ variant.name | to_upper_camel_case }}:
-		u.{{ variant.name | to_upper_camel_case }} = new({{ variant.schema_ref | to_upper_camel_case }})
-		return json.Unmarshal(data, u.{{ variant.name | to_upper_camel_case }})
-{% endif %}{% endfor %}	default:
+{% for variant in known %}	case {{ go_const(type.name, variant.name, type_names) }}:
+		u.{{ variant_field(variant) }} = new({{ go_ident(variant.schema_ref) }})
+		return json.Unmarshal(data, u.{{ variant_field(variant) }})
+{% endfor %}	default:
 		u.raw = append(json.RawMessage(nil), data...)
 		return nil
 	}

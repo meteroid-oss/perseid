@@ -1,14 +1,26 @@
+{% import "types/macros.java.jinja" as m -%}
 // This file is @generated
 {% set ty_name = type.name | to_upper_camel_case -%}
+{{- m.check_name(ty_name) -}}
 package {{ sdk.java_package }}.models;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 import {{ sdk.java_package }}.Utils.ToQueryParam;
 
+{% if type.description is defined -%}
+{{ type.description | e | to_doc_comment(style="java") }}
+{% endif -%}
 public enum {{ ty_name }} implements ToQueryParam {
+    {% set owner = "schema `" ~ type.name ~ "`" -%}
+    {% set unknown = "UNRECOGNIZED_VALUE" if "UNRECOGNIZED" in (type.values | idents("shouty", "java", owner)) else "UNRECOGNIZED" -%}
+    {% set members = (type.values + [unknown | lower]) | idents("shouty", "java", owner) -%}
     {% for value in type.values -%}
-    {{ value | to_upper_snake_case }}("{{ value }}") {% if loop.last %};{% else %},{% endif %}
+    {{ members[loop.index0] }}({{ value | tojson }}),
     {% endfor -%}
+    /** A value this version of the SDK does not know, which serializes as null. */
+    {{ unknown }}(null);
+
     private final String value;
 
     {{ ty_name }}(String value) {
@@ -18,6 +30,17 @@ public enum {{ ty_name }} implements ToQueryParam {
     @JsonValue
     public String getValue() {
         return this.value;
+    }
+
+    /** The constant for {@code value}, or {@link #{{ unknown }}} for an unknown value. */
+    @JsonCreator
+    public static {{ ty_name }} fromValue(String value) {
+        for ({{ ty_name }} known : values()) {
+            if (known.value != null && known.value.equals(value)) {
+                return known;
+            }
+        }
+        return {{ unknown }};
     }
 
     @Override

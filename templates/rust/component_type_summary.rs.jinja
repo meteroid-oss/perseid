@@ -1,13 +1,32 @@
 // this file is @generated
 #![allow(clippy::too_many_arguments)]
 
+#[path = "../codec.rs"]
+pub(crate) mod codec;
+
 {% for _, type in api.types | items -%}
     pub mod {{ type.name | to_rust_ident }};
 {% endfor -%}
 
+{% if api.types -%}
 pub use self::{
     {% for _, type in api.types | items -%}
         {% set type_name = type.name | to_upper_camel_case -%}
         {{ type.name | to_rust_ident }}::{{ type_name }},
     {% endfor -%}
 };
+{% endif -%}
+{% if sdk.chrono %}
+
+impl crate::request::QueryParamValue for chrono::DateTime<chrono::Utc> {
+    fn encode(&self) -> String {
+        self.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    }
+}
+
+impl crate::request::QueryParamValue for chrono::NaiveDate {
+    fn encode(&self) -> String {
+        self.to_string()
+    }
+}
+{% endif %}

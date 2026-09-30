@@ -6,8 +6,9 @@ pub mod upload;
 mod event_stream;
 #[path = "../middleware.rs"]
 pub mod middleware;
-pub use upload::Upload;
+pub use crate::connector::{http_client, HttpClient};
 pub use event_stream::{EventStream, SseEvent};
+pub use upload::{RequestBody, Upload};
 #[path = "../auth_schemes.rs"]
 pub(crate) mod auth_schemes;
 pub use auth_schemes::{BasicAuth, TokenProvider};
@@ -50,9 +51,9 @@ pub use self::{
 
 use std::{sync::Arc, time::Duration};
 
-use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
+use hyper_util::client::legacy::connect::Connect;
 
-use super::middleware::Middlewares;
+use super::{middleware::Middlewares, HttpClient};
 use crate::Configuration;
 
 use super::auth_schemes::{Credentials, Scheme, Security};
@@ -70,27 +71,23 @@ static DEFAULT_SECURITY: Security = &[{% for names in api.security %}&[{% for na
 /// Options for configuring the {{ sdk.client_name }} client.
 #[derive(Debug, Clone)]
 pub struct {{ sdk.client_name }}Options {
-    /// Enable debug logging.
+    #[deprecated(note = "has no effect, use a middleware to log requests")]
     pub debug: bool,
 
     /// Custom server URL. Defaults to `{{ sdk.default_base_url }}`.
     pub server_url: Option<String>,
 
-    /// Timeout for HTTP requests.
-    ///
-    /// The timeout is applied from when the request starts connecting until
-    /// the response body has finished. {% if streaming.events %}For SSE this covers opening the stream only.
-    /// If set to `None`, requests never time
-    /// out.{% else %}If set to `None`, requests never time
-    /// out.{% endif %}
+    /// Timeout of each attempt, from connecting until the response body is read{% if streaming.events %}
+    /// (for event streams, until the stream opens){% endif %}.
+    /// `None` never times out.
     ///
     /// Default: 15 seconds.
     pub timeout: Option<Duration>,
 
-    /// Number of retries.
-    ///
-    /// The number of times the client will retry if a server-side error
-    /// or timeout is received.
+    /// How many times a failed request is retried: on connection errors, timeouts, and
+    /// 408, 429 and 5xx responses. Only idempotent requests are retried; POST requests are
+    /// made idempotent with an automatic `Idempotency-Key`. `Retry-After` is honored up to
+    /// a minute, otherwise delays grow from 500ms to 8s with jitter.
     ///
     /// Default: 2
     pub num_retries: Option<u32>,
@@ -112,18 +109,33 @@ pub struct {{ sdk.client_name }}Options {
     pub api_keys: std::collections::HashMap<String, String>,
 {%- endif %}
 
-    /// Retry Schedule.
-    ///
-    /// List of delays to wait before each retry attempt.
-    /// Takes precedence over `num_retries`.
+    /// Exact delays before each retry, overriding `num_retries` and the backoff.
     pub retry_schedule: Option<Vec<Duration>>,
 
     /// Middleware wrapping every HTTP attempt: caching, logging, custom headers.
     pub middleware: Middlewares,
+
+    /// Sends the requests. Defaults to hyper over rustls, or native-tls with the
+    /// `native-tls` feature. See [`with_connector`](Self::with_connector) for custom TLS
+    /// roots, client certificates or a proxy.
+    pub http_client: Option<Arc<dyn HttpClient>>,
+}
+
+impl {{ sdk.client_name }}Options {
+    /// Sends requests through `connector`, e.g. a `hyper_rustls::HttpsConnector` with its
+    /// own `rustls::ClientConfig`.
+    pub fn with_connector<C>(mut self, connector: C) -> Self
+    where
+        C: Connect + Clone + Send + Sync + 'static,
+    {
+        self.http_client = Some(super::http_client(connector));
+        self
+    }
 }
 
 impl Default for {{ sdk.client_name }}Options {
     fn default() -> Self {
+        #[allow(deprecated)]
         Self {
             debug: false,
             server_url: None,
@@ -140,6 +152,7 @@ impl Default for {{ sdk.client_name }}Options {
 {%- if "api_key" in kinds %}
             api_keys: Default::default(),
 {%- endif %}
+            http_client: None,
         }
     }
 }
@@ -154,10 +167,10 @@ impl Default for {{ sdk.client_name }}Options {
 /// use {{ sdk.rust_crate }}::api::{{ "{" }}{{ sdk.client_name }}, {{ sdk.client_name }}Options};
 ///
 /// # async fn example() -> Result<(), {{ sdk.rust_crate }}::error::Error> {
-/// let client = {{ sdk.client_name }}::new("your-api-key".to_string(), None);
+/// let client = {{ sdk.client_name }}::new("your-api-key", None);
 ///
-/// // Access API resources
 {% if sdk.example -%}
+/// // Access API resources
 {% for line in sdk.example | lines -%}
 /// {{ line }}
 {% endfor -%}
@@ -179,17 +192,18 @@ impl {{ sdk.client_name }} {
     ///
     /// * `token` - Your {{ sdk.client_name }} API key
     /// * `options` - Optional configuration options
-    pub fn new(token: String, options: Option<{{ sdk.client_name }}Options>) -> Self {
+    pub fn new(token: impl Into<String>, options: Option<{{ sdk.client_name }}Options>) -> Self {
         let options = options.unwrap_or_default();
-
         let cfg = Arc::new(Configuration {
             user_agent: Some(format!("{{ sdk.user_agent_prefix }}-rust/{CRATE_VERSION}")),
-            client: HyperClient::builder(TokioExecutor::new()).build(crate::make_connector()),
+            client: options
+                .http_client
+                .unwrap_or_else(|| super::http_client(crate::make_connector())),
             timeout: options.timeout,
             base_path: options
                 .server_url
                 .unwrap_or_else(|| "{{ sdk.default_base_url }}".to_string()),
-            bearer_access_token: Some(token),
+            bearer_access_token: Some(token.into()),
             num_retries: options.num_retries.unwrap_or(2),
             retry_schedule: options.retry_schedule,
             middleware: options.middleware.0,
@@ -206,16 +220,16 @@ impl {{ sdk.client_name }} {
     }
 
     /// Creates a new `{{ sdk.client_name }}` API client with a different token,
-    /// re-using all of the settings and the Hyper client from
+    /// re-using all of the settings and the HTTP client from
     /// an existing `{{ sdk.client_name }}` instance.
     ///
     /// This can be used to change the token without incurring
     /// the cost of TLS initialization.
-    pub fn with_token(&self, token: String) -> Self {
+    pub fn with_token(&self, token: impl Into<String>) -> Self {
         let cfg = Arc::new(Configuration {
             base_path: self.cfg.base_path.clone(),
             user_agent: self.cfg.user_agent.clone(),
-            bearer_access_token: Some(token),
+            bearer_access_token: Some(token.into()),
             client: self.cfg.client.clone(),
             timeout: self.cfg.timeout,
             num_retries: self.cfg.num_retries,
@@ -253,7 +267,7 @@ mod tests {
     fn test_client_send_sync() {
         fn require_send_sync<T: Send + Sync>(_: T) {}
 
-        let client = {{ sdk.client_name }}::new(String::new(), None);
+        let client = {{ sdk.client_name }}::new("", None);
         require_send_sync(client);
     }
     {% endif -%}

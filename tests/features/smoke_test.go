@@ -43,18 +43,18 @@ func TestSmoke(t *testing.T) {
 	client := New("tok", &Options{ServerURL: url})
 	expect(t, status(client.Account().Health(ctx)), "||")
 	expect(t, status(client.Account().MachineStatus(ctx)), "Bearer tok||")
-	widget := func(w Widget) string { return w.Id }
+	widget := func(w Widget) string { return w.ID }
 	expect(t, ids(t, client.Widgets().ListWidgetsIter(ctx, nil), widget), []string{"w1", "w2", "w3"})
 	events := client.Widgets().ListWidgetEventsIter(ctx, "w1", WidgetsListWidgetEventsOptions{Kind: "created"})
-	expect(t, ids(t, events, func(e Event) string { return e.Id }), []string{"e1", "e2", "e3"})
+	expect(t, ids(t, events, func(e Event) string { return e.ID }), []string{"e1", "e2", "e3"})
 	gadgets := client.Gadgets().ListGadgetsIter(ctx, nil)
 	var gadgetIds []string
 	for gadgets.Next() {
-		gadgetIds = append(gadgetIds, gadgets.Current().Id)
+		gadgetIds = append(gadgetIds, gadgets.Current().ID)
 	}
 	expect(t, gadgets.Err(), nil)
 	expect(t, gadgetIds, []string{"g1", "g2", "g3"})
-	expect(t, ids(t, client.Records().ListRecordsIter(ctx, nil), func(r Entry) string { return r.Id }), []string{"r1", "r2", "r3"})
+	expect(t, ids(t, client.Records().ListRecordsIter(ctx, nil), func(r Entry) string { return r.ID }), []string{"r1", "r2", "r3"})
 
 	basic := New("", &Options{ServerURL: url, BasicAuth: &BasicAuth{Username: "u", Password: "p"}})
 	expect(t, status(basic.Account().CreateSession(ctx)), "Basic dTpw||")

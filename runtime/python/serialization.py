@@ -2,14 +2,15 @@
 """(De)serialization support for the generated @@CLIENT_NAME@@ models.
 
 The generated models are plain :mod:`dataclasses`. All JSON conversion lives
-here so the generated code stays declarative and dependency free.
+here, driven by their type annotations, so the generated code stays declarative
+and dependency free.
 
-Conventions mirrored from the Rust SDK:
-
-* ``None`` valued fields are omitted from the serialized payload (equivalent to
-  ``#[serde(skip_serializing_if = "Option::is_none")]``), except required
-  any-JSON (``t.Any``) fields, where ``None`` is a JSON ``null``.
-* Unknown JSON keys are ignored when deserializing.
+* An optional field left to ``None`` is omitted from the payload. An optional
+  field that the API accepts as ``null`` defaults to :data:`UNSET` instead:
+  ``UNSET`` is omitted, while ``None`` is sent as ``null`` (to clear a value).
+  A required field is always sent.
+* Unknown JSON keys are ignored, and so are enum values and union variants
+  added to the API after this SDK was generated: they are kept as received.
 * ``Decimal`` values travel as JSON strings, ``datetime`` values as RFC 3339
   strings. Only finite decimals are valid: ``NaN`` and ``Infinity`` are
   rejected in both directions.
@@ -20,23 +21,33 @@ from __future__ import annotations
 import dataclasses
 import datetime as _datetime
 import enum
+import importlib
 import json
 import re
+import sys
+import types
 import typing as t
 from decimal import Decimal
 
 __all__ = [
+    "UNSET",
     "BaseModel",
-    "TaggedUnionModel",
+    "Discriminator",
+    "IntEnum",
     "@@CLIENT_NAME@@Error",
     "ModelParseError",
+    "StrEnum",
+    "TaggedUnionModel",
+    "UnknownVariant",
+    "Unset",
     "format_decimal",
+    "from_json_value",
     "parse_datetime",
     "parse_decimal",
     "to_json_value",
 ]
 
-_T = t.TypeVar("_T", bound="BaseModel")
+_M = t.TypeVar("_M", bound="BaseModel")
 
 
 # `@@CLIENT_NAME@@Error` is defined here rather than in `errors.py` because the
@@ -55,29 +66,156 @@ class ModelParseError(@@CLIENT_NAME@@Error, ValueError):
     """
 
 
+class Unset(enum.Enum):
+    """The type of :data:`UNSET`."""
+
+    UNSET = "UNSET"
+
+    def __bool__(self) -> t.Literal[False]:
+        return False
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET: t.Final = Unset.UNSET
+"""Default of the optional fields that also accept ``null``: the field is left
+out of the payload, whereas ``None`` sends ``null``."""
+
+
+class StrEnum(str, enum.Enum):
+    """A string enum that keeps values this SDK version does not know.
+
+    ``Color("ultraviolet")`` returns a member whose ``value`` is
+    ``"ultraviolet"`` and whose ``is_known`` is false, instead of raising.
+    """
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    @classmethod
+    def _missing_(cls, value: object) -> t.Any:
+        if not isinstance(value, str):
+            return None
+        member = str.__new__(cls, value)
+        member._name_ = value
+        member._value_ = value
+        return member
+
+    @property
+    def is_known(self) -> bool:
+        """Whether the value is one of those declared by the API spec."""
+        return self._value_ in type(self)._value2member_map_
+
+
+class IntEnum(int, enum.Enum):
+    """An integer enum that keeps values this SDK version does not know."""
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+    @classmethod
+    def _missing_(cls, value: object) -> t.Any:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        member = int.__new__(cls, value)
+        member._name_ = str(value)
+        member._value_ = value
+        return member
+
+    @property
+    def is_known(self) -> bool:
+        """Whether the value is one of those declared by the API spec."""
+        return self._value_ in type(self)._value2member_map_
+
+
+@dataclasses.dataclass(frozen=True)
+class UnknownVariant:
+    """A union variant this SDK version does not know, kept as received."""
+
+    tag: str
+    """The discriminator value."""
+    data: t.Mapping[str, t.Any]
+    """The raw JSON object, which serializes back unchanged."""
+
+
+class Discriminator:
+    """Annotation metadata of a union of models told apart by one property.
+
+    ``Annotated[Circle | Square | UnknownVariant, Discriminator("type", ...)]``
+    decodes into the model its ``type`` names, and writes that name back when
+    the model is serialized.
+    """
+
+    def __init__(self, property: str, mapping: t.Mapping[str, type[BaseModel]]) -> None:
+        self.property = property
+        self.mapping = dict(mapping)
+        self.tags = {model: tag for tag, model in self.mapping.items()}
+
+    def parse(self, value: t.Any, ctx: str) -> t.Any:
+        if not isinstance(value, t.Mapping):
+            raise ModelParseError(f"{ctx}: expected an object, got {type(value).__name__}")
+        tag = value.get(self.property)
+        if not isinstance(tag, str):
+            raise ModelParseError(f"{ctx}: missing discriminator {self.property!r}")
+        model = self.mapping.get(tag)
+        if model is None:
+            return UnknownVariant(tag, dict(value))
+        return model.from_dict(value)
+
+    def serialize(self, value: t.Any) -> t.Any:
+        data = to_json_value(value)
+        tag = self.tags.get(type(value))
+        if tag is not None and isinstance(data, dict):
+            data[self.property] = tag
+        return data
+
+
 # --------------------------------------------------------------------------
 # Serialization
 # --------------------------------------------------------------------------
 
+_NoneType = type(None)
+_UNION_TYPES: tuple[t.Any, ...] = (t.Union, types.UnionType)
 
-def to_json_value(value: t.Any) -> t.Any:
-    """Convert a Python value into something ``json.dumps`` understands."""
+
+def to_json_value(value: t.Any, annotation: t.Any = t.Any) -> t.Any:
+    """Convert ``value`` into something ``json.dumps`` understands.
+
+    ``annotation`` is the declared type of ``value``; it only matters for
+    unions of models whose variants do not carry their own discriminator.
+    """
+    origin = t.get_origin(annotation)
+    if origin is t.Annotated:
+        base, *metadata = t.get_args(annotation)
+        for meta in metadata:
+            if isinstance(meta, Discriminator) and value is not None:
+                return meta.serialize(value)
+        return to_json_value(value, base)
+    if origin in _UNION_TYPES:
+        members = [a for a in t.get_args(annotation) if a not in (_NoneType, Unset)]
+        return to_json_value(value, members[0] if len(members) == 1 else t.Any)
+    if isinstance(value, enum.Enum):
+        return to_json_value(value.value)
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, BaseModel):
         return value.to_dict()
-    if isinstance(value, enum.Enum):
-        return to_json_value(value.value)
+    if isinstance(value, UnknownVariant):
+        return dict(value.data)
     if isinstance(value, Decimal):
         return format_decimal(value)
     if isinstance(value, _datetime.datetime):
         return format_datetime(value)
     if isinstance(value, _datetime.date):
         return value.isoformat()
+    args = t.get_args(annotation)
     if isinstance(value, (list, tuple, set, frozenset)):
-        return [to_json_value(v) for v in value]
-    if isinstance(value, dict):
-        return {str(k): to_json_value(v) for k, v in value.items()}
+        inner = args[0] if origin in (list, set, frozenset) and args else t.Any
+        return [to_json_value(v, inner) for v in value]
+    if isinstance(value, t.Mapping):
+        inner = args[1] if origin is dict and len(args) == 2 else t.Any
+        return {str(k): to_json_value(v, inner) for k, v in value.items()}
     return value
 
 
@@ -120,19 +258,17 @@ def format_datetime(value: _datetime.datetime) -> str:
 _FRACTION_RE = re.compile(r"(?<=[Tt ]\d\d:\d\d:\d\d)\.(\d+)")
 
 
-def _normalize_fraction(match: "re.Match[str]") -> str:
+def _normalize_fraction(match: re.Match[str]) -> str:
     return "." + match.group(1)[:6].ljust(6, "0")
 
 
 def parse_datetime(value: t.Any) -> _datetime.datetime:
     """Parse an ISO 8601 / RFC 3339 string into an aware :class:`datetime.datetime`.
 
-    The result is always timezone-aware. The @@CLIENT_NAME@@ API sends every
-    date-time in UTC, but some fields carry no UTC offset (e.g.
-    ``2026-09-19T10:00:00.123456``): those are read as UTC. A string with an
-    explicit offset (``Z``, ``+02:00``) keeps it. Fractional seconds may have
-    1 to 9 digits: they are truncated to microseconds, the precision of
-    :class:`datetime.datetime`.
+    A string without a UTC offset (``2026-09-19T10:00:00.123456``) is read as
+    UTC; one with an explicit offset (``Z``, ``+02:00``) keeps it. Fractional
+    seconds may have 1 to 9 digits: they are truncated to microseconds, the
+    precision of :class:`datetime.datetime`.
     """
     if isinstance(value, _datetime.datetime):
         parsed = value
@@ -142,12 +278,11 @@ def parse_datetime(value: t.Any) -> _datetime.datetime:
         if text.endswith(("Z", "z")):
             text = text[:-1] + "+00:00"
         # Before Python 3.11, `fromisoformat` only accepts exactly 3 or 6
-        # fractional digits, while the server sends anywhere from 1 to 9.
-        # Rewrite the fraction to 6 digits so every version parses alike.
+        # fractional digits, while servers send anywhere from 1 to 9.
         text = _FRACTION_RE.sub(_normalize_fraction, text, count=1)
         try:
             parsed = _datetime.datetime.fromisoformat(text)
-        except ValueError as exc:  # pragma: no cover - depends on server output
+        except ValueError as exc:
             raise ModelParseError(f"invalid date-time string {value!r}") from exc
     else:
         raise ModelParseError(f"expected a date-time string, got {type(value).__name__}")
@@ -160,16 +295,39 @@ def parse_datetime(value: t.Any) -> _datetime.datetime:
 # Deserialization
 # --------------------------------------------------------------------------
 
-_NoneType = type(None)
-_hints_cache: t.Dict[type, t.Dict[str, t.Any]] = {}
+_hints_cache: dict[type, dict[str, t.Any]] = {}
 
 
-def _type_hints(cls: type) -> t.Dict[str, t.Any]:
+def _type_hints(cls: type) -> dict[str, t.Any]:
+    """Resolve the annotations of a model.
+
+    Models import each other only for type checkers, which keeps recursive
+    schemas importable, so their names are looked up in the models package.
+    """
     hints = _hints_cache.get(cls)
     if hints is None:
-        hints = t.get_type_hints(cls)
+        hints = t.get_type_hints(cls, localns=_namespace(cls), include_extras=True)
         _hints_cache[cls] = hints
     return hints
+
+
+_namespaces: dict[str, dict[str, t.Any]] = {}
+
+
+def _namespace(cls: type) -> dict[str, t.Any]:
+    namespace = _namespaces.get(cls.__module__)
+    if namespace is None:
+        namespace = {}
+        if __package__:
+            namespace.update(vars(importlib.import_module(".models", __package__)))
+        namespace.update(vars(sys.modules[cls.__module__]))
+        _namespaces[cls.__module__] = namespace
+    return namespace
+
+
+def from_json_value(annotation: t.Any, value: t.Any) -> t.Any:
+    """Build a value of type ``annotation`` from decoded JSON."""
+    return _from_json_value(annotation, value, getattr(annotation, "__name__", "value"))
 
 
 def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
@@ -177,20 +335,23 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
         return value
 
     origin = t.get_origin(annotation)
+    args = t.get_args(annotation)
 
-    if origin is t.Union:
-        args = t.get_args(annotation)
-        non_none = [a for a in args if a is not _NoneType]
+    if origin is t.Annotated:
+        for meta in args[1:]:
+            if isinstance(meta, Discriminator):
+                return meta.parse(value, ctx)
+        return _from_json_value(args[0], value, ctx)
+
+    if origin in _UNION_TYPES:
         if value is None and _NoneType in args:
             return None
-        if len(non_none) == 1:
-            return _from_json_value(non_none[0], value, ctx)
-        # Unions of models only appear inside tagged unions, which override
-        # `from_dict` and never route through here.
+        members = [a for a in args if a not in (_NoneType, Unset)]
+        if len(members) == 1:
+            return _from_json_value(members[0], value, ctx)
         raise ModelParseError(f"{ctx}: cannot deserialize into union {annotation!r}")
 
     if origin in (list, set, frozenset, tuple):
-        args = t.get_args(annotation)
         inner = args[0] if args else t.Any
         if not isinstance(value, list):
             raise ModelParseError(f"{ctx}: expected a list, got {type(value).__name__}")
@@ -198,15 +359,10 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
         return set(items) if origin in (set, frozenset) else items
 
     if origin is dict:
-        args = t.get_args(annotation)
         inner = args[1] if len(args) == 2 else t.Any
         if not isinstance(value, dict):
-            raise ModelParseError(
-                f"{ctx}: expected an object, got {type(value).__name__}"
-            )
-        return {
-            str(k): _from_json_value(inner, v, f"{ctx}.{k}") for k, v in value.items()
-        }
+            raise ModelParseError(f"{ctx}: expected an object, got {type(value).__name__}")
+        return {str(k): _from_json_value(inner, v, f"{ctx}.{k}") for k, v in value.items()}
 
     if origin is t.Literal:
         return value
@@ -214,21 +370,22 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
     if isinstance(annotation, type):
         if issubclass(annotation, BaseModel):
             if not isinstance(value, dict):
-                raise ModelParseError(
-                    f"{ctx}: expected an object, got {type(value).__name__}"
-                )
+                raise ModelParseError(f"{ctx}: expected an object, got {type(value).__name__}")
             return annotation.from_dict(value)
         if issubclass(annotation, enum.Enum):
             try:
                 return annotation(value)
             except ValueError as exc:
-                raise ModelParseError(f"{ctx}: unknown value {value!r}") from exc
+                raise ModelParseError(f"{ctx}: invalid value {value!r}") from exc
         if annotation is _datetime.datetime:
             return parse_datetime(value)
         if annotation is _datetime.date:
             if isinstance(value, _datetime.date):
                 return value
-            return _datetime.date.fromisoformat(str(value))
+            try:
+                return _datetime.date.fromisoformat(str(value))
+            except ValueError as exc:
+                raise ModelParseError(f"{ctx}: invalid date {value!r}") from exc
         if annotation is Decimal:
             try:
                 return parse_decimal(value)
@@ -259,6 +416,13 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
 # --------------------------------------------------------------------------
 
 
+def _has_default(field: dataclasses.Field[t.Any]) -> bool:
+    return (
+        field.default is not dataclasses.MISSING
+        or field.default_factory is not dataclasses.MISSING
+    )
+
+
 @dataclasses.dataclass
 class BaseModel:
     """Base class of every generated model."""
@@ -266,77 +430,94 @@ class BaseModel:
     #: Maps python attribute names onto their JSON key, when they differ.
     _JSON_KEYS: t.ClassVar[t.Mapping[str, str]] = {}
     #: Attribute names whose (model) value is merged into the parent object.
-    _FLATTENED: t.ClassVar[t.Tuple[str, ...]] = ()
+    _FLATTENED: t.ClassVar[tuple[str, ...]] = ()
 
     @classmethod
     def _json_key(cls, name: str) -> str:
         return cls._JSON_KEYS.get(name, name)
 
-    def to_dict(self) -> t.Dict[str, t.Any]:
-        """Serialize into a JSON-compatible dict, omitting ``None`` fields.
-
-        The exception is a required any-JSON field (annotated ``t.Any``), where
-        ``None`` is the JSON ``null`` value rather than "unset".
-        """
-        out: t.Dict[str, t.Any] = {}
+    def _fields_to_dict(self, skip: t.Container[str] = ()) -> dict[str, t.Any]:
+        out: dict[str, t.Any] = {}
         hints = _type_hints(type(self))
         for field in dataclasses.fields(self):
-            value = getattr(self, field.name)
-            if value is None and hints.get(field.name) is not t.Any:
+            if field.name in skip:
                 continue
+            value = getattr(self, field.name)
+            # `None` means "leave out" for optional fields that the API does
+            # not accept as `null`, which default to `None` rather than UNSET.
+            if value is UNSET or (value is None and field.default is None):
+                continue
+            data = to_json_value(value, hints.get(field.name, t.Any))
             if field.name in self._FLATTENED:
-                flattened = to_json_value(value)
-                if not isinstance(flattened, dict):
+                if not isinstance(data, dict):
                     raise TypeError(
                         f"{type(self).__name__}.{field.name} must serialize to an object"
                     )
-                out.update(flattened)
-                continue
-            out[self._json_key(field.name)] = to_json_value(value)
+                out.update(data)
+            else:
+                out[self._json_key(field.name)] = data
         return out
 
-    def to_json(self) -> str:
-        return json.dumps(self.to_dict())
-
     @classmethod
-    def from_dict(cls: t.Type[_T], data: t.Mapping[str, t.Any]) -> _T:
-        """Build a model from a decoded JSON object, ignoring unknown keys."""
-        if not isinstance(data, t.Mapping):
-            raise ModelParseError(
-                f"{cls.__name__}: expected an object, got {type(data).__name__}"
-            )
+    def _fields_from_dict(
+        cls, data: t.Mapping[str, t.Any], skip: t.Container[str] = ()
+    ) -> dict[str, t.Any]:
         hints = _type_hints(cls)
-        kwargs: t.Dict[str, t.Any] = {}
+        kwargs: dict[str, t.Any] = {}
         for field in dataclasses.fields(cls):
+            if field.name in skip:
+                continue
             annotation = hints.get(field.name, t.Any)
             ctx = f"{cls.__name__}.{field.name}"
             if field.name in cls._FLATTENED:
                 kwargs[field.name] = _from_json_value(annotation, data, ctx)
                 continue
             key = cls._json_key(field.name)
-            if key not in data:
-                if _is_optional(annotation):
-                    kwargs[field.name] = None
-                    continue
-                raise ModelParseError(f"{cls.__name__}: missing required field {key!r}")
-            kwargs[field.name] = _from_json_value(annotation, data[key], ctx)
-        return cls(**kwargs)
+            if key in data:
+                kwargs[field.name] = _from_json_value(annotation, data[key], ctx)
+            elif not _has_default(field):
+                if not _accepts_none(annotation):
+                    raise ModelParseError(f"{cls.__name__}: missing required field {key!r}")
+                kwargs[field.name] = None
+        return kwargs
+
+    def to_dict(self) -> dict[str, t.Any]:
+        """Serialize into a JSON-compatible dict."""
+        return self._fields_to_dict()
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict())
 
     @classmethod
-    def from_json(cls: t.Type[_T], data: t.Union[str, bytes]) -> _T:
+    def from_dict(cls: type[_M], data: t.Mapping[str, t.Any]) -> _M:
+        """Build a model from a decoded JSON object, ignoring unknown keys."""
+        if not isinstance(data, t.Mapping):
+            raise ModelParseError(
+                f"{cls.__name__}: expected an object, got {type(data).__name__}"
+            )
+        return cls(**cls._fields_from_dict(data))
+
+    @classmethod
+    def from_json(cls: type[_M], data: str | bytes) -> _M:
         return cls.from_dict(json.loads(data))
 
 
-def _is_optional(annotation: t.Any) -> bool:
-    return t.get_origin(annotation) is t.Union and _NoneType in t.get_args(annotation)
+def _accepts_none(annotation: t.Any) -> bool:
+    if t.get_origin(annotation) is t.Annotated:
+        annotation = t.get_args(annotation)[0]
+    return annotation is t.Any or (
+        t.get_origin(annotation) in _UNION_TYPES and _NoneType in t.get_args(annotation)
+    )
 
 
 @dataclasses.dataclass
 class TaggedUnionModel(BaseModel):
     """Base class for discriminated unions (``oneOf`` with a discriminator).
 
-    Subclasses declare two dataclass fields: the discriminator (a ``Literal``
-    of the variant names) and the content (a ``Union`` of the variant models).
+    Subclasses declare the discriminator (a ``Literal`` of the variant names),
+    the content (a union of the variant models, plus :class:`UnknownVariant`
+    for variants added to the API later) and any property shared by all
+    variants.
     """
 
     #: JSON key holding the variant name.
@@ -347,54 +528,59 @@ class TaggedUnionModel(BaseModel):
     _CONTENT_ATTR: t.ClassVar[str] = ""
     #: JSON key holding the variant payload; ``None`` when internally tagged
     #: (i.e. the payload's fields sit next to the discriminator).
-    _CONTENT_KEY: t.ClassVar[t.Optional[str]] = None
-    #: Variant name -> model class (``None`` for variants without a payload).
-    _VARIANTS: t.ClassVar[t.Mapping[str, t.Optional[t.Type[BaseModel]]]] = {}
+    _CONTENT_KEY: t.ClassVar[str | None] = None
+    #: Variant name -> model, or model name in the models package (``None``
+    #: for variants without a payload).
+    _VARIANTS: t.ClassVar[t.Mapping[str, str | type[BaseModel] | None]] = {}
 
-    def to_dict(self) -> t.Dict[str, t.Any]:
+    @classmethod
+    def _variant(cls, tag: str) -> type[BaseModel] | None:
+        variant = cls._VARIANTS[tag]
+        if isinstance(variant, str):
+            variant = _namespace(cls)[variant]
+        return variant
+
+    def to_dict(self) -> dict[str, t.Any]:
         tag = getattr(self, self._DISCRIMINATOR_ATTR)
-        if tag not in self._VARIANTS:
-            raise ValueError(f"{type(self).__name__}: unknown variant {tag!r}")
         content = getattr(self, self._CONTENT_ATTR)
-        out: t.Dict[str, t.Any] = {}
-        if self._CONTENT_KEY is None:
-            if content is not None:
-                serialized = to_json_value(content)
-                if not isinstance(serialized, dict):
-                    raise TypeError(
-                        f"{type(self).__name__}: variant {tag!r} must serialize to an object"
-                    )
-                out.update(serialized)
-            out[self._DISCRIMINATOR] = tag
-        else:
-            out[self._DISCRIMINATOR] = tag
-            out[self._CONTENT_KEY] = to_json_value(content)
+        if tag not in self._VARIANTS and not isinstance(content, UnknownVariant):
+            raise ValueError(f"{type(self).__name__}: unknown variant {tag!r}")
+        out = self._fields_to_dict(skip=(self._DISCRIMINATOR_ATTR, self._CONTENT_ATTR))
+        serialized = to_json_value(content)
+        if self._CONTENT_KEY is not None and content is not None:
+            out[self._CONTENT_KEY] = serialized
+        elif isinstance(serialized, dict):
+            out.update(serialized)
+        elif content is not None:
+            raise TypeError(f"{type(self).__name__}: variant {tag!r} must serialize to an object")
+        out[self._DISCRIMINATOR] = tag
         return out
 
     @classmethod
-    def from_dict(cls: t.Type[_T], data: t.Mapping[str, t.Any]) -> _T:
+    def from_dict(cls: type[_M], data: t.Mapping[str, t.Any]) -> _M:
         if not isinstance(data, t.Mapping):
             raise ModelParseError(
                 f"{cls.__name__}: expected an object, got {type(data).__name__}"
             )
-        assert issubclass(cls, TaggedUnionModel)
-        if cls._DISCRIMINATOR not in data:
+        union = t.cast("type[TaggedUnionModel]", cls)
+        tag = data.get(union._DISCRIMINATOR)
+        if not isinstance(tag, str):
             raise ModelParseError(
-                f"{cls.__name__}: missing discriminator {cls._DISCRIMINATOR!r}"
+                f"{cls.__name__}: missing discriminator {union._DISCRIMINATOR!r}"
             )
-        tag = data[cls._DISCRIMINATOR]
-        if tag not in cls._VARIANTS:
-            raise ModelParseError(f"{cls.__name__}: unknown variant {tag!r}")
-        variant = cls._VARIANTS[tag]
-        content: t.Any = None
-        if variant is not None:
-            if cls._CONTENT_KEY is None:
-                payload: t.Any = data
-            else:
-                payload = data.get(cls._CONTENT_KEY, {})
-            if not isinstance(payload, t.Mapping):
-                raise ModelParseError(
-                    f"{cls.__name__}: variant {tag!r} payload must be an object"
-                )
-            content = variant.from_dict(payload)
-        return cls(**{cls._DISCRIMINATOR_ATTR: tag, cls._CONTENT_ATTR: content})
+        payload: t.Any = data if union._CONTENT_KEY is None else data.get(union._CONTENT_KEY, {})
+        if not isinstance(payload, t.Mapping):
+            raise ModelParseError(f"{cls.__name__}: variant {tag!r} payload must be an object")
+        content: t.Any
+        if tag not in union._VARIANTS:
+            content = UnknownVariant(tag, dict(payload))
+        else:
+            variant = union._variant(tag)
+            content = None if variant is None else variant.from_dict(payload)
+        skip = (union._DISCRIMINATOR_ATTR, union._CONTENT_ATTR)
+        kwargs = union._fields_from_dict(data, skip=skip)
+        kwargs[union._DISCRIMINATOR_ATTR] = tag
+        kwargs[union._CONTENT_ATTR] = content
+        return cls(**kwargs)
+
+

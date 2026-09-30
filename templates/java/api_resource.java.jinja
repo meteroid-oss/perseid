@@ -20,11 +20,12 @@ import {{ sdk.java_package }}.streaming.EventStream;
 {% endif -%}
 
 import java.io.IOException;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
 
+{% if resource.operations | selectattr("response_body_json_type", "defined") | list | length > 0 -%}
+import com.fasterxml.jackson.core.type.TypeReference;
+{% endif -%}
 import okhttp3.Headers;
 import okhttp3.HttpUrl;
 {% for c in referenced_components -%}
@@ -48,14 +49,28 @@ public class {{ resource_type_name }} {
     {% include api_resource_extra ignore missing %}
 
 {% for op in resource.operations if op.request_body_kind == "multipart" %}
-    /** Multipart form fields of {@link #{{ op.name | to_lower_camel_case }}}. */
-    @lombok.Data
+    {% set names = op.multipart_fields | map(attribute="name") | list -%}
+    {% set fields = names | idents("camel", "java", "operation `" ~ op.id ~ "`") -%}
+    {% set accessors = names | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
+    /** Multipart form fields of {@link #{{ op.name | ident("camel", "java") }}}. */
     public static class {{ op.name | to_upper_camel_case }}Body {
         {% for field in op.multipart_fields -%}
+        private {% if field.is_file %}Upload{% else %}{{ field.type.to_java() }}{% endif %} {{ fields[loop.index0] }};
+        {% endfor %}
+        {% for field in op.multipart_fields -%}
+        {% set ty = "Upload" if field.is_file else field.type.to_java() -%}
+        {% set accessor = accessors[loop.index0] ~ ("_" if accessors[loop.index0] == "Class" else "") -%}
         {% if field.description is defined -%}
         {{ field.description | to_doc_comment(style="java") }}
         {% endif -%}
-        private {% if field.is_file %}Upload{% else %}{{ field.type.to_java() }}{% endif %} {{ field.name | to_lower_camel_case }};
+        public {{ ty }} get{{ accessor }}() {
+            return {{ fields[loop.index0] }};
+        }
+
+        public void set{{ accessor }}({{ ty }} {{ fields[loop.index0] }}) {
+            this.{{ fields[loop.index0] }} = {{ fields[loop.index0] }};
+        }
+
         {% endfor -%}
     }
 {% endfor %}
@@ -63,137 +78,147 @@ public class {{ resource_type_name }} {
 {% for op in resource.operations -%}
     {% set throws = "throws IOException, ApiException" -%}
     {% set res_type = "void" -%}
+    {% set res_java_type = none -%}
     {% if op.response_is_event_stream -%}
         {% set res_type = "EventStream" -%}
     {% elif op.response_is_binary -%}
         {% set res_type = "byte[]" -%}
+    {% elif op.response_body_json_type is defined -%}
+        {% set res_type = op.response_body_json_type.to_java() -%}
+        {% set res_java_type = "client.typeOf(new TypeReference<" ~ res_type ~ ">() {})" -%}
     {% elif op.response_body_schema_name is defined -%}
-        {% set res_type = op.response_body_schema_name | replace("_", "") -%}
+        {% set res_item = op.response_body_schema_name | to_upper_camel_case -%}
+        {% if op.response_body_is_list -%}
+            {% set res_type = "List<" ~ res_item ~ ">" -%}
+            {% set res_java_type = "client.listOf(" ~ res_item ~ ".class)" -%}
+        {% else -%}
+            {% set res_type = res_item -%}
+            {% set res_java_type = res_item ~ ".class" -%}
+        {% endif -%}
     {% endif -%}
-    {% set has_query_params = op.query_params | length > 0 -%}
-    {% set has_required_query_params =
-        op.query_params | selectattr("required") | length > 0 -%}
-    {% set op_name = op.name | to_lower_camel_case -%}
+    {% set has_body = op.request_body_schema_name is defined or op.request_body_json_type is defined -%}
+    {% if op.request_body_schema_name is defined -%}
+        {% set req_body_type = op.request_body_schema_name | to_upper_camel_case -%}
+        {% if op.request_body_is_list %}{% set req_body_type = "List<" ~ req_body_type ~ ">" %}{% endif -%}
+        {% set req_body_field_name = op.request_body_schema_name | ident("camel", "java") -%}
+    {% elif op.request_body_json_type is defined -%}
+        {% set req_body_type = op.request_body_json_type.to_java() -%}
+        {% set req_body_field_name = "body" -%}
+    {% endif -%}
+    {% set op_name = op.name | ident("camel", "java") -%}
     {% if op.security is defined -%}
         {% set http_client -%}
-            this.client.withSecurity(List.of({%- for names in op.security %}{% if not loop.first %}, {% endif %}List.of({%- for name in names %}{% if not loop.first %}, {% endif %}"{{ name }}"{% endfor -%}){% endfor -%}))
+            client.withSecurity(List.of({%- for names in op.security %}{% if not loop.first %}, {% endif %}List.of({%- for name in names %}{% if not loop.first %}, {% endif %}{{ name | tojson }}{% endfor -%}){% endfor -%}))
         {%- endset -%}
     {% else -%}
-        {% set http_client = "this.client" -%}
+        {% set http_client = "client" -%}
     {% endif -%}
-    {% if op_name == "import" -%}
-        {% set op_name = "import_" -%}
-    {% endif -%}
-    {% if op | has_query_or_header_params -%}
-
-        {{ op.description | with_javadoc_deprecation(op.deprecated) | to_doc_comment(style="java") }}
-        {% if op.deprecated %}@Deprecated{% endif %}
-    public {{ res_type }} {{ op_name }} (
-        {% set func_args -%}
-            {# path parameters -#}
-            {% for p in op.path_params -%}
-                final String {{ p | to_lower_camel_case }},
-            {% endfor -%}
-
-            {# body parameter interface -#}
-            {% if op.request_body_schema_name is defined -%}
-                {% set req_body_field_name = op.request_body_schema_name | to_lower_camel_case -%}
-                final {{ op.request_body_schema_name }} {{ req_body_field_name }},
-            {% elif op.request_body_kind == "binary" -%}
-                final Upload body,
-            {% elif op.request_body_kind == "multipart" -%}
-                final {{ op.name | to_upper_camel_case }}Body body,
-            {% endif -%}
-        {% endset -%}
-        {{ func_args | strip_trailing_comma }}
-        ) {{ throws }}  {
-            {% if res_type != "void" %}return{% endif %} this.{{ op_name }}(
-            {# path parameters -#}
-            {% for p in op.path_params -%}
-                {{ p | to_lower_camel_case }},
-            {% endfor -%}
-
-            {# body parameter interface -#}
-            {% if op.request_body_schema_name is defined -%}
-                {{ req_body_field_name }},
-            {% elif op.request_body_kind in ["binary", "multipart"] -%}
-                body,
-            {% endif -%}
-            new {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options()
-            );
-        }
-    {% endif -%}
-
-    {{ op.description | with_javadoc_deprecation(op.deprecated) | to_doc_comment(style="java") }}
-    {% if op.deprecated %}@Deprecated{% endif %}
-    public {{ res_type }} {{ op_name }}(
-    {% set func_args -%}
-        {# path parameters -#}
-        {% for p in op.path_params -%}
-            final String {{ p | to_lower_camel_case }},
+    {% if op.request_body_kind == "multipart" -%}
+        {% set mp = namespace(accessors=[]) -%}
+        {% for a in op.multipart_fields | map(attribute="name") | list | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
+            {% set mp.accessors = mp.accessors + [a ~ ("_" if a == "Class" else "")] -%}
         {% endfor -%}
-
-        {# body parameter interface -#}
-        {% if op.request_body_schema_name is defined -%}
-            {% set req_body_field_name = op.request_body_schema_name | to_lower_camel_case -%}
-            final {{ op.request_body_schema_name }} {{ req_body_field_name }},
+        {% set multipart_accessors = mp.accessors -%}
+    {% endif -%}
+    {% set path_args = op.path_params | idents("camel", "java", "operation `" ~ op.id ~ "`") -%}
+    {% set options_type = resource_type_name ~ (op.name | to_upper_camel_case) ~ "Options" -%}
+    {% set has_options = op | has_query_or_header_params -%}
+    {% set doc -%}
+        {% if op.description or op.deprecated -%}
+        {{ op.description | default("") | with_javadoc_deprecation(op.deprecated) | to_doc_comment(style="java") }}
+        {% endif -%}
+        {% if op.deprecated %}@Deprecated{% endif %}
+    {%- endset -%}
+    {% set func_args -%}
+        {% for p in path_args -%}
+            final String {{ p }},
+        {% endfor -%}
+        {% if has_body -%}
+            final {{ req_body_type }} {{ req_body_field_name }},
         {% elif op.request_body_kind == "binary" -%}
             final Upload body,
         {% elif op.request_body_kind == "multipart" -%}
             final {{ op.name | to_upper_camel_case }}Body body,
         {% endif -%}
+    {% endset -%}
+    {% if has_options -%}
 
-        {# query/header parameters -#}
-        {% if op | has_query_or_header_params -%}
-            final {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options options,
+        {{ doc }}
+    public {{ res_type }} {{ op_name }}({{ func_args | strip_trailing_comma }}) {{ throws }} {
+        {% if res_type != "void" %}return {% endif %}{{ op_name }}(
+            {%- for p in path_args %}{{ p }}, {% endfor -%}
+            {%- if has_body %}{{ req_body_field_name }}, {% elif op.request_body_kind in ["binary", "multipart"] %}body, {% endif -%}
+            new {{ options_type }}());
+    }
+    {% endif -%}
+
+    {{ doc }}
+    public {{ res_type }} {{ op_name }}(
+    {% set all_args -%}
+        {{ func_args }}
+        {% if has_options -%}
+            final {{ options_type }} options,
         {% endif -%}
     {% endset -%}
-    {{ func_args | strip_trailing_comma }}
+    {{ all_args | strip_trailing_comma }}
     ) {{ throws }}  {
-        {# path params -#}
-        {% if op.path_params | length > 0 -%}
-        HttpUrl.Builder url =  this.client.newUrlBuilder().encodedPath(String.format("{{ op.path | generate_java_path_str(op.path_params) }}"
-            {%- for p in op.path_params -%}
-            ,{{ p | to_lower_camel_case }}
-            {%- endfor -%}
-        ));
-        {% else -%}
-        HttpUrl.Builder url = this.client.newUrlBuilder().encodedPath("{{ op.path }}");
-        {% endif -%}
-
-        {# query params -#}
-        {% for p in op.query_params -%}
-        {% set field = p.name | to_lower_camel_case -%}
-        {# `explode` defaults to true for OpenAPI `style: form`, and may be missing
-           entirely when the codegen binary predates the `explode` IR field. -#}
-        {% set explode = p.explode | default(true) -%}
-        if (options.{{ field }} != null) {
-            {% if (p.type.is_list() or p.type.is_set()) and explode -%}
-            Utils.addExplodedQueryParameter(url, "{{ p.name }}", options.{{ field }});
+        {% set ns = namespace(literal=[], calls=[], expr="") -%}
+        {% for segment in (op.path | split("/") | list)[1:] -%}
+            {% if "{" in segment -%}
+                {% if ns.literal | length > 0 -%}
+                    {% set ns.calls = ns.calls + [".addPathSegments(" ~ (ns.literal | join("/") | tojson) ~ ")"] -%}
+                    {% set ns.literal = [] -%}
+                {% endif -%}
+                {% set ns.expr = segment | tojson -%}
+                {% for p in op.path_params -%}
+                    {% set ns.expr = ns.expr | replace("{" ~ p ~ "}", "\" + " ~ path_args[loop.index0] ~ " + \"") -%}
+                {% endfor -%}
+                {% set expr = ns.expr | replace("\"\" + ", "") | replace(" + \"\"", "") -%}
+                {% set name = segment[1:-1] if segment[1:-1] in op.path_params else segment -%}
+                {% set ns.calls = ns.calls + [".addPathSegment(Utils.pathSegment(" ~ (name | tojson) ~ ", " ~ expr ~ "))"] -%}
             {% else -%}
-            url.addQueryParameter("{{ p.name }}",
-            {% if p.type.is_string() -%}
-            options.{{ field }}
-            {% else -%}
-            Utils.serializeQueryParam(options.{{ field }})
+                {% set ns.literal = ns.literal + [segment] -%}
             {% endif -%}
-            );
+        {% endfor -%}
+        {% if ns.literal | length > 0 -%}
+            {% set ns.calls = ns.calls + [".addPathSegments(" ~ (ns.literal | join("/") | tojson) ~ ")"] -%}
+        {% endif -%}
+        {% set has_query = op.query_params | length > 0 -%}
+        {% if not has_query -%}
+        HttpUrl url = client.newUrlBuilder(){{ ns.calls | join("") }}.build();
+        {% else -%}
+        HttpUrl.Builder url = client.newUrlBuilder(){{ ns.calls | join("") }};
+        {% set query_fields = op.query_params | map(attribute="name") | list | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
+        {% for p in op.query_params -%}
+        {% set getter = "options.get" ~ query_fields[loop.index0] ~ ("_" if query_fields[loop.index0] == "Class" else "") ~ "()" -%}
+        {% set explode = p.explode | default(true) -%}
+        if ({{ getter }} != null) {
+            {% if (p.type.is_list() or p.type.is_set()) and explode -%}
+            Utils.addExplodedQueryParameter(url, {{ p.name | tojson }}, {{ getter }});
+            {% elif p.type.is_string() -%}
+            url.addQueryParameter({{ p.name | tojson }}, {{ getter }});
+            {% else -%}
+            url.addQueryParameter({{ p.name | tojson }}, Utils.serializeQueryParam({{ getter }}));
             {% endif -%}
         }
         {% endfor -%}
-        {# header params -#}
-        {% if op.header_params | length  >0 -%}
-        Map<String, String> headers = new HashMap<>();
-            {% for p in op.header_params -%}
-            if (options.{{ p.name | to_lower_camel_case }} != null){
-                headers.put("{{ p.name }}", options.{{ p.name | to_lower_camel_case }});
-            }
-            {% endfor -%}
         {% endif -%}
+        {% if op.header_params | length > 0 -%}
+        {% set header_fields = op.header_params | map(attribute="name") | list | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
+        Headers.Builder headers = new Headers.Builder();
+        {% for p in op.header_params -%}
+        {% set getter = "options.get" ~ header_fields[loop.index0] ~ ("_" if header_fields[loop.index0] == "Class" else "") ~ "()" -%}
+        if ({{ getter }} != null) {
+            headers.set({{ p.name | tojson }}, {{ getter }});
+        }
+        {% endfor -%}
+        {% endif -%}
+        {% set headers_arg = "headers.build()" if op.header_params | length > 0 else "null" -%}
+        {% set body_arg = req_body_field_name if has_body else "null" -%}
 
-        {% set headers_arg %}{% if op.header_params | length > 0 %}Headers.of(headers){% else %}null{% endif %}{% endset -%}
+        {% if res_type != "void" %}return {% endif -%}
         {% if op.response_is_event_stream -%}
-        return {{ http_client }}.executeEventStream("{{ op.method | upper }}", url.build(), {{ headers_arg }});
+        {{ http_client }}.executeEventStream({{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }}, {{ headers_arg }});
         {% elif op.request_body_kind in ["binary", "multipart"] -%}
         {% if op.request_body_kind == "binary" -%}
         {% set body_expr = 'body.toRequestBody("application/octet-stream")' -%}
@@ -201,136 +226,76 @@ public class {{ resource_type_name }} {
         {% set body_expr -%}
             new Multipart()
             {%- for field in op.multipart_fields %}
-                .{% if field.is_file %}file{% else %}field{% endif %}("{{ field.name }}", body.get{{ field.name | to_upper_camel_case }}())
+                .{% if field.is_file %}file{% else %}field{% endif %}({{ field.name | tojson }}, body.get{{ multipart_accessors[loop.index0] }}())
             {%- endfor %}
                 .build()
         {%- endset -%}
         {% endif -%}
-        {% if res_type != "void" %}return{% endif %} {{ http_client }}.executeBodyRequest(
-            "{{ op.method | upper }}",
-            url.build(),
+        {{ http_client }}.executeBodyRequest(
+            {{ op.method | upper | tojson }},
+            {{ "url.build()" if has_query else "url" }},
             {{ headers_arg }},
             {% if op.request_body_optional %}body == null ? null : {% endif %}{{ body_expr }},
-            {% if op.response_body_schema_name is defined %}{{ res_type }}.class{% else %}null{% endif %});
+            {{ res_java_type or "(com.fasterxml.jackson.databind.JavaType) null" }});
         {% elif op.response_is_binary -%}
-        {% if res_type != "void" %}return{% endif %}  {{ http_client }}.executeBinaryRequest(
-            "{{ op.method | upper }}",
-            url.build(),
-            {# headers -#}
-            {% if op.header_params | length > 0 -%}
-            Headers.of(headers),
-            {% else -%}
-            null,
-            {% endif -%}
-            {# request body -#}
-            {% if op.request_body_schema_name is defined -%}
-            {{ req_body_field_name }}
-            {% else -%}
-            null
-            {% endif -%}
-        );
-        {% elif op.request_body_is_form -%}
-        {% if res_type != "void" %}return{% endif %}  {{ http_client }}.executeFormRequest(
-            "{{ op.method | upper }}",
-            url.build(),
-            {# headers -#}
-            {% if op.header_params | length > 0 -%}
-            Headers.of(headers),
-            {% else -%}
-            null,
-            {% endif -%}
-            {# request body -#}
-            {% if op.request_body_schema_name is defined -%}
-            {{ req_body_field_name }},
-            {% else -%}
-            null,
-            {% endif -%}
-            {# response body class -#}
-            {% if op.response_body_schema_name is defined -%}
-            {{ res_type }}.class
-            {% else -%}
-            null
-            {% endif -%}
-        );
+        {{ http_client }}.executeBinaryRequest({{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }}, {{ headers_arg }}, {{ body_arg }});
         {% else -%}
-        {% if res_type != "void" %}return{% endif %}  {{ http_client }}.executeRequest(
-            "{{ op.method | upper }}",
-            url.build(),
-            {# headers -#}
-            {% if op.header_params | length > 0 -%}
-            Headers.of(headers),
-            {% else -%}
-            null,
-            {% endif -%}
-            {# request body -#}
-            {% if op.request_body_schema_name is defined -%}
-            {{ req_body_field_name }},
-            {% else -%}
-            null,
-            {% endif -%}
-            {# response body class -#}
-            {% if op.response_body_schema_name is defined -%}
-            {{ res_type }}.class
-            {% else -%}
-            null
-            {% endif -%}
-        );
+        {{ http_client }}.{{ "executeFormRequest" if op.request_body_is_form else "executeRequest" }}(
+            {{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }}, {{ headers_arg }}, {{ body_arg }}, {{ res_java_type or "Void.class" }});
         {% endif -%}
-
     }
     {% if op.pagination is defined -%}
     {% set pg = op.pagination -%}
-    {% set options_ty = resource_type_name ~ (op.name | to_upper_camel_case) ~ "Options" -%}
     {% set param = (op.query_params | selectattr("name", "equalto", pg.param) | first) -%}
     {% set item_ty = pg.item_schema | to_upper_camel_case -%}
-    {% set path_and_body -%}
-        {% for p in op.path_params -%}
-            final String {{ p | to_lower_camel_case }},
-        {% endfor -%}
-        {% if op.request_body_schema_name is defined -%}
-            final {{ op.request_body_schema_name }} {{ req_body_field_name }},
-        {% endif -%}
-    {% endset -%}
-    {% set path_and_body_args -%}
-        {% for p in op.path_params -%}{{ p | to_lower_camel_case }}, {% endfor -%}
-        {% if op.request_body_schema_name is defined -%}{{ req_body_field_name }}, {% endif -%}
+    {% set params = op.query_params + op.header_params -%}
+    {% set pager = namespace(accessors=[], param="") -%}
+    {% for a in params | map(attribute="name") | list | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
+        {% set pager.accessors = pager.accessors + [a ~ ("_" if a == "Class" else "")] -%}
+        {% if params[loop.index0].name == pg.param %}{% set pager.param = a ~ ("_" if a == "Class" else "") %}{% endif -%}
+    {% endfor -%}
+    {% set pager_accessors = pager.accessors -%}
+    {% set param_accessor = pager.param -%}
+    {% set call_args -%}
+        {%- for p in path_args %}{{ p }}, {% endfor -%}
+        {%- if has_body %}{{ req_body_field_name }}, {% elif op.request_body_kind in ["binary", "multipart"] %}body, {% endif -%}
     {% endset -%}
 
     /** Iterates over every item of {@link #{{ op_name }}}, fetching further pages on demand. */
-    public Paginator<{{ item_ty }}> {{ op_name }}Iter({{ path_and_body | strip_trailing_comma }}) {
-        return {{ op_name }}Iter({{ path_and_body_args }}new {{ options_ty }}());
+    public Paginator<{{ item_ty }}> {{ op_name }}Iter({{ func_args | strip_trailing_comma }}) {
+        return {{ op_name }}Iter({{ call_args }}new {{ options_type }}());
     }
 
     /** Iterates over every item of {@link #{{ op_name }}}, fetching further pages on demand. */
-    public Paginator<{{ item_ty }}> {{ op_name }}Iter({{ path_and_body }}final {{ options_ty }} options) {
+    public Paginator<{{ item_ty }}> {{ op_name }}Iter({{ func_args }}final {{ options_type }} options) {
         return new Paginator<>(
                 new Paginator.Spec(
-                        "{{ pg.style }}",
+                        {{ pg.style | tojson }},
                         {% for key in ["items", "next_cursor", "item_cursor", "has_more", "total_pages", "total"] -%}
                         {% if pg[key] is not defined -%}
                         null,
                         {% elif key == "item_cursor" -%}
-                        "{{ pg.item_cursor }}",
+                        {{ pg.item_cursor | tojson }},
                         {% else -%}
-                        List.of({% for segment in pg[key] %}{% if not loop.first %}, {% endif %}"{{ segment }}"{% endfor %}),
+                        List.of({% for segment in pg[key] %}{% if not loop.first %}, {% endif %}{{ segment | tojson }}{% endfor %}),
                         {% endif -%}
                         {% endfor -%}
                         {{ pg.first_page }}L),
-                options.{{ pg.param | to_lower_camel_case }},
+                options.get{{ param_accessor }}(),
                 param -> {
-                    {{ options_ty }} page = new {{ options_ty }}();
-                    {% for p in op.query_params + op.header_params -%}
-                    page.{{ p.name | to_lower_camel_case }} = options.{{ p.name | to_lower_camel_case }};
+                    {{ options_type }} page = new {{ options_type }}();
+                    {% for a in pager_accessors -%}
+                    page.set{{ a }}(options.get{{ a }}());
                     {% endfor -%}
                     if (param != null) {
                         {% if pg.style == "cursor" -%}
-                        page.{{ pg.param | to_lower_camel_case }} = (String) param;
+                        page.set{{ param_accessor }}((String) param);
                         {% else -%}
                         {% set jt = param.type.to_java() -%}
-                        page.{{ pg.param | to_lower_camel_case }} = ((Number) param).{% if jt == "Long" %}longValue{% elif jt == "Short" %}shortValue{% else %}intValue{% endif %}();
+                        page.set{{ param_accessor }}(((Number) param).{% if jt == "Long" %}longValue{% elif jt == "Short" %}shortValue{% else %}intValue{% endif %}());
                         {% endif -%}
                     }
-                    return this.{{ op_name }}({{ path_and_body_args }}page);
+                    return this.{{ op_name }}({{ call_args }}page);
                 },
                 {{ item_ty }}.class);
     }

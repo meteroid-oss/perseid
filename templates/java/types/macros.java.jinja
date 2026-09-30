@@ -1,0 +1,119 @@
+{#- Identifiers of `fields`, `case` for `owner`; flattened parts are named after their type. -#}
+{% macro field_idents(fields, case, owner) -%}
+{%- set ns = namespace(names=[]) -%}
+{%- for field in fields -%}
+{%- set ns.names = ns.names + [field.type.to_java() if field.flatten else field.name] -%}
+{%- endfor -%}
+{{ ns.names | idents(case, "java", owner) | join(" ") }}
+{%- endmacro %}
+
+{#- A nullable field that is not required is kept as an Optional: unset is omitted, empty is
+    sent as null. -#}
+{% macro is_optional(field) -%}
+{{ "true" if field.nullable and not field.required and not field.flatten }}
+{%- endmacro %}
+
+{#- Declaration of `field`, named `var`. -#}
+{% macro declaration(field, var) -%}
+{% if field.flatten -%}
+@JsonUnwrapped
+private {{ field.type.to_java() }} {{ var }};
+{% else -%}
+@JsonProperty({{ field.name | tojson }})
+{% if field.required and field.nullable %}@JsonInclude(JsonInclude.Include.ALWAYS){% endif %}
+private {% if is_optional(field) %}Optional<{{ field.type.to_java() }}>{% else %}{{ field.type.to_java() }}{% endif %} {{ var }};
+{% endif -%}
+{%- endmacro %}
+
+{#- Fluent setter, getter, bean setter and collection helpers of `field` in `cls`. -#}
+{% macro accessors(field, var, pascal, cls) -%}
+{% set m = {
+    "var": var,
+    "accessor": pascal ~ "_" if pascal == "Class" else pascal,
+    "type": field.type.to_java(),
+    "optional": is_optional(field) == "true",
+} -%}
+{% set deprecated = "@Deprecated " if field.deprecated else "" -%}
+{% set wrap = "Optional.ofNullable(" ~ m.var ~ ")" if m.optional else m.var -%}
+{% if field.description is defined -%}
+{{ field.description | e | to_doc_comment(style="java") }}
+{% endif -%}
+{{ deprecated }}public {{ cls }} {{ m.var }}({{ m.type }} {{ m.var }}) {
+    this.{{ m.var }} = {{ wrap }};
+    return this;
+}
+
+{% if field.type.is_list() or field.type.is_set() or field.type.is_map() -%}
+{% set is_map = field.type.is_map() -%}
+{% set item_ty = field.type.value_type().to_java() if is_map else field.type.inner_type().to_java() -%}
+{% set empty = "new HashMap<>()" if is_map else ("new LinkedHashSet<>()" if field.type.is_set() else "new ArrayList<>()") -%}
+{% set current = "this." ~ m.var ~ (".get()" if m.optional else "") -%}
+{{ deprecated }}public {{ cls }} {{ "put" if is_map else "add" }}{{ pascal }}Item({% if is_map %}String key, {% endif %}{{ item_ty }} item) {
+    if (this.{{ m.var }} == null{% if m.optional %} || this.{{ m.var }}.isEmpty(){% endif %}) {
+        this.{{ m.var }} = {% if m.optional %}Optional.of({{ empty }}){% else %}{{ empty }}{% endif %};
+    }
+    {{ current }}.{{ "put(key, item)" if is_map else "add(item)" }};
+    return this;
+}
+
+{% endif -%}
+{% if field.required and not field.nullable -%}
+@javax.annotation.Nonnull
+{% else -%}
+@javax.annotation.Nullable
+{% endif -%}
+{{ deprecated }}public {{ m.type }} get{{ m.accessor }}() {
+    {% if m.optional -%}
+    return {{ m.var }} == null ? null : {{ m.var }}.orElse(null);
+    {% else -%}
+    return {{ m.var }};
+    {% endif -%}
+}
+
+{{ deprecated }}public void set{{ m.accessor }}({{ m.type }} {{ m.var }}) {
+    this.{{ m.var }} = {{ wrap }};
+}
+{%- endmacro %}
+
+{#- equals, hashCode and toString over `vars`, for `cls`; `base` compares the superclass too. -#}
+{% macro value_methods(cls, vars, base=false) -%}
+@Override
+public boolean equals(Object o) {
+    if (this == o) {
+        return true;
+    }
+    if (o == null || getClass() != o.getClass(){% if base %} || !super.equals(o){% endif %}) {
+        return false;
+    }
+    {% if vars | length > 0 -%}
+    {{ cls }} that = ({{ cls }}) o;
+    return {% for v in vars %}Objects.equals({{ v }}, that.{{ v }}){% if not loop.last %} && {% endif %}{% endfor %};
+    {% else -%}
+    return true;
+    {% endif -%}
+}
+
+@Override
+public int hashCode() {
+    return Objects.hash({% if base %}super.hashCode(){% if vars %}, {% endif %}{% endif %}{{ vars | join(", ") }});
+}
+
+@Override
+public String toString() {
+    return "{{ cls }}{"
+        {% if base %}+ super.toString(){% if vars %} + ", "{% endif %}{% endif %}
+        {% for v in vars -%}
+        + "{% if not loop.first %}, {% endif %}{{ v }}=" + {{ v }}
+        {% endfor -%}
+        + "}";
+}
+{%- endmacro %}
+
+{#- Model names that would shadow a type the generated code uses. -#}
+{% macro check_name(name) -%}
+{% if name in ["Object", "String", "Boolean", "Short", "Integer", "Long", "Float", "Double", "Void",
+    "Override", "Deprecated", "List", "Map", "Set", "Optional", "Objects", "ArrayList", "HashMap",
+    "LinkedHashSet", "LinkedHashMap", "BigDecimal", "OffsetDateTime", "URI", "Utils"] -%}
+{{ panic("java codegen: schema `" ~ name ~ "` would shadow java's own `" ~ name ~ "`, rename it in the spec") }}
+{%- endif %}
+{%- endmacro %}

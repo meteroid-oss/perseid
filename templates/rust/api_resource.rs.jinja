@@ -1,4 +1,5 @@
 // this file is @generated
+{% from "types/macros.rs.jinja" import rust_type -%}
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
 
 #[allow(unused_imports)]
@@ -12,15 +13,15 @@ use crate::{error::Result, models::*, Configuration};
         {% if field.description is defined -%}
         {{ field.description | to_doc_comment(style="rust") }}
         {% endif -%}
-        pub {{ field.name | to_rust_ident }}: {% if not field.required or field.nullable %}Option<{% endif %}{% if field.is_file %}crate::api::Upload{% else %}{{ field.type.to_rust() }}{% endif %}{% if not field.required or field.nullable %}>{% endif %},
+        pub {{ field.name | to_rust_ident }}: {% if not field.required or field.nullable %}Option<{% endif %}{% if field.is_file %}crate::api::Upload{% else %}{{ rust_type(field.type) }}{% endif %}{% if not field.required or field.nullable %}>{% endif %},
         {% endfor -%}
     }
     {% endif -%}
     {% if op | has_query_or_header_params %}
-    #[derive(Default{% if op.pagination is defined %}, Clone{% endif %})]
+    #[derive(Clone, Debug, Default)]
     pub struct {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options {
         {% for p in op.query_params -%}
-            {% set ty = p.type.to_rust() -%}
+            {% set ty = rust_type(p.type) -%}
             {% if not p.required %}{% set ty %}Option<{{ ty }}>{% endset %}{% endif %}
             {% if p.description is defined -%}
                 {{ p.description | to_doc_comment(style="rust") }}
@@ -59,12 +60,12 @@ impl<'a> {{ resource_type_name }}<'a> {
     {% if op.deprecated -%}
         #[deprecated]
     {% endif -%}
-    pub async fn {{ op.name | to_snake_case }}(
+    pub async fn {{ op.name | to_rust_ident }}(
         &self,
 
         {#- path parameters -#}
         {% for p in op.path_params -%}
-            {{ p | to_rust_ident }}: String,
+            {{ p | to_rust_ident }}: impl std::fmt::Display,
         {% endfor -%}
 
         {% if op.request_body_kind == "binary" -%}
@@ -75,7 +76,9 @@ impl<'a> {{ resource_type_name }}<'a> {
 
         {# body parameter struct -#}
         {% if op.request_body_schema_name is defined -%}
-            {{ op.request_body_schema_name | to_snake_case }}: {% if op.request_body_optional %}Option<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_optional %}>{% endif %},
+            {{ op.request_body_schema_name | to_rust_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},
+        {% elif op.request_body_json_type is defined -%}
+            body: {% if op.request_body_optional %}Option<{% endif %}{{ rust_type(op.request_body_json_type) }}{% if op.request_body_optional %}>{% endif %},
         {% endif -%}
 
         {# query / header parameter struct -#}
@@ -90,7 +93,7 @@ impl<'a> {{ resource_type_name }}<'a> {
                 options: Option<{{ param_struct_name }}>,
             {%- endif -%}
         {% endif -%}
-    ) -> Result<{% if op.response_is_event_stream %}crate::api::EventStream{% elif op.response_is_binary %}bytes::Bytes{% elif op.response_is_text %}String{% elif op.response_body_schema_name is defined %}crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}{% else %}(){% endif %}> {
+    ) -> Result<{% if op.response_is_event_stream %}crate::api::EventStream{% elif op.response_is_binary %}bytes::Bytes{% elif op.response_is_text %}String{% elif op.response_body_json_type is defined %}{{ rust_type(op.response_body_json_type) }}{% elif op.response_body_is_list %}Vec<crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}>{% elif op.response_body_schema_name is defined %}crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}{% else %}(){% endif %}> {
         {% if has_params -%}
             {# unpack query / header parameter struct -#}
             let {{ param_struct_name }} {
@@ -147,7 +150,7 @@ impl<'a> {{ resource_type_name }}<'a> {
         {% endfor -%}
 
         {% for p in op.header_params -%}
-            .with_optional_header_param("{{ p.name }}", {{ p.name | to_rust_ident }})
+            .{% if p.required %}with_header_param{% else %}with_optional_header_param{% endif %}("{{ p.name }}", {{ p.name | to_rust_ident }})
         {% endfor -%}
 
         {% if op.request_body_kind == "binary" -%}
@@ -157,10 +160,12 @@ impl<'a> {{ resource_type_name }}<'a> {
         {% endif -%}
         {% if op.request_body_schema_name is defined -%}
             {% if op.request_body_is_form -%}
-            .with_form_body_param({{ op.request_body_schema_name | to_snake_case }})
+            .with_form_body_param({{ op.request_body_schema_name | to_rust_ident }})
             {% else -%}
-            .{% if op.request_body_optional %}with_optional_body_param{% else %}with_body_param{% endif %}({{ op.request_body_schema_name | to_snake_case }})
+            .{% if op.request_body_optional %}with_optional_body_param{% else %}with_body_param{% endif %}({{ op.request_body_schema_name | to_rust_ident }})
             {% endif -%}
+        {% elif op.request_body_json_type is defined -%}
+            .{% if op.request_body_optional %}with_optional_body_param{% else %}with_body_param{% endif %}(body)
         {% endif -%}
 
         {% if op.response_is_event_stream -%}
@@ -172,9 +177,8 @@ impl<'a> {{ resource_type_name }}<'a> {
         {% elif op.response_is_text -%}
             .execute_text(self.cfg)
             .await
-        {% elif op.response_body_schema_name is undefined -%}
-            .returns_nothing()
-            .execute(self.cfg)
+        {% elif op.response_body_schema_name is undefined and op.response_body_json_type is undefined -%}
+            .execute_empty(self.cfg)
             .await
         {% else -%}
             .execute(self.cfg)
@@ -184,14 +188,16 @@ impl<'a> {{ resource_type_name }}<'a> {
     {% if op.pagination is defined %}
     {% set pg = op.pagination -%}
     {% set param = (op.query_params | selectattr("name", "equalto", pg.param) | first) -%}
-    /// Iterates over every item of [`Self::{{ op.name | to_snake_case }}`], fetching further pages on demand.
+    /// Iterates over every item of [`Self::{{ op.name | to_rust_ident }}`], fetching further pages on demand.
     pub fn {{ op.name | to_snake_case }}_iter(
         &self,
         {% for p in op.path_params -%}
             {{ p | to_rust_ident }}: String,
         {% endfor -%}
         {% if op.request_body_schema_name is defined -%}
-            {{ op.request_body_schema_name | to_snake_case }}: {% if op.request_body_optional %}Option<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_optional %}>{% endif %},
+            {{ op.request_body_schema_name | to_rust_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},
+        {% elif op.request_body_json_type is defined -%}
+            body: {% if op.request_body_optional %}Option<{% endif %}{{ rust_type(op.request_body_json_type) }}{% if op.request_body_optional %}>{% endif %},
         {% endif -%}
         {% if has_required_params -%}
             options: {{ param_struct_name }},
@@ -224,21 +230,23 @@ impl<'a> {{ resource_type_name }}<'a> {
                 let {{ p | to_rust_ident }} = {{ p | to_rust_ident }}.clone();
                 {% endfor -%}
                 {% if op.request_body_schema_name is defined -%}
-                let {{ op.request_body_schema_name | to_snake_case }} = {{ op.request_body_schema_name | to_snake_case }}.clone();
+                let {{ op.request_body_schema_name | to_rust_ident }} = {{ op.request_body_schema_name | to_rust_ident }}.clone();
+                {% elif op.request_body_json_type is defined -%}
+                let body = body.clone();
                 {% endif -%}
                 Box::pin(async move {
                     if let Some(param) = param {
                         options.{{ pg.param | to_rust_ident }} =
-                            serde_json::from_value(param).map_err(crate::error::Error::generic)?;
+                            serde_json::from_value(param).map_err(crate::request::decode_error)?;
                     }
                     let page = Self::new(cfg)
-                        .{{ op.name | to_snake_case }}(
+                        .{{ op.name | to_rust_ident }}(
                             {% for p in op.path_params %}{{ p | to_rust_ident }}, {% endfor %}
-                            {% if op.request_body_schema_name is defined %}{{ op.request_body_schema_name | to_snake_case }}, {% endif %}
+                            {% if op.request_body_schema_name is defined %}{{ op.request_body_schema_name | to_rust_ident }}, {% elif op.request_body_json_type is defined %}body, {% endif %}
                             {% if has_required_params %}options{% else %}Some(options){% endif %},
                         )
                         .await?;
-                    serde_json::to_value(page).map_err(crate::error::Error::generic)
+                    serde_json::to_value(page).map_err(crate::request::decode_error)
                 })
             }),
         )

@@ -1,3 +1,107 @@
 {% macro field_name(name) -%}
     {{ name | to_rust_ident }}
 {% endmacro -%}
+
+{# The Rust type of a spec type. Dates are chrono types when the crate depends on chrono. -#}
+{% macro rust_type(ty) -%}
+{% if ty.is_datetime() -%}
+{% if sdk.chrono %}chrono::DateTime<chrono::Utc>{% else %}String{% endif -%}
+{% elif ty.is_date() -%}
+{% if sdk.chrono %}chrono::NaiveDate{% else %}String{% endif -%}
+{% elif ty.is_list() or ty.is_set() -%}
+Vec<{{ rust_type(ty.inner_type()) }}>
+{%- elif ty.is_map() -%}
+std::collections::HashMap<String, {{ rust_type(ty.value_type()) }}>
+{%- else -%}
+{{ ty.to_rust() }}
+{%- endif %}
+{%- endmacro %}
+
+{# Boxes the types that lead back to the one being defined. -#}
+{% macro value_type(ty, recursive) -%}
+{% if ty.is_schema_ref() and ty.to_rust() in recursive -%}
+Box<{{ ty.to_rust() }}>
+{%- else -%}
+{{ rust_type(ty) }}
+{%- endif %}
+{%- endmacro %}
+
+{% macro unknown_variant(names) -%}
+{% if "Unknown" not in names %}Unknown{% elif "Other" not in names %}Other{% else %}UnknownValue{% endif %}
+{%- endmacro %}
+
+{# A struct's fields. Required nullable fields always serialize, `null` included; nullable
+   optional fields of PATCH bodies are `Option<Option<T>>`, where `Some(None)` sends `null`. -#}
+{% macro struct_fields(fields, recursive, patch_body, skip=none) -%}
+{% for field in fields if field.name != skip %}
+    {% if field.description is defined -%}
+        {{ field.description | to_doc_comment(style="rust") }}
+        {% if field.type.is_datetime() and not sdk.chrono -%}
+        ///
+        /// RFC 3339 date-time.
+        {% endif -%}
+    {% endif -%}
+    {% if field.deprecated -%}
+        #[deprecated]
+    {% endif -%}
+    {% set ty = value_type(field.type, recursive) -%}
+    {% set rename = "" -%}
+    {% if field.name != field.name | to_rust_ident | replace("r#", "") -%}
+        {% set rename %}rename = {{ field.name | rust_str }}{% endset -%}
+    {% endif -%}
+    {% set presence = "" -%}
+    {% if field.flatten -%}
+        {% set rename = "flatten" -%}
+    {% elif field.required and not field.nullable -%}
+    {% elif field.required -%}
+        {% set ty %}Option<{{ ty }}>{% endset -%}
+    {% elif field.nullable and patch_body -%}
+        {% set presence = 'default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::models::codec::nullable"' -%}
+        {% set ty %}Option<Option<{{ ty }}>>{% endset -%}
+    {% else -%}
+        {% set presence = 'skip_serializing_if = "Option::is_none"' -%}
+        {% set ty %}Option<{{ ty }}>{% endset -%}
+    {% endif -%}
+    {% set args = [rename, presence] | select | join(", ") -%}
+    {% if args %}#[serde({{ args }})]{% endif %}
+    pub {{ field_name(field.name) }}: {{ ty }},
+{% endfor %}
+{%- endmacro %}
+
+{# `new` takes the required, non-nullable fields; strings as `impl Into<String>`. -#}
+{% macro struct_new(fields, recursive, skip=none) -%}
+{% set params = fields | rejectattr("flatten") | selectattr("required") | rejectattr("nullable") | rejectattr("name", "equalto", skip) | list -%}
+{% if params -%}
+/// Creates a value from its required fields.
+{% endif -%}
+pub fn new(
+    {% for field in params -%}
+        {% if field.type.to_rust() == "String" and not field.type.is_datetime() and not field.type.is_date() -%}
+        {{ field_name(field.name) }}: impl Into<String>,
+        {% else -%}
+        {{ field_name(field.name) }}: {{ rust_type(field.type) }},
+        {% endif -%}
+    {% endfor -%}
+) -> Self {
+    {% if fields | selectattr("deprecated") | length > 0 -%}
+        #[allow(deprecated)]
+    {% endif -%}
+    Self {
+        {% for field in fields if field.name != skip -%}
+            {% if field in params -%}
+                {% if field.type.to_rust() == "String" and not field.type.is_datetime() and not field.type.is_date() -%}
+                {{ field_name(field.name) }}: {{ field_name(field.name) }}.into(),
+                {% elif field.type.is_schema_ref() and field.type.to_rust() in recursive -%}
+                {{ field_name(field.name) }}: Box::new({{ field_name(field.name) }}),
+                {% else -%}
+                {{ field_name(field.name) }},
+                {% endif -%}
+            {% elif field.flatten -%}
+                {{ field_name(field.name) }}: Default::default(),
+            {% else -%}
+                {{ field_name(field.name) }}: None,
+            {% endif -%}
+        {% endfor -%}
+    }
+}
+{%- endmacro %}

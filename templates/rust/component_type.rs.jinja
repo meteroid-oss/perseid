@@ -1,4 +1,5 @@
 // this file is @generated
+{% from "types/macros.rs.jinja" import rust_type -%}
 {% if type.description is defined -%}
 {% set doc_comment = type.description | to_doc_comment(style="rust") -%}
 {% else -%}
@@ -20,7 +21,7 @@
     use super::{{ c | to_upper_camel_case }};
     {% endfor -%}
     {{ doc_comment }}
-    pub type {{ type.name | to_upper_camel_case }} = {{ type.target.to_rust() }};
+    pub type {{ type.name | to_upper_camel_case }} = {{ rust_type(type.target) }};
 {% else -%}
     compile_error!("{{ type.kind }} types are not supported by this codegen template");
 {% endif %}

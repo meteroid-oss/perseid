@@ -1,10 +1,15 @@
+{% from "types/macros.py.jinja" import module_name -%}
 # this file is @generated
 """Models for the {{ sdk.client_name }} API."""
 
+from ..serialization import UNSET, Unset, UnknownVariant
 {% for _, type in api.types | items -%}
-from .{{ type.name | to_snake_case }} import {{ type.name | to_upper_camel_case }}
+from .{{ module_name(type.name) }} import {{ type.name | to_upper_camel_case }}
 {% endfor %}
 __all__ = [
+    "UNSET",
+    "Unset",
+    "UnknownVariant",
     {% for _, type in api.types | items -%}
         "{{ type.name | to_upper_camel_case }}",
     {% endfor -%}

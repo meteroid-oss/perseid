@@ -1,6 +1,6 @@
-use std::str::FromStr;
+use std::{collections::BTreeSet, str::FromStr};
 
-use anyhow::{Context as _, bail};
+use anyhow::{Context as _, bail, ensure};
 use camino::{Utf8Path, Utf8PathBuf};
 use fs_err as fs;
 use heck::{ToLowerCamelCase, ToSnakeCase as _, ToUpperCamelCase as _};
@@ -8,7 +8,10 @@ use minijinja::{Template, context};
 use serde::Deserialize;
 
 use crate::{
-    api::{Api, Resource},
+    api::{
+        Api, Resource, Types,
+        types::{Type, TypeData},
+    },
     postprocessing::Postprocessor,
     template,
 };
@@ -44,6 +47,23 @@ pub(crate) fn generate_with_output_context(
 
     if tpl_file_ext != "rs" {
         api.inline_aliases()?;
+    }
+    if tpl_file_ext == "java" {
+        api.inline_string_alias_bodies()?;
+    }
+    if tpl_file_ext == "cs" {
+        let streaming: Vec<&str> = api
+            .resources
+            .values()
+            .flat_map(Resource::streaming_operations)
+            .collect();
+        ensure!(
+            streaming.is_empty(),
+            "multipart uploads, binary uploads and event streams are not supported in C# yet, \
+             leave them out with `exclude = [\"{}\"]` in the [csharp] table",
+            streaming.join("\", \"")
+        );
+        api.inline_flattened_fields()?;
     }
 
     let tpl_kind = match tpl_base_name {
@@ -159,11 +179,49 @@ impl Generator<'_> {
         let mut generated_paths = vec![];
 
         let output_dir = output_dir.as_str();
-        for (name, ty) in api.types {
-            let referenced_components = ty.referenced_components();
+        let patch_bodies: BTreeSet<&str> = api
+            .resources
+            .values()
+            .flat_map(Resource::patch_bodies)
+            .collect();
+        let type_names = minijinja::Value::from_serialize(
+            api.types
+                .keys()
+                .map(|name| (name.to_upper_camel_case(), true))
+                .collect::<std::collections::BTreeMap<_, _>>(),
+        );
+        for (name, ty) in &api.types {
+            let mut referenced_components = ty.referenced_components();
+            // A recursive type refers to itself, which is not an import.
+            referenced_components.remove(name.as_str());
+            let recursive_refs = recursive_refs(&api.types, ty);
+            let patch_body = patch_bodies.contains(name.as_str());
+            let inherited_fields = ty.inherited_fields(&api.types);
+            // Type names, as templates render them, of the schemas `ty` embeds or unites that
+            // are not objects (a union, say).
+            let non_struct_refs: BTreeSet<String> = ty
+                .direct_refs()
+                .into_iter()
+                .filter(|r| {
+                    !matches!(
+                        api.types.get(*r).map(|t| &t.data),
+                        Some(TypeData::Struct { .. })
+                    )
+                })
+                .map(|r| r.to_upper_camel_case())
+                .collect();
             generated_paths.extend_from_slice(&self.render_tpl(
-                Some(&name),
-                context! { type => ty, referenced_components, output_dir },
+                Some(name),
+                context! {
+                    type => ty,
+                    referenced_components,
+                    recursive_refs,
+                    patch_body,
+                    inherited_fields,
+                    non_struct_refs,
+                    output_dir,
+                    type_names => type_names.clone(),
+                },
             )?);
         }
 
@@ -185,6 +243,7 @@ impl Generator<'_> {
         let basename = match (output_name, tpl_file_ext) {
             (Some(name), "ts") => name.to_lower_camel_case(),
             (Some(name), "cs" | "java" | "kt" | "php") => name.to_upper_camel_case(),
+            (Some(name), "go") => go_file_stem(name.to_snake_case()),
             (Some(name), _) => name.to_snake_case(),
             (None, "py") => "__init__".to_owned(),
             (None, "rs") => "mod".to_owned(),
@@ -227,5 +286,93 @@ impl Generator<'_> {
         }
 
         Ok(generated_paths)
+    }
+}
+
+/// Schemas `ty` holds by value that lead back to it, so a language without indirection by
+/// default (Rust) must box them.
+fn recursive_refs<'a>(types: &'a Types, ty: &'a Type) -> BTreeSet<&'a str> {
+    let leads_back = |start: &'a str| {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![start];
+        while let Some(name) = stack.pop() {
+            if name == ty.name {
+                return true;
+            }
+            if seen.insert(name) {
+                stack.extend(types.get(name).into_iter().flat_map(Type::direct_refs));
+            }
+        }
+        false
+    };
+    ty.direct_refs()
+        .into_iter()
+        .filter(|r| leads_back(r))
+        .collect()
+}
+
+/// Go only builds `x_windows.go`, `x_arm64.go` or `x_test.go` for that OS, arch or test run.
+fn go_file_stem(stem: String) -> String {
+    const CONSTRAINTS: &[&str] = &[
+        "aix",
+        "android",
+        "darwin",
+        "dragonfly",
+        "freebsd",
+        "hurd",
+        "illumos",
+        "ios",
+        "js",
+        "linux",
+        "nacl",
+        "netbsd",
+        "openbsd",
+        "plan9",
+        "solaris",
+        "wasip1",
+        "windows",
+        "zos",
+        "386",
+        "amd64",
+        "amd64p32",
+        "arm",
+        "armbe",
+        "arm64",
+        "arm64be",
+        "loong64",
+        "mips",
+        "mipsle",
+        "mips64",
+        "mips64le",
+        "mips64p32",
+        "mips64p32le",
+        "ppc",
+        "ppc64",
+        "ppc64le",
+        "riscv",
+        "riscv64",
+        "s390",
+        "s390x",
+        "sparc",
+        "sparc64",
+        "wasm",
+        "test",
+    ];
+    match stem.rsplit_once('_') {
+        Some((_, last)) if CONSTRAINTS.contains(&last) => format!("{stem}_gen"),
+        _ => stem,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::go_file_stem;
+
+    #[test]
+    fn go_file_names_never_look_like_build_constraints() {
+        assert_eq!(go_file_stem("usage_windows".into()), "usage_windows_gen");
+        assert_eq!(go_file_stem("widget_test".into()), "widget_test_gen");
+        assert_eq!(go_file_stem("windows".into()), "windows");
+        assert_eq!(go_file_stem("usage_window".into()), "usage_window");
     }
 }

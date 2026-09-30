@@ -1,7 +1,8 @@
-{% set type_name = type.name | to_upper_camel_case -%}
+{% from "types/macros.go.jinja" import go_ident -%}
+{#- A true alias (`=`) rather than a defined type, so callers can pass plain
+    strings wherever an ID is expected. -#}
+{% set type_name = go_ident(type.name) -%}
 package {{ sdk.package_name }}
 
 {{ doc_comment }}
-{#- A true alias (`=`) rather than a defined type, so callers can pass plain
-    strings wherever an ID is expected. -#}
 type {{ type_name }} = string

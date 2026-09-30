@@ -1,4 +1,6 @@
+{% from "types/macros.py.jinja" import module_name -%}
 # this file is @generated
+{% set _ = set_summary_filename(module_name(type.name) ~ ".py") -%}
 {% if type.kind == "struct" -%}
     {% include "types/struct.py.jinja" -%}
 {% elif type.kind == "string_enum" -%}

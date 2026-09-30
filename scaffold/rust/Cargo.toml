@@ -2,15 +2,14 @@
 name = "@@RUST_CRATE@@"
 version = "@@VERSION@@"
 edition = "2021"
-license = "Apache-2.0 AND MIT"
 description = "@@CLIENT_NAME@@ API client"
 categories = ["api-bindings"]
+# Set before publishing: license, repository, documentation.
 
 [dependencies]
 # HTTP & Networking
 hyper = { version = "1.7", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
-tower-service = "0.3"
 http-body-util = "0.1"
 bytes = "1"
 
@@ -27,16 +26,14 @@ hyper-tls = { version = "0.6", optional = true }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-js_option = { version = "0.1", features = ["serde"] }
 serde_urlencoded = "0.7"
 rust_decimal = { version = "1", features = ["serde"] }
+chrono = { version = "0.4.38", default-features = false, features = ["serde", "std"] }
 
 # Utilities
 url = "2.5"
 percent-encoding = "2.3"
 uuid = { version = "1", features = ["v4"] }
-itertools = "0.14"
-rand = "0.9"
 
 # Webhook verification, behind the `webhooks` feature
 hmac = { version = "0.12", optional = true }

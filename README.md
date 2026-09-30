@@ -60,7 +60,8 @@ Four extension points, none of which needs a fork:
 2. **Middleware.** Every SDK lets you wrap each HTTP attempt to cache, log, sign or rewrite requests:
    `middleware` in the TypeScript options (`(request, next) => Response`), `middleware` and
    `async_middleware` in the Python options, `Options.Middleware` in Go (a `RoundTripper` wrapper),
-   `getInterceptors()` in Java (OkHttp interceptors) and `Middleware` in Rust.
+   `getInterceptors()` in Java (OkHttp interceptors, also added to your own client given to
+   `setHttpClient`) and `Middleware` in Rust.
 3. **Resource snippets.** A file at `.perseid/templates/<lang>/extensions/<resource>.<ext>` is inlined
    in the body of that resource's class (Rust, TypeScript, Java, and Python where
    `<resource>_async.py` targets the async class), to add custom methods.
@@ -133,6 +134,22 @@ It is `Webhook` in every language (`Webhook::new(secret)?.verify(&body, &headers
 `x-webhooks` in the spec. In Rust the verifier lives behind the `webhooks` cargo feature that `init`
 adds to `Cargo.toml` and `lib.rs`.
 
+### Rust
+
+Enums and unions are `#[non_exhaustive]` and decode values this version does not know into an
+`Unknown` variant that serializes back unchanged. Recursive fields are boxed. Dates are `chrono`
+types when the crate depends on `chrono`, as `init` sets it up, and strings otherwise. In PATCH
+bodies, nullable optional fields are `Option<Option<T>>`: `Some(None)` sends `null`.
+
+Failed requests are retried on connection errors, timeouts, 408, 429 and 5xx responses, honoring
+`Retry-After`, but only when the method is idempotent or the request carries an `Idempotency-Key`
+(POST gets one automatically). `Options::with_connector` takes any hyper connector, for custom
+TLS roots, client certificates or a proxy, and `http_client` any `HttpClient` implementation.
+
+`src/error.rs` is yours: the runtime builds errors with `Error::generic(Failure)` and
+`Error::from_response(status, headers, body)` only. The scaffolded one is an enum of `Api`,
+`Timeout`, `Transport`, `Decode` and `Request` errors with `source()`.
+
 ## perseid.toml
 
 ```toml
@@ -152,8 +169,30 @@ module = "github.com/acme/acme-go"
 repo = "acme/acme-go"               # lives in its own repository
 ```
 
-Every table also takes `path`, `version`, `base_url`, `header_prefix`, `user_agent`, `webhooks` and a
-`context` table exposed to templates. `perseid inspect` prints the model templates receive.
+The Python SDK needs Python 3.10+. Its models are keyword-only dataclasses; an optional field
+that accepts `null` defaults to `UNSET`, so `None` sends `null`, and enum values or union variants
+newer than the SDK are kept rather than rejected. Methods take `extra_headers=` and `timeout=`.
+Unions are models holding the discriminator and the variant (`Shape(type=..., content=Circle(...))`);
+`flat_unions = true` in `[python.context]` types them as `Circle | Square` instead.
+
+Every table also takes `path`, `version`, `base_url`, `header_prefix`, `user_agent`, `webhooks`,
+`exclude` (operation ids left out of that SDK only) and a `context` table exposed to templates. `perseid inspect` prints the model templates receive. In
+templates, `name | ident("snake", "rust")` turns a spec name into an identifier (cases `snake`,
+`camel`, `pascal` and `shouty`, keywords escaped for `rust`, `python`, `go`, `java` or
+`typescript`), and `names | idents(case, language, owner)` fails when two names collide.
+
+`[typescript]` also takes `int64`: `"number"` (the default, exact up to 2^53), `"bigint"` or
+`"string"`. With the last two, responses are parsed without losing digits, and `parseJson` /
+`stringifyJson` do the same for webhook payloads. The TypeScript package ships ESM and CommonJS
+builds behind an `exports` map; every method takes a last `{ signal, headers, timeout }` argument,
+and models convert with `XSerializer.parse(json)` / `XSerializer.serialize(value)`.
+
+In `[go]`, `initialisms = true` spells names the Go way (`CustomerID`, `APIKey`) and
+`patch_nullable = true` types the optional nullable fields of PATCH bodies as `*Nullable[T]`,
+so `Null[T]()` clears a field. `perseid init` turns both on; they rename or retype public API, so
+existing SDKs opt in. Every Go method takes trailing options for one call:
+`WithHeader`, `WithTimeout`, `WithIdempotencyKey` and `WithMaxRetries`. Retries cover network
+errors, 408, 429 and 5xx, honor `Retry-After` up to a minute and add jitter to the backoff.
 
 ## Authentication
 
@@ -301,10 +340,19 @@ Early, and honest about it:
   (`nullable`, boolean `exclusiveMinimum`/`exclusiveMaximum`). Swagger 2.0 is rejected: convert
   it first, for example with `npx swagger2openapi`.
 - Proven on [Meteroid's API](https://github.com/meteroid-oss/meteroid-clients) and our test
-  specs, not yet on hundreds of APIs. Unsupported constructs make generation fail instead of
-  being skipped: an issue with the spec attached is the fastest way to get one supported.
+  specs. SDKs generated from the GitHub, OpenAI, Twilio and Stripe specs compile in Rust,
+  TypeScript, Python, Go and Java once a few operations are excluded. `$ref` parameters, bodies
+  and responses, inline objects, `allOf` compositions, list bodies and `application/*+json` are
+  read as is; inline objects become named types.
+- Unsupported constructs make generation fail instead of being skipped, each listed with its
+  operation id and path or its schema: `exclude = ["<operation id>"]` skips an operation, and an
+  issue with the spec attached is the fastest way to get one supported. Unions without a
+  discriminator are typed as untyped JSON, with a warning. A variant missing from the
+  discriminator `mapping` is tagged with the `const` or `enum` of its discriminator property,
+  falling back to its schema name.
 - Not there yet: a built-in OAuth2 token exchange (bring a token provider), and auth,
-  pagination and streaming in C#.
+  pagination and streaming in C#. C# generation fails on upload and event stream operations,
+  naming them for `exclude` in its `[csharp]` table.
 
 ## License
 

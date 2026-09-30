@@ -1,6 +1,7 @@
-{#- A bare type alias cannot carry a docstring on Python < 3.12, so the schema
-    description is kept as a comment. -#}
+{% from "types/macros.py.jinja" import docstring -%}
+import typing as t
+
+{{ type.name | to_upper_camel_case }}: t.TypeAlias = str
 {% if type.description is defined -%}
-# {{ type.description | replace("\n", "\n# ") }}
+{{ docstring(type.description) }}
 {% endif -%}
-{{ type.name | to_upper_camel_case }} = str

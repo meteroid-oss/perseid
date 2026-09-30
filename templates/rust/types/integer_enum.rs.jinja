@@ -1,33 +1,68 @@
+{% from "types/macros.rs.jinja" import unknown_variant -%}
 use std::fmt;
 
-use serde_repr::{Deserialize_repr, Serialize_repr};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+{% set name = type.name | to_upper_camel_case -%}
+{% set variants = type.variants | map(attribute=0) | map("to_upper_camel_case") | list -%}
+{% set unknown = unknown_variant(variants) -%}
 {{ doc_comment }}
-#[repr(i64)]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Hash,
-    Serialize_repr,
-    Deserialize_repr,
-)]
-pub enum {{ type.name | to_upper_camel_case }} {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum {{ name }} {
     {% for name, value in type.variants -%}
         {% if loop.first -%}
-            #[default]
+        #[default]
         {% endif -%}
-        {{ name | to_upper_camel_case }} = {{ value }},
+        {{ name | to_upper_camel_case }},
     {% endfor -%}
+    /// A value this version of the SDK does not know yet.
+    {{ unknown }}(i64),
 }
 
-impl fmt::Display for {{ type.name | to_upper_camel_case }} {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", *self as i64)
+impl {{ name }} {
+    /// The value as sent on the wire.
+    pub fn value(self) -> i64 {
+        match self {
+            {% for name, value in type.variants -%}
+                Self::{{ name | to_upper_camel_case }} => {{ value }},
+            {% endfor -%}
+            Self::{{ unknown }}(value) => value,
+        }
+    }
+}
+
+impl From<i64> for {{ name }} {
+    fn from(value: i64) -> Self {
+        match value {
+            {% for name, value in type.variants -%}
+                {{ value }} => Self::{{ name | to_upper_camel_case }},
+            {% endfor -%}
+            other => Self::{{ unknown }}(other),
+        }
+    }
+}
+
+impl fmt::Display for {{ name }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.value().fmt(f)
+    }
+}
+
+impl Serialize for {{ name }} {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i64(self.value())
+    }
+}
+
+impl<'de> Deserialize<'de> for {{ name }} {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        i64::deserialize(deserializer).map(Self::from)
+    }
+}
+
+impl crate::request::QueryParamValue for {{ name }} {
+    fn encode(&self) -> String {
+        self.to_string()
     }
 }

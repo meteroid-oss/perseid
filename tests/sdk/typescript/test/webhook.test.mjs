@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Webhook, WebhookVerificationError } from "../dist/index.js";
+import { Webhook, WebhookVerificationError } from "../dist/esm/index.js";
 
 const SECRET = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
 const PAYLOAD = '{"test": 2432232314}';

@@ -1,23 +1,16 @@
-{% from "types/macros.py.jinja" import docstring, field_ident, field_type, py_ident -%}
-import dataclasses
-import typing as t
-from datetime import datetime
-from decimal import Decimal
-
-from ..serialization import BaseModel
-{% for c in referenced_components -%}
-from .{{ c | to_snake_case }} import {{ c | to_upper_camel_case }}
-{% endfor %}
+{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, model_imports, py_ident -%}
+{% set runtime_names = ["BaseModel"] -%}
+{% if type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
+    {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
+{% endif -%}
+{{ model_imports(referenced_components, runtime_names) }}
 
 {% set json_keys %}
-    {#- Keyed by the *attribute* name, i.e. `py_ident(...)` and not a bare
-        `to_snake_case`: a field named after a Python keyword (`class`, `from`,
-        ...) is exposed as `class_` / `from_`, and a snake_case key would
-        silently miss the lookup and serialize under the wrong wire key. -#}
+    {#- Keyed by the attribute name: a keyword field `class` is exposed as `class_`. -#}
     {%- for field in type.fields if not field.flatten -%}
         {%- set attr = py_ident(field.name) -%}
         {%- if attr != field.name -%}
-            "{{ attr }}": "{{ field.name }}",
+            "{{ attr }}": {{ py_str(field.name) }},
         {%- endif -%}
     {%- endfor -%}
 {% endset -%}
@@ -29,7 +22,7 @@ from .{{ c | to_snake_case }} import {{ c | to_upper_camel_case }}
 {% endset -%}
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(kw_only=True)
 class {{ type.name | to_upper_camel_case }}(BaseModel):
     {% if type.description is defined -%}
         {{ docstring(type.description) | indent(4) }}
@@ -40,21 +33,16 @@ class {{ type.name | to_upper_camel_case }}(BaseModel):
     {%- endif %}
 
     {%- if flattened | trim %}
-    _FLATTENED: t.ClassVar[t.Tuple[str, ...]] = ( {{ flattened | trim }} )
+    _FLATTENED: t.ClassVar[tuple[str, ...]] = ( {{ flattened | trim }} )
     {%- endif %}
 
-    {#- Dataclass fields without a default must come first, so mandatory
-        fields are emitted before optional ones. -#}
+    {#- Required fields first, for readability: every field is keyword-only. -#}
     {%- for required_pass in [true, false] %}
-        {%- for field in type.fields %}
-            {%- set is_required = field.required and not field.nullable %}
-            {%- if is_required == required_pass %}
+        {%- for field in type.fields if field.required == required_pass %}
 
-    {{ field_ident(field) }}: {{ field_type(field) }}
-                {%- if not is_required %} = None{% endif %}
-                {%- if field.description is defined %}
-    {{ docstring(field.description) | indent(4) }}
-                {%- endif %}
+    {{ field_ident(field) }}: {{ field_decl(field) }}
+            {%- if field.description is defined or field.deprecated %}
+    {{ docstring(((field.description if field.description is defined else "") ~ ("\n\n.. deprecated:: This field is deprecated." if field.deprecated else "")) | trim) | indent(4) }}
             {%- endif %}
         {%- endfor %}
     {%- endfor %}

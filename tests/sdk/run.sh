@@ -16,20 +16,35 @@ cp -r "$here/$lang/." "$lang/"
 cd "$lang"
 
 case "$lang" in
-  rust) cargo test --features webhooks ;;
-  typescript) npm install --no-audit --no-fund && npx tsc && node --test test/*.test.mjs ;;
+  rust)
+    cargo test --features webhooks
+    mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
+    cd "$work/torture" && perseid init rust && perseid generate rust
+    mkdir -p rust/tests && cp "$here/rust/torture/"*.rs rust/tests/ && cd rust && cargo test ;;
+  typescript)
+    npm install --no-audit --no-fund && npm run build
+    FIXTURES="$here/../fixtures" node --test test/*.test.mjs ;;
   python)
     uv venv -q && uv pip install -q -e .
-    uv run python -m unittest discover -s tests -v ;;
-  go) go vet ./... && go test ./... ;;
+    FIXTURES="$here/../fixtures" .venv/bin/python -m unittest discover -s tests -v ;;
+  go)
+    go vet ./... && go test ./...
+    mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
+    cd "$work/torture" && perseid init go && perseid generate go
+    cp "$here/go/_torture/"*_test.go go/ && cd go && go vet ./... && go test ./... ;;
   java)
-    cat >> build.gradle <<'GRADLE'
+    gradle_test() {
+      cat >> build.gradle <<'GRADLE'
 dependencies {
     testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.11.4'
-    testCompileOnly 'org.projectlombok:lombok:1.18.36'
 }
-test { useJUnitPlatform() }
+test { useJUnitPlatform(); testLogging { events "passed", "skipped", "failed"; exceptionFormat "full" } }
 GRADLE
-    gradle test --no-daemon ;;
+      gradle test --no-daemon
+    }
+    rm -rf _torture && gradle_test
+    mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
+    cd "$work/torture" && perseid init java && perseid generate java
+    cp -r "$here/java/_torture/." java/ && cd java && gradle_test ;;
 esac

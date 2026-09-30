@@ -1,14 +1,12 @@
-{% from "types/macros.py.jinja" import docstring -%}
-import enum
+{% from "types/macros.py.jinja" import py_str, docstring -%}
+from ..serialization import StrEnum
 
 
-class {{ type.name | to_upper_camel_case }}(str, enum.Enum):
+class {{ type.name | to_upper_camel_case }}(StrEnum):
     {% if type.description is defined -%}
         {{ docstring(type.description) | indent(4) }}
     {% endif %}
+    {%- set members = type.values | idents("shouty", "python", "schema `" ~ type.name ~ "`") %}
     {%- for value in type.values %}
-    {{ value | to_upper_snake_case }} = "{{ value }}"
+    {{ members[loop.index0] }} = {{ py_str(value) }}
     {%- endfor %}
-
-    def __str__(self) -> str:
-        return str(self.value)

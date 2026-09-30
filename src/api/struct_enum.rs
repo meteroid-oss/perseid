@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure};
+use anyhow::{Context as _, bail, ensure};
 use schemars::schema::{ObjectValidation, Schema, SchemaObject};
 
 use crate::api::{
@@ -14,7 +14,10 @@ struct SameString(Option<String>);
 impl SameString {
     fn update(&mut self, val: String) -> anyhow::Result<()> {
         match self.0.as_ref() {
-            Some(current_val) => ensure!(*current_val == val),
+            Some(current_val) => ensure!(
+                *current_val == val,
+                "`oneOf` variants disagree on the field name: `{current_val}` and `{val}`"
+            ),
             None => self.0 = Some(val),
         }
         Ok(())
@@ -67,10 +70,12 @@ impl TypeData {
         Ok(Self::StructEnum {
             discriminator_field: discriminator_field
                 .inner()
-                .expect("failed to fine discriminator field"),
+                .context("a `oneOf` without variants")?,
             fields: fields.to_vec(),
             repr: StructEnumRepr::AdjacentlyTagged {
-                content_field: content_field.inner().expect("failed to fine content field"),
+                content_field: content_field
+                    .inner()
+                    .context("no `oneOf` variant carries content")?,
                 variants,
             },
         })
@@ -93,7 +98,10 @@ fn get_content(variant: &ObjectValidation) -> anyhow::Result<(String, EnumVarian
             return Ok((
                 p_name.to_owned(),
                 EnumVariantType::Ref {
-                    schema_ref: Some(get_schema_name(Some(schema_ref.as_str())).unwrap()),
+                    schema_ref: Some(
+                        get_schema_name(Some(schema_ref.as_str()))
+                            .context("variant reference outside #/components/schemas")?,
+                    ),
                     inner: None,
                 },
             ));

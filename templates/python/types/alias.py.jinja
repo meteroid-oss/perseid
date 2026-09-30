@@ -1,12 +1,14 @@
-{% from "types/macros.py.jinja" import py_type -%}
+{% from "types/macros.py.jinja" import docstring, module_name, py_type -%}
+from __future__ import annotations
+
 import typing as t
 from datetime import datetime
 from decimal import Decimal
+{% for c in referenced_components %}
+from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
+{%- endfor %}
 
-{% for c in referenced_components -%}
-from .{{ c | to_snake_case }} import {{ c | to_upper_camel_case }}
-{% endfor %}
+{{ type.name | to_upper_camel_case }}: t.TypeAlias = {{ py_type(type.target) }}
 {% if type.description is defined -%}
-# {{ type.description | replace("\n", "\n# ") }}
+{{ docstring(type.description) }}
 {% endif -%}
-{{ type.name | to_upper_camel_case }} = {{ py_type(type.target) }}

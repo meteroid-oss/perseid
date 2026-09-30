@@ -88,7 +88,7 @@ impl<'a, T: DeserializeOwned> Paginator<'a, T> {
         };
         for item in &items {
             self.buffered
-                .push_back(serde_json::from_value(item.clone()).map_err(Error::generic)?);
+                .push_back(serde_json::from_value(item.clone()).map_err(crate::request::decode_error)?);
         }
         self.done = !self.advance(&page, &items);
         Ok(())

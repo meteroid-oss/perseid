@@ -1,12 +1,23 @@
 """Customize API error decoding here without changing generated files."""
-from .serialization import @@CLIENT_NAME@@Error
+
+from .serialization import @@CLIENT_NAME@@Error, ModelParseError
+
+__all__ = [
+    "@@CLIENT_NAME@@Error",
+    "ApiException",
+    "ModelParseError",
+    "NetworkException",
+    "ResponseDecodeError",
+]
 
 
 class NetworkException(@@CLIENT_NAME@@Error):
-    pass
+    """The request got no response: connection failure or timeout, after retries."""
 
 
 class ApiException(@@CLIENT_NAME@@Error):
+    """The API answered with a non-2xx status."""
+
     def __init__(self, status_code: int, raw_body: bytes) -> None:
         self.status_code = status_code
         self.raw_body = raw_body
@@ -18,6 +29,8 @@ class ApiException(@@CLIENT_NAME@@Error):
 
 
 class ResponseDecodeError(@@CLIENT_NAME@@Error, ValueError):
+    """A 2xx body was not valid JSON or did not match its model."""
+
     def __init__(self, status_code: int, raw_body: bytes, reason: str) -> None:
         self.status_code = status_code
         self.raw_body = raw_body

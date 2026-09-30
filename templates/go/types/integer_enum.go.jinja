@@ -1,5 +1,5 @@
-{% from "types/macros.go.jinja" import go_deprecated -%}
-{% set type_name = type.name | to_upper_camel_case -%}
+{% from "types/macros.go.jinja" import go_deprecated, go_ident, go_const -%}
+{% set type_name = go_ident(type.name) -%}
 package {{ sdk.package_name }}
 
 import "strconv"
@@ -10,12 +10,12 @@ import "strconv"
 
 // Known values of {{ type_name }}.
 const (
-{% for name, value in type.variants %}{{ type_name }}{{ name | to_upper_camel_case }} {{ type_name }} = {{ value }}
+{% for name, value in type.variants %}{{ go_const(type.name, name, type_names) }} {{ type_name }} = {{ value }}
 {% endfor %})
 
 // All{{ type_name }}Values lists every {{ type_name }} value known to this SDK version.
 var All{{ type_name }}Values = []{{ type_name }}{
-{% for name, value in type.variants %}{{ type_name }}{{ name | to_upper_camel_case }},
+{% for name, value in type.variants %}{{ go_const(type.name, name, type_names) }},
 {% endfor %}}
 
 // String returns the decimal representation of the value.

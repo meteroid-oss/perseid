@@ -1,14 +1,16 @@
 {
   "compilerOptions": {
     "strict": true,
-    "target": "es2020",
-    "module": "CommonJS",
-    "moduleResolution": "node",
+    "target": "es2022",
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom"],
     "declaration": true,
-    "outDir": "dist",
-    "esModuleInterop": true,
+    "sourceMap": true,
+    "isolatedModules": true,
     "skipLibCheck": true,
-    "lib": ["es2020", "dom"]
+    "rootDir": "src",
+    "outDir": "dist/esm"
   },
   "include": ["src/**/*.ts"]
 }

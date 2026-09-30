@@ -1,7 +1,7 @@
 {#- Properties of `fields`, inside a type named `owner`. -#}
 {% for field in fields -%}
 {% set ty = m.field_type(field) -%}
-{% set patch = sdk.patch_nullable and owner is endingwith "Patch" and field.nullable -%}
+{% set patch = sdk.patch_nullable and (patch_body | default(false) or owner is endingwith "Patch") and field.nullable -%}
 {% if field.description is defined %}
 {{ m.doc(field.description) }}
 {%- endif %}

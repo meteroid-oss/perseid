@@ -5,16 +5,17 @@ pub(crate) mod struct_enum;
 pub(crate) mod types;
 
 use aide::openapi;
+use anyhow::ensure;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::Filters;
 
 pub(crate) use self::{
     resources::{Resource, Resources},
-    types::Types,
+    types::{FieldType, Types},
 };
 
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 pub(crate) struct Api {
     #[serde(with = "toplevel_resources_serde")]
     pub resources: Resources,
@@ -35,25 +36,44 @@ impl Api {
         filters: &Filters,
     ) -> anyhow::Result<Self> {
         let include_mode = filters.include_mode;
-        let mut resources = resources::from_openapi(
+        let (mut resources, mut errors) = resources::from_openapi(
             paths,
             &components.schemas,
             include_mode,
             &filters.excluded,
             &filters.specified,
-        )?;
-        let mut types = types::from_referenced_components(
+        );
+        let (mut types, type_errors) = types::from_referenced_components(
             &resources,
             &mut components.schemas,
             webhooks,
             include_mode,
         );
+        errors.extend(type_errors);
+        types::untag_unions_with_non_object_variants(&mut types);
 
         // Promote inline enums (e.g. array-of-enum query params) to named
         // top-level types so generated SDKs get real enum types instead of
         // `Vec<String>`. Must run before we collect string alias names, since
         // promotion may add new `SchemaRef`s that need resolving.
-        types::promote_inline_enums(&mut types, &mut resources)?;
+        if let Err(e) = types::promote_inline_enums(&mut types, &mut resources) {
+            errors.push(format!("{e:#}"));
+        }
+        errors.extend(types::clashing_type_names(&types));
+        errors.extend(types::clashing_identifiers(&types));
+        errors.extend(resources::object_query_params(&resources, &types));
+        ensure!(
+            errors.is_empty(),
+            "the spec uses {} perseid does not support (skip an operation with \
+             `exclude = [\"<operation id>\"]` in perseid.toml):\n  - {}",
+            match errors.len() {
+                1 => "a construct".to_owned(),
+                n => format!("{n} constructs"),
+            },
+            errors.join("\n  - ")
+        );
+
+        resources::rename_resources_named_like_types(&mut resources, &types);
 
         // Resolve string alias references in operation query params
         // This must happen after types are created so we know which types are string aliases
@@ -75,6 +95,22 @@ impl Api {
 
     pub(crate) fn inline_aliases(&mut self) -> anyhow::Result<()> {
         types::inline_aliases(&mut self.types, &mut self.resources)
+    }
+
+    pub(crate) fn inline_flattened_fields(&mut self) -> anyhow::Result<()> {
+        types::inline_flattened_fields(&mut self.types)
+    }
+
+    /// Types string-alias bodies and parameters as plain strings, for Java.
+    pub(crate) fn inline_string_alias_bodies(&mut self) -> anyhow::Result<()> {
+        let aliases = types::collect_string_alias_names(&self.types)
+            .into_iter()
+            .map(|name| (name, FieldType::String))
+            .collect();
+        for resource in self.resources.values_mut() {
+            resource.inline_aliases(&aliases)?;
+        }
+        Ok(())
     }
 }
 

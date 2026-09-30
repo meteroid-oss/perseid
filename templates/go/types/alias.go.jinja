@@ -1,4 +1,4 @@
-{% from "types/macros.go.jinja" import go_type -%}
+{% from "types/macros.go.jinja" import go_type, go_ident -%}
 {% set target = go_type(type.target) -%}
 package {{ sdk.package_name }}
 {% if "time.Time" in target and "json.RawMessage" in target %}
@@ -12,4 +12,4 @@ import "time"
 import "encoding/json"
 {% endif %}
 {{ doc_comment }}
-type {{ type.name | to_upper_camel_case }} = {{ target }}
+type {{ go_ident(type.name) }} = {{ target }}

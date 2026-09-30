@@ -17,7 +17,7 @@ use crate::{
     assets,
     config::{Config, Sdk},
     format, fsx, generator,
-    spec::{self, FailOnError},
+    spec::{self, FailOnError, Report},
 };
 
 pub struct Options {
@@ -141,11 +141,12 @@ fn scan_sources(
 fn render(
     config: &Config,
     root: &Path,
-    language: &str,
+    sdk: &Sdk,
     context: &Value,
     spec: &str,
     stage: &Path,
 ) -> Result<Vec<PathBuf>> {
+    let language = sdk.language;
     let assets_dir = tempfile::tempdir()?;
     assets::materialize(
         language,
@@ -154,8 +155,9 @@ fn render(
     )?;
     let (runtime, tasks) = layout(language, context);
     let extension = extension(language);
-    let filters = config.filters();
+    let filters = config.filters_for(sdk);
     let mut produced = Vec::new();
+    let api = spec::api(spec, &filters)?;
     for (template, output) in tasks {
         let template = assets_dir
             .path()
@@ -163,9 +165,8 @@ fn render(
         let template = template.to_str().context("non UTF-8 path")?.to_owned();
         let out = Utf8PathBuf::from_path_buf(stage.join(&output))
             .map_err(|p| anyhow::anyhow!("non UTF-8 path {}", p.display()))?;
-        let api = spec::api(spec, &filters)?;
         let paths = generator::generate_with_output_context(
-            api,
+            api.clone(),
             template,
             &out,
             true,
@@ -270,17 +271,13 @@ pub fn sdk(
         .tempdir_in(dir)?;
     let failed = Arc::new(AtomicBool::new(false));
     let subscriber = tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(std::io::stderr)
-                .with_target(false)
-                .without_time()
-                .with_filter(tracing::level_filters::LevelFilter::ERROR),
-        )
+        .with(Report)
         .with(FailOnError(failed.clone()));
     let produced = tracing::subscriber::with_default(subscriber, || {
-        render(config, root, sdk.language, &context, spec, stage.path())
-    })?;
+        render(config, root, sdk, &context, spec, stage.path())
+    });
+    spec::report_held_back();
+    let produced = produced?;
     if failed.load(Ordering::SeqCst) {
         bail!("{} generation logged errors", sdk.language);
     }

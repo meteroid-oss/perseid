@@ -5,10 +5,9 @@ List.of({%- for names in security %}{% if not loop.first %}, {% endif %}List.of(
 // this file is @generated
 package {{ sdk.java_package }};
 
-import {{ sdk.java_package }}.api.*;
-
-import lombok.Getter;
-
+{% for resource in api.resources -%}
+import {{ sdk.java_package }}.api.{{ resource.name | to_upper_camel_case }};
+{% endfor %}
 import okhttp3.HttpUrl;
 
 import java.util.List;
@@ -27,6 +26,7 @@ import java.util.Map;
  * // Or with custom options
  * {{ sdk.client_name }}Options options = new {{ sdk.client_name }}Options();
  * options.setServerUrl("{{ sdk.default_base_url | replace("://", "://custom.") }}");
+ * options.setTimeout(Duration.ofSeconds(30));
  * {{ sdk.client_name }} {{ sdk.client_name | to_lower_camel_case }} = new {{ sdk.client_name }}("your-api-key", options);
  *
  * // Access API resources
@@ -39,15 +39,14 @@ import java.util.Map;
  {% endif -%}
  * }</pre>
  */
-@Getter
 public class {{ sdk.client_name }} {
     private static final Map<String, {{ sdk.client_name }}Auth.Scheme> SECURITY_SCHEMES = Map.ofEntries(
 {%- for scheme in api.security_schemes %}
-            Map.entry("{{ scheme.name }}", new {{ sdk.client_name }}Auth.Scheme("{{ scheme.kind }}", {% if scheme.kind == "api_key" %}"{{ scheme.in }}", "{{ scheme.param }}"{% else %}null, null{% endif %})){% if not loop.last %},{% endif %}
+            Map.entry({{ scheme.name | tojson }}, new {{ sdk.client_name }}Auth.Scheme("{{ scheme.kind }}", {% if scheme.kind == "api_key" %}"{{ scheme.in }}", {{ scheme.param | tojson }}{% else %}null, null{% endif %})){% if not loop.last %},{% endif %}
 {%- endfor %}
     );
 {% for resource in api.resources %}
-    private final {{ resource.name | to_upper_camel_case }} {{ resource.name | to_lower_camel_case }};
+    private final {{ resource.name | to_upper_camel_case }} {{ resource.name | ident("camel", "java") }};
 {% endfor %}
 
     /**
@@ -80,12 +79,20 @@ public class {{ sdk.client_name }} {
                 parsedUrl,
                 defaultHeaders,
                 options.getRetrySchedule(),
-                options.getInterceptors(),
+                {{ sdk.client_name }}HttpClient.okHttpClient(
+                        options.getHttpClient(), options.getTimeout(), options.getInterceptors()),
                 auth
         );
 
 {% for resource in api.resources %}
-        this.{{ resource.name | to_lower_camel_case }} = new {{ resource.name | to_upper_camel_case }}(httpClient);
+        this.{{ resource.name | ident("camel", "java") }} = new {{ resource.name | to_upper_camel_case }}(httpClient);
 {% endfor %}
     }
+{% for resource in api.resources %}
+    {% set accessor = resource.name | ident("pascal", "java") %}
+
+    public {{ resource.name | to_upper_camel_case }} get{{ accessor }}{% if accessor == "Class" %}_{% endif %}() {
+        return {{ resource.name | ident("camel", "java") }};
+    }
+{% endfor %}
 }

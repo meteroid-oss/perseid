@@ -75,7 +75,9 @@ pub fn run(init: Init, root: &Path) -> Result<Vec<PathBuf>> {
     {
         toml += &format!("\n[{language}]\n");
         if language == "go" {
-            toml += &format!("module = \"github.com/{name}/{name}-go\"\n");
+            toml += &format!(
+                "module = \"github.com/{name}/{name}-go\"\ninitialisms = true\npatch_nullable = true\n"
+            );
         }
         added = true;
     }

@@ -1,29 +1,67 @@
+{% from "types/macros.rs.jinja" import unknown_variant -%}
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+{% set name = type.name | to_upper_camel_case -%}
+{% set variants = type.values | map("to_rust_variant") | list -%}
+{% set unknown = unknown_variant(variants) -%}
 {{ doc_comment }}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum {{ type.name | to_upper_camel_case }} {
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum {{ name }} {
     {% for value in type.values -%}
-        {% if loop.first %}#[default]{% endif %}
-        #[serde(rename = "{{ value }}")]
+        {% if loop.first -%}
+        #[default]
+        {% endif -%}
         {{ value | to_rust_variant }},
     {% endfor -%}
+    /// A value this version of the SDK does not know yet.
+    {{ unknown }}(String),
 }
 
-impl fmt::Display for {{ type.name | to_upper_camel_case }} {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let value = match self {
+impl {{ name }} {
+    /// The value as sent on the wire.
+    pub fn as_str(&self) -> &str {
+        match self {
             {% for value in type.values -%}
-                Self::{{ value | to_rust_variant }} => "{{ value }}",
+                Self::{{ value | to_rust_variant }} => {{ value | rust_str }},
             {% endfor -%}
-        };
-        f.write_str(value)
+            Self::{{ unknown }}(value) => value,
+        }
     }
 }
 
-impl crate::request::QueryParamValue for {{ type.name | to_upper_camel_case }} {
+impl From<&str> for {{ name }} {
+    fn from(value: &str) -> Self {
+        match value {
+            {% for value in type.values -%}
+                {{ value | rust_str }} => Self::{{ value | to_rust_variant }},
+            {% endfor -%}
+            other => Self::{{ unknown }}(other.to_owned()),
+        }
+    }
+}
+
+impl fmt::Display for {{ name }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for {{ name }} {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for {{ name }} {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer).map(|value| Self::from(value.as_str()))
+    }
+}
+
+impl crate::request::QueryParamValue for {{ name }} {
     fn encode(&self) -> String {
         self.to_string()
     }

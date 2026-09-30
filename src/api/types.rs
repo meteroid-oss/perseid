@@ -31,7 +31,7 @@ pub(crate) fn from_referenced_components(
     schemas: &mut IndexMap<String, openapi::SchemaObject>,
     webhooks: &[String],
     include_mode: IncludeMode,
-) -> Types {
+) -> (Types, Vec<String>) {
     let mut referenced_components: Vec<&str> = match include_mode {
         IncludeMode::OnlyPublic | IncludeMode::PublicAndInternal | IncludeMode::OnlyInternal => {
             webhooks.iter().map(|s| &**s).collect()
@@ -41,20 +41,25 @@ pub(crate) fn from_referenced_components(
     referenced_components.extend(resources::referenced_components(res));
 
     let mut types = BTreeMap::new();
+    let mut errors = Vec::new();
+    let mut visited = BTreeSet::new();
     let mut add_type = |schema_name: &str, extra_components: &mut BTreeSet<_>| {
+        if !visited.insert(schema_name.to_owned()) {
+            return;
+        }
+        let _span = tracing::warn_span!("schema", name = schema_name).entered();
         let Some(s) = schemas.swap_remove(schema_name) else {
-            tracing::error!(schema_name, "schema not found");
+            errors.push(format!(
+                "schema `{schema_name}` is referenced but not defined"
+            ));
             return;
         };
-
-        let obj = match s.json_schema {
-            Schema::Bool(_) => {
-                tracing::error!(schema_name, "found $ref'erenced bool schema, wat?!");
-                return;
-            }
-            Schema::Object(o) => o,
+        let Schema::Object(obj) = s.json_schema else {
+            errors.push(format!(
+                "schema `{schema_name}`: boolean schemas are not supported"
+            ));
+            return;
         };
-
         match Type::from_schema(schema_name.to_owned(), obj) {
             Ok(ty) => {
                 extra_components.extend(
@@ -65,9 +70,7 @@ pub(crate) fn from_referenced_components(
                 );
                 types.insert(schema_name.to_owned(), ty);
             }
-            Err(e) => {
-                tracing::error!(schema_name, "unsupported schema: {e:#}");
-            }
+            Err(e) => errors.push(format!("schema `{schema_name}`: {e:#}")),
         }
     };
 
@@ -78,12 +81,108 @@ pub(crate) fn from_referenced_components(
     while let Some(c) = extra_components.pop_first() {
         add_type(&c, &mut extra_components);
     }
-
     // Resolve SchemaRef inner types for string alias detection
     // This allows to_XXX_typename() methods to check if a reference is to a string alias
     resolve_schema_refs(&mut types);
 
-    types
+    (types, errors)
+}
+
+/// Schemas whose names become the same type name (`a.b` and `AB` are both `AB`).
+pub(crate) fn clashing_type_names(types: &Types) -> Vec<String> {
+    let mut seen = BTreeMap::new();
+    let mut errors = Vec::new();
+    for name in types.keys() {
+        if let Some(other) = seen.insert(name.to_upper_camel_case(), name) {
+            errors.push(format!(
+                "schemas `{other}` and `{name}` both become the type `{}`",
+                name.to_upper_camel_case()
+            ));
+        }
+    }
+    errors
+}
+
+/// Types a discriminated union whose variants are not all objects as untyped JSON, since no
+/// SDK can tag a list or a scalar with a discriminator property.
+pub(crate) fn untag_unions_with_non_object_variants(types: &mut Types) {
+    fn is_object(types: &Types, name: &str, depth: usize) -> bool {
+        match types.get(name).map(|t| &t.data) {
+            Some(TypeData::Struct { .. } | TypeData::StructEnum { .. }) => true,
+            Some(TypeData::Alias { target }) if depth < 16 => match &**target {
+                FieldType::SchemaRef { name, .. } => is_object(types, name, depth + 1),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    let non_objects: BTreeSet<String> = types
+        .keys()
+        .filter(|name| !is_object(types, name, 0))
+        .cloned()
+        .collect();
+    for (name, ty) in types.iter_mut() {
+        let TypeData::StructEnum {
+            repr: StructEnumRepr::InternallyTagged { variants },
+            ..
+        } = &ty.data
+        else {
+            continue;
+        };
+        let offending = variants.iter().find_map(|v| match &v.content {
+            EnumVariantType::Ref {
+                schema_ref: Some(target),
+                ..
+            } if non_objects.contains(target) => Some(target.clone()),
+            _ => None,
+        });
+        if let Some(target) = offending {
+            let _span = tracing::warn_span!("schema", name = %name).entered();
+            tracing::warn!(
+                "variant `{target}` is not an object, so the union is typed as an untyped JSON value"
+            );
+            ty.data = TypeData::Alias {
+                target: Box::new(FieldType::JsonObject),
+            };
+        }
+    }
+}
+
+/// Fields and enum values that would share an identifier in every SDK, such as `type` and
+/// `@type`.
+pub(crate) fn clashing_identifiers(types: &Types) -> Vec<String> {
+    let mut errors = Vec::new();
+    let mut check = |names: Vec<String>, case: &str, owner: String| {
+        if let Err(e) = crate::template::ident::idents(&names, case, None, &owner) {
+            errors.push(e.detail().unwrap_or_default().to_owned());
+        }
+    };
+    for (name, ty) in types {
+        let field_names = |fields: &[Field]| fields.iter().map(|f| f.name.clone()).collect();
+        match &ty.data {
+            TypeData::Struct { fields } => {
+                check(field_names(fields), "snake", format!("schema `{name}`"))
+            }
+            TypeData::StringEnum { values } => {
+                check(values.clone(), "pascal", format!("schema `{name}`"))
+            }
+            TypeData::StructEnum { fields, repr, .. } => {
+                check(field_names(fields), "snake", format!("schema `{name}`"));
+                let (StructEnumRepr::AdjacentlyTagged { variants, .. }
+                | StructEnumRepr::InternallyTagged { variants }) = repr;
+                let values = variants.iter().map(|v| v.name.clone()).collect();
+                check(values, "pascal", format!("schema `{name}`"));
+                for variant in variants {
+                    if let EnumVariantType::Struct { fields } = &variant.content {
+                        let owner = format!("schema `{name}`, variant `{}`", variant.name);
+                        check(field_names(fields), "snake", owner);
+                    }
+                }
+            }
+            TypeData::IntegerEnum { .. } | TypeData::StringAlias | TypeData::Alias { .. } => {}
+        }
+    }
+    errors
 }
 
 /// Resolve SchemaRef inner types by looking up the referenced type.
@@ -172,6 +271,69 @@ fn resolve_schema_ref_in_field_type(
     }
 }
 
+/// Replaces the embedded `allOf` parts of every struct by their fields, for targets that
+/// cannot flatten a nested object when (de)serializing.
+pub(crate) fn inline_flattened_fields(types: &mut Types) -> anyhow::Result<()> {
+    let snapshot = types.clone();
+    for (name, ty) in types.iter_mut() {
+        let flat = |fields: &mut Vec<Field>| -> anyhow::Result<()> {
+            if fields.iter().any(|f| f.flatten) {
+                *fields = flattened(&snapshot, name, fields, &mut BTreeSet::new())?;
+            }
+            Ok(())
+        };
+        match &mut ty.data {
+            TypeData::Struct { fields } => flat(fields)?,
+            TypeData::StructEnum { fields, repr, .. } => {
+                flat(fields)?;
+                let (StructEnumRepr::AdjacentlyTagged { variants, .. }
+                | StructEnumRepr::InternallyTagged { variants }) = repr;
+                for variant in variants {
+                    if let EnumVariantType::Struct { fields } = &mut variant.content {
+                        flat(fields)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// `fields` with each embedded part replaced by its own fields; direct fields win.
+fn flattened<'a>(
+    types: &'a Types,
+    owner: &str,
+    fields: &'a [Field],
+    seen: &mut BTreeSet<&'a str>,
+) -> anyhow::Result<Vec<Field>> {
+    let mut out: Vec<Field> = Vec::new();
+    for field in fields {
+        if !field.flatten {
+            match out.iter_mut().find(|f| f.name == field.name) {
+                Some(inherited) => *inherited = field.clone(),
+                None => out.push(field.clone()),
+            }
+            continue;
+        }
+        let part = field.r#type.referenced_schema().unwrap_or_default();
+        let Some(TypeData::Struct { fields: inner }) = types.get(part).map(|t| &t.data) else {
+            bail!(
+                "schema `{owner}`: its `allOf` part `{part}` is not an object, which this target cannot embed"
+            );
+        };
+        if !seen.insert(part) {
+            continue;
+        }
+        for inherited in flattened(types, owner, inner, seen)? {
+            if !out.iter().any(|f| f.name == inherited.name) {
+                out.push(inherited);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Replace every reference to a [`TypeData::Alias`] type by the alias target, for
 /// targets whose templates cannot declare named aliases.
 pub(crate) fn inline_aliases(types: &mut Types, resources: &mut Resources) -> anyhow::Result<()> {
@@ -257,8 +419,8 @@ fn resolve_alias_targets(types: &Types) -> anyhow::Result<BTreeMap<String, Field
 /// - Else, derive from context: `{parent}_{field}` (or `..._item` / `..._value`
 ///   when promoted through a List/Set/Map), converted to UpperCamelCase.
 ///
-/// After this pass, `FieldType::StringEnum` must not appear anywhere; the render
-/// methods treat it as `unreachable!`.
+/// After this pass, `FieldType::StringEnum` should not appear anywhere; the render
+/// methods type a leftover one as a plain string.
 pub(crate) fn promote_inline_enums(
     types: &mut Types,
     resources: &mut Resources,
@@ -266,13 +428,16 @@ pub(crate) fn promote_inline_enums(
     // Snapshot existing top-level string enums keyed by their value set, so we
     // can reuse them instead of generating duplicates (e.g. the subscription
     // `statuses` filter reuses the existing `SubscriptionStatusEnum`).
-    let existing_by_values: BTreeMap<Vec<String>, String> = types
-        .iter()
-        .filter_map(|(name, ty)| match &ty.data {
-            TypeData::StringEnum { values } => Some((values.clone(), name.clone())),
-            _ => None,
-        })
-        .collect();
+    let existing = ExistingTypes {
+        by_values: types
+            .iter()
+            .filter_map(|(name, ty)| match &ty.data {
+                TypeData::StringEnum { values } => Some((values.clone(), name.clone())),
+                _ => None,
+            })
+            .collect(),
+        type_names: types.keys().map(|n| n.to_upper_camel_case()).collect(),
+    };
 
     let mut new_types: BTreeMap<String, Type> = BTreeMap::new();
 
@@ -281,23 +446,13 @@ pub(crate) fn promote_inline_enums(
             TypeData::Struct { fields } => {
                 for field in fields {
                     let base = format!("{}_{}", type_name, field.name);
-                    promote_field_type(
-                        &mut field.r#type,
-                        &base,
-                        &existing_by_values,
-                        &mut new_types,
-                    )?;
+                    promote_field_type(&mut field.r#type, &base, &existing, &mut new_types)?;
                 }
             }
             TypeData::StructEnum { fields, repr, .. } => {
                 for field in fields {
                     let base = format!("{}_{}", type_name, field.name);
-                    promote_field_type(
-                        &mut field.r#type,
-                        &base,
-                        &existing_by_values,
-                        &mut new_types,
-                    )?;
+                    promote_field_type(&mut field.r#type, &base, &existing, &mut new_types)?;
                 }
                 let variants = match repr {
                     StructEnumRepr::AdjacentlyTagged { variants, .. }
@@ -310,22 +465,23 @@ pub(crate) fn promote_inline_enums(
                             promote_field_type(
                                 &mut field.r#type,
                                 &base,
-                                &existing_by_values,
+                                &existing,
                                 &mut new_types,
                             )?;
                         }
                     }
                 }
             }
-            TypeData::Alias { .. }
-            | TypeData::StringEnum { .. }
-            | TypeData::IntegerEnum { .. }
-            | TypeData::StringAlias => {}
+            TypeData::Alias { target } => {
+                let base = format!("{type_name}_value");
+                promote_field_type(target, &base, &existing, &mut new_types)?;
+            }
+            TypeData::StringEnum { .. } | TypeData::IntegerEnum { .. } | TypeData::StringAlias => {}
         }
     }
 
     for resource in resources.values_mut() {
-        promote_inline_enums_in_resource(resource, &existing_by_values, &mut new_types)?;
+        promote_inline_enums_in_resource(resource, &existing, &mut new_types)?;
     }
 
     for (name, ty) in new_types {
@@ -349,78 +505,74 @@ pub(crate) fn promote_inline_enums(
 
 fn promote_inline_enums_in_resource(
     resource: &mut Resource,
-    existing_by_values: &BTreeMap<Vec<String>, String>,
+    existing: &ExistingTypes,
     new_types: &mut BTreeMap<String, Type>,
 ) -> anyhow::Result<()> {
     for sub in resource.subresources.values_mut() {
-        promote_inline_enums_in_resource(sub, existing_by_values, new_types)?;
+        promote_inline_enums_in_resource(sub, existing, new_types)?;
     }
     for op in &mut resource.operations {
         let op_id = op.id.clone();
         for field in &mut op.multipart_fields {
             let base = format!("{}_{}", op_id, field.field.name);
-            promote_field_type(
-                &mut field.field.r#type,
-                &base,
-                existing_by_values,
-                new_types,
-            )?;
+            promote_field_type(&mut field.field.r#type, &base, existing, new_types)?;
         }
         for param in &mut op.query_params {
             let base = format!("{}_{}", op_id, param.name);
-            promote_field_type(&mut param.r#type, &base, existing_by_values, new_types)?;
+            promote_field_type(&mut param.r#type, &base, existing, new_types)?;
         }
     }
     Ok(())
 }
 
+struct ExistingTypes {
+    /// String enums by their values, reused instead of promoting a copy.
+    by_values: BTreeMap<Vec<String>, String>,
+    type_names: BTreeSet<String>,
+}
+
 fn promote_field_type(
     ft: &mut FieldType,
     base_name: &str,
-    existing_by_values: &BTreeMap<Vec<String>, String>,
+    existing: &ExistingTypes,
     new_types: &mut BTreeMap<String, Type>,
 ) -> anyhow::Result<()> {
     match ft {
         FieldType::StringEnum { values, title } => {
             let values = std::mem::take(values);
-            if let Some(existing_name) = existing_by_values.get(&values) {
+            if let Some(existing_name) = existing.by_values.get(&values) {
                 *ft = FieldType::SchemaRef {
                     name: existing_name.clone(),
                     inner: None,
                 };
                 return Ok(());
             }
-            let name = match title.take() {
+            let base = match title.take() {
                 Some(t) => t.to_upper_camel_case(),
                 None => base_name.to_upper_camel_case(),
             };
-            let promoted = Type {
+            let data = TypeData::StringEnum { values };
+            let mut name = base.clone();
+            for n in 2.. {
+                match new_types.get(&name) {
+                    Some(promoted) if promoted.data == data => break,
+                    None if !existing.type_names.contains(&name) => break,
+                    _ => name = format!("{base}{n}"),
+                }
+            }
+            new_types.entry(name.clone()).or_insert_with(|| Type {
                 name: name.clone(),
                 description: None,
                 deprecated: false,
-                data: TypeData::StringEnum {
-                    values: values.clone(),
-                },
-            };
-            match new_types.entry(name.clone()) {
-                btree_map::Entry::Vacant(e) => {
-                    e.insert(promoted);
-                }
-                btree_map::Entry::Occupied(e) => {
-                    if *e.get() != promoted {
-                        bail!(
-                            "promoted inline enum `{name}` has conflicting value sets at different call sites"
-                        );
-                    }
-                }
-            }
+                data,
+            });
             *ft = FieldType::SchemaRef { name, inner: None };
         }
         FieldType::List { inner } | FieldType::Set { inner } => {
             promote_field_type(
                 Arc::make_mut(inner),
                 &format!("{base_name}_item"),
-                existing_by_values,
+                existing,
                 new_types,
             )?;
         }
@@ -428,7 +580,7 @@ fn promote_field_type(
             promote_field_type(
                 Arc::make_mut(value_ty),
                 &format!("{base_name}_value"),
-                existing_by_values,
+                existing,
                 new_types,
             )?;
         }
@@ -446,7 +598,7 @@ fn promote_field_type(
         | FieldType::Uri
         | FieldType::JsonObject
         | FieldType::SchemaRef { .. }
-        | FieldType::StringConst { .. } => {}
+        | FieldType::Date => {}
     }
     Ok(())
 }
@@ -470,111 +622,93 @@ fn has_open_additional_properties(obj: &ObjectValidation) -> bool {
 impl Type {
     pub(crate) fn from_schema(name: String, s: SchemaObject) -> anyhow::Result<Self> {
         let metadata = s.metadata.clone().unwrap_or_default();
-
-        let is_alias = s.reference.is_some()
-            || matches!(s.instance_type, Some(SingleOrVec::Single(ref t)) if matches!(**t, InstanceType::Array | InstanceType::Number | InstanceType::Boolean))
-            || (s.instance_type == Some(InstanceType::Integer.into()) && s.enum_values.is_none())
-            || (s.instance_type == Some(InstanceType::Object.into())
-                && s.object
-                    .as_ref()
-                    .is_some_and(|o| o.properties.is_empty() && has_open_additional_properties(o)))
-            || (s.instance_type.is_none() && s.subschemas.is_none());
-        if is_alias {
-            return Ok(Self {
-                name,
-                description: metadata.description,
-                deprecated: metadata.deprecated,
-                data: TypeData::Alias {
-                    target: Box::new(FieldType::from_schema_object(s)?),
+        let ty = |data| Self {
+            name: name.clone(),
+            description: metadata.description.clone(),
+            deprecated: metadata.deprecated,
+            data,
+        };
+        let alias = |s: SchemaObject| -> anyhow::Result<Self> {
+            Ok(ty(match FieldType::from_schema_object(s)? {
+                FieldType::StringEnum { values, .. } => TypeData::StringEnum { values },
+                target => TypeData::Alias {
+                    target: Box::new(target),
                 },
-            });
+            }))
+        };
+
+        if s.reference.is_some() {
+            return alias(s);
         }
-
-        // First check for subschemas (allOf, oneOf) which take precedence over instance_type
-        if let Some(ref subschemas) = s.subschemas {
-            // Handle allOf - merge all schemas into one struct
-            if let Some(ref all_of) = subschemas.all_of {
-                let data = TypeData::from_all_of(all_of)?;
-                return Ok(Self {
-                    name,
-                    description: metadata.description,
-                    deprecated: metadata.deprecated,
-                    data,
-                });
+        if let Some(subschemas) = &s.subschemas {
+            if let Some(all_of) = &subschemas.all_of {
+                let object = s.object.clone().map(|o| *o).unwrap_or_default();
+                return Ok(ty(TypeData::from_all_of(all_of, object)?));
             }
-
-            // Handle oneOf with discriminator - create a struct enum
-            if let Some(ref one_of) = subschemas.one_of {
-                // Check if this is a discriminated union (has discriminator in extensions)
-                if let Some(discriminator) = s.extensions.get("discriminator") {
-                    let data = TypeData::from_discriminated_oneof(one_of, discriminator)?;
-                    return Ok(Self {
-                        name,
-                        description: metadata.description,
-                        deprecated: metadata.deprecated,
-                        data,
-                    });
-                }
+            if let Some(one_of) = &subschemas.one_of
+                && let Some(discriminator) = s.extensions.get("discriminator")
+            {
+                return Ok(ty(TypeData::from_discriminated_oneof(
+                    one_of,
+                    discriminator,
+                    s.object.as_deref(),
+                )?));
+            }
+            let is_struct_enum = subschemas.one_of.is_some()
+                && s.object.as_ref().is_some_and(|o| !o.properties.is_empty());
+            if (subschemas.one_of.is_some() || subschemas.any_of.is_some()) && !is_struct_enum {
+                return alias(s);
             }
         }
 
-        // Handle OpenAPI 3.1 nullable type arrays like ["object", "null"]
         let effective_type = match &s.instance_type {
-            Some(SingleOrVec::Vec(types)) => extract_non_null_type(types)?,
-            Some(SingleOrVec::Single(t)) => Some(*t.clone()),
-            None => None,
+            Some(SingleOrVec::Vec(types)) => match extract_non_null_type(types) {
+                Ok(t) => t,
+                Err(_) => return alias(s),
+            },
+            Some(SingleOrVec::Single(t)) => Some(**t),
+            None if s.enum_values.is_some() => Some(InstanceType::String),
+            None if s.subschemas.is_some() => Some(InstanceType::Object),
+            None => match implied_type(&s) {
+                Some(implied) => Some(implied),
+                None => return alias(s),
+            },
         };
 
         let data = match effective_type {
             Some(InstanceType::Object) => {
-                let obj = s.object.unwrap_or_default();
+                let obj = s.object.clone().unwrap_or_default();
+                if obj.properties.is_empty() && has_open_additional_properties(&obj) {
+                    return alias(s);
+                }
                 TypeData::from_object_schema(*obj, s.subschemas)?
             }
-            Some(InstanceType::Integer) => {
-                let enum_varnames = s
-                    .extensions
-                    .get("x-enum-varnames")
-                    .context("unsupported: integer type without enum varnames")?
-                    .as_array()
-                    .context("unsupported: integer type enum varnames should be a list")?;
-                let values = s
-                    .enum_values
-                    .context("unsupported: integer type without enum values")?;
-                if enum_varnames.len() != values.len() {
-                    bail!(
-                        "enum varnames length ({}) does not match values length ({})",
-                        enum_varnames.len(),
-                        values.len()
-                    );
-                }
-                TypeData::from_integer_enum(values, enum_varnames)?
+            Some(InstanceType::Integer) if s.enum_values.is_some() => {
+                let values = s.enum_values.unwrap_or_default();
+                let names = ["x-enum-varnames", "x-enumNames"]
+                    .into_iter()
+                    .find_map(|key| s.extensions.get(key))
+                    .map(|names| {
+                        names
+                            .as_array()
+                            .context("integer enum varnames should be a list")?
+                            .iter()
+                            .map(|n| n.as_str().map(ToOwned::to_owned))
+                            .collect::<Option<Vec<_>>>()
+                            .context("integer enum varnames should be strings")
+                    })
+                    .transpose()?;
+                TypeData::from_integer_enum(values, names)?
             }
-            Some(InstanceType::String) => {
-                // String types can be either enums (with enum_values) or simple string types (IDs, etc.)
-                if let Some(values) = s.enum_values {
-                    TypeData::from_string_enum(values)?
-                } else {
-                    // Simple string type (like ID types) - these are just String aliases
-                    // We'll render them as type aliases: pub type CustomerId = String;
-                    TypeData::StringAlias
-                }
-            }
-            Some(it) => bail!("unsupported type {it:?}"),
-            None => {
-                // No type - check if there's a subschema we didn't handle
-                if s.subschemas.is_some() {
-                    bail!("unsupported subschema combination");
-                }
-                bail!("unsupported: no type");
-            }
+            Some(InstanceType::String) => match s.enum_values {
+                Some(values) => TypeData::from_string_enum(values)?,
+                None => TypeData::StringAlias,
+            },
+            Some(_) => return alias(s),
+            None => bail!("a schema with only `null` values is not supported"),
         };
 
-        Ok(Self {
-            name,
-            description: metadata.description,
-            deprecated: metadata.deprecated,
-            data,
-        })
+        Ok(ty(data))
     }
 
     pub(crate) fn referenced_components(&self) -> BTreeSet<&str> {
@@ -588,6 +722,77 @@ impl Type {
                 let mut res = repr.referenced_components();
                 res.append(&mut fields_referenced_schemas(fields));
                 res
+            }
+        }
+    }
+
+    /// The wire names of the fields a struct gets from its `allOf` parts.
+    pub(crate) fn inherited_fields<'a>(&'a self, types: &'a Types) -> BTreeSet<&'a str> {
+        let mut fields = BTreeSet::new();
+        let mut stack = vec![self];
+        let mut seen = BTreeSet::new();
+        while let Some(ty) = stack.pop() {
+            let TypeData::Struct { fields: own } = &ty.data else {
+                continue;
+            };
+            for base in own.iter().filter(|f| f.flatten) {
+                let Some(name) = base.r#type.referenced_schema() else {
+                    continue;
+                };
+                if let Some(
+                    base @ Type {
+                        data: TypeData::Struct { fields: inherited },
+                        ..
+                    },
+                ) = types.get(name)
+                {
+                    fields.extend(
+                        inherited
+                            .iter()
+                            .filter(|f| !f.flatten)
+                            .map(|f| f.name.as_str()),
+                    );
+                    if seen.insert(name) {
+                        stack.push(base);
+                    }
+                }
+            }
+        }
+        fields
+    }
+
+    /// Schemas this type holds by value rather than behind a list or map.
+    pub(crate) fn direct_refs(&self) -> BTreeSet<&str> {
+        fn direct(ty: &FieldType) -> Option<&str> {
+            match ty {
+                FieldType::SchemaRef { name, .. } => Some(name),
+                _ => None,
+            }
+        }
+        fn fields(fields: &[Field]) -> BTreeSet<&str> {
+            fields.iter().filter_map(|f| direct(&f.r#type)).collect()
+        }
+        match &self.data {
+            TypeData::Struct { fields: f } => fields(f),
+            TypeData::Alias { target } => direct(target).into_iter().collect(),
+            TypeData::StructEnum {
+                repr, fields: f, ..
+            } => {
+                let (StructEnumRepr::AdjacentlyTagged { variants, .. }
+                | StructEnumRepr::InternallyTagged { variants }) = repr;
+                let mut refs = fields(f);
+                for variant in variants {
+                    match &variant.content {
+                        EnumVariantType::Struct { fields: f } => refs.extend(fields(f)),
+                        EnumVariantType::Ref { schema_ref, .. } => {
+                            refs.extend(schema_ref.as_deref())
+                        }
+                    }
+                }
+                refs
+            }
+            TypeData::StringEnum { .. } | TypeData::IntegerEnum { .. } | TypeData::StringAlias => {
+                BTreeSet::new()
             }
         }
     }
@@ -612,48 +817,31 @@ fn extract_non_null_type(types: &[InstanceType]) -> anyhow::Result<Option<Instan
     }
 }
 
-/// Extract the non-null schema from an OpenAPI 3.1 oneOf nullable pattern.
-/// Pattern: oneOf: [{type: null}, {actual schema}]
-/// Returns Some((inner_schema, true)) if it's a nullable oneOf, None otherwise.
-fn extract_nullable_oneof(one_of: &[Schema]) -> anyhow::Result<Option<(Schema, bool)>> {
-    if one_of.len() != 2 {
-        // Not a simple nullable pattern, let the caller handle it
-        return Ok(None);
+fn is_null_schema(schema: &Schema) -> bool {
+    matches!(schema, Schema::Object(obj) if obj.instance_type == Some(InstanceType::Null.into()))
+}
+
+/// `X` in the `oneOf`/`anyOf: [X, {type: null}]` nullable pattern, in either order.
+fn extract_nullable_variant(variants: &[Schema]) -> Option<&Schema> {
+    match variants {
+        [a, b] if is_null_schema(a) && !is_null_schema(b) => Some(b),
+        [a, b] if is_null_schema(b) && !is_null_schema(a) => Some(a),
+        _ => None,
     }
+}
 
-    let mut null_count = 0;
-    let mut non_null_schema = None;
-
-    for schema in one_of {
-        match schema {
-            Schema::Object(obj) => {
-                // Check if this is a null type
-                let is_null = match &obj.instance_type {
-                    Some(SingleOrVec::Single(t)) => **t == InstanceType::Null,
-                    Some(SingleOrVec::Vec(types)) => {
-                        types.len() == 1 && types[0] == InstanceType::Null
-                    }
-                    None => false,
-                };
-
-                if is_null {
-                    null_count += 1;
-                } else {
-                    non_null_schema = Some(schema.clone());
-                }
-            }
-            Schema::Bool(_) => {
-                // Not a nullable pattern we recognize
-                return Ok(None);
-            }
-        }
-    }
-
-    #[allow(clippy::unnecessary_unwrap)]
-    if null_count == 1 && non_null_schema.is_some() {
-        Ok(Some((non_null_schema.unwrap(), true)))
+/// The type implied by validation keywords when `type` is absent.
+fn implied_type(obj: &SchemaObject) -> Option<InstanceType> {
+    if obj.reference.is_some() || obj.const_value.is_some() {
+        None
+    } else if obj.array.is_some() {
+        Some(InstanceType::Array)
+    } else if obj.object.is_some() {
+        Some(InstanceType::Object)
+    } else if obj.enum_values.is_some() || obj.string.is_some() || obj.format.is_some() {
+        Some(InstanceType::String)
     } else {
-        Ok(None)
+        None
     }
 }
 
@@ -711,20 +899,9 @@ impl TypeData {
         obj: ObjectValidation,
         subschemas: Option<Box<SubschemaValidation>>,
     ) -> anyhow::Result<Self> {
-        ensure!(
-            !has_open_additional_properties(&obj),
-            "additionalProperties not yet supported"
-        );
-        ensure!(obj.max_properties.is_none(), "unsupported: maxProperties");
-        ensure!(obj.min_properties.is_none(), "unsupported: minProperties");
-        ensure!(
-            obj.pattern_properties.is_empty(),
-            "unsupported: patternProperties"
-        );
-        // Note: property_names is a JSON Schema validation constraint that limits
-        // property names to a certain format. For code generation, we can safely
-        // ignore it since all JSON object keys are strings anyway.
-        // ensure!(obj.property_names.is_none(), "unsupported: propertyNames");
+        if has_open_additional_properties(&obj) || !obj.pattern_properties.is_empty() {
+            tracing::warn!("properties beyond the declared ones are dropped when decoding");
+        }
 
         let fields: Vec<_> = obj
             .properties
@@ -735,74 +912,65 @@ impl TypeData {
             })
             .collect::<anyhow::Result<_>>()?;
 
+        // `not` and `if`/`then`/`else` only constrain values, they do not change the type.
         if let Some(sub) = subschemas {
-            ensure!(sub.all_of.is_none(), "unsupported: allOf subschema");
-            ensure!(sub.any_of.is_none(), "unsupported: anyOf subschema");
-            ensure!(sub.not.is_none(), "unsupported: not subschema");
-            ensure!(sub.if_schema.is_none(), "unsupported: if subschema");
-            ensure!(sub.then_schema.is_none(), "unsupported: then subschema");
-            ensure!(sub.else_schema.is_none(), "unsupported: else subschema");
-
+            ensure!(
+                sub.all_of.is_none(),
+                "`allOf` is only supported over object schemas"
+            );
             if let Some(one_of) = sub.one_of {
-                return Self::inline_struct_enum(&one_of, &fields);
+                match Self::inline_struct_enum(&one_of, &fields) {
+                    Ok(data) => return Ok(data),
+                    Err(e) => tracing::warn!("`oneOf` next to properties is ignored: {e:#}"),
+                }
+            }
+            if sub.any_of.is_some() {
+                tracing::warn!("`anyOf` next to properties is ignored");
             }
         }
 
         Ok(Self::Struct { fields })
     }
 
-    /// Parse an allOf schema - merges all schemas into a single struct
-    fn from_all_of(all_of: &[Schema]) -> anyhow::Result<Self> {
-        let mut all_fields = Vec::new();
-
-        for schema in all_of {
-            match schema {
-                Schema::Object(obj) => {
-                    // If it's a $ref, we'll get the fields from the referenced schema later
-                    if let Some(ref_name) = &obj.reference {
-                        // For now, we add a field that references this schema
-                        // The actual merging would require resolving the $ref
-                        let schema_name =
-                            get_schema_name(Some(ref_name)).context("invalid $ref in allOf")?;
-                        // We'll flatten this reference - add a special marker field
-                        all_fields.push(Field {
-                            name: format!("__flatten_{}", schema_name.to_lowercase()),
-                            r#type: FieldType::SchemaRef {
-                                name: schema_name,
-                                inner: None,
-                            },
-                            default: None,
-                            description: None,
-                            required: true,
-                            nullable: false,
-                            deprecated: false,
-                            example: None,
-                            flatten: true,
-                        });
-                    } else if let Some(ref obj_validation) = obj.object {
-                        // Inline object schema - extract fields directly
-                        for (name, prop_schema) in &obj_validation.properties {
-                            let field = Field::from_schema(
-                                name.clone(),
-                                prop_schema.clone(),
-                                obj_validation.required.contains(name),
-                            )
-                            .with_context(|| format!("unsupported field `{name}` in allOf"))?;
-                            all_fields.push(field);
-                        }
-                    }
-                }
-                Schema::Bool(_) => bail!("unsupported bool schema in allOf"),
-            }
+    /// A struct embedding the referenced `allOf` parts, which the spec normalization leaves
+    /// after merging the inline ones into `object`.
+    fn from_all_of(all_of: &[Schema], object: ObjectValidation) -> anyhow::Result<Self> {
+        let mut fields = Vec::new();
+        for part in all_of {
+            let Schema::Object(SchemaObject {
+                reference: Some(reference),
+                ..
+            }) = part
+            else {
+                bail!("`allOf` is only supported over object schemas");
+            };
+            let name = get_schema_name(Some(reference)).context("invalid $ref in allOf")?;
+            fields.push(Field {
+                name: format!("__flatten_{}", name.to_lowercase()),
+                r#type: FieldType::SchemaRef { name, inner: None },
+                default: None,
+                description: None,
+                required: true,
+                nullable: false,
+                deprecated: false,
+                example: None,
+                read_only: false,
+                write_only: false,
+                flatten: true,
+            });
         }
-
-        Ok(Self::Struct { fields: all_fields })
+        let Self::Struct { fields: own } = Self::from_object_schema(object, None)? else {
+            unreachable!("objects without subschemas are structs")
+        };
+        fields.extend(own);
+        Ok(Self::Struct { fields })
     }
 
     /// Parse a oneOf schema with a discriminator - creates a struct enum
     fn from_discriminated_oneof(
         one_of: &[Schema],
         discriminator: &serde_json::Value,
+        shared: Option<&ObjectValidation>,
     ) -> anyhow::Result<Self> {
         let discriminator_obj = discriminator
             .as_object()
@@ -813,7 +981,14 @@ impl TypeData {
             .and_then(|v| v.as_str())
             .context("discriminator.propertyName is required")?;
 
-        let mapping = discriminator_obj.get("mapping").and_then(|v| v.as_object());
+        // Mapping targets are `#/components/schemas/X` references or bare `X` names.
+        let mapping: Vec<(&String, &str)> = discriminator_obj
+            .get("mapping")
+            .and_then(|v| v.as_object())
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, target)| Some((key, target.as_str()?.rsplit('/').next()?)))
+            .collect();
 
         let mut variants = Vec::new();
 
@@ -823,24 +998,23 @@ impl TypeData {
                     if let Some(ref_str) = &obj.reference {
                         let schema_name =
                             get_schema_name(Some(ref_str)).context("invalid $ref in oneOf")?;
-
-                        // Find the discriminator value from the mapping
-                        let discriminator_value = if let Some(map) = mapping {
-                            map.iter()
-                                .find(|(_, v)| v.as_str() == Some(ref_str))
-                                .map(|(k, _)| k.clone())
-                                .unwrap_or_else(|| schema_name.clone())
-                        } else {
-                            schema_name.clone()
-                        };
-
-                        variants.push(SimpleVariant {
-                            name: discriminator_value,
-                            content: EnumVariantType::Ref {
-                                schema_ref: Some(schema_name),
-                                inner: None,
-                            },
-                        });
+                        let mut values: Vec<String> = mapping
+                            .iter()
+                            .filter(|(_, target)| *target == schema_name)
+                            .map(|(key, _)| (*key).clone())
+                            .collect();
+                        if values.is_empty() {
+                            values.push(schema_name.clone());
+                        }
+                        for value in values {
+                            variants.push(SimpleVariant {
+                                name: value,
+                                content: EnumVariantType::Ref {
+                                    schema_ref: Some(schema_name.clone()),
+                                    inner: None,
+                                },
+                            });
+                        }
                     } else if let Some(ref obj_validation) = obj.object {
                         // Inline schema - try to extract the discriminator value from properties
                         let discriminator_value = obj_validation
@@ -849,9 +1023,9 @@ impl TypeData {
                             .and_then(|s| {
                                 if let Schema::Object(disc_obj) = s {
                                     disc_obj
-                                        .enum_values
+                                        .const_value
                                         .as_ref()
-                                        .and_then(|vals| vals.first())
+                                        .or_else(|| disc_obj.enum_values.as_ref()?.first())
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string())
                                 } else {
@@ -889,10 +1063,28 @@ impl TypeData {
             }
         }
 
+        let fields = shared
+            .into_iter()
+            .flat_map(|object| {
+                object
+                    .properties
+                    .iter()
+                    .filter(|(name, _)| *name != property_name)
+                    .map(|(name, schema)| {
+                        Field::from_schema(
+                            name.clone(),
+                            schema.clone(),
+                            object.required.contains(name),
+                        )
+                        .with_context(|| format!("unsupported shared field `{name}`"))
+                    })
+            })
+            .collect::<anyhow::Result<_>>()?;
+
         Ok(Self::StructEnum {
             discriminator_field: property_name.to_string(),
             repr: StructEnumRepr::InternallyTagged { variants },
-            fields: vec![],
+            fields,
         })
     }
 
@@ -901,6 +1093,7 @@ impl TypeData {
             values: values
                 .into_iter()
                 .enumerate()
+                .filter(|(_, v)| !v.is_null())
                 .map(|(i, v)| match v {
                     serde_json::Value::String(s) => Ok(s),
                     _ => bail!("enum value {} is not a string", i + 1),
@@ -909,33 +1102,35 @@ impl TypeData {
         })
     }
 
+    /// Variant names come from `x-enum-varnames`/`x-enumNames`, or else from the values.
     fn from_integer_enum(
         values: Vec<serde_json::Value>,
-        enum_varnames: &[serde_json::Value],
+        names: Option<Vec<String>>,
     ) -> anyhow::Result<TypeData> {
-        Ok(Self::IntegerEnum {
-            variants: values
-                .into_iter()
-                .enumerate()
-                .map(|(i, v)| match v {
-                    serde_json::Value::Number(s) => {
-                        let num = s
-                            .as_i64()
-                            .with_context(|| format!("enum value {s} is not an integer"))?;
-                        Ok((
-                            enum_varnames[i]
-                                .as_str()
-                                .with_context(|| {
-                                    format!("enum varname {} is not a string", enum_varnames[i])
-                                })?
-                                .to_string(),
-                            num,
-                        ))
-                    }
-                    _ => bail!("enum value {} is not a number", i + 1),
-                })
-                .collect::<anyhow::Result<_>>()?,
-        })
+        if let Some(names) = &names {
+            ensure!(
+                names.len() == values.len(),
+                "{} enum varnames for {} values",
+                names.len(),
+                values.len()
+            );
+        }
+        let variants = values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let value = v
+                    .as_i64()
+                    .with_context(|| format!("enum value {v} is not an integer"))?;
+                let name = match &names {
+                    Some(names) => names[i].clone(),
+                    None if value < 0 => format!("Minus{}", value.unsigned_abs()),
+                    None => format!("Value{value}"),
+                };
+                Ok((name, value))
+            })
+            .collect::<anyhow::Result<_>>()?;
+        Ok(Self::IntegerEnum { variants })
     }
 }
 
@@ -993,13 +1188,20 @@ pub(crate) struct Field {
     deprecated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     example: Option<serde_json::Value>,
-    /// If true, this field should be flattened (used for allOf merging)
+    /// Only sent by the server (`readOnly`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    read_only: bool,
+    /// Only sent by the client (`writeOnly`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    write_only: bool,
+    /// An embedded `allOf` part, whose fields are the struct's own on the wire.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     flatten: bool,
 }
 
 impl Field {
     pub(crate) fn from_schema(name: String, s: Schema, required: bool) -> anyhow::Result<Self> {
+        let _span = tracing::warn_span!("field", name = %name).entered();
         let obj = match s {
             Schema::Bool(_) => bail!("unsupported bool schema"),
             Schema::Object(o) => o,
@@ -1027,6 +1229,8 @@ impl Field {
             nullable,
             deprecated: metadata.deprecated,
             example,
+            read_only: metadata.read_only,
+            write_only: metadata.write_only,
             flatten: false,
         })
     }
@@ -1071,6 +1275,8 @@ pub(crate) enum FieldType {
     String,
     Decimal,
     DateTime,
+    /// A calendar date (`format: date`), typed as a string until SDKs map it to a date type.
+    Date,
     Uri,
     /// A JSON object with arbitrary field values.
     JsonObject,
@@ -1093,11 +1299,6 @@ pub(crate) enum FieldType {
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         inner: Option<Type>,
-    },
-
-    /// A string constant, used as an enum discriminator value.
-    StringConst {
-        value: String,
     },
 
     /// An inline string enum that will be promoted to a named top-level type
@@ -1126,115 +1327,107 @@ impl FieldType {
         Self::from_schema_object(obj)
     }
 
-    fn from_schema_object(obj: SchemaObject) -> anyhow::Result<Self> {
+    pub(crate) fn from_schema_object(obj: SchemaObject) -> anyhow::Result<Self> {
         let (field_type, _nullable) = Self::from_schema_object_with_nullable(obj)?;
         Ok(field_type)
     }
 
     /// Parse a schema object, returning the field type and whether it's nullable.
-    /// Handles OpenAPI 3.1 patterns like type arrays and oneOf with null.
+    /// Handles OpenAPI 3.1 patterns like type arrays and unions with null.
     fn from_schema_object_with_nullable(obj: SchemaObject) -> anyhow::Result<(Self, bool)> {
-        // Check for OpenAPI 3.1 oneOf nullable pattern: oneOf: [{type: null}, {$ref or type}]
-        if let Some(ref subschemas) = obj.subschemas
-            && let Some(ref one_of) = subschemas.one_of
-            && let Some((inner_schema, is_nullable)) = extract_nullable_oneof(one_of)?
-        {
-            let field_type = Self::from_schema(inner_schema)?;
-            return Ok((field_type, is_nullable));
+        if let Some(subschemas) = &obj.subschemas {
+            if let Some(all_of) = &subschemas.all_of {
+                ensure!(
+                    all_of.len() == 1,
+                    "`allOf` is only supported over object schemas"
+                );
+                let Schema::Object(inner) = all_of[0].clone() else {
+                    bail!("boolean schemas are not supported");
+                };
+                return Self::from_schema_object_with_nullable(inner);
+            }
+            if let Some(variants) = subschemas.one_of.as_ref().or(subschemas.any_of.as_ref()) {
+                if let Some(inner) = extract_nullable_variant(variants) {
+                    let Schema::Object(inner) = inner.clone() else {
+                        bail!("boolean schemas are not supported");
+                    };
+                    let (field_type, _) = Self::from_schema_object_with_nullable(inner)?;
+                    return Ok((field_type, true));
+                }
+                tracing::warn!(
+                    "`oneOf`/`anyOf` without a discriminator is typed as an untyped JSON value"
+                );
+                return Ok((Self::JsonObject, variants.iter().any(is_null_schema)));
+            }
         }
 
-        // Handle OpenAPI 3.1 type arrays like ["string", "null"]
-        let (effective_type, is_type_array_nullable) = match &obj.instance_type {
+        let (effective_type, nullable) = match &obj.instance_type {
             Some(SingleOrVec::Vec(types)) => {
                 let has_null = types.contains(&InstanceType::Null);
-                let non_null = extract_non_null_type(types)?;
-                (non_null, has_null)
+                match extract_non_null_type(types) {
+                    Ok(non_null) => (non_null, has_null),
+                    Err(_) => {
+                        tracing::warn!(
+                            "a value of several types is typed as an untyped JSON value"
+                        );
+                        return Ok((Self::JsonObject, has_null));
+                    }
+                }
             }
-            Some(SingleOrVec::Single(t)) => (Some(*t.clone()), false),
-            None => (None, false),
+            Some(SingleOrVec::Single(t)) => (Some(**t), false),
+            None => (implied_type(&obj), false),
         };
 
         let result = match effective_type {
             Some(InstanceType::Boolean) => Self::Bool,
             Some(InstanceType::Integer) => match obj.format.as_deref() {
-                Some("int16") => Self::Int16,
+                Some("int16" | "int8") => Self::Int16,
                 Some("uint16") => Self::UInt16,
-                Some("uint8" | "uint32") => Self::UInt64,
-                Some("int8") => Self::Int16,
                 Some("int32") => Self::Int32,
-                // FIXME: Why do we have int in the spec?
-                Some("int" | "int64") => Self::Int64,
-                // FIXME: Get rid of uint in the spec..
-                Some("uint" | "uint64") => Self::UInt64,
-                None => Self::Int64, // Default to i64 for integers without format
-                f => bail!("unsupported integer format: `{f:?}`"),
+                Some("uint8" | "uint32" | "uint" | "uint64") => Self::UInt64,
+                // Formats are annotations: an unknown one (`int`, `unix-time`) is still an integer.
+                _ => Self::Int64,
             },
             Some(InstanceType::Number) => match obj.format.as_deref() {
                 Some("float") => Self::Float,
-                // A number without a format is unbounded in JSON Schema, so pick the wider type.
-                Some("double") | None => Self::Double,
-                f => bail!("unsupported number format: `{f:?}`"),
+                _ => Self::Double,
             },
             Some(InstanceType::String) => {
-                // String consts are the only const / enum values we support, for now.
-                // Early return so we don't hit the checks for these two below.
-                if let Some(value) = obj.const_value {
-                    let serde_json::Value::String(value) = value else {
-                        bail!("unsupported: non-string constant as field type");
-                    };
-                    return Ok((Self::StringConst { value }, is_type_array_nullable));
-                }
                 if let Some(values) = obj.enum_values {
-                    // Single-value enum: treat as a string constant (discriminator)
-                    if values.len() == 1 {
-                        let serde_json::Value::String(value) = values.into_iter().next().unwrap()
-                        else {
-                            bail!("unsupported: non-string constant as field type");
-                        };
-                        return Ok((Self::StringConst { value }, is_type_array_nullable));
-                    }
-                    // Multi-value enum: inline string enum. Promoted to a named top-level
-                    // type by `promote_inline_enums` after parsing.
-                    let string_values: Vec<String> = values
+                    let mut values: Vec<String> = values
                         .into_iter()
+                        .filter(|v| !v.is_null())
                         .map(|v| match v {
                             serde_json::Value::String(s) => Ok(s),
-                            _ => bail!("unsupported: non-string value in enum"),
+                            _ => bail!("string enums with non-string values are not supported"),
                         })
                         .collect::<anyhow::Result<_>>()?;
+                    // A single value is a constant, most often a discriminator.
+                    if values.len() <= 1 {
+                        return Ok((Self::String, nullable));
+                    }
+                    values.dedup();
                     let title = obj.metadata.as_ref().and_then(|m| m.title.clone());
-                    return Ok((
-                        Self::StringEnum {
-                            values: string_values,
-                            title,
-                        },
-                        is_type_array_nullable,
-                    ));
+                    return Ok((Self::StringEnum { values, title }, nullable));
                 }
-
                 match obj.format.as_deref() {
-                    None | Some("color" | "email" | "uuid") => Self::String,
                     Some("decimal") => Self::Decimal,
                     Some("date-time") => Self::DateTime,
-                    Some("date") => Self::String, // Date without time, treat as string for now
+                    Some("date") => Self::Date,
                     Some("uri") => Self::Uri,
-                    Some(f) => {
-                        // Unknown formats - treat as string with a warning
-                        tracing::warn!(format = f, "treating unknown string format as String");
-                        Self::String
-                    }
+                    _ => Self::String,
                 }
             }
             Some(InstanceType::Array) => {
-                let array = obj.array.context("array type must have array props")?;
-                ensure!(array.additional_items.is_none(), "not supported");
-                let inner = match array.items.context("array type must have items prop")? {
-                    SingleOrVec::Single(ty) => ty,
-                    SingleOrVec::Vec(types) => {
-                        bail!("unsupported multi-typed array parameter: `{types:?}`")
+                let array = obj.array.unwrap_or_default();
+                let inner = match array.items {
+                    None => Self::JsonObject,
+                    Some(SingleOrVec::Single(ty)) => Self::from_schema(*ty)?,
+                    Some(SingleOrVec::Vec(_)) => {
+                        bail!("tuple arrays (`items` as a list) are not supported")
                     }
                 };
-                let inner = Arc::new(Self::from_schema(*inner)?);
+                let inner = Arc::new(inner);
                 if array.unique_items == Some(true) {
                     Self::Set { inner }
                 } else {
@@ -1243,50 +1436,31 @@ impl FieldType {
             }
             Some(InstanceType::Object) => {
                 let obj = obj.object.unwrap_or_default();
-                let additional_properties = obj
-                    .additional_properties
-                    .unwrap_or_else(|| Box::new(Schema::Bool(true)));
-
-                ensure!(obj.max_properties.is_none(), "unsupported: max_properties");
-                ensure!(obj.min_properties.is_none(), "unsupported: min_properties");
                 ensure!(
                     obj.properties.is_empty(),
-                    "unsupported: properties on field type"
+                    "inline objects with properties must be named schemas"
                 );
-                ensure!(
-                    obj.pattern_properties.is_empty(),
-                    "unsupported: pattern_properties"
-                );
-                // Note: property_names is a JSON Schema validation constraint that limits
-                // property names. For code generation, we can safely ignore it.
-                // ensure!(obj.property_names.is_none(), "unsupported: property_names");
-                ensure!(
-                    obj.required.is_empty(),
-                    "unsupported: required on field type"
-                );
-
-                match *additional_properties {
-                    Schema::Bool(true) => Self::JsonObject,
-                    Schema::Bool(false) => bail!("unsupported `additional_properties: false`"),
-                    Schema::Object(schema_object) => {
+                match obj.additional_properties.map(|s| *s) {
+                    None | Some(Schema::Bool(_)) => Self::JsonObject,
+                    Some(Schema::Object(schema_object)) => {
                         let value_ty = Arc::new(Self::from_schema_object(schema_object)?);
                         Self::Map { value_ty }
                     }
                 }
             }
-            Some(ty) => bail!("unsupported type: `{ty:?}`"),
-            None => match get_schema_name(obj.reference.as_deref()) {
-                Some(name) => Self::SchemaRef { name, inner: None },
-                // Empty schema {} means "any JSON" - treat as JsonObject
-                None => Self::JsonObject,
+            Some(InstanceType::Null) => bail!("`null`-only values are not supported"),
+            None => match (get_schema_name(obj.reference.as_deref()), obj.const_value) {
+                (Some(name), _) => Self::SchemaRef { name, inner: None },
+                (None, Some(serde_json::Value::String(_))) => Self::String,
+                (None, Some(serde_json::Value::Bool(_))) => Self::Bool,
+                (None, Some(serde_json::Value::Number(n))) if n.is_i64() => Self::Int64,
+                (None, Some(serde_json::Value::Number(_))) => Self::Double,
+                // `{}` accepts any JSON value.
+                (None, _) => Self::JsonObject,
             },
         };
 
-        // If we didn't hit the early return above, check that there's no const or enum value(s).
-        ensure!(obj.const_value.is_none(), "unsupported const_value");
-        ensure!(obj.enum_values.is_none(), "unsupported enum_values");
-
-        Ok((result, is_type_array_nullable))
+        Ok((result, nullable))
     }
 
     fn to_csharp_typename(&self) -> Cow<'_, str> {
@@ -1299,7 +1473,7 @@ impl FieldType {
             Self::UInt64 => "ulong".into(),
             Self::Float => "float".into(),
             Self::Double => "double".into(),
-            Self::String | Self::Uri | Self::StringConst { .. } => "string".into(),
+            Self::String | Self::Uri => "string".into(),
             Self::Decimal => "decimal".into(),
             Self::DateTime => "DateTimeOffset".into(),
             Self::JsonObject => "JsonNode".into(),
@@ -1313,7 +1487,8 @@ impl FieldType {
                 inner: Some(ty), ..
             } if matches!(ty.data, TypeData::StringAlias) => "string".into(),
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
-            Self::StringEnum { .. } => unreachable_inline_enum(),
+            Self::Date => "string".into(),
+            Self::StringEnum { .. } => "string".into(),
         }
     }
 
@@ -1334,9 +1509,9 @@ impl FieldType {
             Self::List { inner } | Self::Set { inner } => {
                 format!("[]{}", inner.to_go_typename()).into()
             }
-            Self::SchemaRef { name, .. } => Cow::Borrowed(name.as_str()),
-            Self::StringConst { .. } => "string".into(),
-            Self::StringEnum { .. } => unreachable_inline_enum(),
+            Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
+            Self::Date => "string".into(),
+            Self::StringEnum { .. } => "string".into(),
         }
     }
 
@@ -1359,9 +1534,9 @@ impl FieldType {
             Self::JsonObject => "Map<String,Any>".into(),
             Self::List { inner } => format!("List<{}>", inner.to_kotlin_typename()).into(),
             Self::Set { inner } => format!("Set<{}>", inner.to_kotlin_typename()).into(),
-            Self::SchemaRef { name, .. } => Cow::Borrowed(name.as_str()),
-            Self::StringConst { .. } => "String".into(),
-            Self::StringEnum { .. } => unreachable_inline_enum(),
+            Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
+            Self::Date => "String".into(),
+            Self::StringEnum { .. } => "String".into(),
         }
     }
 
@@ -1388,9 +1563,9 @@ impl FieldType {
             Self::Map { value_ty } => {
                 format!("{{ [key: string]: {} }}", value_ty.to_js_typename()).into()
             }
-            Self::SchemaRef { name, .. } => Cow::Borrowed(name.as_str()),
-            Self::StringConst { .. } => "string".into(),
-            Self::StringEnum { .. } => unreachable_inline_enum(),
+            Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
+            Self::Date => "string".into(),
+            Self::StringEnum { .. } => "string".into(),
         }
     }
 
@@ -1420,8 +1595,32 @@ impl FieldType {
             )
             .into(),
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
-            Self::StringConst { .. } => "String".into(),
-            Self::StringEnum { .. } => unreachable_inline_enum(),
+            Self::Date => "String".into(),
+            Self::StringEnum { .. } => "String".into(),
+        }
+    }
+
+    /// Whether the SDK value is the decoded JSON value itself in every language: scalars,
+    /// untyped JSON, and lists and maps of those.
+    pub(crate) fn is_plain_json(&self) -> bool {
+        match self {
+            Self::Bool
+            | Self::Int16
+            | Self::UInt16
+            | Self::Int32
+            | Self::Int64
+            | Self::UInt64
+            | Self::Float
+            | Self::Double
+            | Self::String
+            | Self::Date
+            | Self::Uri
+            | Self::JsonObject => true,
+            Self::List { inner } | Self::Set { inner } => inner.is_plain_json(),
+            Self::Map { value_ty } => value_ty.is_plain_json(),
+            Self::Decimal | Self::DateTime | Self::SchemaRef { .. } | Self::StringEnum { .. } => {
+                false
+            }
         }
     }
 
@@ -1458,7 +1657,7 @@ impl FieldType {
             Self::String => "str".into(),
             Self::Decimal => "Decimal".into(),
             Self::DateTime => "datetime".into(),
-            Self::SchemaRef { name, .. } => Cow::Borrowed(name.as_str()),
+            Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
             Self::Uri => "str".into(),
             Self::JsonObject => "t.Dict[str, t.Any]".into(),
             Self::Set { inner } | Self::List { inner } => {
@@ -1467,8 +1666,8 @@ impl FieldType {
             Self::Map { value_ty } => {
                 format!("t.Dict[str, {}]", value_ty.to_python_typename()).into()
             }
-            Self::StringConst { .. } => "str".into(),
-            Self::StringEnum { .. } => unreachable_inline_enum(),
+            Self::Date => "str".into(),
+            Self::StringEnum { .. } => "str".into(),
         }
     }
 
@@ -1500,11 +1699,10 @@ impl FieldType {
                 {
                     return "String".into();
                 }
-                Cow::Borrowed(name.as_str())
+                name.to_upper_camel_case().into()
             }
-            // backwards compat
-            FieldType::StringConst { .. } => "TypeEnum".into(),
-            FieldType::StringEnum { .. } => unreachable_inline_enum(),
+            FieldType::Date => "String".into(),
+            FieldType::StringEnum { .. } => "String".into(),
         }
     }
 
@@ -1525,8 +1723,8 @@ impl FieldType {
             | FieldType::DateTime
             | FieldType::Uri
             | FieldType::JsonObject
-            | FieldType::StringConst { .. } => false,
-            FieldType::StringEnum { .. } => unreachable_inline_enum(),
+            | FieldType::Date => false,
+            FieldType::StringEnum { .. } => false,
             FieldType::List { inner } | FieldType::Set { inner } => inner.needs_java_import(),
             FieldType::Map { value_ty } => value_ty.needs_java_import(),
             FieldType::SchemaRef { inner, .. } => {
@@ -1543,9 +1741,6 @@ impl FieldType {
     fn to_ruby_typename(&self) -> Cow<'_, str> {
         match self {
             FieldType::SchemaRef { name, .. } => name.clone().into(),
-            FieldType::StringConst { .. } => {
-                unreachable!("FieldType::const should never be exposed to template code")
-            }
             _ => panic!("types? in ruby?!?!, not on my watch!"),
         }
     }
@@ -1566,9 +1761,9 @@ impl FieldType {
             | FieldType::DateTime
             | FieldType::Uri
             | FieldType::JsonObject
-            | FieldType::StringConst { .. }
+            | FieldType::Date
             | FieldType::SchemaRef { .. } => self.to_php_typename(),
-            FieldType::StringEnum { .. } => unreachable_inline_enum(),
+            FieldType::StringEnum { .. } => "string".into(),
             FieldType::Set { inner } | FieldType::List { inner } => {
                 format!("list<{}>", inner.to_phpdoc_typename()).into()
             }
@@ -1587,8 +1782,8 @@ impl FieldType {
             | FieldType::Int32
             | FieldType::Int64 => "int".into(),
             FieldType::Float | FieldType::Double | FieldType::Decimal => "float".into(),
-            FieldType::Uri | FieldType::StringConst { .. } | FieldType::String => "string".into(),
-            FieldType::StringEnum { .. } => unreachable_inline_enum(),
+            FieldType::Uri | FieldType::Date | FieldType::String => "string".into(),
+            FieldType::StringEnum { .. } => "string".into(),
             FieldType::DateTime => r#"\DateTimeImmutable"#.into(),
 
             FieldType::JsonObject
@@ -1677,9 +1872,10 @@ impl minijinja::value::Object for FieldType {
                 ensure_no_args(args, "is_map")?;
                 Ok(matches!(**self, Self::Map { .. }).into())
             }
+            // Dates are typed as strings, so templates treat them alike unless they check `is_date`.
             "is_string" => {
                 ensure_no_args(args, "is_string")?;
-                Ok(matches!(**self, Self::String).into())
+                Ok(matches!(**self, Self::String | Self::Date).into())
             }
             "is_uri" => {
                 ensure_no_args(args, "is_uri")?;
@@ -1706,8 +1902,8 @@ impl minijinja::value::Object for FieldType {
                     | F::Set { .. }
                     | F::Map { .. }
                     | F::SchemaRef { .. }
-                    | F::StringConst { .. } => false,
-                    F::StringEnum { .. } => unreachable_inline_enum(),
+                    | F::Date => false,
+                    F::StringEnum { .. } => false,
                 };
                 Ok(is_int_or_uint.into())
             }
@@ -1715,9 +1911,9 @@ impl minijinja::value::Object for FieldType {
                 ensure_no_args(args, "is_json_object")?;
                 Ok(matches!(**self, Self::JsonObject).into())
             }
-            "is_string_const" => {
-                ensure_no_args(args, "is_string_const")?;
-                Ok(matches!(**self, Self::StringConst { .. }).into())
+            "is_date" => {
+                ensure_no_args(args, "is_date")?;
+                Ok(matches!(**self, Self::Date).into())
             }
 
             // Returns the inner type of a list or set
@@ -1736,8 +1932,7 @@ impl minijinja::value::Object for FieldType {
                 ensure_no_args(args, "inner_schema_ref_ty")?;
                 let ty = match &**self {
                     FieldType::SchemaRef { inner, .. } => {
-                        let i = inner.as_ref().unwrap().clone();
-                        Some(minijinja::Value::from_serialize(i))
+                        inner.as_ref().map(minijinja::Value::from_serialize)
                     }
                     _ => None,
                 };
@@ -1754,16 +1949,6 @@ impl minijinja::value::Object for FieldType {
                     _ => None,
                 };
                 Ok(ty.into())
-            }
-            "string_const_val" => {
-                ensure_no_args(args, "string_const_val")?;
-                let val = match &**self {
-                    Self::StringConst { value } => {
-                        Some(minijinja::Value::from_safe_string(value.clone()))
-                    }
-                    _ => None,
-                };
-                Ok(val.into())
             }
             _ => Err(minijinja::Error::from(minijinja::ErrorKind::UnknownMethod)),
         }
@@ -1795,10 +1980,17 @@ where
     }
 }
 
-#[cold]
-#[inline(never)]
-fn unreachable_inline_enum() -> ! {
-    panic!("FieldType::StringEnum must be promoted by promote_inline_enums before rendering")
+pub(super) fn serialize_optional_field_type<S>(
+    field_ty: &Option<FieldType>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match field_ty {
+        Some(field_ty) => serialize_field_type(field_ty, serializer),
+        None => serializer.serialize_none(),
+    }
 }
 
 #[cfg(test)]
@@ -1972,5 +2164,247 @@ mod tests {
         assert_eq!(ty.referenced_schema(), Some("Data"));
         assert_eq!(ty.to_rust_typename(), "Data");
         assert_eq!(ty.to_js_typename(), "Data");
+    }
+
+    fn field(value: serde_json::Value) -> Field {
+        Field::from_schema("f".into(), Schema::Object(schema(value)), false).unwrap()
+    }
+
+    #[test]
+    fn unions_without_a_discriminator_are_untyped_json() {
+        let f = field(json!({"oneOf": [{"$ref": "#/components/schemas/A"}, {"type": "string"}]}));
+        assert_eq!((f.r#type, f.nullable), (FieldType::JsonObject, false));
+        let f =
+            field(json!({"anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}]}));
+        assert_eq!((f.r#type, f.nullable), (FieldType::JsonObject, true));
+        let f = field(json!({"type": ["string", "integer"]}));
+        assert_eq!(f.r#type, FieldType::JsonObject);
+    }
+
+    #[test]
+    fn nullable_and_wrapped_references_keep_their_type() {
+        let a = FieldType::SchemaRef {
+            name: "A".into(),
+            inner: None,
+        };
+        let f = field(json!({"anyOf": [{"$ref": "#/components/schemas/A"}, {"type": "null"}]}));
+        assert_eq!((&f.r#type, f.nullable), (&a, true));
+        let f = field(json!({"allOf": [{"$ref": "#/components/schemas/A"}], "description": "d"}));
+        assert_eq!((&f.r#type, f.description.as_deref()), (&a, Some("d")));
+    }
+
+    #[test]
+    fn constants_and_single_value_enums_are_plain_values() {
+        assert_eq!(
+            field(json!({"type": "string", "const": "circle"})).r#type,
+            FieldType::String
+        );
+        assert_eq!(
+            field(json!({"type": "string", "enum": ["only"]})).r#type,
+            FieldType::String
+        );
+        assert_eq!(field(json!({"const": 2})).r#type, FieldType::Int64);
+        assert_eq!(field(json!({"const": true})).r#type, FieldType::Bool);
+        let f = field(json!({"type": ["string", "null"], "enum": ["a", "b", null]}));
+        assert!(
+            matches!(f.r#type, FieldType::StringEnum { ref values, .. } if values == &["a", "b"])
+        );
+        assert!(f.nullable);
+    }
+
+    #[test]
+    fn dates_and_access_modes_reach_templates() {
+        assert_eq!(
+            field(json!({"type": "string", "format": "date"})).r#type,
+            FieldType::Date
+        );
+        assert_eq!(
+            field(json!({"type": "integer", "format": "unix-time"})).r#type,
+            FieldType::Int64
+        );
+        assert_eq!(
+            field(json!({"type": "number", "format": "decimal"})).r#type,
+            FieldType::Double
+        );
+        let f = field(json!({"type": "string", "readOnly": true}));
+        assert!(f.read_only && !f.write_only);
+        let f = field(json!({"type": "string", "writeOnly": true}));
+        assert!(f.write_only && !f.read_only);
+    }
+
+    #[test]
+    fn discriminator_mappings_accept_bare_names_and_aliases() {
+        let ty = Type::from_schema(
+            "Shape".into(),
+            schema(json!({
+                "oneOf": [{"$ref": "#/components/schemas/Circle"}, {"$ref": "#/components/schemas/Square"}],
+                "discriminator": {"propertyName": "kind", "mapping": {
+                    "circle": "Circle", "round": "#/components/schemas/Circle"
+                }}
+            })),
+        )
+        .unwrap();
+        let TypeData::StructEnum {
+            repr: StructEnumRepr::InternallyTagged { variants },
+            ..
+        } = ty.data
+        else {
+            panic!("not a union");
+        };
+        let names: Vec<_> = variants.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["circle", "round", "Square"]);
+    }
+
+    #[test]
+    fn integer_enums_without_varnames_are_named_after_their_values() {
+        let ty = Type::from_schema(
+            "Level".into(),
+            schema(json!({"type": "integer", "enum": [1, -1]})),
+        )
+        .unwrap();
+        assert_eq!(
+            ty.data,
+            TypeData::IntegerEnum {
+                variants: vec![("Value1".into(), 1), ("Minus1".into(), -1)]
+            }
+        );
+    }
+
+    #[test]
+    fn top_level_objects_without_a_type_and_nullable_enums_are_declared() {
+        let ty = Type::from_schema(
+            "Page".into(),
+            schema(json!({"properties": {"a": {"type": "string"}}})),
+        )
+        .unwrap();
+        assert!(matches!(ty.data, TypeData::Struct { ref fields } if fields.len() == 1));
+        let ty = Type::from_schema(
+            "Mode".into(),
+            schema(json!({"anyOf": [{"type": "string", "enum": ["a", "b"]}, {"type": "null"}]})),
+        )
+        .unwrap();
+        assert!(matches!(ty.data, TypeData::StringEnum { .. }));
+        let error = Type::from_schema(
+            "Mixed".into(),
+            schema(json!({"allOf": [{"type": "string"}, {"type": "integer"}]})),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("`allOf`"), "{error}");
+    }
+
+    #[test]
+    fn clashing_names_are_reported() {
+        let types = types_from(json!({
+            "issue": {"type": "object", "properties": {"type": {"type": "string"}, "@type": {"type": "string"}}},
+            "Issue": {"type": "string", "enum": ["a-b", "a_b"]}
+        }));
+        assert_eq!(
+            clashing_type_names(&types),
+            ["schemas `Issue` and `issue` both become the type `Issue`"]
+        );
+        let errors = clashing_identifiers(&types);
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(
+            errors[0].starts_with("schema `Issue`: `a-b` and `a_b`"),
+            "{errors:?}"
+        );
+        assert!(
+            errors[1].starts_with("schema `issue`: `@type` and `type`"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn unions_over_non_object_variants_become_untyped_json() {
+        let mut types = types_from(json!({
+            "Listing": {"type": "array", "items": {"type": "string"}},
+            "File": {"type": "object", "properties": {"type": {"type": "string"}}},
+            "Content": {
+                "oneOf": [{"$ref": "#/components/schemas/Listing"}, {"$ref": "#/components/schemas/File"}],
+                "discriminator": {"propertyName": "type"}
+            }
+        }));
+        untag_unions_with_non_object_variants(&mut types);
+        assert_eq!(
+            types["Content"].data,
+            TypeData::Alias {
+                target: Box::new(FieldType::JsonObject)
+            }
+        );
+    }
+
+    #[test]
+    fn promoted_enums_avoid_names_that_differ_only_in_case() {
+        let mut types = types_from(json!({
+            "thing_kind": {"type": "string"},
+            "Thing": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["a", "b"]}}}
+        }));
+        promote_inline_enums(&mut types, &mut Resources::new()).unwrap();
+        assert_eq!(
+            field_type(&types, "Thing", "kind"),
+            &FieldType::SchemaRef {
+                name: "ThingKind2".into(),
+                inner: None
+            }
+        );
+    }
+
+    #[test]
+    fn all_of_embeds_references_next_to_merged_properties() {
+        let ty = Type::from_schema(
+            "Composed".into(),
+            schema(json!({
+                "allOf": [{"$ref": "#/components/schemas/Base"}],
+                "type": "object",
+                "required": ["extra"],
+                "properties": {"extra": {"type": "string"}}
+            })),
+        )
+        .unwrap();
+        let TypeData::Struct { fields } = &ty.data else {
+            panic!("not a struct");
+        };
+        let fields: Vec<_> = fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.flatten))
+            .collect();
+        assert_eq!(fields, [("__flatten_base", true), ("extra", false)]);
+        assert_eq!(ty.referenced_components(), BTreeSet::from(["Base"]));
+    }
+
+    #[test]
+    fn flattened_parts_are_inlined_and_own_fields_win() {
+        let object = |props: serde_json::Value| {
+            schema(json!({"type": "object", "required": ["id"], "properties": props}))
+        };
+        let mut types = Types::new();
+        for (name, schema) in [
+            (
+                "Base",
+                object(json!({"id": {"type": "string"}, "note": {"type": "string"}})),
+            ),
+            (
+                "Composed",
+                schema(json!({
+                    "allOf": [{"$ref": "#/components/schemas/Base"}],
+                    "type": "object",
+                    "properties": {"note": {"type": "integer"}}
+                })),
+            ),
+        ] {
+            types.insert(name.into(), Type::from_schema(name.into(), schema).unwrap());
+        }
+        inline_flattened_fields(&mut types).unwrap();
+        let TypeData::Struct { fields } = &types["Composed"].data else {
+            panic!("not a struct");
+        };
+        let fields: Vec<_> = fields
+            .iter()
+            .map(|f| (f.name.as_str(), f.r#type.clone()))
+            .collect();
+        assert_eq!(
+            fields,
+            [("id", FieldType::String), ("note", FieldType::Int64)]
+        );
     }
 }

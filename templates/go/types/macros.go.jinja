@@ -20,77 +20,47 @@
     "float64", "int", "int8", "int16", "int32", "int64", "rune", "string",
     "uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
     "false", "iota", "nil", "true",
-    "a", "ctx", "options", "req", "out", "err", "vals", "v",
+    "a", "ctx", "options", "opts", "req", "out", "err", "vals", "v",
 ] -%}
 
 {#- A local (unexported) Go identifier that is safe to use as a parameter name. -#}
 {% macro go_local(name) -%}
-    {%- set ident = name | to_lower_camel_case -%}
+    {%- set ident = name | ident("camel", "go") | go_name -%}
     {%- if ident in GO_RESERVED -%}{{ ident }}_{%- else -%}{{ ident }}{%- endif -%}
 {%- endmacro %}
 
-{#- The Go type of a value, with any-JSON (`{}` in the spec, `JsonObject` in the
-    codegen) rendered as `json.RawMessage`.
-
-    `FieldType::to_go()` renders `JsonObject` as `map[string]any`, which only
-    decodes JSON *objects*: an array, a scalar or `null` would fail to decode
-    and take the whole enclosing response with it. The spec uses `{}` to mean
-    "any JSON value", so the Go SDK hands it over losslessly as
-    `json.RawMessage`, and callers decode it into whatever type they expect.
-    Genuine maps (`additionalProperties: <schema>`) are `FieldType::Map` and are
-    not affected.
-
-    Containers of any-JSON one level deep are supported; anything deeper would
-    still carry a `map[string]any` and is a hard error. -#}
+{#- The Go type of a value. Any-JSON (`{}` in the spec) is `json.RawMessage` at
+    any depth: `map[string]any` would reject arrays, scalars and null. -#}
 {% macro go_type(ty) -%}
-    {%- if ty.is_json_object() -%}
-        json.RawMessage
-    {%- elif (ty.is_list() or ty.is_set()) and ty.inner_type().is_json_object() -%}
-        []json.RawMessage
-    {%- elif ty.is_map() and ty.value_type().is_json_object() -%}
-        map[string]json.RawMessage
-    {%- elif "map[string]any" in ty.to_go() -%}
-        {{ panic("go codegen: unsupported nested any-JSON type `" ~ ty.to_go() ~ "` - add explicit support in codegen/templates/go/types/macros.go.jinja") }}
-    {%- else -%}
-        {{ ty.to_go() }}
-    {%- endif -%}
+    {{ ty.to_go() | replace("map[string]any", "json.RawMessage") | go_name }}
 {%- endmacro %}
 
-{#- The Go type of a struct field, including the pointer indirection used to
-    model "absent" for optional fields.
+{#- A type or schema name as a Go identifier. -#}
+{% macro go_ident(name) -%}
+    {{ name | to_upper_camel_case | go_name }}
+{%- endmacro %}
 
-    * any-JSON -> `json.RawMessage`, never a pointer and never wrapped (see below)
-    * required and non-nullable collections -> `RequiredSlice[T]` / `RequiredMap[V]`
-    * required and non-nullable, anything else -> plain `T`
-    * slices / maps -> never a pointer, `nil` already means absent
-    * anything else -> `*T`
+{#- An exported identifier from a spec name, keywords escaped. -#}
+{% macro go_export(name) -%}
+    {{ name | ident("pascal", "go") | go_name }}
+{%- endmacro %}
 
-    The `Required*` wrappers exist because the zero value of a Go slice or map is
-    `nil`, which `encoding/json` writes as `null`. The spec declares these fields
-    required *and* non-nullable, so `null` is schema-invalid: the wrappers give
-    them a `MarshalJSON` that writes `[]` / `{}` instead. They are defined types
-    over `[]T` / `map[string]V`, so a plain slice or map literal still assigns to
-    them and they still range, index and append like the underlying type.
+{#- The constant of an enum value or union variant, `{Type}{Value}`, suffixed with
+    `Value` when that already names a schema. -#}
+{% macro go_const(type_name, value, type_names) -%}
+    {%- set name = (type_name | to_upper_camel_case) ~ (value | ident("pascal", "go")) -%}
+    {{ (name ~ ("Value" if name in type_names else "")) | go_name }}
+{%- endmacro %}
 
-    A required *nullable* collection deliberately keeps the bare `[]T` / `map`
-    type: for those, `nil` -> `null` is the correct wire representation. (The
-    current spec has none, but the distinction is load-bearing.)
-
-    Any-JSON needs no wrapper: `null` is itself a valid "any JSON" value, and a
-    nil `json.RawMessage` marshals as `null`, so a required any-JSON field left
-    unset still produces valid JSON. An optional one uses `omitempty`, which
-    drops a nil (empty) `json.RawMessage` from the payload; set it to
-    `json.RawMessage("null")` to send an explicit `null`.
-
-    The wrappers are attached to the field type rather than to the struct on
-    purpose. A generated `MarshalJSON` on the struct would be promoted through
-    the `flatten` embeds -- e.g. `CustomerEvent` embeds `CustomerEventData`,
-    which has required collections -- and would silently hijack the outer
-    struct's marshaling, dropping every field declared outside the embed.
--#}
-{% macro go_field_type(field) -%}
+{#- The Go type of a struct field: optional fields are pointers (collections stay
+    nil), required non-nullable collections marshal nil as `[]`/`{}` through
+    RequiredSlice/RequiredMap, and optional nullable fields of a PATCH body are
+    *Nullable[T] so they can be cleared. -#}
+{% macro go_field_type(field, patch=false) -%}
     {%- if field.type.is_json_object() -%}
         json.RawMessage
+    {%- elif patch and field.nullable and not field.required -%}
+        *Nullable[{{ go_type(field.type) }}]
     {%- elif field.required and not field.nullable -%}
         {%- if field.type.is_list() or field.type.is_set() -%}
             RequiredSlice[{{ go_type(field.type.inner_type()) }}]
@@ -106,9 +76,7 @@
     {%- endif -%}
 {%- endmacro %}
 
-{#- The struct tag of a field. `omitempty` is only used for fields that the API
-    treats as optional; a required-but-nullable field must still be serialized
-    as an explicit `null`. -#}
+{#- `omitempty` only for optional fields: a required nullable one sends `null`. -#}
 {% macro go_json_tag(field) -%}
     `json:"{{ field.name }}{% if not field.required %},omitempty{% endif %}"`
 {%- endmacro %}
@@ -138,8 +106,7 @@
     {%- elif ty.is_datetime() -%}
         formatTime({{ expr }})
     {%- elif ty.is_schema_ref() -%}
-        {#- string aliases and string enums are both `string` underneath -#}
-        string({{ expr }})
+        formatValue({{ expr }})
     {%- else -%}
         {{ panic("go codegen: unsupported query parameter type `" ~ gt ~ "` - add explicit support in codegen/templates/go/types/macros.go.jinja") }}
     {%- endif -%}

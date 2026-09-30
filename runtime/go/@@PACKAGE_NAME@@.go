@@ -19,6 +19,9 @@
 //
 // Errors coming back from the API are always a [*APIError]; use errors.As to
 // inspect the status code and the decoded payload.
+//
+// Every method takes trailing [RequestOption] values to adjust one call, e.g.
+// [WithHeader], [WithTimeout] or [WithIdempotencyKey].
 package @@PACKAGE_NAME@@
 
 import (
@@ -36,8 +39,8 @@ const (
 	// DefaultTimeout bounds a single request attempt, response body included.
 	DefaultTimeout = 15 * time.Second
 
-	// DefaultNumRetries is how many times a request is retried when the server
-	// fails transiently (5xx responses and network errors).
+	// DefaultNumRetries is how many times a request is retried when it fails
+	// transiently: network errors, 408, 429 and 5xx responses.
 	DefaultNumRetries = 2
 )
 
@@ -59,8 +62,10 @@ type Options struct {
 	// been read. Zero selects DefaultTimeout; a negative value disables it.
 	Timeout time.Duration
 
-	// NumRetries is the number of retries attempted on transient failures.
-	// Ignored when RetrySchedule is set. Zero selects DefaultNumRetries.
+	// NumRetries is the number of retries attempted on transient failures,
+	// waiting 500ms, 1s, 2s... (up to 8s) minus a random jitter, or the
+	// server's Retry-After when it is under a minute. Zero selects
+	// DefaultNumRetries and a negative value disables retries.
 	NumRetries int
 
 	// RetrySchedule is the delay to wait before each retry, and takes
@@ -94,6 +99,7 @@ type config struct {
 	httpClient    *http.Client
 	timeout       time.Duration
 	retrySchedule []time.Duration
+	jitter        bool
 	debug         bool
 	tokenProvider func(ctx context.Context) (string, error)
 	basicAuth     *BasicAuth
@@ -140,11 +146,11 @@ func newConfig(token string, options *Options) *config {
 	case opts.RetrySchedule != nil:
 		cfg.retrySchedule = append([]time.Duration(nil), opts.RetrySchedule...)
 	case opts.NumRetries > 0:
-		cfg.retrySchedule = exponentialBackoff(opts.NumRetries)
+		cfg.retrySchedule, cfg.jitter = exponentialBackoff(opts.NumRetries), true
 	case opts.NumRetries < 0:
 		cfg.retrySchedule = nil
 	default:
-		cfg.retrySchedule = exponentialBackoff(DefaultNumRetries)
+		cfg.retrySchedule, cfg.jitter = exponentialBackoff(DefaultNumRetries), true
 	}
 
 	return cfg
@@ -156,13 +162,12 @@ func (c *config) withToken(token string) *config {
 	return &clone
 }
 
-// exponentialBackoff mirrors the Rust SDK: 20ms doubling on each retry, capped
-// at 5 seconds.
+// exponentialBackoff waits 500ms before the first retry, doubling up to 8 seconds.
 func exponentialBackoff(retries int) []time.Duration {
-	const maxBackoff = 5 * time.Second
+	const maxBackoff = 8 * time.Second
 
 	schedule := make([]time.Duration, 0, retries)
-	backoff := 20 * time.Millisecond
+	backoff := 500 * time.Millisecond
 	for i := 0; i < retries; i++ {
 		schedule = append(schedule, backoff)
 		backoff *= 2

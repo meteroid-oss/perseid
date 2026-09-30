@@ -1,6 +1,9 @@
+{% import "macros.cs.jinja" as m -%}
 {% set _ = set_summary_filename(sdk.client_name ~ "JsonContext.cs") -%}
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // generated code may use deprecated API
+using System.Collections.Generic;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace {{ sdk.package_name }}.Models;
@@ -25,5 +28,14 @@ namespace {{ sdk.package_name }}.Models;
 {% endfor -%}
 {% endif -%}
 {% endif -%}
+{% endfor -%}
+{% set generic = namespace(types=[]) -%}
+{% for resource in api.resources -%}
+{% for op in resource.operations -%}
+{% for ty in [m.body_type(op), m.response_type(op)] if "<" in ty and ty not in generic.types -%}
+{% set generic.types = generic.types + [ty] -%}
+[JsonSerializable(typeof({{ ty }}), TypeInfoPropertyName = "{{ m.type_info(ty) }}")]
+{% endfor -%}
+{% endfor -%}
 {% endfor -%}
 public sealed partial class {{ sdk.client_name }}JsonContext : JsonSerializerContext { }

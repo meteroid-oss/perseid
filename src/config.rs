@@ -69,6 +69,13 @@ pub struct Target {
     pub user_agent: Option<String>,
     pub patch_nullable: Option<bool>,
     pub webhooks: Option<bool>,
+    /// TypeScript type of int64 values: `number` (the default), `bigint` or `string`.
+    pub int64: Option<String>,
+    /// Go: spell initialisms the Go way (`CustomerID`, not `CustomerId`).
+    pub initialisms: Option<bool>,
+    /// Operation ids left out of this SDK only, on top of the top-level `exclude`.
+    #[serde(default)]
+    pub exclude: Vec<String>,
     #[serde(default)]
     pub context: BTreeMap<String, Value>,
 }
@@ -133,12 +140,32 @@ impl Config {
             "`name` must be UpperCamelCase, e.g. \"{}\"",
             config.name.to_upper_camel_case()
         );
+        let others = [&config.rust, &config.python, &config.go, &config.java];
+        ensure!(
+            others
+                .iter()
+                .all(|t| t.as_ref().is_none_or(|t| t.int64.is_none())),
+            "`int64` is only supported in [typescript]"
+        );
+        if let Some(int64) = config.typescript.as_ref().and_then(|t| t.int64.as_deref()) {
+            ensure!(
+                ["number", "bigint", "string"].contains(&int64),
+                "`int64` must be \"number\", \"bigint\" or \"string\", not {int64:?}"
+            );
+        }
         let root = std::path::absolute(path)?.parent().unwrap().to_owned();
         Ok((config, root))
     }
 
     pub fn overrides_dir(&self, root: &Path) -> PathBuf {
         root.join(self.overrides.as_deref().unwrap_or(".perseid"))
+    }
+
+    /// The filters of one SDK: the shared ones, plus the operations its target excludes.
+    pub fn filters_for(&self, sdk: &Sdk) -> Filters {
+        let mut filters = self.filters();
+        filters.excluded.extend(sdk.target.exclude.iter().cloned());
+        filters
     }
 
     pub fn filters(&self) -> Filters {
@@ -223,14 +250,31 @@ impl Config {
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
             "patch_nullable": target.patch_nullable.or(self.patch_nullable).unwrap_or(false),
             "webhooks": target.webhooks.or(self.webhooks).unwrap_or(false),
+            "int64": target.int64.as_deref().unwrap_or("number"),
+            "go_initialisms": target.initialisms.unwrap_or(false),
             "version": version,
             "extra_exports": target.exports,
         });
         let map = context.as_object_mut().unwrap();
+        if language == "rust" {
+            map.insert("chrono".into(), rust_depends_on(dir, "chrono").into());
+        }
         map.extend(self.context.clone());
         map.extend(target.context.clone());
         context
     }
+}
+
+/// Rust dates are `chrono` types when the crate depends on it (or has no manifest yet), so
+/// SDKs predating it keep their string dates.
+fn rust_depends_on(dir: &Path, dependency: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else {
+        return true;
+    };
+    toml::from_str::<toml::Value>(&text)
+        .ok()
+        .and_then(|manifest| manifest.get("dependencies")?.get(dependency).cloned())
+        .is_some()
 }
 
 /// The SDK's own package manifest owns its version, so release tooling keeps working.

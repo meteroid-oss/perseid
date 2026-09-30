@@ -1,20 +1,18 @@
 {#
-    Shared helpers for the TypeScript model templates.
-
-    `field_from_json` / `field_to_json` render the expression that converts a
-    single field between its JSON wire representation and its TypeScript
-    representation. They recurse through lists, sets and maps.
+    Shared helpers for the TypeScript templates. `from_json` / `to_json` render the expression
+    converting a value between its JSON wire form and its TypeScript form.
 -#}
 
-{#
-    The TypeScript type of `type`. This is `type.to_js()`, except that any-JSON
-    values (`{}` in the spec) are typed `unknown` rather than `any`, so callers
-    have to narrow them before use. Recurses through lists, sets and maps so
-    that e.g. a list of any-JSON values is `unknown[]`.
--#}
+{% macro is_int64(type) -%}
+    {%- if sdk.int64 | default("number") != "number" and type.to_go() in ["int64", "uint64"] %}yes{% endif -%}
+{%- endmacro %}
+
+{# `unknown` for any-JSON values, so callers narrow them before use. -#}
 {% macro js_type(type) -%}
     {%- if type.is_json_object() -%}
         unknown
+    {%- elif is_int64(type) -%}
+        {{ sdk.int64 }}
     {%- elif type.is_list() or type.is_set() -%}
         {{ js_type(type.inner_type()) }}[]
     {%- elif type.is_map() -%}
@@ -24,114 +22,108 @@
     {%- endif -%}
 {%- endmacro %}
 
-{# The TypeScript type of a field, including `| null` for nullable fields. -#}
 {% macro field_type(field) -%}
     {{- js_type(field.type) }}{% if field.nullable %} | null{% endif -%}
 {%- endmacro %}
 
-{# A full interface member declaration (doc comment + `name?: Type;`). -#}
-{% macro field_decl(field) %}
-    {%- if field.description is defined %}
-        {{- field.description | with_javadoc_deprecation(field.deprecated) | to_doc_comment(style="js") }}
-    {% elif field.deprecated %}
-        {{- "" | with_javadoc_deprecation(field.deprecated) | to_doc_comment(style="js") }}
+{% macro doc(description, deprecated) -%}
+    {%- if description is defined and description -%}
+        {{ description | with_javadoc_deprecation(deprecated) | to_doc_comment(style="js") }}
+    {% elif deprecated -%}
+        /** @deprecated */
     {% endif -%}
-    {{ field.name | to_lower_camel_case }}{% if not field.required %}?{% endif %}: {{ field_type(field) }};
-{% endmacro %}
+{%- endmacro %}
 
-{# True when the JSON value may be absent or null and therefore needs a guard. -#}
-{% macro needs_guard(field_required, field_nullable) %}{{ not field_required or field_nullable }}{% endmacro %}
+{% macro field_decl(field) -%}
+    {{ doc(field.description, field.deprecated) }}{{ field.name | ident("camel") }}{% if not field.required %}?{% endif %}: {{ field_type(field) }};
+{%- endmacro %}
 
-{#
-    Convert `field_expr` (a JSON value) into the TypeScript representation of
-    `type`. `field_required`/`field_nullable` describe the *field* this
-    expression belongs to; nested calls always pass required=true.
--#}
-{% macro field_from_json(field_expr, type, field_required, field_nullable) %}
-    {%- set guarded = (not field_required) or field_nullable -%}
-    {%- set fallback = "null" if (field_required and field_nullable) else "undefined" -%}
-    {%- if type.is_datetime() -%}
-        {%- if guarded -%}
-            {{ field_expr }} != null ? parseDateTime({{ field_expr }}) : {{ fallback }}
-        {%- else -%}
-            parseDateTime({{ field_expr }})
-        {%- endif -%}
-    {%- elif type.is_schema_ref() -%}
-        {%- if guarded -%}
-            {{ field_expr }} != null ? {{ type.to_js() }}Serializer._fromJsonObject({{ field_expr }}) : {{ fallback }}
-        {%- else -%}
-            {{ type.to_js() }}Serializer._fromJsonObject({{ field_expr }})
-        {%- endif -%}
-    {%- elif type.is_list() or type.is_set() -%}
-        {%- set inner_t = type.inner_type() -%}
-        {%- if inner_t.is_datetime() or inner_t.is_schema_ref() or inner_t.is_list() or inner_t.is_set() or inner_t.is_map() -%}
-            {%- if guarded -%}
-                {{ field_expr }} != null ? {{ field_expr }}.map((item: any) => {{ field_from_json("item", inner_t, true, false) }}) : {{ fallback }}
-            {%- else -%}
-                {{ field_expr }}.map((item: any) => {{ field_from_json("item", inner_t, true, false) }})
-            {%- endif -%}
-        {%- else -%}
-            {{ field_expr }}
-        {%- endif -%}
-    {%- elif type.is_map() -%}
-        {%- set value_t = type.value_type() -%}
-        {%- if value_t.is_datetime() or value_t.is_schema_ref() or value_t.is_list() or value_t.is_set() or value_t.is_map() -%}
-            {%- set mapped -%}
-                Object.fromEntries(Object.entries({{ field_expr }}).map((entry: [string, any]) => [entry[0], {{ field_from_json("entry[1]", value_t, true, false) }}]))
-            {%- endset -%}
-            {%- if guarded -%}
-                {{ field_expr }} != null ? {{ mapped }} : {{ fallback }}
-            {%- else -%}
-                {{ mapped }}
-            {%- endif -%}
-        {%- else -%}
-            {{ field_expr }}
-        {%- endif -%}
-    {%- else -%}
-        {{ field_expr }}
-    {%- endif -%}
-{% endmacro %}
-
-{#
-    Convert `field_expr` (a TypeScript value) into its JSON representation.
-    Dates are handled by `JSON.stringify` (which calls `toISOString`), so only
-    schema refs and containers thereof need explicit conversion.
--#}
-{% macro field_to_json(field_expr, type, field_required, field_nullable) %}
-    {%- set guarded = (not field_required) or field_nullable -%}
-    {%- set fallback = "null" if (field_required and field_nullable) else "undefined" -%}
+{# `yes` when values of `type` need converting from JSON, or to JSON with `outgoing`. -#}
+{% macro converted(type, outgoing=false) -%}
     {%- if type.is_schema_ref() -%}
-        {%- if guarded -%}
-            {{ field_expr }} != null ? {{ type.to_js() }}Serializer._toJsonObject({{ field_expr }}) : {{ fallback }}
-        {%- else -%}
-            {{ type.to_js() }}Serializer._toJsonObject({{ field_expr }})
-        {%- endif -%}
+        yes
+    {%- elif outgoing and is_int64(type) and sdk.int64 == "string" -%}
+        yes
+    {%- elif not outgoing and (type.is_datetime() or is_int64(type)) -%}
+        yes
     {%- elif type.is_list() or type.is_set() -%}
-        {%- set inner_t = type.inner_type() -%}
-        {%- if inner_t.is_schema_ref() or inner_t.is_list() or inner_t.is_set() or inner_t.is_map() -%}
-            {%- if guarded -%}
-                {{ field_expr }} != null ? {{ field_expr }}.map((item: any) => {{ field_to_json("item", inner_t, true, false) }}) : {{ fallback }}
-            {%- else -%}
-                {{ field_expr }}.map((item: any) => {{ field_to_json("item", inner_t, true, false) }})
-            {%- endif -%}
-        {%- else -%}
-            {{ field_expr }}
-        {%- endif -%}
+        {{ converted(type.inner_type(), outgoing) }}
     {%- elif type.is_map() -%}
-        {%- set value_t = type.value_type() -%}
-        {%- if value_t.is_schema_ref() or value_t.is_list() or value_t.is_set() or value_t.is_map() -%}
-            {%- set mapped -%}
-                Object.fromEntries(Object.entries({{ field_expr }}).map((entry: [string, any]) => [entry[0], {{ field_to_json("entry[1]", value_t, true, false) }}]))
-            {%- endset -%}
-            {%- if guarded -%}
-                {{ field_expr }} != null ? {{ mapped }} : {{ fallback }}
-            {%- else -%}
-                {{ mapped }}
-            {%- endif -%}
-        {%- else -%}
-            {{ field_expr }}
-        {%- endif -%}
-    {%- else -%}
-        {{ field_expr }}
+        {{ converted(type.value_type(), outgoing) }}
     {%- endif -%}
-{% endmacro %}
+{%- endmacro %}
+
+{% macro from_json(expr, type) -%}
+    {%- if type.is_datetime() -%}
+        parseDateTime({{ expr }})
+    {%- elif type.is_schema_ref() -%}
+        {{ type.to_js() }}Serializer.parse({{ expr }})
+    {%- elif is_int64(type) -%}
+        {{ "BigInt" if sdk.int64 == "bigint" else "String" }}({{ expr }})
+    {%- elif not converted(type) -%}
+        {{ expr }}
+    {%- elif type.is_map() -%}
+        Object.fromEntries(Object.entries({{ expr }}).map(([key, entry]: [string, any]) => [key, {{ from_json("entry", type.value_type()) }}]))
+    {%- else -%}
+        {{ expr }}.map((item: any) => {{ from_json("item", type.inner_type()) }})
+    {%- endif -%}
+{%- endmacro %}
+
+{# Dates are left to `JSON.stringify`, which calls `toISOString`. -#}
+{% macro to_json(expr, type) -%}
+    {%- if type.is_schema_ref() -%}
+        {{ type.to_js() }}Serializer.serialize({{ expr }})
+    {%- elif is_int64(type) and sdk.int64 == "string" -%}
+        BigInt({{ expr }})
+    {%- elif not converted(type, true) -%}
+        {{ expr }}
+    {%- elif type.is_map() -%}
+        Object.fromEntries(Object.entries({{ expr }}).map(([key, entry]) => [key, {{ to_json("entry", type.value_type()) }}]))
+    {%- else -%}
+        {{ expr }}.map((item) => {{ to_json("item", type.inner_type()) }})
+    {%- endif -%}
+{%- endmacro %}
+
+{# Absent and null values are passed through, keeping `null` for nullable fields only. -#}
+{% macro guarded(expr, field, conversion, outgoing) -%}
+    {%- if converted(field.type, outgoing) and (not field.required or field.nullable) -%}
+        {{ expr }} != null ? {{ conversion }} : {{ expr if field.nullable else "undefined" }}
+    {%- else -%}
+        {{ conversion }}
+    {%- endif -%}
+{%- endmacro %}
+
+{% macro field_from_json(json, field) -%}
+    {%- set expr %}{{ json }}[{{ field.name | tojson }}]{% endset -%}
+    {{ guarded(expr, field, from_json(expr, field.type), false) }}
+{%- endmacro %}
+
+{% macro field_to_json(value, field) -%}
+    {%- set expr %}{{ value }}.{{ field.name | ident("camel") }}{% endset -%}
+    {{ guarded(expr, field, to_json(expr, field.type), true) }}
+{%- endmacro %}
+
+{#- The object literal members parsing `fields` out of `json`. -#}
+{% macro parse_fields(fields, json) -%}
+    {%- for field in fields if not field.flatten %}
+    {{ field.name | ident("camel") }}: {{ field_from_json(json, field) }},
+    {%- endfor %}
+{%- endmacro %}
+
+{% macro serialize_fields(fields, value) -%}
+    {%- for field in fields if not field.flatten %}
+    {{ field.name | tojson }}: {{ field_to_json(value, field) }},
+    {%- endfor %}
+{%- endmacro %}
+
+{#- `@deprecated` aliases of `parse` / `serialize` under their former names. -#}
+{% macro legacy_aliases(type_name) %}
+    /** @deprecated Use `parse`. */
+    _fromJsonObject(json: any): {{ type_name }} {
+        return {{ type_name }}Serializer.parse(json);
+    },
+    /** @deprecated Use `serialize`. */
+    _toJsonObject(value: {{ type_name }}): any {
+        return {{ type_name }}Serializer.serialize(value);
+    },
+{%- endmacro %}

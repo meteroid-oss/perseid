@@ -1,36 +1,49 @@
 {% import "types/macros.ts.jinja" as m -%}
 {% for c in referenced_components -%}
-import {
-    {{ c | to_upper_camel_case }},
-    {{ c | to_upper_camel_case }}Serializer,
-} from './{{ c | to_lower_camel_case }}';
+import { type {{ c | to_upper_camel_case }}, {{ c | to_upper_camel_case }}Serializer } from "./{{ c | to_lower_camel_case }}.js";
 {% endfor -%}
 
 {% set type_name = type.name | to_upper_camel_case -%}
+{% set ns = namespace(bases=[]) -%}
+{% for field in type.fields if field.flatten %}{% set ns.bases = ns.bases + [field.type.to_js()] %}{% endfor -%}
+{% set base_names = ns.bases -%}
+
+{#- Own fields that redeclare an inherited one are left out of the base with `Omit`, and a
+    base that is not an object (a union) is intersected rather than extended. -#}
+{% set overridden = type.fields | rejectattr("flatten") | map(attribute="name") | select("in", inherited_fields) | list -%}
+{% set omitted = overridden | map("ident", "camel") | map("tojson") | join(" | ") -%}
+{% set ns.parents = [] -%}
+{% for base in base_names %}{% set ns.parents = ns.parents + ["Omit<" ~ base ~ ", " ~ omitted ~ ">" if overridden else base] %}{% endfor -%}
 
 {{ doc_comment }}
-export interface {{ type_name }} {
-    {% for field in type.fields -%}
-        {{ m.field_decl(field) }}
+{% set intersect = base_names | select("in", non_struct_refs) | list -%}
+{% if intersect -%}
+export type {{ type_name }} = {{ ns.parents | join(" & ") }} & {
+{%- else -%}
+export interface {{ type_name }}{% if base_names %} extends {{ ns.parents | join(", ") }}{% endif %} {
+{%- endif %}
+    {% for field in type.fields if not field.flatten -%}
+    {{ m.field_decl(field) }}
     {% endfor -%}
-}
+}{% if intersect %};{% endif %}
 
 export const {{ type_name }}Serializer = {
-    _fromJsonObject(object: any): {{ type_name }} {
+    parse(json: any): {{ type_name }} {
         return {
-            {% for field in type.fields -%}
-                {% set field_expr %}object['{{ field.name }}']{% endset -%}
-                {{ field.name | to_lower_camel_case }}: {{ m.field_from_json(field_expr, field.type, field.required, field.nullable) }},
-            {% endfor -%}
+            {%- for base in base_names %}
+            ...{{ base }}Serializer.parse(json),
+            {%- endfor %}
+            {{- m.parse_fields(type.fields, "json") }}
         };
     },
 
-    _toJsonObject(self: {{ type_name }}): any {
+    serialize(value: {{ type_name }}): any {
         return {
-            {% for field in type.fields -%}
-                {% set field_expr %}self.{{ field.name | to_lower_camel_case }}{% endset -%}
-                '{{ field.name }}': {{ m.field_to_json(field_expr, field.type, field.required, field.nullable) }},
-            {% endfor -%}
+            {%- for base in base_names %}
+            ...{{ base }}Serializer.serialize({% if overridden %}value as unknown as {{ base }}{% else %}value{% endif %}),
+            {%- endfor %}
+            {{- m.serialize_fields(type.fields, "value") }}
         };
     },
+{{ m.legacy_aliases(type_name) }}
 };

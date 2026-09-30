@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Petstore } from "../dist/index.js";
+import { Petstore } from "../dist/esm/index.js";
 
 const PET = { id: "1", name: "Rex", created_at: "2024-01-01T00:00:00Z" };
 

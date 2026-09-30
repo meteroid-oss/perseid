@@ -9,6 +9,9 @@ use itertools::Itertools as _;
 use minijinja::{State, Value, path_loader, value::Kwargs};
 use serde::Deserialize;
 
+pub(crate) mod go;
+pub(crate) mod ident;
+
 pub fn env_with_dir(
     tpl_dir: &Utf8Path,
 ) -> Result<minijinja::Environment<'static>, minijinja::Error> {
@@ -31,25 +34,36 @@ pub fn populate_env(
     });
     env.add_filter("to_snake_case", |s: Cow<'_, str>| s.to_snake_case());
     env.add_filter("to_rust_ident", |s: Cow<'_, str>| {
-        let s = s.to_snake_case();
-        match s.as_str() {
-            "as" | "break" | "const" | "continue" | "crate" | "else" | "enum" | "extern"
-            | "false" | "fn" | "for" | "if" | "impl" | "in" | "let" | "loop" | "match" | "mod"
-            | "move" | "mut" | "pub" | "ref" | "return" | "self" | "Self" | "static" | "struct"
-            | "super" | "trait" | "true" | "type" | "unsafe" | "use" | "where" | "while"
-            | "async" | "await" | "dyn" | "abstract" | "become" | "box" | "do" | "final"
-            | "macro" | "override" | "priv" | "typeof" | "unsized" | "virtual" | "yield"
-            | "try" => format!("r#{s}"),
-            _ => s,
+        ident::ident(&s, "snake", Some("rust"))
+    });
+    env.add_filter(
+        "ident",
+        |name: Cow<'_, str>, case: Cow<'_, str>, language: Option<Cow<'_, str>>| {
+            ident::ident(&name, &case, language.as_deref())
+        },
+    );
+    env.add_filter(
+        "idents",
+        |names: Vec<String>,
+         case: Cow<'_, str>,
+         language: Option<Cow<'_, str>>,
+         owner: Cow<'_, str>| { ident::idents(&names, &case, language.as_deref(), &owner) },
+    );
+    env.add_filter("go_name", |state: &State, s: Cow<'_, str>| {
+        let enabled = state
+            .lookup("sdk")
+            .and_then(|sdk| sdk.get_attr("go_initialisms").ok())
+            .is_some_and(|v| v.is_true());
+        if enabled {
+            go::initialisms(&s)
+        } else {
+            s.into_owned()
         }
     });
+    // `tojson` writes `'` as `\u0027`, which Rust string literals reject.
+    env.add_filter("rust_str", |s: Cow<'_, str>| format!("{s:?}"));
     env.add_filter("to_rust_variant", |s: Cow<'_, str>| {
-        let name = s.to_upper_camel_case();
-        if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) || name == "Self" {
-            format!("Value{name}")
-        } else {
-            name
-        }
+        ident::ident(&s, "pascal", Some("rust"))
     });
     env.add_filter("to_lower_camel_case", |s: Cow<'_, str>| {
         s.to_lower_camel_case()
@@ -105,9 +119,11 @@ pub fn populate_env(
                     }
                 }
                 "python" => {
-                    return Ok(format!(r#""""{s}""""#));
+                    return Ok(format!(r#""""{}""""#, s.replace(r#"""""#, r#"\"\"\""#)));
                 }
                 "java" | "kotlin" | "javascript" | "js" | "ts" | "typescript" | "php_class" => {
+                    // A `*/` in the text, as in a `release/*/*` glob, would end the comment.
+                    let s = s.replace("*/", "*\\/");
                     if !s.contains("\n") {
                         return Ok(format!("/** {s} */"));
                     }

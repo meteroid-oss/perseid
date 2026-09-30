@@ -272,6 +272,25 @@ fn csharp_init_and_generate_lay_out_a_dotnet_project() {
     assert!(api.contains("public Task<Pet> GetPetAsync("), "{api}");
 }
 
+#[test]
+fn csharp_names_the_streaming_operations_it_cannot_generate() {
+    let dir = project_from("features.yaml", &["csharp"]);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(!ok, "{out}");
+    for op in ["stream_events", "upload_file", "upload_content"] {
+        assert!(out.contains(op), "{op}: {out}");
+    }
+
+    let config = dir.path().join("perseid.toml");
+    let text = fs::read_to_string(&config).unwrap().replace(
+        "[csharp]\n",
+        "[csharp]\nexclude = [\"stream_events\", \"upload_file\", \"upload_content\"]\n",
+    );
+    fs::write(&config, text).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+}
+
 fn json(path: &Path) -> serde_json::Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
@@ -532,4 +551,271 @@ fn pagination_rules_apply_to_matching_operations() {
     assert!(ok && !out.contains("\"pagination\""), "{out}");
     let (ok, out) = inspect_with("[pagination]\ncursor = \"page\"\n");
     assert!(ok && !out.contains("\"pagination\""), "{out}");
+}
+
+fn operation<'a>(model: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
+    model["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|r| r["operations"].as_array().unwrap())
+        .find(|op| op["id"] == id)
+        .unwrap_or_else(|| panic!("no operation `{id}`"))
+}
+
+fn field_names(model: &serde_json::Value, ty: &str) -> Vec<String> {
+    let fields = model["types"][ty]["fields"].as_array().unwrap();
+    fields
+        .iter()
+        .map(|f| f["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn torture_fixture_generates_every_language() {
+    let langs = ["rust", "typescript", "python", "go", "java"];
+    let dir = project_from("torture.yaml", &langs);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert_eq!(
+        out.matches("schema `StringOrInt`: `oneOf`").count(),
+        1,
+        "warnings are printed once for all languages: {out}"
+    );
+
+    let (ok, model) = perseid(dir.path(), &["inspect"]);
+    assert!(ok, "{model}");
+    let model: serde_json::Value = serde_json::from_str(&model).unwrap();
+    let list = operation(&model, "list_widgets");
+    assert_eq!(list["response_body_schema_name"], "Widget");
+    assert_eq!(list["response_body_is_list"], true);
+    let derived = operation(&model, "get_v2_widgets_by_widget_id");
+    assert_eq!(derived["path_params"], serde_json::json!(["widget_id"]));
+    assert_eq!(derived["response_body_schema_name"], "Widget");
+    let update = operation(&model, "update_widget");
+    assert_eq!(update["request_body_schema_name"], "WidgetUpdate");
+    assert_eq!(update["response_body_schema_name"], "Widget");
+    let create = operation(&model, "create_widget");
+    assert_eq!(create["request_body_schema_name"], "CreateWidgetRequest");
+    assert_eq!(create["response_body_schema_name"], "CreateWidgetResponse");
+    assert_eq!(
+        operation(&model, "bulk_create_widgets")["request_body_is_list"],
+        true
+    );
+    assert_eq!(
+        operation(&model, "count_widgets")["response_body_json_type"]["id"],
+        "Map"
+    );
+    assert_eq!(
+        field_names(&model, "Composed"),
+        ["__flatten_base", "extra", "sibling_prop"]
+    );
+    assert_eq!(field_names(&model, "Nested"), ["__flatten_base", "depth"]);
+    assert_eq!(field_names(&model, "InlineEvent"), ["at"]);
+    assert_eq!(
+        field_names(&model, "CreateWidgetRequest"),
+        ["dimensions", "name", "parts"]
+    );
+    let variants: Vec<_> = model["types"]["Activity"]["variants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| {
+            (
+                v["name"].as_str().unwrap(),
+                v["schema_ref"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        variants,
+        [
+            ("opened", "Opened"),
+            ("reopened", "Opened"),
+            ("closed", "ActivityClosedVariant")
+        ]
+    );
+    for ty in ["Problem", "WidgetReactions", "CreateWidgetRequestPartsItem"] {
+        assert!(model["types"].get(ty).is_some(), "{ty} was not promoted");
+    }
+
+    let read = |path: &str| fs::read_to_string(dir.path().join(path)).unwrap();
+    let rust = read("rust/src/api/widgets.rs");
+    assert!(rust.contains("Vec<crate::models::Widget>"), "{rust}");
+    assert!(rust.contains("date_created_lt"), "{rust}");
+    let reactions = read("rust/src/models/widget_reactions.rs");
+    assert!(
+        reactions.contains("pub plus_1") && reactions.contains("pub minus_1"),
+        "{reactions}"
+    );
+    assert!(read("typescript/src/api/widgets.ts").contains("Promise<Widget[]>"));
+    assert!(read("python/torture/api/widgets.py").contains("-> list[Widget]:"));
+    let tree = read("python/torture/models/tree_node.py");
+    assert!(!tree.contains("import TreeNode"), "{tree}");
+    assert!(read("python/torture/api/class_.py").contains("class Class(ApiBaseSync)"));
+    assert!(read("go/widgets.go").contains("([]Widget, error)"));
+    assert!(read("java/src/main/java/com/torture/api/Widgets.java").contains("List<Widget>"));
+}
+
+#[test]
+fn java_types_string_aliases_as_strings() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Edge, version: "1" }
+paths:
+  /token:
+    post:
+      operationId: rotate
+      tags: [tokens]
+      parameters: [{ name: previous, in: query, schema: { $ref: "#/components/schemas/Token" } }]
+      requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } } }
+      responses:
+        "200":
+          description: ok
+          content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } }
+components:
+  schemas:
+    Token: { type: string, format: uuid }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "java"]);
+    assert!(ok, "{out}");
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let tokens = fs::read_to_string(
+        dir.path()
+            .join("java/src/main/java/com/edge/api/Tokens.java"),
+    )
+    .unwrap();
+    assert!(tokens.contains("public String rotate("), "{tokens}");
+    assert!(!tokens.contains("com.edge.models"), "{tokens}");
+    let options = dir
+        .path()
+        .join("java/src/main/java/com/edge/api/TokensRotateOptions.java");
+    let options = fs::read_to_string(options).unwrap();
+    assert!(options.contains("String previous"), "{options}");
+    assert!(!options.contains("com.edge.models"), "{options}");
+}
+
+#[test]
+fn unsupported_constructs_are_listed_with_their_operation_or_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Edge, version: "1" }
+paths:
+  /search:
+    get:
+      operationId: search
+      parameters:
+        - { name: filter, in: query, style: deepObject, schema: { type: object } }
+        - { name: session, in: cookie, schema: { type: string } }
+      responses: { "204": { description: ok } }
+  /render:
+    post:
+      requestBody: { content: { text/plain: { schema: { type: string } } } }
+      responses: { "204": { description: ok } }
+  /clash:
+    get:
+      responses:
+        "200":
+          description: ok
+          content: { application/json: { schema: { $ref: "#/components/schemas/Clash" } } }
+components:
+  schemas:
+    Clash:
+      type: object
+      properties: { type: { type: string }, "@type": { type: string } }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "rust"]);
+    assert!(ok, "{out}");
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(!ok);
+    assert!(!out.contains("panicked"), "{out}");
+    for line in [
+        "operation `search` (GET /search): query parameter `filter`: style \"deepObject\" is not supported",
+        "operation `post_render` (POST /render): request body: content type `text/plain` is not supported",
+        "schema `Clash`: `@type` and `type` both become the identifier `type`",
+    ] {
+        assert!(out.contains(line), "missing `{line}` in:\n{out}");
+    }
+}
+
+#[test]
+fn rust_models_box_recursion_and_follow_the_chrono_dependency() {
+    let dir = project_from("torture.yaml", &["rust"]);
+    let (ok, out) = perseid(dir.path(), &["generate", "rust", "--no-format"]);
+    assert!(ok, "{out}");
+    // Unformatted output, so compare without whitespace.
+    let read = |path: &str| {
+        let text = fs::read_to_string(dir.path().join("rust/src/models").join(path)).unwrap();
+        text.split_whitespace().collect::<String>()
+    };
+    let tree = read("tree_node.rs");
+    assert!(tree.contains("Option<Box<TreeNode>>"), "{tree}");
+    assert!(tree.contains("children:Vec<TreeNode>"), "{tree}");
+    assert!(read("thing.rs").contains("chrono::DateTime<chrono::Utc>"));
+    let patch = read("thing_patch.rs");
+    assert!(patch.contains("Option<Option<String>>"), "{patch}");
+    assert!(read("kind.rs").contains("Unknown(String)"));
+
+    let manifest = dir.path().join("rust/Cargo.toml");
+    let without_chrono: String = fs::read_to_string(&manifest)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.starts_with("chrono"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(&manifest, without_chrono).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "rust", "--no-format"]);
+    assert!(ok, "{out}");
+    let thing = read("thing.rs");
+    assert!(!thing.contains("chrono"), "{thing}");
+    assert!(thing.contains("pubcreated_at:String"), "{thing}");
+}
+
+#[test]
+fn typescript_int64_is_opt_in() {
+    let dir = project_from("torture.yaml", &["typescript", "go"]);
+    let config = dir.path().join("perseid.toml");
+    let original = fs::read_to_string(&config).unwrap();
+    let thing = || fs::read_to_string(dir.path().join("typescript/src/models/thing.ts")).unwrap();
+
+    let (ok, out) = perseid(dir.path(), &["generate", "typescript", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(thing().contains("count: number;"), "{}", thing());
+
+    fs::write(
+        &config,
+        original.replace("[typescript]", "[typescript]\nint64 = \"bigint\""),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "typescript", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(
+        thing().contains("count: bigint;") && thing().contains("BigInt(json[\"count\"])"),
+        "{}",
+        thing()
+    );
+
+    fs::write(
+        &config,
+        original.replace("[typescript]", "[typescript]\nint64 = \"long\""),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(!ok && out.contains("`int64` must be"), "{out}");
+
+    fs::write(
+        &config,
+        original.replace("[go]", "[go]\nint64 = \"string\""),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(
+        !ok && out.contains("only supported in [typescript]"),
+        "{out}"
+    );
 }
