@@ -34,4 +34,8 @@ import { parseDateTime } from "../datetime.js";
 {% if "isJsonObject(" in body -%}
 import { isJsonObject } from "../json.js";
 {% endif -%}
+{% set union_helpers = ["unionBestMatch", "unionHas"] | select("in", body) | list -%}
+{% if union_helpers -%}
+import { {{ union_helpers | join(", ") }} } from "../unions.js";
+{% endif -%}
 {{ body }}

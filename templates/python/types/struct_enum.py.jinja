@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, model_imports, module_name, py_ident -%}
+{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, module_name, py_ident -%}
 {#- Discriminated unions: a model holding the discriminator and the variant
     (`Shape(type="circle", content=Circle(...))`), or with `flat_unions` in
     the `[python.context]` table, the plain union `Circle | Square`. -#}
@@ -47,6 +47,13 @@ from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
 {% set runtime_names = ["FROM_CONTENT", "TaggedUnionModel", "UnknownVariant"] -%}
 {% if type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
     {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
+{% endif -%}
+{% set objects = namespace(any=false) -%}
+{% for field in type.fields if has_object_union(field.type) -%}
+    {% set objects.any = true -%}
+{% endfor -%}
+{% if objects.any -%}
+    {% set runtime_names = runtime_names + ["ObjectUnion"] -%}
 {% endif -%}
 {{ model_imports(referenced_components, runtime_names, union_refs | reject("in", [type.name]) | list) }}
 

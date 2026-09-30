@@ -13,7 +13,11 @@ import com.torture.internal.Utils;
 import com.torture.models.Activity;
 import com.torture.models.Circle;
 import com.torture.models.Composed;
+import com.torture.models.Account;
 import com.torture.models.Kind;
+import com.torture.models.ObjectUnions;
+import com.torture.models.ObjectUnions.ObjectUnionsAccount;
+import com.torture.models.ObjectUnions.ObjectUnionsDocument;
 import com.torture.models.Pet;
 import com.torture.models.Priority;
 import com.torture.models.Reserved;
@@ -186,5 +190,45 @@ class RoundTripTest {
         JsonNode json = PLAIN.readTree(composed.toJson());
         assertFalse(json.has("base"));
         assertEquals("b1", json.get("id").asText());
+    }
+
+    @ParameterizedTest
+    @CsvSource(
+            delimiter = '|',
+            value = {
+                "\"a0\"|string|a0",
+                "{\"id\":\"a1\",\"object\":\"account\",\"email\":\"e\"}|account|a1",
+                "{\"deleted\":true,\"id\":\"a2\",\"object\":\"account\"}|deleted|a2",
+                "{\"object\":\"account_v2\",\"id\":\"a3\"}|unrecognized|",
+            })
+    void unionsOfObjectsPickTheirVariant(String json, String variant, String id) throws Exception {
+        ObjectUnionsAccount account = Utils.getObjectMapper().readValue(json, ObjectUnionsAccount.class);
+        assertEquals(variant.equals("string"), account.isString());
+        assertEquals(variant.equals("account"), account.isAccount());
+        assertEquals(variant.equals("deleted"), account.isDeletedAccount());
+        assertEquals(variant.equals("unrecognized"), account.isUnrecognized());
+        assertEquals(id, account.id());
+        assertEquals(PLAIN.readTree(json), PLAIN.readTree(Utils.toJson(account)));
+    }
+
+    @Test
+    void unionsOfObjectsDecodeAsAnotherVariantAndKeepUnknownShapes() throws Exception {
+        ObjectUnionsAccount deleted = Utils.getObjectMapper()
+                .readValue("{\"deleted\":true,\"id\":\"a2\",\"object\":\"account\"}", ObjectUnionsAccount.class);
+        assertEquals("a2", deleted.decodeAs(Account.class).getId());
+
+        String json = "{\"source\":{\"file_id\":\"f\"},\"sources\":[{\"url\":\"u\",\"detail\":\"d\"},{\"path\":\"p\"}],"
+                + "\"document\":{\"title\":\"t\",\"author\":\"a\"},\"loose\":{\"title\":\"t\"}}";
+        ObjectUnions unions = ObjectUnions.fromJson(json);
+        assertTrue(unions.getSource().isFileSource());
+        assertTrue(unions.getSources().get(0).isUrlSource());
+        assertTrue(unions.getSources().get(1).isUnrecognized());
+        assertTrue(unions.getDocument().isArticle());
+        assertInstanceOf(java.util.Map.class, unions.getLoose());
+        assertEquals(PLAIN.readTree(json), PLAIN.readTree(unions.toJson()));
+        ObjectUnions draft = ObjectUnions.fromJson("{\"document\":{\"title\":\"t\"}}");
+        assertTrue(draft.getDocument().isDraft(), "ties go to the first variant");
+        ObjectUnionsDocument untitled = ObjectUnions.fromJson("{\"document\":{\"body\":\"b\"}}").getDocument();
+        assertTrue(untitled.isUnrecognized());
     }
 }

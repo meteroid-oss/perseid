@@ -95,3 +95,65 @@ func TestErrorsMatchStatusSentinelsAndDecodeBodies(t *testing.T) {
 		t.Fatal("a non-API error decoded")
 	}
 }
+
+func TestUnionsOfObjects(t *testing.T) {
+	for _, tc := range []struct {
+		in    string
+		check func(ObjectUnionsAccount) bool
+	}{
+		{`"a0"`, func(u ObjectUnionsAccount) bool { return u.ID() == "a0" }},
+		{`{"id":"a1","object":"account","email":"e"}`, func(u ObjectUnionsAccount) bool {
+			return u.Account != nil && u.DeletedAccount == nil && u.ID() == "a1"
+		}},
+		{`{"deleted":true,"id":"a2","object":"account"}`, func(u ObjectUnionsAccount) bool {
+			return u.DeletedAccount != nil && u.Account == nil && u.ID() == "a2"
+		}},
+		{`{"object":"account_v2","id":"a3"}`, func(u ObjectUnionsAccount) bool {
+			return u.Account == nil && u.DeletedAccount == nil && string(u.Raw()) == `{"object":"account_v2","id":"a3"}`
+		}},
+	} {
+		var u ObjectUnionsAccount
+		if err := json.Unmarshal([]byte(tc.in), &u); err != nil || !tc.check(u) {
+			t.Fatalf("%s: %+v %v", tc.in, u, err)
+		}
+		out, err := json.Marshal(u)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, string(out), tc.in)
+	}
+
+	var deleted ObjectUnionsAccount
+	if err := json.Unmarshal([]byte(`{"deleted":true,"id":"a2","object":"account"}`), &deleted); err != nil {
+		t.Fatal(err)
+	}
+	var account Account
+	if err := deleted.As(&account); err != nil || account.ID != "a2" {
+		t.Fatalf("%+v %v", account, err)
+	}
+
+	var unions ObjectUnions
+	in := `{"source":{"file_id":"f"},"sources":[{"url":"u","detail":"d"},{"path":"p"}],"document":{"title":"t","author":"a"},"loose":{"title":"t"}}`
+	if err := json.Unmarshal([]byte(in), &unions); err != nil {
+		t.Fatal(err)
+	}
+	if unions.Source.FileSource == nil || unions.Sources[0].URLSource == nil || string(unions.Sources[1].Raw()) != `{"path":"p"}` {
+		t.Fatalf("%+v", unions)
+	}
+	if unions.Document.Article == nil || string(unions.Loose) != `{"title":"t"}` {
+		t.Fatalf("%+v", unions)
+	}
+	out, err := json.Marshal(unions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, string(out), in)
+
+	var draft, untitled ObjectUnionsDocument
+	if json.Unmarshal([]byte(`{"title":"t"}`), &draft) != nil || draft.Draft == nil {
+		t.Fatalf("ties go to the first variant: %+v", draft)
+	}
+	if json.Unmarshal([]byte(`{"body":"b"}`), &untitled) != nil || untitled.Draft != nil || untitled.Article != nil {
+		t.Fatalf("%+v", untitled)
+	}
+}

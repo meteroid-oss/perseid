@@ -66,7 +66,7 @@
 
 {% macro go_union_field(variant) -%}
     {%- set field = variant.name | ident("pascal", "go") | go_name -%}
-    {{ field ~ ("Variant" if field in ["Raw", "MarshalJSON", "UnmarshalJSON"] else "") }}
+    {{ field ~ ("Variant" if field in ["Raw", "MarshalJSON", "UnmarshalJSON", "As", "ID", "Id"] else "") }}
 {%- endmacro %}
 
 {#- The declaration of the union `name` found in `ty`: one pointer per variant,
@@ -78,10 +78,23 @@
 {{ go_union(name, ty.value_type()) }}
 {%- else -%}
 {%- set variants = ty.union_variants() %}
+{%- set objects = ty.union_mode() != "json" %}
 // {{ name }} is one of {% for v in variants %}{% if not loop.first %}{{ " or " if loop.last else ", " }}{% endif %}{% if v.empty %}the empty string{% elif v.type.is_schema_ref() %}{{ go_article(go_type(v.type)) }} [{{ go_type(v.type) }}]{% else %}{{ "an" if v.name[0] in "aeiou" else "a" }} {{ v.name | replace("_", " ") }}{% endif %}{% endfor %}.
 //
 // At most one field is set, and the zero value encodes as null. A value of
 // another JSON type, from a newer API version, is kept as [{{ name }}.Raw].
+{%- if objects %}
+{%- if ty.union_mode() == "rules" %}
+// An object is the first variant whose conditions it meets:
+{%- for v in ty.object_variants() %}
+//   - {{ go_union_field(v) }}: {% for c in v.when %}{% if not loop.first %} and {% endif %}{{ c.property }} {% if c.value is defined %}is {{ c.value | tojson }}{% else %}is present{% endif %}{% else %}any object{% endfor %}
+{%- endfor %}
+{%- else %}
+// An object is the variant whose required properties are all present and which
+// has the most of its properties, the first one on ties.
+{%- endif %}
+// An object that no variant decodes is kept as Raw too.
+{%- endif %}
 type {{ name }} struct {
 {% for v in variants %}{% if v.empty %}	// {{ go_union_field(v) }} reports the empty string.
 	{{ go_union_field(v) }} bool
@@ -105,6 +118,31 @@ func (u {{ name }}) Raw() json.RawMessage {
 	return append(json.RawMessage(nil), u.raw...)
 }
 
+{% if objects %}
+// As decodes the value into target, such as another variant than the one
+// decoding picked.
+func (u {{ name }}) As(target any) error {
+	data, err := u.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, target)
+}
+{% endif %}
+{% set strings = variants | selectattr("name", "equalto", "string") | list -%}
+{% set expanded = variants | selectattr("id") | list -%}
+{% if strings and expanded %}
+// ID returns the string, or the id of the expanded object; "" for other values.
+func (u {{ name }}) ID() string {
+	switch {
+	case u.{{ go_union_field(strings[0]) }} != nil:
+		return *u.{{ go_union_field(strings[0]) }}
+{% for v in expanded %}{% set f = "u." ~ go_union_field(v) %}{% set id = f ~ "." ~ go_export("id") %}	case {{ f }} != nil{% if v.id == "optional" %} && {{ id }} != nil{% endif %}:
+		return {% if v.id == "optional" %}*{% endif %}{{ id }}
+{% endfor %}	}
+	return ""
+}
+{% endif %}
 // MarshalJSON implements json.Marshaler.
 func (u {{ name }}) MarshalJSON() ([]byte, error) {
 	switch {
@@ -122,7 +160,24 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
 	switch jsonKind(data) {
 	case "null":
 		return nil
-{% for v in variants %}	case "{{ "number" if v.json_type == "integer" else v.json_type }}":
+{% if objects %}	case "object":
+{% set candidates = ty.object_variants() %}{% if ty.union_mode() == "rules" %}		switch {
+{% for v in candidates %}		case {% if v.when %}unionMatches(data{% for c in v.when %}, unionCondition{ {{ c.property | tojson }}, {{ (c.value | tojson | tojson) if c.value is defined else '""' }} }{% endfor %}){% else %}true{% endif %}:
+			if json.Unmarshal(data, &u.{{ go_union_field(v) }}) == nil {
+				return nil
+			}
+			u.{{ go_union_field(v) }} = nil
+{% endfor %}		}
+{% else %}		switch unionBestMatch(data{% for v in candidates %},
+			[2][]string{ { {% for p in v.required %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %} }, { {% for p in v.properties %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %} } }{% endfor %},
+		) {
+{% for v in candidates %}		case {{ loop.index0 }}:
+			if json.Unmarshal(data, &u.{{ go_union_field(v) }}) == nil {
+				return nil
+			}
+			u.{{ go_union_field(v) }} = nil
+{% endfor %}		}
+{% endif %}{% endif %}{% for v in variants if not (objects and v.json_type == "object") %}	case "{{ "number" if v.json_type == "integer" else v.json_type }}":
 {% if v.empty %}		if string(data) == `""` {
 			u.{{ go_union_field(v) }} = true
 			return nil

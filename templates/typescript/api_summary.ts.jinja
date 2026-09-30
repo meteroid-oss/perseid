@@ -39,6 +39,9 @@ export type {{ sdk.client_name }}ErrorBody = unknown;
 export type { XOR } from "./util.js";
 export type { Middleware } from "./middleware.js";
 export { parseJson, stringifyJson } from "./json.js";
+{% if sdk.typed_unions -%}
+export { expandableId } from "./unions.js";
+{% endif -%}
 export { LIB_VERSION, type RequestOptions } from "./request.js";
 {% for module in sdk.extra_exports | default([]) -%}
 export * from "./{{ module }}.js";

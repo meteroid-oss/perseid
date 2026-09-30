@@ -828,6 +828,8 @@ components:
           $ref: '#/components/schemas/CatOrDog'
         any_of:
           $ref: '#/components/schemas/AnyOfThing'
+        map_or_address:
+          $ref: '#/components/schemas/MapOrAddress'
         inline_union:
           oneOf:
           - type: string
@@ -842,6 +844,122 @@ components:
           $ref: '#/components/schemas/StringMap'
         nested:
           $ref: '#/components/schemas/Nested'
+        objects:
+          $ref: '#/components/schemas/ObjectUnions'
+    # Unions of several objects without a discriminator.
+    Account:
+      type: object
+      required:
+      - id
+      - object
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          enum:
+          - account
+        email:
+          type: string
+    DeletedAccount:
+      type: object
+      required:
+      - deleted
+      - id
+      - object
+      properties:
+        deleted:
+          type: boolean
+          enum:
+          - true
+        id:
+          type: string
+        object:
+          type: string
+          enum:
+          - account
+    UrlSource:
+      type: object
+      required:
+      - url
+      properties:
+        url:
+          type: string
+        detail:
+          type: string
+    FileSource:
+      type: object
+      required:
+      - file_id
+      properties:
+        file_id:
+          type: string
+        detail:
+          type: string
+    Draft:
+      type: object
+      required:
+      - title
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+    Article:
+      type: object
+      required:
+      - title
+      properties:
+        title:
+          type: string
+        body:
+          type: string
+        published_at:
+          type: string
+          format: date-time
+        author:
+          type: string
+    Document:
+      oneOf:
+      - $ref: '#/components/schemas/Draft'
+      - $ref: '#/components/schemas/Article'
+    ObjectUnions:
+      type: object
+      properties:
+        account:
+          anyOf:
+          - type: string
+          - $ref: '#/components/schemas/Account'
+          - $ref: '#/components/schemas/DeletedAccount'
+        source:
+          oneOf:
+          - $ref: '#/components/schemas/UrlSource'
+          - $ref: '#/components/schemas/FileSource'
+        sources:
+          type: array
+          items:
+            oneOf:
+            - $ref: '#/components/schemas/UrlSource'
+            - $ref: '#/components/schemas/FileSource'
+        document:
+          x-perseid-union: best-match
+          oneOf:
+          - $ref: '#/components/schemas/Draft'
+          - $ref: '#/components/schemas/Article'
+        loose:
+          $ref: '#/components/schemas/Document'
+        raw_account:
+          x-perseid-union: json
+          anyOf:
+          - type: string
+          - $ref: '#/components/schemas/Account'
+          - $ref: '#/components/schemas/DeletedAccount'
+    MapOrAddress:
+      anyOf:
+      - type: object
+        additionalProperties:
+          type: string
+      - $ref: '#/components/schemas/Address'
     TreeNode:
       type: object
       required:

@@ -85,6 +85,38 @@ describe("models", () => {
     assert.equal(sdk.CircleSerializer.parse({ radius: 1 }).type, "circle");
   });
 
+  it("picks the variant of a union of objects and keeps unknown shapes", () => {
+    const parse = (value) => sdk.ObjectUnionsSerializer.parse(value);
+    const account = parse({ account: { id: "a1", object: "account", email: "e" } }).account;
+    const deleted = parse({ account: { deleted: true, id: "a2", object: "account" } }).account;
+    const unknown = { object: "account_v2", id: "a3" };
+    assert.ok("email" in account && !("deleted" in account));
+    assert.equal(deleted.deleted, true);
+    assert.ok(!("email" in deleted));
+    assert.deepEqual(parse({ account: unknown }).account, unknown);
+    assert.equal(sdk.expandableId(deleted), "a2");
+    assert.equal(sdk.expandableId(parse({ account: "a0" }).account), "a0");
+
+    const unions = parse({
+      source: { file_id: "f" },
+      sources: [{ url: "u", detail: "d" }, { path: "p" }],
+      document: { title: "t", author: "a" },
+      loose: { title: "t" },
+    });
+    assert.equal(unions.source.fileId, "f");
+    assert.deepEqual(unions.sources[1], { path: "p" });
+    assert.ok("publishedAt" in unions.document);
+    assert.ok(!("author" in parse({ document: { title: "t" } }).document), "ties go to the first variant");
+    assert.deepEqual(parse({ document: { body: "b" } }).document, { body: "b" });
+    for (const text of [
+      '{"account":{"deleted":true,"id":"a2","object":"account"}}',
+      '{"account":{"object":"account_v2","id":"a3"},"sources":[{"file_id":"f"},{"path":"p"}]}',
+      '{"source":{"url":"u"},"document":{"title":"t","author":"a"},"loose":{"title":"t"}}',
+    ]) {
+      assert.deepEqual(roundTrip("ObjectUnions", text), sdk.parseJson(text));
+    }
+  });
+
   it("sends explicit nulls to clear nullable fields", () => {
     assert.deepEqual(sdk.ThingPatchSerializer.serialize({ description: null, count: null }), {
       name: undefined,

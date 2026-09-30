@@ -1,9 +1,13 @@
-{% from "types/macros.py.jinja" import docstring, module_name, py_type -%}
+{% from "types/macros.py.jinja" import docstring, has_object_union, module_name, py_type -%}
 from __future__ import annotations
 
 import typing as t
 from datetime import datetime
 from decimal import Decimal
+{% if has_object_union(type.target) %}
+from ..serialization import UnknownVariant
+from ..unions import ObjectUnion
+{% endif -%}
 {% for c in (referenced_components | list) + (union_refs | reject("in", (referenced_components | list) + [type.name]) | sort | list) %}
 from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
 {%- endfor %}

@@ -46,7 +46,9 @@
     `t.Any`, as its value may be a list, a scalar or `null` too. A union told
     apart by JSON type is `str | Customer`, its `""` variant `t.Literal[""]`. -#}
 {% macro py_type(ty) -%}
-    {%- if ty.is_union() -%}
+    {%- if ty.is_union() and ty.union_mode() != "json" -%}
+        t.Annotated[{% for variant in ty.union_variants() %}{% if variant.empty %}t.Literal[""]{% else %}{{ py_type(variant.type) }}{% endif %} | {% endfor %}UnknownVariant, {{ object_union(ty) }}]
+    {%- elif ty.is_union() -%}
         {%- for variant in ty.union_variants() -%}
             {%- if not loop.first %} | {% endif -%}
             {%- if variant.empty %}t.Literal[""]{% else %}{{ py_type(variant.type) }}{% endif -%}
@@ -59,6 +61,38 @@
         dict[str, {{ py_type(ty.value_type()) }}]
     {%- else -%}
         {{ ty.to_python() }}
+    {%- endif -%}
+{%- endmacro %}
+
+{#- The `ObjectUnion` metadata telling apart the object variants of `ty`. -#}
+{% macro object_union(ty) -%}
+    {%- macro literal(value) -%}
+        {%- set j = value | tojson -%}
+        {%- if j == "true" %}True{% elif j == "false" %}False{% else %}{{ j }}{% endif -%}
+    {%- endmacro -%}
+    {%- set others -%}
+        {%- for variant in ty.union_variants() if variant.json_type != "object" -%}
+            {%- if not loop.first %} | {% endif -%}
+            {%- if variant.empty %}t.Literal[""]{% else %}{{ py_type(variant.type) }}{% endif -%}
+        {%- endfor -%}
+    {%- endset -%}
+    {%- set others = others ~ ", " if others else "" -%}
+    {%- if ty.union_mode() == "rules" -%}
+        ObjectUnion({{ others }}when=[{% for v in ty.object_variants() %}({{ py_type(v.type) }}, { {%- for c in v.when %}{{ c.property | tojson }}: {% if c.value is defined %}{{ literal(c.value) }}{% else %}...{% endif %}{% if not loop.last %}, {% endif %}{% endfor -%} }){% if not loop.last %}, {% endif %}{% endfor %}])
+    {%- else -%}
+        ObjectUnion({{ others }}best_match=[{% for v in ty.object_variants() %}({{ py_type(v.type) }}, ({% for p in v.required %}{{ p | tojson }}{% if not loop.last %}, {% elif loop.length == 1 %},{% endif %}{% endfor %}), ({% for p in v.properties %}{{ p | tojson }}{% if not loop.last %}, {% elif loop.length == 1 %},{% endif %}{% endfor %})){% if not loop.last %}, {% endif %}{% endfor %}])
+    {%- endif -%}
+{%- endmacro %}
+
+{#- "1" when `ty` holds a union of several objects, directly or in collections. -#}
+{% macro has_object_union(ty) -%}
+    {%- if ty.is_union() -%}
+        {%- if ty.union_mode() != "json" %}1{% endif -%}
+        {%- for v in ty.union_variants() %}{{ has_object_union(v.type) }}{% endfor -%}
+    {%- elif ty.is_list() or ty.is_set() -%}
+        {{ has_object_union(ty.inner_type()) }}
+    {%- elif ty.is_map() -%}
+        {{ has_object_union(ty.value_type()) }}
     {%- endif -%}
 {%- endmacro %}
 
@@ -97,7 +131,10 @@ import typing as t
 from datetime import datetime
 from decimal import Decimal
 
-from ..serialization import {{ runtime_names | sort | join(", ") }}
+from ..serialization import {{ runtime_names | reject("equalto", "ObjectUnion") | sort | join(", ") }}
+{%- if "ObjectUnion" in runtime_names %}
+from ..unions import ObjectUnion
+{%- endif %}
 {%- if referenced_components | length > 0 %}
 
 if t.TYPE_CHECKING:

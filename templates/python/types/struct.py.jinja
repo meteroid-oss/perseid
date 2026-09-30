@@ -1,9 +1,16 @@
-{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, model_imports, py_ident -%}
+{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, py_ident -%}
 {#- A union variant's discriminator defaults to its tag: `Circle(radius=1)`. -#}
 {% set defaults = type.discriminator_defaults if type.discriminator_defaults is defined else {} -%}
 {% set runtime_names = ["BaseModel"] -%}
 {% if type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
     {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
+{% endif -%}
+{% set objects = namespace(any=false) -%}
+{% for field in type.fields if has_object_union(field.type) -%}
+    {% set objects.any = true -%}
+{% endfor -%}
+{% if objects.any -%}
+    {% set runtime_names = runtime_names + ["ObjectUnion", "UnknownVariant"] -%}
 {% endif -%}
 {{ model_imports(referenced_components, runtime_names, union_refs | reject("in", [type.name]) | list) }}
 

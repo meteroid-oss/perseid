@@ -155,4 +155,50 @@ public class RoundTripTests
         Assert.True(raw.GetProperty("x").GetBoolean());
         Assert.Contains("\"str_or_int\":{\"x\":true}", JsonSerializer.Serialize(unknown, Context.UnionHolder));
     }
+
+    [Theory]
+    [InlineData("\"a0\"", "string", "a0")]
+    [InlineData("""{"id":"a1","object":"account","email":"e"}""", "account", "a1")]
+    [InlineData("""{"deleted":true,"id":"a2","object":"account"}""", "deleted", "a2")]
+    [InlineData("""{"object":"account_v2","id":"a3"}""", "unrecognized", null)]
+    public void UnionsOfObjectsPickTheirVariant(string json, string variant, string? id)
+    {
+        var account = JsonSerializer.Deserialize(json, Context.ObjectUnionsAccount)!;
+        var picked = account switch
+        {
+            ObjectUnionsAccount.String => "string",
+            ObjectUnionsAccount.Account => "account",
+            ObjectUnionsAccount.DeletedAccount => "deleted",
+            ObjectUnionsAccount.Unrecognized => "unrecognized",
+            _ => "?",
+        };
+        Assert.Equal(variant, picked);
+        Assert.Equal(id, account.Id);
+        AssertRoundTrip(Context.ObjectUnionsAccount, json);
+    }
+
+    [Fact]
+    public void UnionsOfObjectsDecodeAsAnotherVariantAndKeepUnknownShapes()
+    {
+        var deleted = JsonSerializer.Deserialize(
+            """{"deleted":true,"id":"a2","object":"account"}""",
+            Context.ObjectUnionsAccount
+        )!;
+        Assert.Equal("a2", deleted.DecodeAs(Context.Account).Id);
+
+        const string json = """
+            {"source":{"file_id":"f"},"sources":[{"url":"u","detail":"d"},{"path":"p"}],
+            "document":{"title":"t","author":"a"},"loose":{"title":"t"}}
+            """;
+        var unions = JsonSerializer.Deserialize(json, Context.ObjectUnions)!;
+        Assert.IsType<ObjectUnionsSource.FileSource>(unions.Source);
+        Assert.IsType<ObjectUnionsSources.UrlSource>(unions.Sources![0]);
+        Assert.IsType<ObjectUnionsSources.Unrecognized>(unions.Sources[1]);
+        Assert.IsType<ObjectUnionsDocument.Article>(unions.Document);
+        AssertRoundTrip(Context.ObjectUnions, json);
+        var draft = JsonSerializer.Deserialize("""{"title":"t"}""", Context.ObjectUnionsDocument);
+        Assert.IsType<ObjectUnionsDocument.Draft>(draft);
+        var untitled = JsonSerializer.Deserialize("""{"body":"b"}""", Context.ObjectUnionsDocument);
+        Assert.IsType<ObjectUnionsDocument.Unrecognized>(untitled);
+    }
 }

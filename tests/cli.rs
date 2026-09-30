@@ -686,13 +686,71 @@ fn real_world_constructs_generate_every_language() {
 }
 
 #[test]
+fn unions_of_objects_follow_untagged_unions_and_x_perseid_union() {
+    let dir = project_from("torture.yaml", &["rust"]);
+    let generate = || {
+        let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+        assert!(ok, "{out}");
+        out
+    };
+    let read = |model: &str| {
+        let path = dir.path().join(format!("rust/src/models/{model}.rs"));
+        fs::read_to_string(path)
+            .unwrap()
+            .split_whitespace()
+            .collect::<String>()
+    };
+    let out = generate();
+    assert!(
+        out.contains("decoded as their best-matching variant: 1"),
+        "{out}"
+    );
+    assert!(out.contains("left as untyped JSON: 1"), "{out}");
+    let unions = read("object_unions");
+    for text in [
+        "pubenumObjectUnionsAccount",
+        "has(&value,\"deleted\",Some(serde_json::json!(true)))",
+        "pubenumObjectUnionsDocument",
+        "pubraw_account:Option<serde_json::Value>",
+    ] {
+        assert!(unions.contains(text), "no `{text}` in {unions}");
+    }
+    assert!(read("document").contains("pubtypeDocument=serde_json::Value;"));
+
+    edit_config(dir.path(), |text| {
+        format!("untagged_unions = \"best-match\"\n{text}")
+    });
+    let out = generate();
+    assert!(
+        out.contains("decoded as their best-matching variant: 2"),
+        "{out}"
+    );
+    assert!(!out.contains("left as untyped JSON"), "{out}");
+    assert!(read("document").contains("best_match(&value,"));
+
+    edit_config(dir.path(), |text| {
+        text.replace("[rust]\n", "[rust]\nuntagged_unions = \"json\"\n")
+    });
+    assert!(generate().contains("left as untyped JSON: 1"));
+
+    edit_config(dir.path(), |text| text.replace("typed_unions = true\n", ""));
+    let out = generate();
+    assert!(!out.contains("best-matching"), "{out}");
+    assert!(read("object_unions").contains("pubaccount:Option<serde_json::Value>"));
+
+    edit_config(dir.path(), |text| text.replace("\"json\"", "\"guess\""));
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(!ok && out.contains("guess"), "{out}");
+}
+
+#[test]
 fn torture_fixture_generates_every_language() {
     let langs = ["rust", "typescript", "python", "go", "java", "csharp"];
     let dir = project_from("torture.yaml", &langs);
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
     assert_eq!(
-        out.matches("schema `CatOrDog`: `oneOf`").count(),
+        out.matches("schema `MapOrAddress`: `oneOf`").count(),
         1,
         "warnings are printed once for all languages: {out}"
     );
@@ -1076,7 +1134,19 @@ fn primitive_or_object_unions_are_modelled() {
         variants("amount"),
         [pair("integer", "integer"), pair("empty", "string")]
     );
-    assert_eq!(field("source")["id"], "JsonObject");
+    assert_eq!(
+        variants("source"),
+        [
+            pair("string", "string"),
+            pair("customer", "object"),
+            pair("upload", "object")
+        ]
+    );
+    assert_eq!(field("source")["mode"], "rules");
+    assert_eq!(
+        field("source")["variants"][1]["when"],
+        serde_json::json!([{"property": "object", "value": "customer"}])
+    );
     assert!(model["types"]["ChargeShipping"].is_object());
 }
 
@@ -1175,6 +1245,7 @@ fn rust_unions_and_tag_defaults_are_typed_when_init_opts_in() {
     let dir = project_named_by_resource("realworld.yaml", &["rust"]);
     let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
     assert!(config.contains("[rust]\ntyped_unions = true"), "{config}");
+    assert!(!config.contains("untagged_unions"), "{config}");
     let charge = || {
         let (ok, out) = perseid(dir.path(), &["generate", "rust", "--no-format"]);
         assert!(ok, "{out}");
@@ -1260,7 +1331,7 @@ fn typescript_types_unions_errors_and_the_default_timeout() {
         "customer: string | Customer | null;",
         "amount?: number | \"\";",
         "shipping?: ChargeShipping | \"\";",
-        "source?: unknown;",
+        "source?: string | Customer | UploadModel;",
     ] {
         assert!(charge.contains(decl), "no `{decl}` in {charge}");
     }

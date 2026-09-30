@@ -5,6 +5,7 @@ pub(crate) mod resources;
 pub(crate) mod security;
 pub(crate) mod struct_enum;
 pub(crate) mod types;
+pub(crate) mod unions;
 
 use aide::openapi;
 use anyhow::ensure;
@@ -154,6 +155,18 @@ impl Api {
 
     pub(crate) fn untype_unions(&mut self) {
         types::untype_unions(&mut self.types);
+    }
+
+    /// Settles the unions of several objects for the SDK of context `sdk`: untyped JSON
+    /// without typed unions, and those without rules unless best match is on. Returns how
+    /// many are decided by best match and how many best match would type.
+    pub(crate) fn settle_object_unions(&mut self, sdk: &serde_json::Value) -> (usize, usize) {
+        let typed = match sdk["edition"].as_u64() {
+            Some(edition) => edition >= 2,
+            None => sdk["typed_unions"].as_bool().unwrap_or(false),
+        };
+        let best_match = sdk["untagged_unions"].as_str() == Some("best-match");
+        types::settle_object_unions(&mut self.types, typed, best_match)
     }
 
     pub(crate) fn inline_flattened_fields(&mut self) -> anyhow::Result<()> {

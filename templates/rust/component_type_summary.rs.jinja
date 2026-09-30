@@ -3,6 +3,10 @@
 
 #[path = "../codec.rs"]
 pub(crate) mod codec;
+{% if sdk.typed_unions %}
+#[path = "../unions.rs"]
+pub(crate) mod union_rules;
+{% endif %}
 
 {% for _, type in api.types | items -%}
     pub mod {{ type.name | to_rust_ident }};
@@ -63,22 +67,24 @@ pub use self::{{ module }}::{{ nested }};
 {%- endmacro %}
 {% macro expandable_id(module, union, ty) -%}
 {% set variants = ty.union_variants() -%}
-{% set refs = variants | selectattr("json_type", "equalto", "object") | list -%}
-{% if variants | selectattr("name", "equalto", "string") | list and refs and refs[0].type.is_schema_ref() -%}
-{% set required = refs[0].name ~ ":required" in ids.all -%}
-{% if required or refs[0].name ~ ":optional" in ids.all %}
+{% set refs = namespace(list=[]) -%}
+{% for v in variants if v.json_type == "object" and v.type.is_schema_ref() -%}
+{% if v.name ~ ":required" in ids.all %}{% set refs.list = refs.list + [(v, true)] %}{% elif v.name ~ ":optional" in ids.all %}{% set refs.list = refs.list + [(v, false)] %}{% endif -%}
+{% endfor -%}
+{% if variants | selectattr("name", "equalto", "string") | list and refs.list %}
 
 impl {{ module }}::{{ union }} {
     /// The id of the object, expanded or not.
     pub fn id(&self) -> Option<&str> {
         match self {
             Self::String(id) => Some(id.as_str()),
-            Self::{{ refs[0].name | to_upper_camel_case }}(object) => {% if required %}Some(object.id.as_str()){% else %}object.id.as_deref(){% endif %},
+            {% for v, required in refs.list -%}
+            Self::{{ v.name | to_upper_camel_case }}(object) => {% if required %}Some(object.id.as_str()){% else %}object.id.as_deref(){% endif %},
+            {% endfor -%}
             _ => None,
         }
     }
 }
-{% endif -%}
 {% endif -%}
 {%- endmacro %}
 

@@ -173,6 +173,7 @@ public String toString() {
 {{ union_class(ty.value_type(), cls, shadowed) }}
 {%- else -%}
 {% set variants = ty.union_variants() -%}
+{% set objects = ty.union_mode() != "json" -%}
 {% set pascals = variants | map(attribute="name") | list | idents("pascal", "java", "union `" ~ cls ~ "`") -%}
 {% set ns = namespace(types=[]) -%}
 {% for v in variants -%}
@@ -190,6 +191,22 @@ public String toString() {
 /**
  * One of {% for v in variants %}{% if not loop.first %}{{ ", " if not loop.last else " or " }}{% endif %}{% if v.empty %}{@code ""}{% elif v.type.is_schema_ref() %}{@link {{ ns.types[loop.index0] }}}{% else %}a JSON {{ v.json_type }}{% endif %}{% endfor %}, told apart
  * by JSON type: {@code of...} builds one, {@code is...} and {@code as...} read it.
+{%- if objects %}
+ *
+{%- if ty.union_mode() == "rules" %}
+ * <p>An object is the first variant whose conditions it meets:
+ * <ul>
+{%- for v in ty.object_variants() %}
+ *   <li>{@link Of{{ v.name | to_upper_camel_case }}}: {% for c in v.when %}{% if not loop.first %} and {% endif %}{@code {{ c.property }}} {% if c.value is defined %}is {@code {{ c.value | tojson | replace("@", "&#64;") }}}{% else %}is present{% endif %}{% else %}any object{% endfor %}
+{%- endfor %}
+ * </ul>
+{%- else %}
+ * <p>An object is the variant whose required properties are all present and which has the
+ * most of its properties, the first one on ties.
+{%- endif %}
+ * An object no variant decodes is {@link Unrecognized}, kept as received; {@link #decodeAs}
+ * reads the value as another variant.
+{%- endif %}
  */
 @JsonDeserialize(using = {{ cls }}.Deserializer.class)
 public abstract static class {{ cls }} {
@@ -230,6 +247,64 @@ public abstract static class {{ cls }} {
     }
     {% endif -%}
     {% endfor %}
+    {% set strings = variants | selectattr("name", "equalto", "string") | list -%}
+    {% set expanded = variants | selectattr("id") | list -%}
+    {% if strings and expanded %}
+
+    /** The id: the string, or the {@code id} of the expanded object; null for other values. */
+    public String id() {
+        {% for v in variants -%}
+        {% if v.name == "string" or v.id -%}
+        if (this instanceof Of{{ pascals[loop.index0] }}) {
+            return ((Of{{ pascals[loop.index0] }}) this).value{% if v.id %}.getId(){% endif %};
+        }
+        {% endif -%}
+        {% endfor -%}
+        return null;
+    }
+    {% endif %}
+    {% if objects %}
+
+    /** Whether no variant matched the value, kept as received. */
+    public boolean isUnrecognized() {
+        return this instanceof Unrecognized;
+    }
+
+    /** The value read as {@code type}, such as another variant than the one decoding picked. */
+    public <T> T decodeAs(Class<T> type) {
+        return {{ sdk.java_internal_package }}.Unions.convert(this, type);
+    }
+
+    /** A value no variant matches, kept as received. */
+    public static final class Unrecognized extends {{ cls }} {
+        private final JsonNode value;
+
+        private Unrecognized(JsonNode value) {
+            this.value = value;
+        }
+
+        @Override
+        @JsonValue
+        public JsonNode getValue() {
+            return value;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof Unrecognized && value.equals(((Unrecognized) o).value);
+        }
+
+        @Override
+        public int hashCode() {
+            return value.hashCode();
+        }
+
+        @Override
+        public String toString() {
+            return "{{ cls }}.Unrecognized{" + value + "}";
+        }
+    }
+    {% endif %}
     {% for v in variants -%}
     {% set p = pascals[loop.index0] -%}
     {% set t = ns.types[loop.index0] -%}
@@ -303,9 +378,33 @@ public abstract static class {{ cls }} {
 
         @Override
         protected {{ cls }} decode(JsonNode node, DeserializationContext ctxt) throws IOException {
+            {% if objects -%}
+            if (node.isObject()) {
+                {% set candidates = ty.object_variants() -%}
+                {% if ty.union_mode() == "rules" -%}
+                {% for v in candidates -%}
+                if ({% for c in v.when %}{{ sdk.java_internal_package }}.Unions.has(node, {{ c.property | tojson }}, {{ (c.value | tojson | tojson) if c.value is defined else "null" }}){% if not loop.last %} && {% endif %}{% else %}true{% endfor %}) {
+                    return objectVariant(node, ctxt, {{ v.name | tojson }});
+                }
+                {% endfor -%}
+                return new Unrecognized(node);
+                {% else -%}
+                switch ({{ sdk.java_internal_package }}.Unions.bestMatch(node{% for v in candidates %},
+                        new String[][] { { {% for p in v.required %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %} }, { {% for p in v.properties %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %} } }{% endfor %})) {
+                    {% for v in candidates -%}
+                    case {{ loop.index0 }}:
+                        return objectVariant(node, ctxt, {{ v.name | tojson }});
+                    {% endfor -%}
+                    default:
+                        return new Unrecognized(node);
+                }
+                {% endif -%}
+            }
+            {% endif -%}
             {% for v in variants -%}
             {% set p = pascals[loop.index0] -%}
-            {% if v.empty -%}
+            {% if objects and v.json_type == "object" -%}
+            {% elif v.empty -%}
             if (node.isTextual() && node.textValue().isEmpty()) {
                 return Empty.INSTANCE;
             }
@@ -316,8 +415,27 @@ public abstract static class {{ cls }} {
             }
             {% endif -%}
             {% endfor -%}
-            return null;
+            return {{ "new Unrecognized(node)" if objects else "null" }};
         }
+        {% if objects %}
+
+        private static {{ cls }} objectVariant(JsonNode node, DeserializationContext ctxt, String variant) {
+            try {
+                switch (variant) {
+                    {% for v in variants -%}
+                    {% if v.json_type == "object" -%}
+                    case {{ v.name | tojson }}:
+                        return new Of{{ pascals[loop.index0] }}(read(node, ctxt, new TypeReference<{{ ns.types[loop.index0] }}>() {}));
+                    {% endif -%}
+                    {% endfor -%}
+                    default:
+                        return new Unrecognized(node);
+                }
+            } catch (IOException e) {
+                return new Unrecognized(node);
+            }
+        }
+        {% endif %}
     }
 }
 {% endif -%}

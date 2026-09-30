@@ -65,6 +65,7 @@ Box<{{ ty.to_rust() }}>
 {% set variants = ty.union_variants() -%}
 {% set names = variants | map(attribute="name") | map("to_upper_camel_case") | list -%}
 {% set unknown = unknown_variant(names) -%}
+{% set objects = ty.union_mode() != "json" -%}
 
 /// One of {% for variant in variants %}{% if not loop.first %}{% if loop.last %} or {% else %}, {% endif %}{% endif %}{% if variant.empty %}`""`{% elif variant.type.is_schema_ref() %}[`{{ variant.type.to_rust() }}`]{% else %}{{ variant.json_type }}{% endif %}{% endfor %}.
 #[derive(Clone, Debug, {% if variants[0].empty %}Default, {% endif %}PartialEq)]
@@ -80,7 +81,7 @@ pub enum {{ name }} {
     {{ variant.name | to_upper_camel_case }}({{ variant_payload(name, variant) }}),
     {% endif -%}
     {% endfor -%}
-    /// A value of another JSON type, as received.
+    /// A value of another JSON type{% if objects %}, or an object no variant matches{% endif %}, as received.
     {{ unknown }}(serde_json::Value),
 }
 
@@ -116,6 +117,13 @@ impl {{ name }} {
     }
     {% endif -%}
     {% endfor -%}
+    {% if objects %}
+
+    /// The value read as `T`, such as another variant than the one decoding picked.
+    pub fn decode_as<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
+        serde_json::to_value(self).and_then(serde_json::from_value)
+    }
+    {% endif -%}
 }
 
 {% if not variants[0].empty -%}
@@ -161,7 +169,10 @@ impl<'de> serde::Deserialize<'de> for {{ name }} {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
         Ok(match crate::models::codec::json_type(&value) {
-            {% for variant in variants -%}
+            {% if objects -%}
+            "object" => {{ pick_object(ty, unknown) }},
+            {% endif -%}
+            {% for variant in variants if not (objects and variant.json_type == "object") -%}
             {% set v = variant.name | to_upper_camel_case -%}
             {% if variant.empty -%}
             "empty" => Self::{{ v }},
@@ -180,6 +191,39 @@ impl<'de> serde::Deserialize<'de> for {{ name }} {
 {% for variant in variants if has_union(variant.type) -%}
 {{ union_enum(nested_union(name, variant), variant.type) }}
 {% endfor -%}
+{%- endif %}
+{%- endmacro %}
+
+{# The variant of the JSON object `value` among the object variants of `ty`: the first whose
+   conditions it meets, or the best match. Values no variant decodes are `unknown`. -#}
+{% macro pick_object(ty, unknown) -%}
+{% set objects = ty.object_variants() -%}
+{% if ty.union_mode() == "rules" -%}
+{
+    {% for v in objects -%}
+    if {% for c in v.when %}crate::models::union_rules::has(&value, {{ c.property | tojson }}, {% if c.value is defined %}Some(serde_json::json!({{ c.value | tojson }})){% else %}None{% endif %}){% if not loop.last %} && {% endif %}{% else %}true{% endfor %} {
+        return Ok(match crate::models::codec::from_value::<_, serde_json::Error>(value.clone()) {
+            Ok(v) => Self::{{ v.name | to_upper_camel_case }}(v),
+            Err(_) => Self::{{ unknown }}(value),
+        });
+    }
+    {% endfor -%}
+    Self::{{ unknown }}(value)
+}
+{%- else -%}
+match crate::models::union_rules::best_match(&value, &[
+    {% for v in objects -%}
+    (&[{% for p in v.required %}{{ p | tojson }}, {% endfor %}], &[{% for p in v.properties %}{{ p | tojson }}, {% endfor %}]),
+    {% endfor -%}
+]) {
+    {% for v in objects -%}
+    Some({{ loop.index0 }}) => match crate::models::codec::from_value::<_, serde_json::Error>(value.clone()) {
+        Ok(v) => Self::{{ v.name | to_upper_camel_case }}(v),
+        Err(_) => Self::{{ unknown }}(value),
+    },
+    {% endfor -%}
+    _ => Self::{{ unknown }}(value),
+}
 {%- endif %}
 {%- endmacro %}
 

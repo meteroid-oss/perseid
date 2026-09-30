@@ -392,3 +392,41 @@ async fn api_errors_expose_their_payload_and_request_id() {
     let payload: torture::api::ErrorBody = api.payload().unwrap();
     assert_eq!(payload["title"], "gone");
 }
+
+#[test]
+fn unions_of_objects_pick_their_variant_and_keep_unknown_shapes() {
+    let account = |value: Value| -> ObjectUnionsAccount { serde_json::from_value(value).unwrap() };
+    let active = json!({"id": "a1", "object": "account", "email": "e"});
+    let deleted = json!({"deleted": true, "id": "a2", "object": "account"});
+    let unknown = json!({"object": "account_v2", "id": "a3"});
+    assert_eq!(account(json!("a0")).id(), Some("a0"));
+    assert_eq!(account(active.clone()).as_account().map(|a| a.id.as_str()), Some("a1"));
+    assert_eq!(account(deleted.clone()).as_deleted_account().map(|a| a.id.as_str()), Some("a2"));
+    assert_eq!(account(deleted.clone()).id(), Some("a2"));
+    assert_eq!(account(unknown.clone()), ObjectUnionsAccount::Unknown(unknown.clone()));
+    for input in [json!("a0"), active, deleted.clone(), unknown] {
+        assert_eq!(round_trip::<ObjectUnionsAccount>(input.clone()), input);
+    }
+    let as_active: Account = account(deleted).decode_as().unwrap();
+    assert_eq!(as_active.id, "a2");
+
+    let unions: ObjectUnions = serde_json::from_value(json!({
+        "source": {"file_id": "f"},
+        "sources": [{"url": "u", "detail": "d"}, {"file_id": "f"}, {"path": "p"}],
+        "document": {"title": "t", "author": "a"},
+        "loose": {"title": "t"},
+    }))
+    .unwrap();
+    assert!(unions.source.as_ref().and_then(|s| s.as_file_source()).is_some());
+    let sources = unions.sources.as_ref().unwrap();
+    assert!(sources[0].as_url_source().is_some() && sources[1].as_file_source().is_some());
+    assert_eq!(sources[2], ObjectUnionsSources::Unknown(json!({"path": "p"})));
+    assert!(unions.document.as_ref().and_then(|d| d.as_article()).is_some());
+    assert_eq!(unions.loose, Some(json!({"title": "t"})));
+    let draft: ObjectUnionsDocument = serde_json::from_value(json!({"title": "t"})).unwrap();
+    assert!(draft.as_draft().is_some(), "ties go to the first variant");
+    let untitled: ObjectUnionsDocument = serde_json::from_value(json!({"body": "b"})).unwrap();
+    assert_eq!(untitled, ObjectUnionsDocument::Unknown(json!({"body": "b"})));
+    let text = json!({"source": {"url": "u"}, "document": {"title": "t", "body": "b"}, "sources": []});
+    assert_eq!(round_trip::<ObjectUnions>(text.clone()), text);
+}

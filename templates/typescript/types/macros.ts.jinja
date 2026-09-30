@@ -81,9 +81,30 @@
     {%- endif -%}
 {%- endmacro %}
 
+{#- The conversion of the object `expr` to or from the object variant of the union `type` it
+    is: the first whose conditions it meets, or the best match. Other objects are kept as is. -#}
+{% macro pick_object(expr, type, outgoing) -%}
+    {%- set candidates = type.object_variants() -%}
+    {%- macro convert(v) -%}
+        {%- if outgoing -%}{{ to_json("(" ~ expr ~ " as " ~ js_type(v.type) ~ ")", v.type) }}{%- else -%}{{ from_json(expr, v.type) }}{%- endif -%}
+    {%- endmacro -%}
+    {%- macro name(p) -%}{{ p | ident("camel") if outgoing else p }}{%- endmacro -%}
+    {%- if type.union_mode() == "rules" -%}
+        ({% for v in candidates %}{% for c in v.when %}{% if not loop.first %} && {% endif %}unionHas({{ expr }}, {{ name(c.property) | tojson }}{% if c.value is defined %}, {{ c.value | tojson }}{% endif %}){% else %}true{% endfor %} ? {{ convert(v) }} : {% endfor %}{{ expr }})
+    {%- else -%}
+        ((variant: number) => {% for v in candidates %}variant === {{ loop.index0 }} ? {{ convert(v) }} : {% endfor %}{{ expr }})(unionBestMatch({{ expr }}, [{% for v in candidates %}[[{% for p in v.required %}{{ name(p) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}], [{% for p in v.properties %}{{ name(p) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]]{% if not loop.last %}, {% endif %}{% endfor %}]))
+    {%- endif -%}
+{%- endmacro %}
+
+{#- The union conversion of `expr`, by JSON type, then among objects by `pick_object`. -#}
+{% macro union_json(expr, type, outgoing) -%}
+    {%- set objects = type.union_mode() != "json" -%}
+    ({% if objects %}isJsonObject({{ expr }}) ? {{ pick_object(expr, type, outgoing) }} : {% endif %}{% for v in type.union_variants() if variant_converted(v, outgoing) and not (objects and v.json_type == "object") %}{{ is_variant(expr, v.json_type) }} ? {{ to_json(expr, v.type) if outgoing else from_json(expr, v.type) }} : {% endfor %}{{ expr }})
+{%- endmacro %}
+
 {% macro from_json(expr, type) -%}
     {%- if type.is_union() and converted(type) -%}
-        ({% for v in type.union_variants() if variant_converted(v, false) %}{{ is_variant(expr, v.json_type) }} ? {{ from_json(expr, v.type) }} : {% endfor %}{{ expr }})
+        {{ union_json(expr, type, false) }}
     {%- elif type.is_datetime() -%}
         parseDateTime({{ expr }})
     {%- elif type.is_schema_ref() -%}
@@ -102,7 +123,7 @@
 {# Dates are left to `JSON.stringify`, which calls `toISOString`. -#}
 {% macro to_json(expr, type) -%}
     {%- if type.is_union() and converted(type, true) -%}
-        ({% for v in type.union_variants() if variant_converted(v, true) %}{{ is_variant(expr, v.json_type) }} ? {{ to_json(expr, v.type) }} : {% endfor %}{{ expr }})
+        {{ union_json(expr, type, true) }}
     {%- elif type.is_schema_ref() -%}
         {{ type.to_js() }}Serializer.serialize({{ expr }})
     {%- elif is_int64(type) and sdk.int64 == "string" -%}

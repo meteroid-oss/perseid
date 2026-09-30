@@ -114,6 +114,7 @@ from torture.api import (  # noqa: E402
 )
 from torture.errors import ApiException, NetworkException  # noqa: E402
 from torture.serialization import UNSET, UnknownVariant, from_json_value  # noqa: E402
+from torture.unions import as_variant, expandable_id  # noqa: E402
 
 SAMPLES = {
     "Thing": {
@@ -235,6 +236,39 @@ class ModelTest(unittest.TestCase):
     def test_models_are_keyword_only(self) -> None:
         with self.assertRaises(TypeError):
             models.Address("line")  # type: ignore[misc]
+
+    def test_unions_of_objects_pick_their_variant_and_keep_unknown_shapes(self) -> None:
+        cases = [
+            ("a0", str, "a0"),
+            ({"id": "a1", "object": "account", "email": "e"}, models.Account, "a1"),
+            ({"deleted": True, "id": "a2", "object": "account"}, models.DeletedAccount, "a2"),
+            ({"object": "account_v2", "id": "a3"}, UnknownVariant, None),
+        ]
+        for payload, kind, id in cases:
+            unions = models.ObjectUnions.from_dict({"account": payload})
+            self.assertIsInstance(unions.account, kind)
+            self.assertEqual(expandable_id(unions.account), id)
+            self.assertEqual(unions.to_dict(), {"account": payload})
+        deleted = models.ObjectUnions.from_dict({"account": cases[2][0]}).account
+        self.assertEqual(as_variant(deleted, models.Account).id, "a2")
+
+        payload = {
+            "source": {"file_id": "f"},
+            "sources": [{"url": "u", "detail": "d"}, {"path": "p"}],
+            "document": {"title": "t", "author": "a"},
+            "loose": {"title": "t"},
+        }
+        unions = models.ObjectUnions.from_dict(payload)
+        self.assertIsInstance(unions.source, models.FileSource)
+        self.assertIsInstance(unions.sources[0], models.UrlSource)
+        self.assertEqual(unions.sources[1], UnknownVariant("", {"path": "p"}))
+        self.assertIsInstance(unions.document, models.Article)
+        self.assertEqual(unions.loose, {"title": "t"})
+        self.assertEqual(unions.to_dict(), payload)
+        draft = models.ObjectUnions.from_dict({"document": {"title": "t"}}).document
+        self.assertIsInstance(draft, models.Draft, "ties go to the first variant")
+        untitled = models.ObjectUnions.from_dict({"document": {"body": "b"}}).document
+        self.assertIsInstance(untitled, UnknownVariant)
 
     def test_recursive_models_import_and_parse(self) -> None:
         tree = models.TreeNode.from_dict(SAMPLES["TreeNode"])

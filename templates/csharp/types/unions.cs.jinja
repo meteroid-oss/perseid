@@ -8,6 +8,7 @@
 {% if t.ty.is_list() or t.ty.is_set() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
 {% endfor -%}
 {% set variants = namespace(list=[]) -%}
+{% set objects = t.ty.union_mode() != "json" -%}
 {% for v in t.ty.union_variants() -%}
 {% set class = m.union_variant_class(v, name) -%}
 {% set leaf = namespace(ty=v.type) -%}
@@ -27,7 +28,7 @@
     else "number" if ty in ["short", "int", "long", "ushort", "ulong", "float", "double"]
     else "node" if ty == "JsonNode"
     else "json" -%}
-{% set variants.list = variants.list + [{"class": class, "type": ty, "kind": kind, "json_type": v.json_type, "doc": v.type.to_csharp() if not v.empty else "\"\""}] -%}
+{% set variants.list = variants.list + [{"class": class, "type": ty, "kind": kind, "json_type": v.json_type, "doc": v.type.to_csharp() if not v.empty else "\"\"", "name": v.name}] -%}
 {% endfor %}
 
 /// <summary>
@@ -36,6 +37,22 @@
 /// <remarks>
 /// Match on the nested variant records, or assign a variant's value directly. <see cref="Unrecognized"/>
 /// holds any other JSON value, as sent by a newer API version.
+{% if objects -%}
+{% if t.ty.union_mode() == "rules" -%}
+/// An object is the first variant whose conditions it meets:
+/// <list type="bullet">
+{% for o in t.ty.object_variants() -%}
+{% set c = (variants.list | selectattr("name", "equalto", o.name) | first).class -%}
+/// <item><see cref="{{ c }}"/>: {% for w in o.when %}{% if not loop.first %} and {% endif %}<c>{{ w.property }}</c> {% if w.value is defined %}is <c>{{ w.value | tojson | replace("&", "&amp;") | replace("<", "&lt;") }}</c>{% else %}is present{% endif %}{% else %}any object{% endfor %}</item>
+{% endfor -%}
+/// </list>
+{% else -%}
+/// An object is the variant whose required properties are all present and which has the most of its
+/// properties, the first one on ties.
+{% endif -%}
+/// An object no variant decodes is <see cref="Unrecognized"/> too; <see cref="DecodeAs{T}"/> reads the value as
+/// another variant.
+{% endif -%}
 /// </remarks>
 [JsonConverter(typeof({{ name }}Converter))]
 public abstract partial record {{ name }}
@@ -60,6 +77,14 @@ public abstract partial record {{ name }}
 {% endfor %}
     /// <summary>A value of none of the known variants, kept as raw JSON.</summary>
     public sealed record Unrecognized(JsonElement Raw) : {{ name }};
+{% if objects %}
+
+    /// <summary>The value read as another type, such as another variant than the one decoding picked.</summary>
+    public T DecodeAs<T>(global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo) =>
+        JsonSerializer
+            .SerializeToElement(this, (global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<{{ name }}>)typeInfo.Options.GetTypeInfo(typeof({{ name }})))
+            .Deserialize(typeInfo)!;
+{% endif %}
 }
 
 internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
@@ -76,7 +101,31 @@ internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
         {
             switch (root.ValueKind)
             {
-{% for v in variants.list -%}
+{% if objects -%}
+                case JsonValueKind.Object:
+{% set candidates = t.ty.object_variants() -%}
+{% if t.ty.union_mode() == "rules" -%}
+{% for o in candidates -%}
+{% set v = variants.list | selectattr("name", "equalto", o.name) | first -%}
+                    if ({% for w in o.when %}global::{{ sdk.package_name }}.UnionRules.Has(root, {{ w.property | tojson }}, {{ (w.value | tojson | tojson) if w.value is defined else "null" }}){% if not loop.last %} && {% endif %}{% else %}true{% endfor %})
+                    {
+                        return new {{ name }}.{{ v.class }}(Json.Deserialize<{{ v.type }}>(root, options));
+                    }
+{% endfor -%}
+                    break;
+{% else -%}
+                    switch (global::{{ sdk.package_name }}.UnionRules.BestMatch(root{% for o in candidates %}, [[{% for p in o.required %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}], [{% for p in o.properties %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]]{% endfor %}))
+                    {
+{% for o in candidates -%}
+{% set v = variants.list | selectattr("name", "equalto", o.name) | first -%}
+                        case {{ loop.index0 }}:
+                            return new {{ name }}.{{ v.class }}(Json.Deserialize<{{ v.type }}>(root, options));
+{% endfor -%}
+                    }
+                    break;
+{% endif -%}
+{% endif -%}
+{% for v in variants.list if not (objects and v.json_type == "object") -%}
 {% set create = "new " ~ name ~ "." ~ v.class -%}
 {% if v.kind == "empty" -%}
                 case JsonValueKind.String when root.ValueEquals(""):

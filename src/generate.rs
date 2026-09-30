@@ -157,7 +157,20 @@ fn render(
     let extension = extension(language);
     let filters = config.filters_for(sdk);
     let mut produced = Vec::new();
-    let api = spec::api(spec, &filters)?;
+    let mut api = spec::api(spec, &filters)?;
+    let (best_match, untyped) = api.settle_object_unions(context);
+    if best_match > 0 {
+        tracing::warn!(
+            "unions of objects that no property tells apart, decoded as their best-matching \
+             variant: {best_match}"
+        );
+    }
+    if untyped > 0 {
+        tracing::warn!(
+            "unions of objects that no property tells apart, left as untyped JSON: {untyped} \
+             (`untagged_unions = \"best-match\"` types them)"
+        );
+    }
     for (template, output) in tasks {
         let template = assets_dir
             .path()

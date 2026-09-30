@@ -35,6 +35,8 @@ pub struct Config {
     pub timeout: Option<u64>,
     /// Primitive-or-object unions as typed values rather than untyped JSON.
     pub typed_unions: Option<bool>,
+    /// How typed unions decode objects that no rule tells apart.
+    pub untagged_unions: Option<UntaggedUnions>,
     /// SPDX license expression of the packages.
     pub license: Option<String>,
     pub repository: Option<String>,
@@ -96,11 +98,25 @@ pub struct Target {
     pub names: BTreeMap<String, String>,
     pub timeout: Option<u64>,
     pub typed_unions: Option<bool>,
+    pub untagged_unions: Option<UntaggedUnions>,
     /// Operation ids left out of this SDK only, on top of the top-level `exclude`.
     #[serde(default)]
     pub exclude: Vec<String>,
     #[serde(default)]
     pub context: BTreeMap<String, Value>,
+}
+
+/// How a typed union decodes an object when several variants are objects that neither a
+/// discriminator nor the constants and required properties they declare tell apart.
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum UntaggedUnions {
+    /// Untyped JSON.
+    #[default]
+    Json,
+    /// The variant whose required properties are all present and which knows the most
+    /// properties, the first declared on ties.
+    BestMatch,
 }
 
 /// How operations are named in code.
@@ -319,6 +335,10 @@ impl Config {
             "extra_exports": target.exports,
             "timeout": target.timeout.or(self.timeout).unwrap_or(60),
             "typed_unions": target.typed_unions.or(self.typed_unions).unwrap_or(false),
+            "untagged_unions": match target.untagged_unions.or(self.untagged_unions).unwrap_or_default() {
+                UntaggedUnions::Json => "json",
+                UntaggedUnions::BestMatch => "best-match",
+            },
             "license": self.license,
             "repository": self.repository,
             "homepage": self.homepage,
@@ -334,6 +354,7 @@ impl Config {
                 (package.clone(), ".")
             };
             map.insert("edition".into(), edition.into());
+            map.insert("typed_unions".into(), (edition >= 2).into());
             map.insert("java_internal_package".into(), internal_package.into());
             map.insert("java_internal_dir".into(), internal_dir.into());
         }
