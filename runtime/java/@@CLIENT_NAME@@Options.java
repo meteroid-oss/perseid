@@ -17,7 +17,7 @@ public final class @@CLIENT_NAME@@Options {
     public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(60);
 
     private String serverUrl = DEFAULT_URL;
-    private final List<Long> retrySchedule = new ArrayList<>(List.of(50L, 100L, 200L));
+    private final List<Long> retrySchedule = new ArrayList<>(List.of(500L, 1000L));
     private boolean debug = false;
     private Duration timeout = DEFAULT_TIMEOUT;
     private OkHttpClient httpClient;
@@ -46,6 +46,7 @@ public final class @@CLIENT_NAME@@Options {
         this.retrySchedule.addAll(retrySchedule);
     }
 
+    /** Whether every HTTP attempt and its status are written to stderr. */
     public boolean isDebug() {
         return debug;
     }

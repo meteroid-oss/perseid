@@ -20,6 +20,7 @@ import dataclasses
 import datetime as _datetime
 import email.utils
 import enum
+import inspect
 import random
 import time
 import typing as t
@@ -75,7 +76,7 @@ __all__ = [
 DEFAULT_SERVER_URL = "@@DEFAULT_BASE_URL@@"
 DEFAULT_TIMEOUT = 15.0
 DEFAULT_NUM_RETRIES = 2
-_MAX_BACKOFF = 5.0
+_MAX_BACKOFF = 8.0
 _MAX_RETRY_AFTER = 60.0
 _REPLAYABLE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 _UNSENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
@@ -183,7 +184,7 @@ def _flatten_param(prefix: str, value: t.Any, out: QueryParams) -> None:
 def default_retry_schedule(num_retries: int) -> list[float]:
     """Exponential backoff delays, matching the Rust client's defaults."""
     schedule: list[float] = []
-    backoff = 0.02
+    backoff = 0.5
     for _ in range(num_retries):
         schedule.append(backoff)
         backoff = min(_MAX_BACKOFF, backoff * 2)
@@ -218,7 +219,15 @@ def _raise_for_status(response: httpx.Response) -> httpx.Response:
         return response
     # Any other status -- 4xx, 5xx, or a 3xx left unfollowed -- is an error;
     # see `ApiException` for how the body is decoded.
-    raise ApiException.from_response(response.status_code, response.content)
+    args: tuple[t.Any, ...] = (response.status_code, response.content)
+    if _FROM_RESPONSE_TAKES_HEADERS:
+        args += (response.headers,)
+    raise _from_response(*args)
+
+
+_from_response: t.Callable[..., ApiException] = ApiException.from_response
+# An `errors.py` scaffolded before response headers were passed takes two arguments.
+_FROM_RESPONSE_TAKES_HEADERS = len(inspect.signature(_from_response).parameters) >= 3
 
 
 @t.overload

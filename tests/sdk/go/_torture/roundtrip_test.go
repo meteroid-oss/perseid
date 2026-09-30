@@ -195,6 +195,30 @@ func TestRetries(t *testing.T) {
 	}
 }
 
+func TestNonIdempotentRequestsAreOnlyRetriedOn429(t *testing.T) {
+	for status, attempts := range map[int]int32{http.StatusBadGateway: 1, http.StatusTooManyRequests: 3} {
+		client, rec := server(t, func(_ int32, w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("X-Request-Id", "req_1")
+			w.WriteHeader(status)
+		})
+		_, err := client.Things().UpdateThing(context.Background(), "t1", ThingPatch{})
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.Header.Get("X-Request-Id") != "req_1" {
+			t.Fatalf("%d: err = %v", status, err)
+		}
+		if got := rec.requests.Load(); got != attempts {
+			t.Errorf("PATCH %d: %d attempts, want %d", status, got, attempts)
+		}
+	}
+	client, rec := server(t, func(_ int32, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	_, _ = client.Things().UpdateThing(context.Background(), "t1", ThingPatch{}, WithIdempotencyKey("k"))
+	if got := rec.requests.Load(); got != 3 {
+		t.Errorf("PATCH with a key: %d attempts, want 3", got)
+	}
+}
+
 func TestRetryAfterOverridesTheSchedule(t *testing.T) {
 	client, rec := server(t, func(n int32, w http.ResponseWriter, _ *http.Request) {
 		if n == 1 {

@@ -300,10 +300,15 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(self.requests[1].headers["torture-retry-count"], "1")
 
     def test_non_idempotent_requests_are_not_replayed_on_5xx(self) -> None:
-        responses = (httpx.Response(500), httpx.Response(500), httpx.Response(200, json=THING))
+        responses = (
+            httpx.Response(500, headers={"x-request-id": "req_1"}),
+            httpx.Response(500),
+            httpx.Response(200, json=THING),
+        )
         with client(self.respond(*responses), retry_schedule=[0.0]) as api:
-            with self.assertRaises(ApiException):
+            with self.assertRaises(ApiException) as raised:
                 api.things.update_thing("t", models.ThingPatch())
+            self.assertEqual(raised.exception.headers["x-request-id"], "req_1")
             self.assertEqual(len(self.requests), 1)
             api.things.create_thing(models.ThingCreate(name="n", kind=models.Kind.ALPHA))
         self.assertEqual(len(self.requests), 3)

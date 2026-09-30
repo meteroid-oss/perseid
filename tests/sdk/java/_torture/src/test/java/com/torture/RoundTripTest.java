@@ -17,11 +17,14 @@ import com.torture.models.Priority;
 import com.torture.models.Reserved;
 import com.torture.models.Shape;
 import com.torture.models.Thing;
+import com.torture.models.ThingList;
 import com.torture.models.ThingPatch;
 import com.torture.models.TreeNode;
 import com.torture.models.UnionHolder;
 import com.torture.models.WidgetReactions;
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -72,6 +75,24 @@ class RoundTripTest {
         assertEquals(Priority.UNRECOGNIZED, thing.getPriority());
         assertEquals(Kind.BETA_2, Kind.fromValue("beta-2"));
         assertEquals(Priority.NEGATIVE, Priority.fromValue(-1));
+    }
+
+    @Test
+    void paginatedItemsKeepUnknownEnumValues() {
+        Paginator<Thing> things =
+                new Paginator<>(
+                        new Paginator.Spec(
+                                "cursor", List.of("data"), List.of("next_cursor"), null, null, null, null, 1L),
+                        null,
+                        param ->
+                                ThingList.fromJson(
+                                        param == null
+                                                ? "{\"data\":[{\"kind\":\"brand-new\"}],\"next_cursor\":\"c\"}"
+                                                : "{\"data\":[{\"kind\":\"alpha\"}]}"),
+                        Thing.class);
+        List<Kind> kinds = new ArrayList<>();
+        things.forEach(thing -> kinds.add(thing.getKind()));
+        assertEquals(List.of(Kind.UNRECOGNIZED, Kind.ALPHA), kinds);
     }
 
     @Test

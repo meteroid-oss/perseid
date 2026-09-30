@@ -80,7 +80,10 @@ public class {{ sdk.client_name }} {
                 defaultHeaders,
                 options.getRetrySchedule(),
                 {{ sdk.client_name }}HttpClient.okHttpClient(
-                        options.getHttpClient(), options.getTimeout(), options.getInterceptors()),
+                        options.getHttpClient(),
+                        options.getTimeout(),
+                        options.getInterceptors(),
+                        options.isDebug()),
                 auth
         );
 

@@ -113,6 +113,14 @@ describe("client", () => {
     assert.equal(thing.count, 9007199254740993n);
   });
 
+  it("ignores a trailing slash in the server URL", async () => {
+    const { calls, torture } = client([new Response(SAMPLES.Thing)], {
+      serverUrl: "https://torture.test/v2/",
+    });
+    await torture.things.getThing("t");
+    assert.equal(calls[0].url.pathname, "/v2/things/t");
+  });
+
   it("sends a user Idempotency-Key instead of the automatic one, whatever its case", async () => {
     const body = { name: "n", kind: "alpha" };
     const { calls, torture } = client([json(THING, 201)]);

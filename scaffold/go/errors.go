@@ -1,15 +1,25 @@
 package @@PACKAGE_NAME@@
 
-import "fmt"
+import (
+	"fmt"
+	"net/http"
+)
 
 // APIError is returned for every non-2xx response.
 type APIError struct {
 	StatusCode int
-	RawBody    []byte
+	// Header holds the response headers, such as the request id to quote to support.
+	Header  http.Header
+	RawBody []byte
 }
 
 func newAPIError(statusCode int, body []byte) *APIError {
 	return &APIError{StatusCode: statusCode, RawBody: body}
+}
+
+// setHeader is called by the SDK with the headers of the response.
+func (e *APIError) setHeader(header http.Header) {
+	e.Header = header
 }
 
 func (e *APIError) Error() string {

@@ -657,7 +657,7 @@ impl Operation {
         let op = Operation {
             id: op_id,
             name: op_name,
-            description: op.description,
+            description: operation_doc(op.summary, op.description),
             deprecated: op.deprecated,
             method: method.to_owned(),
             path: path.to_owned(),
@@ -951,6 +951,20 @@ impl RequestBody {
             form_unexploded,
             ..Self::default()
         })
+    }
+}
+
+/// The summary, often the only text of an operation, then the description unless it repeats it.
+fn operation_doc(summary: Option<String>, description: Option<String>) -> Option<String> {
+    let summary = summary.filter(|s| !s.trim().is_empty());
+    let description = description.filter(|d| !d.trim().is_empty());
+    match (summary, description) {
+        (Some(summary), Some(description))
+            if !description.starts_with(summary.trim().trim_end_matches('.')) =>
+        {
+            Some(format!("{}\n\n{description}", summary.trim()))
+        }
+        (summary, description) => description.or(summary),
     }
 }
 
@@ -1318,6 +1332,23 @@ mod tests {
 
     fn json_body(schema: Value) -> Value {
         json!({ "description": "", "content": { "application/json": { "schema": schema } } })
+    }
+
+    #[test]
+    fn operation_docs_start_with_the_summary() {
+        let doc = |summary: Option<&str>, description: Option<&str>| {
+            operation_doc(summary.map(Into::into), description.map(Into::into))
+        };
+        assert_eq!(doc(Some("List pets"), None).as_deref(), Some("List pets"));
+        assert_eq!(
+            doc(Some("List pets."), Some("Newest first.")).as_deref(),
+            Some("List pets.\n\nNewest first.")
+        );
+        assert_eq!(
+            doc(Some("List pets"), Some("List pets, newest first.")).as_deref(),
+            Some("List pets, newest first.")
+        );
+        assert_eq!(doc(Some(" "), None), None);
     }
 
     fn widget() -> Value {

@@ -109,6 +109,30 @@ public class @@CLIENT_NAME@@HttpClient {
                 baseUrl, defaultHeaders, retrySchedule, client, auth, security);
     }
 
+    static OkHttpClient okHttpClient(
+            OkHttpClient base, Duration timeout, List<Interceptor> interceptors, boolean debug) {
+        if (!debug) {
+            return okHttpClient(base, timeout, interceptors);
+        }
+        List<Interceptor> logged = new ArrayList<>(interceptors);
+        logged.add(
+                chain -> {
+                    Request request = chain.request();
+                    System.err.println(
+                            "@@CLIENT_NAME@@: " + request.method() + " " + request.url());
+                    Response response = chain.proceed(request);
+                    System.err.println(
+                            "@@CLIENT_NAME@@: "
+                                    + request.method()
+                                    + " "
+                                    + request.url()
+                                    + " -> "
+                                    + response.code());
+                    return response;
+                });
+        return okHttpClient(base, timeout, logged);
+    }
+
     /** {@code base} with the interceptors, or a new client timing out after {@code timeout}. */
     static OkHttpClient okHttpClient(
             OkHttpClient base, Duration timeout, List<Interceptor> interceptors) {
@@ -283,15 +307,21 @@ public class @@CLIENT_NAME@@HttpClient {
 
     private ApiException error(Response response) throws IOException {
         String body = response.body() == null ? "" : response.body().string();
-        return new ApiException(
-                response.request().method()
-                        + " "
-                        + response.request().url().encodedPath()
-                        + " failed with status "
-                        + response.code(),
-                response.code(),
-                body,
-                objectMapper);
+        ApiException error =
+                new ApiException(
+                        response.request().method()
+                                + " "
+                                + response.request().url().encodedPath()
+                                + " failed with status "
+                                + response.code(),
+                        response.code(),
+                        body,
+                        objectMapper);
+        // An ApiException scaffolded before response headers were kept does not implement it.
+        if (error instanceof Utils.WithResponseHeaders) {
+            ((Utils.WithResponseHeaders) error).setResponseHeaders(response.headers());
+        }
+        return error;
     }
 
     private Response send(String method, HttpUrl url, Headers headers, RequestBody body)

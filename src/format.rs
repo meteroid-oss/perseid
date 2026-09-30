@@ -38,12 +38,19 @@ fn passes(language: &str) -> (&'static str, &'static [Pass]) {
             &[
                 (
                     RUFF,
-                    &["check", "--no-respect-gitignore", "--fix", "--quiet"],
+                    &[
+                        "check",
+                        "--no-cache",
+                        "--no-respect-gitignore",
+                        "--fix",
+                        "--quiet",
+                    ],
                 ),
                 (
                     RUFF,
                     &[
                         "check",
+                        "--no-cache",
                         "--no-respect-gitignore",
                         "--select",
                         "I",
@@ -51,7 +58,10 @@ fn passes(language: &str) -> (&'static str, &'static [Pass]) {
                         "--quiet",
                     ],
                 ),
-                (RUFF, &["format", "--no-respect-gitignore", "--quiet"]),
+                (
+                    RUFF,
+                    &["format", "--no-cache", "--no-respect-gitignore", "--quiet"],
+                ),
             ],
         ),
         "typescript" => (

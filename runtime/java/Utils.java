@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import okhttp3.Headers;
 import okhttp3.HttpUrl;
 
 public final class Utils {
@@ -138,6 +139,11 @@ public final class Utils {
                     "invalid path parameter `" + name + "`: \"" + segment + "\"");
         }
         return segment;
+    }
+
+    /** Implemented by an {@code ApiException} that keeps the headers of its response. */
+    public interface WithResponseHeaders {
+        void setResponseHeaders(Headers headers);
     }
 
     public interface ToQueryParam {

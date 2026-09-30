@@ -114,6 +114,7 @@ class HttpTest {
         retryAfter = "3600";
         ApiException error = assertThrows(ApiException.class, () -> client().getThings().getThing("t"));
         assertEquals(429, error.getCode());
+        assertEquals("3600", error.getHeaders().get("retry-after"));
         assertEquals(1, requests.size());
     }
 

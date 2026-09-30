@@ -130,7 +130,7 @@ export class {{ sdk.client_name }} {
         {% endfor -%}
       },
       {% endif -%}
-      baseUrl: options.serverUrl ?? DEFAULT_BASE_URL,
+      baseUrl: (options.serverUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, ""),
       timeout: options.requestTimeout,
       debug: options.debug,
       fetch: options.fetch,
