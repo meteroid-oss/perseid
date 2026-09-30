@@ -174,7 +174,19 @@ public String toString() {
 {%- else -%}
 {% set variants = ty.union_variants() -%}
 {% set objects = ty.union_mode() != "json" -%}
-{% set pascals = variants | map(attribute="name") | list | idents("pascal", "java", "union `" ~ cls ~ "`") -%}
+{% set full = variants | map(attribute="name") | list | idents("pascal", "java", "union `" ~ cls ~ "`") -%}
+{#- A variant named after its union drops that prefix (`OfObject`), keeping nested class files
+    under the 255-byte file name limit. -#}
+{% set short = namespace(list=[]) -%}
+{% for p in full -%}
+{% set rest = p[cls | length:] if p is startingwith(cls) and p | length > cls | length else p -%}
+{% set short.list = short.list + [rest] -%}
+{% endfor -%}
+{% set pascals = short.list if short.list | unique | list | length == full | length else full -%}
+{% set pascal_of = namespace(list=[]) -%}
+{% for v in variants -%}
+{% set pascal_of.list = pascal_of.list + [{"name": v.name, "pascal": pascals[loop.index0]}] -%}
+{% endfor -%}
 {% set ns = namespace(types=[]) -%}
 {% for v in variants -%}
 {% set t = v.type.to_java() -%}
@@ -197,7 +209,7 @@ public String toString() {
  * <p>An object is the first variant whose conditions it meets:
  * <ul>
 {%- for v in ty.object_variants() %}
- *   <li>{@link Of{{ v.name | to_upper_camel_case }}}: {% for c in v.when %}{% if not loop.first %} and {% endif %}{@code {{ c.property }}} {% if c.value is defined %}is {@code {{ c.value | tojson | replace("@", "&#64;") }}}{% else %}is present{% endif %}{% else %}any object{% endfor %}
+ *   <li>{@link Of{{ (pascal_of.list | selectattr("name", "equalto", v.name) | first).pascal }}}: {% for c in v.when %}{% if not loop.first %} and {% endif %}{@code {{ c.property }}} {% if c.value is defined %}is {@code {{ c.value | tojson | replace("@", "&#64;") }}}{% else %}is present{% endif %}{% else %}any object{% endfor %}
 {%- endfor %}
  * </ul>
 {%- else %}
