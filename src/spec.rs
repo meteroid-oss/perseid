@@ -49,12 +49,20 @@ pub struct Filters {
     pub names: BTreeMap<String, String>,
 }
 
+/// Largest spec read from a URL: GitHub's REST description is over 10 MB, ureq's default.
+const MAX_SPEC_BYTES: u64 = 200 * 1024 * 1024;
+
 /// Reads an OpenAPI document (JSON or YAML) from a path or an http(s) URL, as JSON text, upgraded to 3.1 when it is 3.0.
 pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
     let text = if location.starts_with("https://") || location.starts_with("http://") {
         ureq::get(location)
             .call()
-            .and_then(|mut r| r.body_mut().read_to_string())
+            .and_then(|mut r| {
+                r.body_mut()
+                    .with_config()
+                    .limit(MAX_SPEC_BYTES)
+                    .read_to_string()
+            })
             .with_context(|| format!("downloading {location}"))?
     } else {
         std::fs::read_to_string(root.join(location))
@@ -362,5 +370,33 @@ mod yaml {
                 serde_json::json!({"max": 18446744073709552000.0, "200": "ok", "small": -3})
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Read as _, Write as _};
+
+    #[test]
+    fn specs_over_ten_megabytes_download() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/spec.json", listener.local_addr().unwrap());
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            let padding = "a".repeat(11 * 1024 * 1024);
+            let body = format!(
+                r#"{{"openapi":"3.1.0","info":{{"title":"t","version":"1"}},"x-pad":"{padding}"}}"#
+            );
+            let head = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n",
+                body.len()
+            );
+            stream.write_all(head.as_bytes()).unwrap();
+            stream.write_all(body.as_bytes()).unwrap();
+        });
+        let text = super::read(&url, std::path::Path::new(".")).unwrap();
+        assert!(text.len() > 11 * 1024 * 1024);
     }
 }

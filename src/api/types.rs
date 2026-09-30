@@ -199,7 +199,6 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
                             Some(kind) => variant.json_type = kind.to_owned(),
                             None => settled = false,
                         }
-                        variant.id = known.ids.get(name).cloned().flatten();
                     }
                 }
                 let _span = tracing::warn_span!("schema", name = %owner).entered();
@@ -228,17 +227,7 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
     struct Known {
         kinds: BTreeMap<String, Option<&'static str>>,
         shapes: BTreeMap<String, Option<Vec<unions::Property>>>,
-        ids: BTreeMap<String, Option<String>>,
     }
-    let id = |ty: &Type| {
-        let TypeData::Struct { fields } = &ty.data else {
-            return None;
-        };
-        fields
-            .iter()
-            .find(|f| f.name == "id" && !f.flatten && !f.nullable && f.r#type == FieldType::String)
-            .map(|f| if f.required { "required" } else { "optional" }.to_owned())
-    };
     let known = Known {
         kinds: types
             .keys()
@@ -247,10 +236,6 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
         shapes: types
             .keys()
             .map(|name| (name.clone(), unions::shape(types, name)))
-            .collect(),
-        ids: types
-            .iter()
-            .map(|(name, ty)| (name.clone(), id(ty)))
             .collect(),
     };
     for (name, ty) in types.iter_mut() {
@@ -262,6 +247,44 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
             op.untype_unions();
         }
         stack.extend(resource.subresources.values_mut());
+    }
+}
+
+/// Sets the `id` of the struct variants of every union, once access modes settled which fields
+/// are required.
+pub(crate) fn set_union_ids(types: &mut Types) {
+    fn set(ty: &mut FieldType, ids: &BTreeMap<String, Option<String>>) {
+        match ty {
+            FieldType::Union { variants, .. } => {
+                for variant in variants.iter_mut() {
+                    set(&mut variant.r#type, ids);
+                    if let FieldType::SchemaRef { name, .. } = &variant.r#type {
+                        variant.id = ids.get(name).cloned().flatten();
+                    }
+                }
+            }
+            FieldType::List { inner } | FieldType::Set { inner } => set(Arc::make_mut(inner), ids),
+            FieldType::Map { value_ty } => set(Arc::make_mut(value_ty), ids),
+            _ => {}
+        }
+    }
+    let ids: BTreeMap<String, Option<String>> = types
+        .iter()
+        .map(|(name, ty)| {
+            let TypeData::Struct { fields } = &ty.data else {
+                return (name.clone(), None);
+            };
+            let id = fields
+                .iter()
+                .find(|f| {
+                    f.name == "id" && !f.flatten && !f.nullable && f.r#type == FieldType::String
+                })
+                .map(|f| if f.required { "required" } else { "optional" }.to_owned());
+            (name.clone(), id)
+        })
+        .collect();
+    for ty in types.values_mut() {
+        ty.data.for_each_field_type(|t| set(t, &ids));
     }
 }
 
@@ -2967,6 +2990,7 @@ mod tests {
             }}
         }));
         resolve_unions(&mut types, &mut Resources::new());
+        set_union_ids(&mut types);
         types
     }
 

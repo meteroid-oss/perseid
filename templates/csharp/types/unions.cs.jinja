@@ -72,7 +72,7 @@ public abstract partial record {{ name }}
     public static implicit operator {{ name }}({{ v.type }} value) => new {{ v.class }}(value);
 
     /// <summary>The value if this is <see cref="{{ v.class }}"/>, else <c>null</c>.</summary>
-    public {{ v.type }}? As{{ v.class }} => this is {{ v.class }} variant ? variant.Value : null;
+    public {{ v.type }}? As{{ v.class }} => this is {{ v.class }} variant ? variant.Value : default({{ v.type }}?);
 {% endif -%}
 {% endfor %}
     /// <summary>A value of none of the known variants, kept as raw JSON.</summary>
@@ -107,12 +107,18 @@ internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
 {% if t.ty.union_mode() == "rules" -%}
 {% for o in candidates -%}
 {% set v = variants.list | selectattr("name", "equalto", o.name) | first -%}
-                    if ({% for w in o.when %}global::{{ sdk.package_name }}.UnionRules.Has(root, {{ w.property | tojson }}, {{ (w.value | tojson | tojson) if w.value is defined else "null" }}){% if not loop.last %} && {% endif %}{% else %}true{% endfor %})
+{% if o.when -%}
+                    if ({% for w in o.when %}global::{{ sdk.package_name }}.UnionRules.Has(root, {{ w.property | tojson }}, {{ (w.value | tojson | tojson) if w.value is defined else "null" }}){% if not loop.last %} && {% endif %}{% endfor %})
                     {
                         return new {{ name }}.{{ v.class }}(Json.Deserialize<{{ v.type }}>(root, options));
                     }
+{% else -%}
+                    return new {{ name }}.{{ v.class }}(Json.Deserialize<{{ v.type }}>(root, options));
+{% endif -%}
 {% endfor -%}
+{% if candidates[-1].when -%}
                     break;
+{% endif -%}
 {% else -%}
                     switch (global::{{ sdk.package_name }}.UnionRules.BestMatch(root{% for o in candidates %}, [[{% for p in o.required %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}], [{% for p in o.properties %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]]{% endfor %}))
                     {

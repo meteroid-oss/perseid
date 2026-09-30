@@ -638,6 +638,11 @@ fn real_world_constructs_generate_every_language() {
     ] {
         assert!(out.contains(warning), "missing `{warning}` in:\n{out}");
     }
+    let charge = fs::read_to_string(dir.path().join("go/charge.go")).unwrap();
+    assert!(
+        charge.contains("u.Customer != nil && u.Customer.ID != nil"),
+        "a read-only id is optional in requests, so a pointer: {charge}"
+    );
 
     let (ok, model) = perseid(dir.path(), &["inspect"]);
     assert!(ok, "{model}");

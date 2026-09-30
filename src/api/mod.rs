@@ -70,6 +70,7 @@ impl Api {
             .into_iter()
             .chain(webhooks.iter().map(String::as_str));
         types::relax_access_modes(&mut types, requests, responses);
+        types::set_union_ids(&mut types);
 
         // Promote inline enums (e.g. array-of-enum query params) to named
         // top-level types so generated SDKs get real enum types instead of
