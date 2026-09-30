@@ -8,7 +8,7 @@ import typing as t
 
 __all__ = ["SecurityScheme", "Security", "TokenProvider", "chosen_schemes", "apply_auth"]
 
-TokenProvider = t.Callable[[], t.Union[str, t.Awaitable[str]]]
+TokenProvider = t.Callable[[], str | t.Awaitable[str]]
 """Returns a fresh bearer token; the async client also accepts coroutine functions."""
 
 Security = t.Sequence[t.Sequence[str]]
@@ -23,9 +23,9 @@ class SecurityScheme(t.NamedTuple):
 
 
 class _Credentials(t.Protocol):
-    bearer_access_token: t.Optional[str]
-    token_provider: t.Optional[TokenProvider]
-    basic_auth: t.Optional[t.Tuple[str, str]]
+    bearer_access_token: str | None
+    token_provider: TokenProvider | None
+    basic_auth: tuple[str, str] | None
     api_keys: t.Mapping[str, str]
     security_schemes: t.Mapping[str, SecurityScheme]
 
@@ -41,7 +41,7 @@ def _configured(cfg: _Credentials, name: str) -> bool:
     return bool(cfg.api_keys.get(name) or cfg.bearer_access_token)
 
 
-def chosen_schemes(cfg: _Credentials, security: Security) -> t.List[str]:
+def chosen_schemes(cfg: _Credentials, security: Security) -> list[str]:
     for names in security:
         if names and all(_configured(cfg, name) for name in names):
             return list(names)
@@ -71,10 +71,10 @@ async def async_token(cfg: _Credentials) -> str:
 def apply_auth(
     cfg: _Credentials,
     names: t.Sequence[str],
-    provided_token: t.Optional[str],
-    request_kwargs: t.Dict[str, t.Any],
+    provided_token: str | None,
+    request_kwargs: dict[str, t.Any],
 ) -> None:
-    headers: t.Dict[str, str] = request_kwargs["headers"]
+    headers: dict[str, str] = request_kwargs["headers"]
     for name in names:
         scheme = cfg.security_schemes[name]
         if scheme.kind == "bearer":

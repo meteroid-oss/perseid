@@ -33,8 +33,8 @@ UploadContent = t.Union[bytes, t.IO[bytes], t.Iterable[bytes], t.AsyncIterable[b
 class Upload(t.NamedTuple):
     """A multipart file with its filename and content type."""
 
-    content: t.Union[bytes, t.IO[bytes]]
-    filename: t.Optional[str] = None
+    content: bytes | t.IO[bytes]
+    filename: str | None = None
     content_type: str = "application/octet-stream"
 
 
@@ -47,9 +47,9 @@ class SseEvent:
 
     event: str
     data: str
-    id: t.Optional[str] = None
+    id: str | None = None
     """Last event ID, including updates from events with no data."""
-    retry: t.Optional[int] = None
+    retry: int | None = None
     """Server-provided reconnection delay in milliseconds. The SDK does not reconnect."""
 
 
@@ -64,15 +64,15 @@ def not_an_event_stream(response: httpx.Response) -> ResponseDecodeError:
 
 class _Parser:
     def __init__(self) -> None:
-        self.id: t.Optional[str] = None
-        self.retry: t.Optional[int] = None
+        self.id: str | None = None
+        self.retry: int | None = None
         self._line = ""
         self._data = ""
         self._event = ""
         self._after_cr = False
         self._first_line = True
 
-    def push(self, text: str) -> t.List[SseEvent]:
+    def push(self, text: str) -> list[SseEvent]:
         events = []
         for char in text:
             if self._after_cr:
@@ -88,7 +88,7 @@ class _Parser:
                 events.append(event)
         return events
 
-    def _end_line(self) -> t.Optional[SseEvent]:
+    def _end_line(self) -> SseEvent | None:
         line, self._line = self._line, ""
         if self._first_line and line.startswith("\ufeff"):
             line = line[1:]
@@ -122,7 +122,7 @@ class EventStream:
         self._parser = _Parser()
 
     @property
-    def last_event_id(self) -> t.Optional[str]:
+    def last_event_id(self) -> str | None:
         return self._parser.id
 
     def __iter__(self) -> t.Iterator[SseEvent]:
@@ -135,7 +135,7 @@ class EventStream:
     def close(self) -> None:
         self._response.close()
 
-    def __enter__(self) -> "EventStream":
+    def __enter__(self) -> EventStream:
         return self
 
     def __exit__(self, *exc_info: t.Any) -> None:
@@ -150,7 +150,7 @@ class AsyncEventStream:
         self._parser = _Parser()
 
     @property
-    def last_event_id(self) -> t.Optional[str]:
+    def last_event_id(self) -> str | None:
         return self._parser.id
 
     async def __aiter__(self) -> t.AsyncIterator[SseEvent]:
@@ -164,7 +164,7 @@ class AsyncEventStream:
     async def aclose(self) -> None:
         await self._response.aclose()
 
-    async def __aenter__(self) -> "AsyncEventStream":
+    async def __aenter__(self) -> AsyncEventStream:
         return self
 
     async def __aexit__(self, *exc_info: t.Any) -> None:
@@ -177,9 +177,9 @@ def _scalar(value: t.Any) -> str:
     return str(value)
 
 
-def multipart_files(fields: t.Sequence[t.Tuple[str, t.Any, bool]]) -> t.List[t.Any]:
+def multipart_files(fields: t.Sequence[tuple[str, t.Any, bool]]) -> list[t.Any]:
     """Renders ``(name, value, is_file)`` fields as ``httpx`` multipart files, skipping ``None``."""
-    files: t.List[t.Any] = []
+    files: list[t.Any] = []
     for name, value, is_file in fields:
         if value is None:
             continue

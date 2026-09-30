@@ -44,7 +44,7 @@ class InvalidWebhookSecretError(@@CLIENT_NAME@@Error, ValueError):
     """Raised when the signing secret is empty or not valid base64."""
 
 
-def _get_header(headers: t.Mapping[str, str], names: t.Tuple[str, str]) -> t.Optional[str]:
+def _get_header(headers: t.Mapping[str, str], names: tuple[str, str]) -> str | None:
     lowered = {str(k).lower(): v for k, v in headers.items()}
     for name in names:
         if lowered.get(name):
@@ -57,7 +57,7 @@ class Webhook:
 
     _secret: bytes
 
-    def __init__(self, secret: t.Union[str, bytes]) -> None:
+    def __init__(self, secret: str | bytes) -> None:
         """Build a verifier from the secret shown in your dashboard.
 
         A ``str`` is base64, with or without the ``whsec_`` prefix; ``bytes``
@@ -82,7 +82,7 @@ class Webhook:
         """Build a verifier from the raw, already decoded key."""
         return cls(secret)
 
-    def verify(self, data: t.Union[str, bytes], headers: t.Mapping[str, str]) -> None:
+    def verify(self, data: str | bytes, headers: t.Mapping[str, str]) -> None:
         """Verify a payload against its signature headers.
 
         ``data`` must be the raw body exactly as received. Raises
@@ -115,7 +115,7 @@ class Webhook:
 
         raise WebhookVerificationError("No matching signature found")
 
-    def sign(self, msg_id: str, timestamp: int, data: t.Union[str, bytes]) -> str:
+    def sign(self, msg_id: str, timestamp: int, data: str | bytes) -> str:
         """Return the ``v1,<base64>`` value of the ``webhook-signature`` header."""
         payload = data if isinstance(data, bytes) else data.encode("utf-8")
         to_sign = f"{msg_id}.{timestamp}.".encode("utf-8") + payload

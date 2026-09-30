@@ -18,15 +18,15 @@ class Pagination(t.NamedTuple):
 
     style: str
     items: Path
-    next_cursor: t.Optional[Path] = None
-    item_cursor: t.Optional[str] = None
-    has_more: t.Optional[Path] = None
-    total_pages: t.Optional[Path] = None
-    total: t.Optional[Path] = None
+    next_cursor: Path | None = None
+    item_cursor: str | None = None
+    has_more: Path | None = None
+    total_pages: Path | None = None
+    total: Path | None = None
     first_page: int = 1
 
 
-def _at(value: t.Any, path: t.Optional[Path]) -> t.Any:
+def _at(value: t.Any, path: Path | None) -> t.Any:
     for key in path or ():
         value = value.get(key) if isinstance(value, dict) else None
     return value
@@ -41,7 +41,7 @@ class _Cursor:
             start = 0
         self.param = start
 
-    def advance(self, page: t.Dict[str, t.Any], items: t.List[t.Any]) -> bool:
+    def advance(self, page: dict[str, t.Any], items: list[t.Any]) -> bool:
         """Moves to the next page, returning whether there is one."""
         p = self.pagination
         if not items or (p.has_more is not None and _at(page, p.has_more) is False):
@@ -70,7 +70,7 @@ def paginate_sync(
     pagination: Pagination,
     start: t.Any,
     fetch_page: t.Callable[[t.Any], BaseModel],
-    item: t.Type[_T],
+    item: type[_T],
 ) -> t.Iterator[_T]:
     cursor = _Cursor(pagination, start)
     while True:
@@ -86,7 +86,7 @@ async def paginate_async(
     pagination: Pagination,
     start: t.Any,
     fetch_page: t.Callable[[t.Any], t.Awaitable[BaseModel]],
-    item: t.Type[_T],
+    item: type[_T],
 ) -> t.AsyncIterator[_T]:
     cursor = _Cursor(pagination, start)
     while True:
