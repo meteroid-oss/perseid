@@ -10,7 +10,7 @@ use crate::{
         Api, Resource,
         types::{EnumVariantType, Field, FieldType, StructEnumRepr, Type, TypeData},
     },
-    spec::IncludeMode,
+    spec::{Filters, IncludeMode},
     template,
 };
 use aide::openapi::OpenApi;
@@ -204,9 +204,13 @@ pub async fn generate_codesamples(
             .context("found no endpoints in input spec")?,
         &mut openapi_spec.components.clone().unwrap_or_default(),
         &[],
-        IncludeMode::OnlyPublic,
-        &excluded_operation_ids,
-        &BTreeSet::new(),
+        &serde_json::to_value(openapi_spec)?,
+        &Filters {
+            include_mode: IncludeMode::OnlyPublic,
+            excluded: excluded_operation_ids,
+            specified: BTreeSet::new(),
+            pagination: Vec::new(),
+        },
     )?;
 
     let mut samples_map = BTreeMap::new();

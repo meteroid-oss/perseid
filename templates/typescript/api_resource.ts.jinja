@@ -8,9 +8,33 @@ import {
     {{ c | to_upper_camel_case }}Serializer,
 } from '../models/{{ c | to_lower_camel_case }}';
 {% endfor -%}
+{% if resource.operations | selectattr("pagination", "defined") | list | length > 0 -%}
+import { paginate } from "../pagination";
+{% endif -%}
 import { HttpMethod, {{ sdk.client_name }}Request, {{ sdk.client_name }}RequestContext } from "../request";
+{% set kinds = resource.operations | map(attribute="request_body_kind") | list -%}
+{% set streams = resource.operations | selectattr("response_is_event_stream") | list | length > 0 -%}
+{% if streams or "binary" in kinds or "multipart" in kinds -%}
+import {
+    {% if streams %}type EventStream,{% endif %}
+    {% if "multipart" in kinds %}MultipartBody, type Upload,{% endif %}
+    {% if "binary" in kinds %}type UploadBody,{% endif %}
+} from "../streaming";
+{% endif %}
 
 {% for op in resource.operations -%}
+    {% if op.request_body_kind == "multipart" -%}
+    /** Multipart form fields. */
+    export interface {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body {
+        {% for field in op.multipart_fields -%}
+            {% if field.description is defined -%}
+                {{ field.description | to_doc_comment(style="js") }}
+            {% endif -%}
+            {{ field.name | to_lower_camel_case }}{% if not field.required %}?{% endif %}: {% if field.is_file %}Upload{% else %}{{ m.js_type(field.type) }}{% endif %}{% if field.nullable %} | null{% endif %};
+        {% endfor -%}
+    }
+
+    {% endif -%}
     {% if op | has_query_or_header_params -%}
     export interface {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options {
         {% for p in op.query_params -%}
@@ -37,7 +61,9 @@ export class {{ resource_type_name }} {
     {% include extension ignore missing %}
 
     {% for op in resource.operations -%}
-        {% if op.response_is_binary | default(false) -%}
+        {% if op.response_is_event_stream -%}
+            {% set response_type = "EventStream" -%}
+        {% elif op.response_is_binary | default(false) -%}
             {% set response_type = "Uint8Array" -%}
         {% elif op.response_is_text | default(false) -%}
             {% set response_type = "string" -%}
@@ -57,6 +83,10 @@ export class {{ resource_type_name }} {
             {% if op.request_body_schema_name is defined -%}
                 {% set body_arg = op.request_body_schema_name | to_lower_camel_case -%}
                 {{ body_arg }}: {{ op.request_body_schema_name | to_upper_camel_case }},
+            {% elif op.request_body_kind == "binary" -%}
+                body{% if op.request_body_optional %}?{% endif %}: UploadBody,
+            {% elif op.request_body_kind == "multipart" -%}
+                body{% if op.request_body_optional %}?{% endif %}: {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body,
             {% endif -%}
 
             {# query / header parameters -#}
@@ -73,6 +103,9 @@ export class {{ resource_type_name }} {
             {% for p in op.path_params -%}
                 request.setPathParam("{{ p }}", {{ p | to_lower_camel_case }});
             {% endfor -%}
+            {% if op.security is defined -%}
+                request.setSecurity({{ op.security | tojson }});
+            {% endif -%}
 
             {# query parameters -#}
             {% for p in op.query_params -%}
@@ -105,7 +138,28 @@ export class {{ resource_type_name }} {
                 {% endif -%}
             {% endif -%}
 
-            {% if op.response_is_binary | default(false) -%}
+            {% if op.request_body_kind == "binary" -%}
+                {% if op.request_body_optional %}if (body !== undefined) {% endif %}request.setUploadBody(body);
+            {% elif op.request_body_kind == "multipart" -%}
+                {% if op.request_body_optional %}if (body !== undefined) { {% endif %}
+                const form = new MultipartBody();
+                {% for field in op.multipart_fields -%}
+                    {% set value = "body." ~ (field.name | to_lower_camel_case) -%}
+                    {% if not field.required or field.nullable %}if ({{ value }} !== undefined && {{ value }} !== null) { {% endif -%}
+                    {% if field.is_file -%}
+                    form.file("{{ field.name }}", {{ value }});
+                    {% else -%}
+                    form.field("{{ field.name }}", {{ m.field_to_json(value, field.type, true, false) }});
+                    {% endif -%}
+                    {% if not field.required or field.nullable %} } {% endif -%}
+                {% endfor -%}
+                request.setMultipartBody(form);
+                {% if op.request_body_optional %} } {% endif %}
+            {% endif -%}
+
+            {% if op.response_is_event_stream -%}
+                return request.sendEventStream(this.requestCtx);
+            {% elif op.response_is_binary | default(false) -%}
                 return request.sendBinary(this.requestCtx);
             {% elif op.response_is_text | default(false) -%}
                 return request.sendText(this.requestCtx);
@@ -119,6 +173,53 @@ export class {{ resource_type_name }} {
             {% endif -%}
         }
 
+        {% if op.pagination is defined -%}
+        {% set pg = op.pagination -%}
+        {% set param_field = pg.param | to_lower_camel_case -%}
+        /** Iterates with `for await` over every item of `{{ op.name | to_lower_camel_case }}`, fetching further pages on demand. */
+        public {{ op.name | to_lower_camel_case }}Iter(
+            {% for p in op.path_params -%}
+                {{ p | to_lower_camel_case }}: string,
+            {% endfor -%}
+            {% if op.request_body_schema_name is defined -%}
+                {{ body_arg }}: {{ op.request_body_schema_name | to_upper_camel_case }},
+            {% endif -%}
+            options{% if not op | has_required_query_or_header_params %}?{% endif %}: {{ options_ty }},
+        ): AsyncIterableIterator<{{ pg.item_schema | to_upper_camel_case }}> {
+            return paginate(
+                {
+                    style: "{{ pg.style }}",
+                    items: {{ pg.items | tojson }},
+                    {% if pg.next_cursor is defined -%}
+                    nextCursor: {{ pg.next_cursor | tojson }},
+                    {% endif -%}
+                    {% if pg.item_cursor is defined -%}
+                    itemCursor: "{{ pg.item_cursor }}",
+                    {% endif -%}
+                    {% if pg.has_more is defined -%}
+                    hasMore: {{ pg.has_more | tojson }},
+                    {% endif -%}
+                    {% if pg.total_pages is defined -%}
+                    totalPages: {{ pg.total_pages | tojson }},
+                    {% endif -%}
+                    {% if pg.total is defined -%}
+                    total: {{ pg.total | tojson }},
+                    {% endif -%}
+                    firstPage: {{ pg.first_page }},
+                },
+                options?.{{ param_field }},
+                (param) =>
+                    this.{{ op.name | to_lower_camel_case }}(
+                        {% for p in op.path_params %}{{ p | to_lower_camel_case }}, {% endfor -%}
+                        {% if op.request_body_schema_name is defined %}{{ body_arg }}, {% endif -%}
+                        { ...options, {{ param_field }}: param },
+                    ),
+                {{ op.response_body_schema_name | to_upper_camel_case }}Serializer._toJsonObject,
+                {{ pg.item_schema | to_upper_camel_case }}Serializer._fromJsonObject,
+            );
+        }
+
+        {% endif -%}
         {% set extra_path -%}
             api_extra/{{ resource.name | to_snake_case }}_{{ op.name | to_snake_case }}.ts
         {%- endset -%}

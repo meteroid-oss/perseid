@@ -8,7 +8,10 @@ import okhttp3.Interceptor;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Supplier;
 
 @Setter
 @Getter
@@ -21,4 +24,25 @@ public final class @@CLIENT_NAME@@Options {
 
     /** Wraps every HTTP attempt, inside the retry loop: caching, logging, custom headers. */
     private final List<Interceptor> interceptors = new ArrayList<>();
+
+    /**
+     * Called before each request for a fresh bearer token, e.g. an OAuth2 access token. Takes
+     * precedence over the client token.
+     */
+    private Supplier<String> tokenProvider;
+
+    /** HTTP basic credentials. */
+    @Setter(lombok.AccessLevel.NONE)
+    private String username;
+
+    @Setter(lombok.AccessLevel.NONE)
+    private String password;
+
+    /** API keys by security scheme name. Schemes left out use the client token. */
+    private Map<String, String> apiKeys = new HashMap<>();
+
+    public void setBasicAuth(String username, String password) {
+        this.username = username;
+        this.password = password;
+    }
 }

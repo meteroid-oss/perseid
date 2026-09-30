@@ -34,6 +34,7 @@ jobs:
       matrix:
         spec:
           - tests/fixtures/petstore.yaml
+          - tests/fixtures/features.yaml
           - https://raw.githubusercontent.com/meteroid-oss/meteroid-clients/main/spec/openapi.json
     steps:
       - uses: actions/checkout@v4
@@ -77,8 +78,14 @@ jobs:
         run: gradle build --no-daemon
       - working-directory: ${{ runner.temp }}/sdk/csharp
         run: dotnet build -warnaserror
-      - if: ${{ !startsWith(matrix.spec, 'https') }}
+      - if: endsWith(matrix.spec, 'petstore.yaml')
         run: dotnet run --project tests/csharp -p:SdkProject="$RUNNER_TEMP/sdk/csharp/Petstore/Petstore.csproj"
+      - name: Smoke tests against a mock server
+        if: endsWith(matrix.spec, 'features.yaml')
+        run: |
+          for language in typescript python go java rust; do
+            tests/features/run.sh "$language" "$RUNNER_TEMP/sdk/$language"
+          done
 
   # Opt-in runtime (webhooks) and middleware, exercised by tests inside each generated SDK.
   extensions:

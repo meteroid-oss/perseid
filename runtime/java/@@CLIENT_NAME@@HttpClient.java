@@ -3,10 +3,12 @@ package @@JAVA_PACKAGE@@;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import @@JAVA_PACKAGE@@.exceptions.ApiException;
+import @@JAVA_PACKAGE@@.streaming.EventStream;
 
 import okhttp3.*;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
@@ -19,10 +21,13 @@ public class @@CLIENT_NAME@@HttpClient {
     private final List<Long> retrySchedule;
     private final OkHttpClient client;
     private final ObjectMapper objectMapper;
+    private final @@CLIENT_NAME@@Auth auth;
+    private final List<List<String>> security;
 
+    /** A client authenticating through {@code defaultHeaders} only. */
     public @@CLIENT_NAME@@HttpClient(
             HttpUrl baseUrl, Map<String, String> defaultHeaders, List<Long> retrySchedule) {
-        this(baseUrl, defaultHeaders, retrySchedule, List.of());
+        this(baseUrl, defaultHeaders, retrySchedule, List.of(), null);
     }
 
     public @@CLIENT_NAME@@HttpClient(
@@ -30,14 +35,45 @@ public class @@CLIENT_NAME@@HttpClient {
             Map<String, String> defaultHeaders,
             List<Long> retrySchedule,
             List<Interceptor> interceptors) {
+        this(baseUrl, defaultHeaders, retrySchedule, interceptors, null);
+    }
+
+    public @@CLIENT_NAME@@HttpClient(
+            HttpUrl baseUrl,
+            Map<String, String> defaultHeaders,
+            List<Long> retrySchedule,
+            List<Interceptor> interceptors,
+            @@CLIENT_NAME@@Auth auth) {
+        this(baseUrl, defaultHeaders, retrySchedule, withInterceptors(interceptors), auth, null);
+    }
+
+    private static OkHttpClient withInterceptors(List<Interceptor> interceptors) {
+        OkHttpClient.Builder builder = new OkHttpClient.Builder();
+        interceptors.forEach(builder::addInterceptor);
+        return builder.build();
+    }
+
+    private @@CLIENT_NAME@@HttpClient(
+            HttpUrl baseUrl,
+            Map<String, String> defaultHeaders,
+            List<Long> retrySchedule,
+            OkHttpClient client,
+            @@CLIENT_NAME@@Auth auth,
+            List<List<String>> security) {
         this.baseUrl = baseUrl;
         this.defaultHeaders = defaultHeaders;
         this.retrySchedule = retrySchedule;
-        OkHttpClient.Builder builder = new OkHttpClient.Builder();
-        interceptors.forEach(builder::addInterceptor);
-        this.client = builder.build();
+        this.client = client;
+        this.auth = auth;
+        this.security = security;
 
         this.objectMapper = Utils.getObjectMapper();
+    }
+
+    /** A client for operations whose security requirement differs from the API-wide one. */
+    public @@CLIENT_NAME@@HttpClient withSecurity(List<List<String>> security) {
+        return new @@CLIENT_NAME@@HttpClient(
+                baseUrl, defaultHeaders, retrySchedule, client, auth, security);
     }
 
     public HttpUrl.Builder newUrlBuilder() {
@@ -59,11 +95,14 @@ public class @@CLIENT_NAME@@HttpClient {
             RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
             reqBuilder.method(method, body);
         } else {
-            reqBuilder.method(method, null);
+            reqBuilder.method(method, emptyBody(method));
         }
 
         // Add default headers
         defaultHeaders.forEach(reqBuilder::addHeader);
+        if (auth != null) {
+            auth.apply(reqBuilder, url, security);
+        }
 
         String idempotencyKey = headers == null ? null : headers.get("idempotency-key");
         if ((idempotencyKey == null || idempotencyKey.isEmpty()) && "POST".equals(method.toUpperCase())) {
@@ -128,11 +167,14 @@ public class @@CLIENT_NAME@@HttpClient {
             formBody = fields.toString();
             reqBuilder.method(method, body);
         } else {
-            reqBuilder.method(method, null);
+            reqBuilder.method(method, emptyBody(method));
         }
 
         // Add default headers
         defaultHeaders.forEach(reqBuilder::addHeader);
+        if (auth != null) {
+            auth.apply(reqBuilder, url, security);
+        }
 
         String idempotencyKey = headers == null ? null : headers.get("idempotency-key");
         if ((idempotencyKey == null || idempotencyKey.isEmpty()) && "POST".equals(method.toUpperCase())) {
@@ -190,11 +232,14 @@ public class @@CLIENT_NAME@@HttpClient {
             RequestBody body = RequestBody.create(jsonBody, MediaType.parse("application/json"));
             reqBuilder.method(method, body);
         } else {
-            reqBuilder.method(method, null);
+            reqBuilder.method(method, emptyBody(method));
         }
 
         // Add default headers
         defaultHeaders.forEach(reqBuilder::addHeader);
+        if (auth != null) {
+            auth.apply(reqBuilder, url, security);
+        }
 
         // Add custom headers if present
         if (headers != null) {
@@ -222,6 +267,98 @@ public class @@CLIENT_NAME@@HttpClient {
                 response.code(),
                 bodyString,
                 objectMapper);
+    }
+
+    /**
+     * Execute a request with a raw or multipart body. Streamed bodies are sent once, without
+     * retries.
+     */
+    public <Res> Res executeBodyRequest(
+            String method, HttpUrl url, Headers headers, RequestBody body, Class<Res> responseClass)
+            throws ApiException, IOException {
+        Request request = buildRequest(method, url, headers, body);
+        Response response = retry(request, client.newCall(request).execute(), client);
+        try (response) {
+            String bodyString = response.body() == null ? "" : response.body().string();
+            if (response.code() >= 200 && response.code() < 300) {
+                return responseClass == null || bodyString.isEmpty()
+                        ? null
+                        : objectMapper.readValue(bodyString, responseClass);
+            }
+            throw new ApiException(
+                    "Non 200 status code: `" + response.code() + "`",
+                    response.code(),
+                    bodyString,
+                    objectMapper);
+        }
+    }
+
+    /** Open a {@code text/event-stream} response. The read timeout does not apply to it. */
+    public EventStream executeEventStream(String method, HttpUrl url, Headers headers)
+            throws ApiException, IOException {
+        OkHttpClient streaming = client.newBuilder().readTimeout(Duration.ZERO).build();
+        Request.Builder builder = buildRequest(method, url, headers, null).newBuilder();
+        Request request = builder.header("Accept", "text/event-stream").build();
+        Response response = retry(request, streaming.newCall(request).execute(), streaming);
+        if (response.code() < 200 || response.code() >= 300) {
+            String bodyString = response.body() == null ? "" : response.body().string();
+            response.close();
+            throw new ApiException(
+                    "Non 200 status code: `" + response.code() + "`",
+                    response.code(),
+                    bodyString,
+                    objectMapper);
+        }
+        MediaType contentType = response.body().contentType();
+        if (contentType == null || !"text/event-stream".equals(contentType.type() + "/" + contentType.subtype())) {
+            response.close();
+            throw new IOException("expected a text/event-stream response, got " + contentType);
+        }
+        return new EventStream(response);
+    }
+
+    private Request buildRequest(String method, HttpUrl url, Headers headers, RequestBody body) {
+        Request.Builder reqBuilder = new Request.Builder().url(url);
+        reqBuilder.method(method, body != null ? body : emptyBody(method));
+        defaultHeaders.forEach(reqBuilder::addHeader);
+        if (auth != null) {
+            auth.apply(reqBuilder, url, security);
+        }
+        String idempotencyKey = headers == null ? null : headers.get("idempotency-key");
+        if ((idempotencyKey == null || idempotencyKey.isEmpty()) && "POST".equals(method.toUpperCase())) {
+            reqBuilder.addHeader("idempotency-key", "auto_" + UUID.randomUUID().toString());
+        }
+        if (headers != null) {
+            headers.forEach(pair -> reqBuilder.addHeader(pair.getFirst(), pair.getSecond()));
+        }
+        reqBuilder.addHeader(
+                "x-@@HEADER_PREFIX@@-req-id",
+                String.valueOf(ThreadLocalRandom.current().nextLong(0, Long.MAX_VALUE)));
+        return reqBuilder.build();
+    }
+
+    private Response retry(Request request, Response response, OkHttpClient http)
+            throws IOException {
+        RequestBody body = request.body();
+        int retryCount = 0;
+        while (response.code() >= 500
+                && retryCount < retrySchedule.size()
+                && (body == null || !body.isOneShot())) {
+            response.close();
+            LockSupport.parkNanos(retrySchedule.get(retryCount) * 1_000_000);
+            Request retryRequest =
+                    request.newBuilder()
+                            .header("x-@@HEADER_PREFIX@@-retry-count", String.valueOf(retryCount + 1))
+                            .build();
+            response = http.newCall(retryRequest).execute();
+            retryCount++;
+        }
+        return response;
+    }
+
+    private static RequestBody emptyBody(String method) {
+        boolean needsBody = List.of("POST", "PUT", "PATCH").contains(method.toUpperCase());
+        return needsBody ? RequestBody.create(new byte[0]) : null;
     }
 
     private Response executeRequestWithRetry(Request request, String body) throws IOException {

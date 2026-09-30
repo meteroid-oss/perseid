@@ -17,7 +17,7 @@ use crate::{error::Result, models::*, Configuration};
     }
     {% endif -%}
     {% if op | has_query_or_header_params %}
-    #[derive(Default)]
+    #[derive(Default{% if op.pagination is defined %}, Clone{% endif %})]
     pub struct {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options {
         {% for p in op.query_params -%}
             {% set ty = p.type.to_rust() -%}
@@ -125,6 +125,10 @@ impl<'a> {{ resource_type_name }}<'a> {
             .with_path_param("{{ p }}", {{ p | to_rust_ident }})
         {% endfor -%}
 
+        {% if op.security is defined -%}
+            .with_security(&[{% for names in op.security %}&[{% for name in names %}"{{ name }}", {% endfor %}], {% endfor %}])
+        {% endif -%}
+
         {% for p in op.query_params -%}
             {# `explode` defaults to true for OpenAPI `style: form`, and may be missing
                entirely when the codegen binary predates the `explode` IR field. -#}
@@ -177,5 +181,68 @@ impl<'a> {{ resource_type_name }}<'a> {
             .await
         {% endif -%}
     }
+    {% if op.pagination is defined %}
+    {% set pg = op.pagination -%}
+    {% set param = (op.query_params | selectattr("name", "equalto", pg.param) | first) -%}
+    /// Iterates over every item of [`Self::{{ op.name | to_snake_case }}`], fetching further pages on demand.
+    pub fn {{ op.name | to_snake_case }}_iter(
+        &self,
+        {% for p in op.path_params -%}
+            {{ p | to_rust_ident }}: String,
+        {% endfor -%}
+        {% if op.request_body_schema_name is defined -%}
+            {{ op.request_body_schema_name | to_snake_case }}: {% if op.request_body_optional %}Option<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_optional %}>{% endif %},
+        {% endif -%}
+        {% if has_required_params -%}
+            options: {{ param_struct_name }},
+        {%- else -%}
+            options: Option<{{ param_struct_name }}>,
+        {%- endif %}
+    ) -> crate::api::Paginator<'a, crate::models::{{ pg.item_schema | to_upper_camel_case }}> {
+        static SPEC: crate::api::pagination::Spec = crate::api::pagination::Spec {
+            style: crate::api::pagination::Style::{{ pg.style | to_upper_camel_case }},
+            items: &[{% for key in pg["items"] %}"{{ key }}", {% endfor %}],
+            {% for key in ["next_cursor", "has_more", "total_pages", "total"] -%}
+            {{ key }}: {% if pg[key] is defined %}Some(&[{% for segment in pg[key] %}"{{ segment }}", {% endfor %}]){% else %}None{% endif %},
+            {% endfor -%}
+            item_cursor: {% if pg.item_cursor is defined %}Some("{{ pg.item_cursor }}"){% else %}None{% endif %},
+            first_page: {{ pg.first_page }},
+        };
+        {% if not has_required_params -%}
+        let options = options.unwrap_or_default();
+        {% endif -%}
+        let start = serde_json::to_value({% if param.required %}Some(&options.{{ pg.param | to_rust_ident }}){% else %}options.{{ pg.param | to_rust_ident }}.as_ref(){% endif %})
+            .ok()
+            .filter(|start| !start.is_null());
+        let cfg = self.cfg;
+        crate::api::Paginator::new(
+            &SPEC,
+            start,
+            Box::new(move |param| {
+                let mut options = options.clone();
+                {% for p in op.path_params -%}
+                let {{ p | to_rust_ident }} = {{ p | to_rust_ident }}.clone();
+                {% endfor -%}
+                {% if op.request_body_schema_name is defined -%}
+                let {{ op.request_body_schema_name | to_snake_case }} = {{ op.request_body_schema_name | to_snake_case }}.clone();
+                {% endif -%}
+                Box::pin(async move {
+                    if let Some(param) = param {
+                        options.{{ pg.param | to_rust_ident }} =
+                            serde_json::from_value(param).map_err(crate::error::Error::generic)?;
+                    }
+                    let page = Self::new(cfg)
+                        .{{ op.name | to_snake_case }}(
+                            {% for p in op.path_params %}{{ p | to_rust_ident }}, {% endfor %}
+                            {% if op.request_body_schema_name is defined %}{{ op.request_body_schema_name | to_snake_case }}, {% endif %}
+                            {% if has_required_params %}options{% else %}Some(options){% endif %},
+                        )
+                        .await?;
+                    serde_json::to_value(page).map_err(crate::error::Error::generic)
+                })
+            }),
+        )
+    }
+    {% endif %}
     {% endfor %}
 }

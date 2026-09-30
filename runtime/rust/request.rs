@@ -4,7 +4,7 @@
 
 use std::{collections::HashMap, time::Duration};
 
-use http1::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, USER_AGENT};
+use http1::header::{CONTENT_LENGTH, CONTENT_TYPE, USER_AGENT};
 use hyper::body::Bytes;
 use itertools::Itertools as _;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
@@ -12,6 +12,7 @@ use rand::Rng;
 use serde::de::DeserializeOwned;
 
 use crate::api::{
+    auth_schemes::Security,
     middleware::{BoxError, Next, Request as MiddlewareRequest},
     upload::{Multipart, RequestBody},
     EventStream, Upload,
@@ -27,11 +28,6 @@ fn middleware_error(error: BoxError) -> Error {
     Error::generic(std::io::Error::other(error))
 }
 
-pub(crate) enum Auth {
-    None,
-    Bearer,
-}
-
 /// HTTP request builder with retry logic.
 pub(crate) struct Request {
     method: http1::Method,
@@ -45,6 +41,7 @@ pub(crate) struct Request {
     upload: Option<Upload>,
     multipart: Option<Multipart>,
     body_error: Option<Error>,
+    security: Option<Security>,
 }
 
 impl Request {
@@ -61,6 +58,7 @@ impl Request {
             upload: None,
             multipart: None,
             body_error: None,
+            security: None,
         }
     }
 
@@ -95,6 +93,12 @@ impl Request {
 
     pub fn with_multipart_body(mut self, body: Option<Multipart>) -> Self {
         self.multipart = body;
+        self
+    }
+
+    /// Overrides the API-wide security requirement.
+    pub fn with_security(mut self, security: Security) -> Self {
+        self.security = Some(security);
         self
     }
 
@@ -225,6 +229,10 @@ impl Request {
             "@@HEADER_PREFIX@@-req-id",
             rand::rng().random::<u32>().to_string(),
         );
+        let token = conf.bearer_access_token.as_deref().filter(|t| !t.is_empty());
+        let auth = conf.credentials.apply(self.security, token).await?;
+        self.query_params.extend(auth.query);
+        self.header_params.extend(auth.headers);
         let replayable = self.upload.as_ref().is_none_or(Upload::replayable)
             && self.multipart.as_ref().is_none_or(Multipart::replayable);
         let default_schedule: Vec<_> = (0..conf.num_retries)
@@ -376,24 +384,6 @@ impl Request {
         let mut request = req_builder.body(body).map_err(Error::generic)?;
 
         let request_headers = request.headers_mut();
-
-        // Detect the authorization type if it hasn't been set.
-        let auth = if conf.bearer_access_token.is_some() {
-            Auth::Bearer
-        } else {
-            Auth::None
-        };
-        match auth {
-            Auth::Bearer => {
-                if let Some(token) = &conf.bearer_access_token {
-                    let value = format!("Bearer {token}")
-                        .try_into()
-                        .map_err(Error::generic)?;
-                    request_headers.insert(AUTHORIZATION, value);
-                }
-            }
-            Auth::None => {}
-        }
 
         if let Some(user_agent) = &conf.user_agent {
             let value = user_agent.try_into().map_err(Error::generic)?;

@@ -470,3 +470,66 @@ fn csharp_releases_bump_the_csproj_version() {
     let csproj = fs::read_to_string(dir.path().join("csharp/Petstore/Petstore.csproj")).unwrap();
     assert!(csproj.contains("x-release-please-version"), "{csproj}");
 }
+
+const LIST_SPEC: &str = r##"
+openapi: 3.1.0
+info: { title: Shop, version: "1" }
+paths:
+  /items:
+    get:
+      operationId: list_items
+      parameters:
+        - { name: page, in: query, schema: { type: integer } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/ItemPage' } } } }
+  /items/{id}:
+    get:
+      operationId: get_item
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Item' } } } }
+components:
+  schemas:
+    Item: { type: object, required: [id], properties: { id: { type: string } } }
+    ItemPage:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Item' } }
+        meta: { $ref: '#/components/schemas/Meta' }
+    Meta: { type: object, required: [pages], properties: { pages: { type: integer } } }
+"##;
+
+fn inspect_with(pagination: &str) -> (bool, String) {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("openapi.yaml"), LIST_SPEC).unwrap();
+    let config = format!("spec = \"openapi.yaml\"\nname = \"Shop\"\n{pagination}\n[go]\n");
+    fs::write(dir.path().join("perseid.toml"), config).unwrap();
+    perseid(dir.path(), &["inspect"])
+}
+
+#[test]
+fn pagination_rules_apply_to_matching_operations() {
+    let (ok, out) = inspect_with("[pagination]\npage = \"page\"\nfirst_page = 0\n");
+    assert!(ok, "{out}");
+    let api: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let ops = &api["resources"][0]["operations"];
+    let list = ops
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["id"] == "list_items");
+    let pagination = &list.unwrap()["pagination"];
+    assert_eq!(pagination["style"], "page");
+    assert_eq!(pagination["item_schema"], "Item");
+    assert_eq!(pagination["first_page"], 0);
+    assert!(!out.contains("\"total_pages\""), "{out}");
+
+    let (ok, out) = inspect_with("[pagination]\npage = \"page\"\noperations = [\"get_item\"]\n");
+    assert!(!ok && out.contains("no `page` query parameter"), "{out}");
+    let (ok, out) = inspect_with("[pagination]\npage = \"page\"\ntotal_pages = \"meta.nope\"\n");
+    assert!(ok && !out.contains("\"pagination\""), "{out}");
+    let (ok, out) = inspect_with("[pagination]\ncursor = \"page\"\n");
+    assert!(ok && !out.contains("\"pagination\""), "{out}");
+}

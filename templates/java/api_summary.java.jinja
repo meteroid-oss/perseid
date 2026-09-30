@@ -1,3 +1,6 @@
+{% macro java_security(security) -%}
+List.of({%- for names in security %}{% if not loop.first %}, {% endif %}List.of({%- for name in names %}{% if not loop.first %}, {% endif %}"{{ name }}"{% endfor -%}){% endfor -%})
+{%- endmacro -%}
 {% set _ = set_summary_filename(sdk.client_name ~ ".java") -%}
 // this file is @generated
 package {{ sdk.java_package }};
@@ -8,6 +11,7 @@ import lombok.Getter;
 
 import okhttp3.HttpUrl;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -37,6 +41,11 @@ import java.util.Map;
  */
 @Getter
 public class {{ sdk.client_name }} {
+    private static final Map<String, {{ sdk.client_name }}Auth.Scheme> SECURITY_SCHEMES = Map.ofEntries(
+{%- for scheme in api.security_schemes %}
+            Map.entry("{{ scheme.name }}", new {{ sdk.client_name }}Auth.Scheme("{{ scheme.kind }}", {% if scheme.kind == "api_key" %}"{{ scheme.in }}", "{{ scheme.param }}"{% else %}null, null{% endif %})){% if not loop.last %},{% endif %}
+{%- endfor %}
+    );
 {% for resource in api.resources %}
     private final {{ resource.name | to_upper_camel_case }} {{ resource.name | to_lower_camel_case }};
 {% endfor %}
@@ -63,15 +72,16 @@ public class {{ sdk.client_name }} {
         }
 
         Map<String, String> defaultHeaders = Map.of(
-                "User-Agent", "{{ sdk.user_agent_prefix }}-java/" + Version.VERSION,
-                "Authorization", "Bearer " + apiKey
+                "User-Agent", "{{ sdk.user_agent_prefix }}-java/" + Version.VERSION
         );
+        {{ sdk.client_name }}Auth auth = new {{ sdk.client_name }}Auth(SECURITY_SCHEMES, {{ java_security(api.security) }}, apiKey, options);
 
         {{ sdk.client_name }}HttpClient httpClient = new {{ sdk.client_name }}HttpClient(
                 parsedUrl,
                 defaultHeaders,
                 options.getRetrySchedule(),
-                options.getInterceptors()
+                options.getInterceptors(),
+                auth
         );
 
 {% for resource in api.resources %}

@@ -1,24 +1,44 @@
 # this file is @generated
 """{{ sdk.client_name }} API resources."""
+{%- set streaming = namespace(used=false) %}
+{%- for resource in api.resources %}
+{%- for op in resource.operations if op.response_is_event_stream or op.request_body_kind in ["binary", "multipart"] %}
+{%- set streaming.used = true %}
+{%- endfor %}
+{%- endfor %}
 
+{% if streaming.used -%}
+from ._streaming import AsyncEventStream, EventStream, SseEvent, Upload
+{% endif -%}
 from .client import {{ sdk.client_name }}, {{ sdk.client_name }}Async, {{ sdk.client_name }}Options
 {% for resource in api.resources -%}
     {% set cls = resource.name | to_upper_camel_case -%}
     from .{{ resource.name | to_snake_case }} import {{ cls }}, {{ cls }}Async
+    {%- for op in resource.operations if op.request_body_kind == "multipart" %}, {{ cls }}{{ op.name | to_upper_camel_case }}Body{% endfor %}
 {% endfor %}
 __all__ = [
     "{{ sdk.client_name }}",
     "{{ sdk.client_name }}Async",
     "{{ sdk.client_name }}Options",
+    {% if streaming.used -%}
+    "AsyncEventStream",
+    "EventStream",
+    "SseEvent",
+    "Upload",
+    {% endif -%}
     {% for resource in api.resources -%}
         {% set cls = resource.name | to_upper_camel_case -%}
         "{{ cls }}",
         "{{ cls }}Async",
+        {% for op in resource.operations if op.request_body_kind == "multipart" -%}
+        "{{ cls }}{{ op.name | to_upper_camel_case }}Body",
+        {% endfor -%}
     {% endfor -%}
 ]
 
 {#- The client entry point lives in its own module so `api/__init__.py` stays a
     plain barrel file. -#}
+{% set kinds = api.security_schemes | map(attribute="kind") | list -%}
 {% set client_py %}# this file is @generated
 """{{ sdk.client_name }} API client."""
 
@@ -27,6 +47,7 @@ import typing as t
 
 import httpx
 
+from ._auth import SecurityScheme{% if "bearer" in kinds %}, TokenProvider{% endif %}
 from .common import (
     DEFAULT_NUM_RETRIES,
     DEFAULT_SERVER_URL,
@@ -56,6 +77,23 @@ class {{ sdk.client_name }}Options:
     retry_schedule: t.Optional[t.List[float]] = None
     """Explicit list of delays (seconds) before each retry. Takes precedence
     over `num_retries`."""
+{%- if "bearer" in kinds %}
+
+    token_provider: t.Optional[TokenProvider] = None
+    """Called before each request for a fresh bearer token, e.g. an OAuth2 access
+    token. Takes precedence over the client token."""
+{%- endif %}
+{%- if "basic" in kinds %}
+
+    basic_auth: t.Optional[t.Tuple[str, str]] = None
+    """HTTP basic `(username, password)`."""
+{%- endif %}
+{%- if "api_key" in kinds %}
+
+    api_keys: t.Dict[str, str] = dataclasses.field(default_factory=dict)
+    """API keys by security scheme name ({% for scheme in api.security_schemes if scheme.kind == "api_key" %}{% if not loop.first %}, {% endif %}`{{ scheme.name }}`{% endfor %}).
+    Schemes left out use the client token."""
+{%- endif %}
 
     middleware: t.List[SyncMiddleware] = dataclasses.field(default_factory=list)
     """Wraps every HTTP attempt of the synchronous client: caching, logging,
@@ -65,7 +103,16 @@ class {{ sdk.client_name }}Options:
     """The same, for the asyncio client."""
 
 
-def _build_configuration(token: str, options: t.Optional[{{ sdk.client_name }}Options]) -> Configuration:
+SECURITY_SCHEMES = {
+{%- for scheme in api.security_schemes %}
+    "{{ scheme.name }}": SecurityScheme("{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, "{{ scheme.in }}", "{{ scheme.param }}"{% endif %}),
+{%- endfor %}
+}
+
+
+def _build_configuration(
+    token: t.Optional[str], options: t.Optional[{{ sdk.client_name }}Options]
+) -> Configuration:
     options = options if options is not None else {{ sdk.client_name }}Options()
     if options.retry_schedule is not None:
         retry_schedule = list(options.retry_schedule)
@@ -77,6 +124,17 @@ def _build_configuration(token: str, options: t.Optional[{{ sdk.client_name }}Op
     return Configuration(
         base_path=(options.server_url or DEFAULT_SERVER_URL).rstrip("/"),
         bearer_access_token=token,
+{%- if "bearer" in kinds %}
+        token_provider=options.token_provider,
+{%- endif %}
+{%- if "basic" in kinds %}
+        basic_auth=options.basic_auth,
+{%- endif %}
+{%- if "api_key" in kinds %}
+        api_keys=dict(options.api_keys),
+{%- endif %}
+        security_schemes=SECURITY_SCHEMES,
+        security={{ api.security | tojson }},
         timeout=options.timeout,
         retry_schedule=retry_schedule,
         middleware=list(options.middleware),
@@ -107,7 +165,7 @@ class {{ sdk.client_name }}:
 
     def __init__(
         self,
-        token: str,
+        token: t.Optional[str],
         options: t.Optional[{{ sdk.client_name }}Options] = None,
         httpx_client: t.Optional[httpx.Client] = None,
     ) -> None:
@@ -166,7 +224,7 @@ class {{ sdk.client_name }}Async:
 
     def __init__(
         self,
-        token: str,
+        token: t.Optional[str],
         options: t.Optional[{{ sdk.client_name }}Options] = None,
         httpx_client: t.Optional[httpx.AsyncClient] = None,
     ) -> None:

@@ -12,6 +12,7 @@ pub struct Configuration {
     pub num_retries: u32,
     pub retry_schedule: Option<Vec<Duration>>,
     pub middleware: Vec<Arc<dyn Middleware>>,
+    pub(crate) credentials: crate::api::auth_schemes::Credentials,
 
     pub(crate) client: HyperClient<Connector, crate::api::upload::RequestBody>,
 }

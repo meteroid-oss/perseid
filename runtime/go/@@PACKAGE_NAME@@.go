@@ -22,6 +22,7 @@
 package @@PACKAGE_NAME@@
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -72,6 +73,17 @@ type Options struct {
 
 	// Debug writes a one-line summary of every request and response to stderr.
 	Debug bool
+
+	// TokenProvider is called before each request for a fresh bearer token,
+	// e.g. an OAuth2 access token. It takes precedence over the client token.
+	TokenProvider func(ctx context.Context) (string, error)
+
+	// BasicAuth holds the credentials of HTTP basic security schemes.
+	BasicAuth *BasicAuth
+
+	// APIKeys holds API keys by security scheme name. Schemes left out use the
+	// client token.
+	APIKeys map[string]string
 }
 
 // config is the resolved, immutable form of Options held by a Client.
@@ -83,6 +95,9 @@ type config struct {
 	timeout       time.Duration
 	retrySchedule []time.Duration
 	debug         bool
+	tokenProvider func(ctx context.Context) (string, error)
+	basicAuth     *BasicAuth
+	apiKeys       map[string]string
 }
 
 func newConfig(token string, options *Options) *config {
@@ -98,6 +113,10 @@ func newConfig(token string, options *Options) *config {
 		httpClient: http.DefaultClient,
 		timeout:    DefaultTimeout,
 		debug:      opts.Debug,
+
+		tokenProvider: opts.TokenProvider,
+		basicAuth:     opts.BasicAuth,
+		apiKeys:       opts.APIKeys,
 	}
 
 	if opts.ServerURL != "" {

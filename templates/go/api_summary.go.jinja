@@ -1,6 +1,14 @@
+{% from "types/macros.go.jinja" import go_security -%}
 {% set _ = set_summary_filename("client.go") -%}
 // this file is @generated
 package {{ sdk.package_name }}
+
+var securitySchemes = map[string]securityScheme{
+{% for scheme in api.security_schemes %}	"{{ scheme.name }}": {kind: "{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, location: "{{ scheme.in }}", param: "{{ scheme.param }}"{% endif %}},
+{% endfor %}}
+
+// defaultSecurity lists the alternatives of security schemes most operations accept.
+var defaultSecurity = {{ go_security(api.security) }}
 
 // Client is the entry point of the {{ sdk.client_name }} SDK.
 //

@@ -7,6 +7,7 @@
 {% for resource in api.resources -%}
 import { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}";
 {% endfor -%}
+import type { Security, SecurityScheme } from "./auth";
 import type { {{ sdk.client_name }}RequestContext } from "./request";
 import type { Middleware } from "./middleware";
 import type { XOR } from "./util";
@@ -22,10 +23,14 @@ export * from "./webhook";
 {% endif -%}
 export * from "./models/index";
 export { LIB_VERSION } from "./request";
-
+export type { EventStream, SseEvent, Upload, UploadBody } from "./streaming";
+{% set kinds = api.security_schemes | map(attribute="kind") | list %}
 {% for resource in api.resources -%}
 export { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}";
 {% for op in resource.operations -%}
+{% if op.request_body_kind == "multipart" -%}
+export type { {{ resource.name | to_upper_camel_case }}{{ op.name | to_upper_camel_case }}Body } from "./api/{{ resource.name | to_lower_camel_case }}";
+{% endif -%}
 {% if op | has_query_or_header_params -%}
 export type { {{ resource.name | to_upper_camel_case }}{{ op.name | to_upper_camel_case }}Options } from "./api/{{ resource.name | to_lower_camel_case }}";
 {% endif -%}
@@ -46,6 +51,26 @@ export type {{ sdk.client_name }}Options = {
   fetch?: typeof fetch;
   /** Wraps every HTTP attempt: caching, logging, custom headers. */
   middleware?: Middleware[];
+  {% if "bearer" in kinds -%}
+  /**
+   * Called before each request for a fresh bearer token, e.g. an OAuth2 access
+   * token. Takes precedence over the constructor token.
+   */
+  tokenProvider?: () => string | Promise<string>;
+  {% endif -%}
+  {% if "basic" in kinds -%}
+  /** HTTP basic credentials. */
+  basicAuth?: { username: string; password: string };
+  {% endif -%}
+  {% if "api_key" in kinds -%}
+  /** API keys by security scheme name. Schemes left out use the constructor token. */
+  apiKeys?: {
+    {% for scheme in api.security_schemes if scheme.kind == "api_key" -%}
+    /** Sent as the `{{ scheme.param }}` {% if scheme.in == "query" %}query parameter{% else %}{{ scheme.in }}{% endif %}. */
+    {{ scheme.name | to_lower_camel_case }}?: string;
+    {% endfor -%}
+  };
+  {% endif -%}
 } & XOR<
   {
     /** List of delays (in milliseconds) to wait before each retry attempt. */
@@ -62,6 +87,15 @@ export type {{ sdk.client_name }}Options = {
 >;
 
 const DEFAULT_BASE_URL = "{{ sdk.default_base_url }}";
+
+const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
+  schemes: {
+    {% for scheme in api.security_schemes -%}
+    "{{ scheme.name }}": { kind: "{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, in: "{{ scheme.in }}", param: "{{ scheme.param }}"{% endif %} },
+    {% endfor -%}
+  },
+  security: {{ api.security | tojson }},
+};
 
 /**
  * {{ sdk.client_name }} API client{% if sdk.tagline %} for {{ sdk.tagline }}{% endif %}.
@@ -85,16 +119,29 @@ export class {{ sdk.client_name }} {
   /**
    * Create a new {{ sdk.client_name }} client.
    *
-   * @param token API token for authentication
+   * @param token API token for authentication{% if "api_key" in kinds %}, also the default API key{% endif %}
    * @param options Client configuration options
    */
-  public constructor(token: string, options: {{ sdk.client_name }}Options = {}) {
+  public constructor(token: string | null, options: {{ sdk.client_name }}Options = {}) {
     const baseUrl: string = options.serverUrl ?? DEFAULT_BASE_URL;
+    const auth = {
+      auth: AUTH,
+      token,
+      {% if "bearer" in kinds %}tokenProvider: options.tokenProvider,{% endif %}
+      {% if "basic" in kinds %}basicAuth: options.basicAuth,{% endif %}
+      {% if "api_key" in kinds -%}
+      apiKeys: {
+        {% for scheme in api.security_schemes if scheme.kind == "api_key" -%}
+        "{{ scheme.name }}": options.apiKeys?.{{ scheme.name | to_lower_camel_case }},
+        {% endfor -%}
+      },
+      {% endif -%}
+    };
 
     if (options.retryScheduleInMs != null) {
       this.requestCtx = {
+        ...auth,
         baseUrl,
-        token,
         timeout: options.requestTimeout,
         retryScheduleInMs: options.retryScheduleInMs,
         debug: options.debug,
@@ -106,8 +153,8 @@ export class {{ sdk.client_name }} {
 
     if (options.numRetries != null) {
       this.requestCtx = {
+        ...auth,
         baseUrl,
-        token,
         timeout: options.requestTimeout,
         numRetries: options.numRetries,
         debug: options.debug,
@@ -118,8 +165,8 @@ export class {{ sdk.client_name }} {
     }
 
     this.requestCtx = {
+      ...auth,
       baseUrl,
-      token,
       timeout: options.requestTimeout,
       debug: options.debug,
       fetch: options.fetch,

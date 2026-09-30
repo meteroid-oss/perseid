@@ -31,6 +31,15 @@ type request struct {
 	// instance a body that cannot be serialized) so it can be surfaced when the
 	// request is executed.
 	err error
+	// security overrides the API-wide requirement when not nil.
+	security [][]string
+	// newBody returns a streamed body for each attempt; oneShot bodies are not retried.
+	newBody func() (io.Reader, error)
+	oneShot bool
+	// stream keeps the response open in response, until cancel.
+	stream   bool
+	response *http.Response
+	cancel   context.CancelFunc
 }
 
 func newRequest(method, path string) *request {
@@ -63,6 +72,11 @@ func (r *request) AddQueryParam(name, value string) {
 // SetQueryParamCSV joins values with commas (OpenAPI explode=false).
 func (r *request) SetQueryParamCSV(name string, values []string) {
 	r.query.Set(name, strings.Join(values, ","))
+}
+
+// SetSecurity overrides the API-wide security requirement of the request.
+func (r *request) SetSecurity(security [][]string) {
+	r.security = security
 }
 
 // SetHeader sets a request header.
@@ -152,6 +166,13 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 	}
 
 	cfg := c.cfg
+	security := req.security
+	if security == nil {
+		security = defaultSecurity
+	}
+	if err := cfg.authenticate(ctx, req, security); err != nil {
+		return nil, 0, err
+	}
 	endpoint, err := req.url(cfg.serverURL)
 	if err != nil {
 		return nil, 0, err
@@ -179,7 +200,7 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 		if err == nil {
 			return body, status, nil
 		}
-		if !retryable || attempt >= len(cfg.retrySchedule) || ctx.Err() != nil {
+		if !retryable || req.oneShot || attempt >= len(cfg.retrySchedule) || ctx.Err() != nil {
 			return nil, 0, err
 		}
 
@@ -198,15 +219,32 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 func (c *Client) attempt(ctx context.Context, req *request, endpoint string, attempt int) ([]byte, int, bool, error) {
 	cfg := c.cfg
 
-	if cfg.timeout > 0 {
-		var cancel context.CancelFunc
+	cancel := context.CancelFunc(func() {})
+	keep := false
+	switch {
+	case req.stream:
+		// The timeout only covers opening a stream, which then lives until closed.
+		ctx, cancel = context.WithCancel(ctx)
+		if cfg.timeout > 0 {
+			defer time.AfterFunc(cfg.timeout, cancel).Stop()
+		}
+	case cfg.timeout > 0:
 		ctx, cancel = context.WithTimeout(ctx, cfg.timeout)
-		defer cancel()
 	}
+	defer func() {
+		if !keep {
+			cancel()
+		}
+	}()
 
 	var body io.Reader
 	if req.body != nil {
 		body = bytes.NewReader(req.body)
+	} else if req.newBody != nil {
+		var err error
+		if body, err = req.newBody(); err != nil {
+			return nil, 0, false, err
+		}
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, req.method, endpoint, body)
@@ -222,11 +260,10 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	if req.contentType != "" {
 		httpReq.Header.Set("Content-Type", req.contentType)
 	}
-	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("User-Agent", cfg.userAgent)
-	if cfg.token != "" {
-		httpReq.Header.Set("Authorization", "Bearer "+cfg.token)
+	if httpReq.Header.Get("Accept") == "" {
+		httpReq.Header.Set("Accept", "application/json")
 	}
+	httpReq.Header.Set("User-Agent", cfg.userAgent)
 	if attempt > 0 {
 		httpReq.Header.Set("@@HEADER_PREFIX@@-retry-count", strconv.Itoa(attempt))
 	}
@@ -238,6 +275,11 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	resp, err := cfg.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, 0, true, &TransportError{Method: req.method, Path: req.path, Err: err}
+	}
+	if req.stream && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		keep = true
+		req.response, req.cancel = resp, cancel
+		return nil, resp.StatusCode, false, nil
 	}
 	defer resp.Body.Close()
 

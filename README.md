@@ -41,6 +41,8 @@ It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients),
 
 - **SDKs that read like handwritten code.** Typed models and enums, resource namespaces
   (`client.customers().list(...)`), retries, request ids, sync and async flavors where the language has them.
+- **Auth, pagination and streaming.** Every `securitySchemes` flavor clients need (bearer, basic,
+  API keys, OAuth2 tokens), iterators over paginated lists, server-sent events and file uploads.
 - **Your code stays yours.** Perseid only rewrites or deletes files it marked `@generated`, and
   refuses to overwrite anything else. Errors, helpers, tests and READMEs live right next to generated code.
 - **Templates you own.** `perseid eject rust` copies the built-in Jinja templates and runtime to
@@ -153,6 +155,70 @@ repo = "acme/acme-go"               # lives in its own repository
 Every table also takes `path`, `version`, `base_url`, `header_prefix`, `user_agent`, `webhooks` and a
 `context` table exposed to templates. `perseid inspect` prints the model templates receive.
 
+## Authentication
+
+Clients read `components.securitySchemes` and honor the `security` of each operation, including
+`security: []` for public endpoints. For every request they send the credentials of the first
+alternative that is fully configured:
+
+| Scheme | Configured with |
+|---|---|
+| `http` bearer, `oauth2`, `openIdConnect` | the constructor token, or a token provider called before each request |
+| `http` basic | `basicAuth` / `basic_auth` / `BasicAuth` / `setBasicAuth` |
+| `apiKey` in a header, query parameter or cookie | the constructor token, or per scheme in `apiKeys` / `api_keys` |
+
+```ts
+new Acme("sk_live_...");                                          // unchanged
+new Acme(null, { tokenProvider: () => oauth.accessToken() });     // OAuth2, refreshed by you
+```
+
+A spec without `securitySchemes` keeps sending `Authorization: Bearer <token>`.
+
+## Pagination
+
+Mark list operations with `x-pagination`, or describe them once in perseid.toml to match every
+operation with that query parameter and response shape:
+
+```yaml
+x-pagination:
+  cursor: starting_after        # or `page: page`, or `offset: offset`
+  item_cursor: id               # next cursor from the last item, or `next_cursor: <path>`
+  has_more: has_more            # optional, as are `total_pages`, `total` and `first_page`
+  items: data                   # the default
+```
+
+```toml
+[pagination]                    # or [[pagination]] with `operations = [...]` to scope rules
+page = "page"
+total_pages = "pagination_meta.total_pages"
+first_page = 0
+```
+
+`x-pagination: false` opts an operation out of perseid.toml rules. Paginated operations get an iterator next to the list method:
+
+```ts
+for await (const customer of client.customers.listCustomersIter({ perPage: 100 })) { ... }
+```
+
+```python
+for customer in client.customers.list_customers_iter(per_page=100): ...
+async for customer in async_client.customers.list_customers_iter(): ...
+```
+
+```go
+pager := client.Customers().ListCustomersIter(ctx, nil)
+for pager.Next() { customer := pager.Current() }   // or range over pager.All() with Go 1.23+
+```
+
+Rust has `let mut customers = client.customers().list_customers_iter(None); customers.next().await`,
+Java a `Paginator<Customer>` from `listCustomersIter()` that is `Iterable` and has `stream()`.
+
+## Streaming
+
+`text/event-stream` responses return an event stream (`for await`, `for`, `Next()`, `Iterable`,
+`next().await`), `multipart/form-data` bodies a typed `...Body` with `Upload` files, and
+`application/octet-stream` bodies accept bytes or streams. Streamed uploads are not retried.
+
 ## From your API repository to SDK pull requests
 
 ```yaml
@@ -237,7 +303,8 @@ Early, and honest about it:
 - Proven on [Meteroid's API](https://github.com/meteroid-oss/meteroid-clients) and our test
   specs, not yet on hundreds of APIs. Unsupported constructs make generation fail instead of
   being skipped: an issue with the spec attached is the fastest way to get one supported.
-- Not there yet: pagination helpers, auth other than bearer tokens, streaming outside Rust.
+- Not there yet: a built-in OAuth2 token exchange (bring a token provider), and auth,
+  pagination and streaming in C#.
 
 ## License
 

@@ -36,6 +36,23 @@ import httpx
 from .._version import __version__
 from ..errors import ApiException, NetworkException, ResponseDecodeError
 from ..serialization import BaseModel, format_datetime, format_decimal
+from ._auth import (
+    Security,
+    SecurityScheme,
+    TokenProvider,
+    apply_auth,
+    async_token,
+    chosen_schemes,
+    needs_token_provider,
+    sync_token,
+)
+from ._streaming import (
+    UploadContent,
+    is_event_stream,
+    multipart_files,
+    not_an_event_stream,
+    replayable,
+)
 from .middleware import AsyncMiddleware, SyncMiddleware, chain_async, chain_sync
 
 __all__ = [
@@ -111,6 +128,11 @@ class Configuration:
 
     base_path: str = DEFAULT_SERVER_URL
     bearer_access_token: t.Optional[str] = None
+    token_provider: t.Optional[TokenProvider] = None
+    basic_auth: t.Optional[t.Tuple[str, str]] = None
+    api_keys: t.Mapping[str, str] = dataclasses.field(default_factory=dict)
+    security_schemes: t.Mapping[str, SecurityScheme] = dataclasses.field(default_factory=dict)
+    security: Security = ()
     user_agent: str = f"@@USER_AGENT_PREFIX@@-python/{__version__}"
     timeout: t.Optional[float] = DEFAULT_TIMEOUT
     retry_schedule: t.List[float] = dataclasses.field(
@@ -120,10 +142,7 @@ class Configuration:
     async_middleware: t.List[AsyncMiddleware] = dataclasses.field(default_factory=list)
 
     def headers(self) -> t.Dict[str, str]:
-        headers = {"user-agent": self.user_agent, "accept": "application/json"}
-        if self.bearer_access_token is not None:
-            headers["authorization"] = f"Bearer {self.bearer_access_token}"
-        return headers
+        return {"user-agent": self.user_agent, "accept": "application/json"}
 
 
 def _raise_for_status(response: httpx.Response) -> httpx.Response:
@@ -168,6 +187,9 @@ class ApiBase:
         header_params: t.Optional[t.Mapping[str, t.Optional[str]]] = None,
         json_body: t.Optional[t.Any] = None,
         form_body: t.Optional[t.Mapping[str, t.Any]] = None,
+        upload_body: t.Optional[UploadContent] = None,
+        multipart: t.Optional[t.Sequence[t.Tuple[str, t.Any, bool]]] = None,
+        security: t.Optional[Security] = None,
     ) -> t.Dict[str, t.Any]:
         if path_params:
             path = path.format(
@@ -204,11 +226,31 @@ class ApiBase:
             kwargs["json"] = json_body
         elif form_body is not None:
             kwargs["data"] = dict(form_body)
+        elif upload_body is not None:
+            kwargs["content"] = upload_body
+            headers["content-type"] = "application/octet-stream"
+        elif multipart is not None:
+            kwargs["files"] = multipart_files(multipart)
+        schemes = chosen_schemes(self._cfg, self._cfg.security if security is None else security)
+        kwargs["auth_schemes"] = schemes
         return kwargs
 
-    def _delays(self) -> t.List[float]:
+    def _authenticate(self, kwargs: t.Dict[str, t.Any], token: t.Optional[str]) -> None:
+        apply_auth(self._cfg, kwargs.pop("auth_schemes"), token, kwargs)
+
+    def _delays(self, request_kwargs: t.Mapping[str, t.Any]) -> t.List[float]:
         # The first attempt happens immediately, subsequent ones are delayed.
+        if not replayable(request_kwargs):
+            return [0.0]
         return [0.0, *self._cfg.retry_schedule]
+
+    def _stream_kwargs(self, request_kwargs: t.Dict[str, t.Any]) -> t.Dict[str, t.Any]:
+        """Build-request arguments of an event stream, whose timeout only covers opening it."""
+        request_kwargs["headers"]["accept"] = "text/event-stream"
+        timeout = self._cfg.timeout
+        if timeout is not None:
+            request_kwargs["timeout"] = httpx.Timeout(timeout, read=None)
+        return request_kwargs
 
 
 class ApiBaseSync(ApiBase):
@@ -218,20 +260,30 @@ class ApiBaseSync(ApiBase):
         super().__init__(cfg)
         self._httpx_client = httpx_client
 
-    def _send(self, kwargs: t.Dict[str, t.Any]) -> httpx.Response:
-        if not self._cfg.middleware:
+    def _send(self, kwargs: t.Dict[str, t.Any], stream: bool) -> httpx.Response:
+        if stream:
+            kwargs = self._stream_kwargs(kwargs)
+        elif not self._cfg.middleware:
             return self._httpx_client.request(**kwargs)
         request = self._httpx_client.build_request(**kwargs)
-        return chain_sync(self._httpx_client.send, self._cfg.middleware)(request)
+        send = chain_sync(
+            lambda request: self._httpx_client.send(request, stream=stream), self._cfg.middleware
+        )
+        response = send(request)
+        if stream and not response.is_success:
+            response.read()
+        return response
 
-    def _request_sync(self, **kwargs: t.Any) -> httpx.Response:
+    def _request_sync(self, stream: bool = False, **kwargs: t.Any) -> httpx.Response:
         """Execute one operation, retrying 5xx and transport failures.
 
         Unlike ``rust/src/request.rs``, a client-side timeout is retried rather
         than propagated immediately -- see this module's docstring for why.
         """
         request_kwargs = self._request_kwargs(**kwargs)
-        delays = self._delays()
+        needs_token = needs_token_provider(self._cfg, request_kwargs["auth_schemes"])
+        self._authenticate(request_kwargs, sync_token(self._cfg) if needs_token else None)
+        delays = self._delays(request_kwargs)
         last_attempt = len(delays) - 1
         last_error: t.Optional[httpx.HTTPError] = None
 
@@ -240,12 +292,16 @@ class ApiBaseSync(ApiBase):
                 time.sleep(delay)
                 request_kwargs["headers"]["@@HEADER_PREFIX@@-retry-count"] = str(attempt)
             try:
-                response = self._send(request_kwargs)
+                response = self._send(request_kwargs, stream)
             except httpx.HTTPError as exc:
                 last_error = exc
                 continue
             if response.status_code < 500 or attempt == last_attempt:
-                return _raise_for_status(response)
+                _raise_for_status(response)
+                if stream and not is_event_stream(response):
+                    response.close()
+                    raise not_an_event_stream(response)
+                return response
 
         raise NetworkException(str(last_error)) from last_error
 
@@ -257,21 +313,31 @@ class ApiBaseAsync(ApiBase):
         super().__init__(cfg)
         self._httpx_client = httpx_client
 
-    async def _send(self, kwargs: t.Dict[str, t.Any]) -> httpx.Response:
-        if not self._cfg.async_middleware:
+    async def _send(self, kwargs: t.Dict[str, t.Any], stream: bool) -> httpx.Response:
+        if stream:
+            kwargs = self._stream_kwargs(kwargs)
+        elif not self._cfg.async_middleware:
             return await self._httpx_client.request(**kwargs)
         request = self._httpx_client.build_request(**kwargs)
-        send = chain_async(self._httpx_client.send, self._cfg.async_middleware)
-        return await send(request)
+        send = chain_async(
+            lambda request: self._httpx_client.send(request, stream=stream),
+            self._cfg.async_middleware,
+        )
+        response = await send(request)
+        if stream and not response.is_success:
+            await response.aread()
+        return response
 
-    async def _request_asyncio(self, **kwargs: t.Any) -> httpx.Response:
+    async def _request_asyncio(self, stream: bool = False, **kwargs: t.Any) -> httpx.Response:
         """Execute one operation, retrying 5xx and transport failures.
 
         Unlike ``rust/src/request.rs``, a client-side timeout is retried rather
         than propagated immediately -- see this module's docstring for why.
         """
         request_kwargs = self._request_kwargs(**kwargs)
-        delays = self._delays()
+        needs_token = needs_token_provider(self._cfg, request_kwargs["auth_schemes"])
+        self._authenticate(request_kwargs, await async_token(self._cfg) if needs_token else None)
+        delays = self._delays(request_kwargs)
         last_attempt = len(delays) - 1
         last_error: t.Optional[httpx.HTTPError] = None
 
@@ -280,11 +346,15 @@ class ApiBaseAsync(ApiBase):
                 await asyncio.sleep(delay)
                 request_kwargs["headers"]["@@HEADER_PREFIX@@-retry-count"] = str(attempt)
             try:
-                response = await self._send(request_kwargs)
+                response = await self._send(request_kwargs, stream)
             except httpx.HTTPError as exc:
                 last_error = exc
                 continue
             if response.status_code < 500 or attempt == last_attempt:
-                return _raise_for_status(response)
+                _raise_for_status(response)
+                if stream and not is_event_stream(response):
+                    await response.aclose()
+                    raise not_an_event_stream(response)
+                return response
 
         raise NetworkException(str(last_error)) from last_error

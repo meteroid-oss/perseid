@@ -1,0 +1,254 @@
+openapi: 3.1.0
+info:
+  title: Features API
+  version: 1.0.0
+servers:
+  - url: https://features.example.com
+security:
+  - bearer: []
+  - api_key: []
+paths:
+  /widgets:
+    get:
+      operationId: list_widgets
+      tags: [widgets]
+      x-pagination:
+        cursor: cursor
+        next_cursor: next_cursor
+      parameters:
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, format: int32 } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WidgetList' }
+  /widgets/{widget_id}/events:
+    get:
+      operationId: list_widget_events
+      tags: [widgets]
+      x-pagination:
+        cursor: starting_after
+        item_cursor: id
+        has_more: has_more
+      parameters:
+        - { name: widget_id, in: path, required: true, schema: { type: string } }
+        - { name: starting_after, in: query, schema: { type: string } }
+        - { name: kind, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventList' }
+  /gadgets:
+    get:
+      operationId: list_gadgets
+      tags: [gadgets]
+      x-pagination:
+        page: page
+        items: items
+        total_pages: meta.total_pages
+        first_page: 0
+      parameters:
+        - { name: page, in: query, schema: { type: integer, format: int32 } }
+        - { name: per_page, in: query, schema: { type: integer, format: int32 } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GadgetPage' }
+  /records:
+    get:
+      operationId: list_records
+      tags: [records]
+      security:
+        - api_key_query: []
+      x-pagination:
+        offset: offset
+        total: total
+      parameters:
+        - { name: offset, in: query, schema: { type: integer, format: int64 } }
+        - { name: limit, in: query, schema: { type: integer, format: int32 } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EntryPage' }
+  /health:
+    get:
+      operationId: health
+      tags: [account]
+      security: []
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /session:
+    post:
+      operationId: create_session
+      tags: [account]
+      security:
+        - basic: []
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /machine:
+    get:
+      operationId: machine_status
+      tags: [account]
+      security:
+        - oauth: []
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /events/stream:
+    get:
+      operationId: stream_events
+      tags: [streaming]
+      parameters:
+        - { name: topic, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: server-sent events
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /files:
+    post:
+      operationId: upload_file
+      tags: [streaming]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, name]
+              properties:
+                file: { type: string, format: binary }
+                name: { type: string }
+                count: { type: integer, format: int32 }
+                meta: { $ref: '#/components/schemas/Health' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /files/{file_id}/content:
+    put:
+      operationId: upload_content
+      tags: [streaming]
+      parameters:
+        - { name: file_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+    basic:
+      type: http
+      scheme: basic
+    api_key:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    api_key_query:
+      type: apiKey
+      in: query
+      name: api_key
+    oauth:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://features.example.com/oauth/token
+          scopes: {}
+  schemas:
+    Widget:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+    WidgetList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Widget' }
+        next_cursor: { type: [string, 'null'] }
+    Event:
+      type: object
+      required: [id, kind]
+      properties:
+        id: { type: string }
+        kind: { type: string }
+    EventList:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Event' }
+        has_more: { type: boolean }
+    Gadget:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+    PageMeta:
+      type: object
+      required: [page, total_pages]
+      properties:
+        page: { type: integer, format: int32 }
+        total_pages: { type: integer, format: int32 }
+    GadgetPage:
+      type: object
+      required: [items, meta]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Gadget' }
+        meta: { $ref: '#/components/schemas/PageMeta' }
+    Entry:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+    EntryPage:
+      type: object
+      required: [data, total]
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/Entry' }
+        total: { type: integer, format: int64 }
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string }

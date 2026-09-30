@@ -11,8 +11,13 @@ use crate::spec::IncludeMode;
 
 use super::{
     get_schema_name,
-    types::{Field, FieldType, resolve_schema_ref_in_field_type_public, serialize_field_type},
+    pagination::{Candidate, Pagination},
+    security::{Requirement, Security},
+    types::{
+        Field, FieldType, Types, resolve_schema_ref_in_field_type_public, serialize_field_type,
+    },
 };
+use crate::config;
 
 /// The API operations of the API client we generate.
 ///
@@ -146,25 +151,29 @@ impl Resource {
         Ok(())
     }
 
+    pub(crate) fn resolve_extensions(
+        &mut self,
+        security: &Security,
+        rules: &[config::Pagination],
+        types: &Types,
+    ) -> anyhow::Result<()> {
+        for op in &mut self.operations {
+            op.security = security.override_for(&op.id);
+            op.resolve_pagination(rules, types)
+                .with_context(|| format!("pagination of `{}`", op.id))?;
+        }
+        for resource in self.subresources.values_mut() {
+            resource.resolve_extensions(security, rules, types)?;
+        }
+        Ok(())
+    }
+
     fn new(name: String) -> Self {
         Self {
             name,
             operations: Vec::new(),
             subresources: BTreeMap::new(),
         }
-    }
-
-    pub(crate) fn requires_streaming_runtime(&self) -> bool {
-        self.operations.iter().any(|op| {
-            op.response_is_event_stream
-                || matches!(
-                    op.request_body_kind,
-                    RequestBodyKind::Binary | RequestBodyKind::Multipart
-                )
-        }) || self
-            .subresources
-            .values()
-            .any(Self::requires_streaming_runtime)
     }
 
     pub(crate) fn referenced_components(&self) -> BTreeSet<&str> {
@@ -190,6 +199,9 @@ impl Resource {
             }
             if let Some(name) = &operation.response_body_schema_name {
                 res.insert(name);
+            }
+            if let Some(pagination) = &operation.pagination {
+                res.insert(&pagination.item_schema);
             }
             res.extend(
                 operation
@@ -334,6 +346,13 @@ pub(crate) struct Operation {
     /// schemas (e.g. `RestErrorResponse`) into the generated models alongside everything else.
     #[serde(skip)]
     error_response_schema_names: BTreeSet<String>,
+    /// Security requirement, when it differs from the API-wide one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    security: Option<Requirement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pagination: Option<Pagination>,
+    #[serde(skip)]
+    x_pagination: Option<serde_json::Value>,
 }
 
 impl Operation {
@@ -622,6 +641,7 @@ impl Operation {
             })
             .unwrap_or((None, ResponseKind::None, BTreeSet::new()));
 
+        let x_pagination = op.extensions.get("x-pagination").cloned();
         let op = Operation {
             id: op_id,
             name: op_name,
@@ -643,8 +663,58 @@ impl Operation {
             response_is_text: response_kind == ResponseKind::Text,
             response_is_event_stream: response_kind == ResponseKind::EventStream,
             error_response_schema_names,
+            security: None,
+            pagination: None,
+            x_pagination,
         };
         Some((res_path, op))
+    }
+
+    /// Applies `x-pagination`, or the first perseid.toml rule matching this operation.
+    fn resolve_pagination(
+        &mut self,
+        rules: &[config::Pagination],
+        types: &Types,
+    ) -> anyhow::Result<()> {
+        let candidate = Candidate {
+            query_params: self
+                .query_params
+                .iter()
+                .map(|p| (p.name.as_str(), &p.r#type))
+                .collect(),
+            response: self.response_body_schema_name.as_deref(),
+        };
+        self.pagination = match self.x_pagination.take() {
+            Some(serde_json::Value::Bool(false)) => None,
+            Some(value) => {
+                let spec: config::Pagination =
+                    serde_json::from_value(value).context("invalid x-pagination")?;
+                ensure!(
+                    spec.operations.is_empty(),
+                    "`operations` only applies to perseid.toml"
+                );
+                Some(Pagination::resolve(&spec, &candidate, types)?)
+            }
+            None => {
+                let mut found = None;
+                for rule in rules {
+                    let listed = rule.operations.contains(&self.id);
+                    if !rule.operations.is_empty() && !listed {
+                        continue;
+                    }
+                    match Pagination::resolve(rule, &candidate, types) {
+                        Ok(pagination) => {
+                            found = Some(pagination);
+                            break;
+                        }
+                        Err(error) if listed => return Err(error),
+                        Err(_) => {}
+                    }
+                }
+                found
+            }
+        };
+        Ok(())
     }
 
     pub(crate) fn has_query_or_header_params(&self) -> bool {

@@ -32,6 +32,7 @@ pub struct Filters {
     pub include_mode: IncludeMode,
     pub excluded: BTreeSet<String>,
     pub specified: BTreeSet<String>,
+    pub pagination: Vec<crate::config::Pagination>,
 }
 
 /// Reads an OpenAPI document (JSON or YAML) from a path or an http(s) URL, as JSON text, upgraded to 3.1 when it is 3.0.
@@ -56,6 +57,7 @@ pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
 }
 
 pub(crate) fn api(spec: &str, filters: &Filters) -> Result<Api> {
+    let raw: Value = serde_json::from_str(spec)?;
     let mut spec: OpenApi =
         serde_json::from_str(spec).context("the spec is not a valid OpenAPI 3 document")?;
     let webhooks = webhooks(&spec);
@@ -66,9 +68,8 @@ pub(crate) fn api(spec: &str, filters: &Filters) -> Result<Api> {
         paths,
         &mut spec.components.take().unwrap_or_default(),
         &webhooks,
-        filters.include_mode,
-        &filters.excluded,
-        &filters.specified,
+        &raw,
+        filters,
     )
 }
 

@@ -167,3 +167,11 @@
         {{ panic("go codegen: unsupported header parameter type `" ~ p.type.to_go() ~ "` for header `" ~ p.name ~ "` - add explicit support in codegen/templates/go/types/macros.go.jinja") }}
     {%- endif -%}
 {%- endmacro %}
+
+{% macro go_security(security) -%}
+[][]string{ {%- for names in security %}{% if not loop.first %}, {% endif %}{ {%- for name in names %}{% if not loop.first %}, {% endif %}"{{ name }}"{% endfor -%} }{% endfor -%} }
+{%- endmacro %}
+
+{% macro go_strings(values) -%}
+[]string{ {%- for v in values %}{% if not loop.first %}, {% endif %}"{{ v }}"{% endfor -%} }
+{%- endmacro %}

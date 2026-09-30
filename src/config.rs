@@ -38,6 +38,9 @@ pub struct Config {
     pub exclude: Vec<String>,
     #[serde(default)]
     pub only: Vec<String>,
+    /// Paginated list operations, detected from their query parameter and response shape.
+    #[serde(default, deserialize_with = "one_or_many")]
+    pub pagination: Vec<Pagination>,
     pub rust: Option<Target>,
     pub typescript: Option<Target>,
     pub python: Option<Target>,
@@ -68,6 +71,44 @@ pub struct Target {
     pub webhooks: Option<bool>,
     #[serde(default)]
     pub context: BTreeMap<String, Value>,
+}
+
+/// How a list operation pages, as `x-pagination` on an operation or `[pagination]` in perseid.toml.
+/// Exactly one of `cursor`, `page` or `offset` names the query parameter selecting the page;
+/// response values are dotted paths of JSON property names.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Pagination {
+    pub cursor: Option<String>,
+    pub page: Option<String>,
+    pub offset: Option<String>,
+    /// The array of items, `data` by default.
+    pub items: Option<String>,
+    /// Cursor of the next page in the response.
+    pub next_cursor: Option<String>,
+    /// Field of the last item that is the next cursor, e.g. `id` for `starting_after`.
+    pub item_cursor: Option<String>,
+    /// Boolean telling whether more pages follow.
+    pub has_more: Option<String>,
+    pub total_pages: Option<String>,
+    /// Total number of items, for offset pagination.
+    pub total: Option<String>,
+    /// Number of the first page, 1 by default.
+    pub first_page: Option<i64>,
+    /// perseid.toml only: operations this rule must apply to, instead of every matching one.
+    #[serde(default)]
+    pub operations: Vec<String>,
+}
+
+fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Pagination>, D::Error> {
+    use serde::de::Error;
+    match toml::Value::deserialize(d)? {
+        toml::Value::Array(many) => many
+            .into_iter()
+            .map(|one| one.try_into().map_err(D::Error::custom))
+            .collect(),
+        one => Ok(vec![one.try_into().map_err(D::Error::custom)?]),
+    }
 }
 
 pub struct Sdk<'a> {
@@ -109,6 +150,7 @@ impl Config {
             },
             excluded: self.exclude.iter().cloned().collect(),
             specified: self.only.iter().cloned().collect(),
+            pagination: self.pagination.clone(),
         }
     }
 

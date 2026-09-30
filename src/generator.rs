@@ -42,17 +42,6 @@ pub(crate) fn generate_with_output_context(
         .rsplit_once(".")
         .context("template name must contain '.'")?;
 
-    if tpl_file_ext != "rs"
-        && api
-            .resources
-            .values()
-            .any(Resource::requires_streaming_runtime)
-    {
-        bail!(
-            "multipart uploads, binary uploads and event streams currently require the Rust target"
-        );
-    }
-
     if tpl_file_ext != "rs" {
         api.inline_aliases()?;
     }

@@ -8,6 +8,12 @@ mod event_stream;
 pub mod middleware;
 pub use upload::Upload;
 pub use event_stream::{EventStream, SseEvent};
+#[path = "../auth_schemes.rs"]
+pub(crate) mod auth_schemes;
+pub use auth_schemes::{BasicAuth, TokenProvider};
+#[path = "../pagination.rs"]
+pub(crate) mod pagination;
+pub use pagination::Paginator;
 
 {% for resource in api.resources -%}
     mod {{ resource.name | to_snake_case }};
@@ -37,6 +43,7 @@ pub use self::{
 {% if op.response_is_event_stream %}{% set streaming.events = true %}{% endif -%}
 {% endfor -%}
 {% endfor -%}
+{% set kinds = api.security_schemes | map(attribute="kind") | list -%}
 {# Generate client.rs with resource accessors #}
 {% set client_rs %}// this file is @generated
 //! {{ sdk.client_name }} API client.
@@ -48,7 +55,17 @@ use hyper_util::{client::legacy::Client as HyperClient, rt::TokioExecutor};
 use super::middleware::Middlewares;
 use crate::Configuration;
 
+use super::auth_schemes::{Credentials, Scheme, Security};
+
 const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+static SECURITY_SCHEMES: &[(&str, Scheme)] = &[
+{%- for scheme in api.security_schemes %}
+    ("{{ scheme.name }}", {% if scheme.kind == "bearer" %}Scheme::Bearer{% elif scheme.kind == "basic" %}Scheme::Basic{% else %}Scheme::ApiKey("{{ scheme.in }}", "{% if scheme.in == "query" %}{{ scheme.param }}{% else %}{{ scheme.param | lower }}{% endif %}"){% endif %}),
+{%- endfor %}
+];
+
+static DEFAULT_SECURITY: Security = &[{% for names in api.security %}&[{% for name in names %}"{{ name }}", {% endfor %}], {% endfor %}];
 
 /// Options for configuring the {{ sdk.client_name }} client.
 #[derive(Debug, Clone)]
@@ -77,6 +94,23 @@ pub struct {{ sdk.client_name }}Options {
     ///
     /// Default: 2
     pub num_retries: Option<u32>,
+{%- if "bearer" in kinds %}
+
+    /// Called before each request for a fresh bearer token, e.g. an OAuth2
+    /// access token. Takes precedence over the client token.
+    pub token_provider: Option<super::TokenProvider>,
+{%- endif %}
+{%- if "basic" in kinds %}
+
+    /// HTTP basic credentials.
+    pub basic_auth: Option<super::BasicAuth>,
+{%- endif %}
+{%- if "api_key" in kinds %}
+
+    /// API keys by security scheme name ({% for scheme in api.security_schemes if scheme.kind == "api_key" %}{% if not loop.first %}, {% endif %}`{{ scheme.name }}`{% endfor %}).
+    /// Schemes left out use the client token.
+    pub api_keys: std::collections::HashMap<String, String>,
+{%- endif %}
 
     /// Retry Schedule.
     ///
@@ -97,6 +131,15 @@ impl Default for {{ sdk.client_name }}Options {
             num_retries: None,
             retry_schedule: None,
             middleware: Middlewares::default(),
+{%- if "bearer" in kinds %}
+            token_provider: None,
+{%- endif %}
+{%- if "basic" in kinds %}
+            basic_auth: None,
+{%- endif %}
+{%- if "api_key" in kinds %}
+            api_keys: Default::default(),
+{%- endif %}
         }
     }
 }
@@ -150,6 +193,13 @@ impl {{ sdk.client_name }} {
             num_retries: options.num_retries.unwrap_or(2),
             retry_schedule: options.retry_schedule,
             middleware: options.middleware.0,
+            credentials: Credentials {
+                schemes: SECURITY_SCHEMES,
+                security: DEFAULT_SECURITY,
+                token_provider: {% if "bearer" in kinds %}options.token_provider{% else %}None{% endif %},
+                basic_auth: {% if "basic" in kinds %}options.basic_auth{% else %}None{% endif %},
+                api_keys: {% if "api_key" in kinds %}options.api_keys{% else %}Default::default(){% endif %},
+            },
         });
 
         Self { cfg }
@@ -171,6 +221,7 @@ impl {{ sdk.client_name }} {
             num_retries: self.cfg.num_retries,
             retry_schedule: self.cfg.retry_schedule.clone(),
             middleware: self.cfg.middleware.clone(),
+            credentials: self.cfg.credentials.clone(),
         });
 
         Self { cfg }
