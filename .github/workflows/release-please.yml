@@ -19,7 +19,7 @@ jobs:
       - id: release
         uses: googleapis/release-please-action@v4
   # Tags made with GITHUB_TOKEN trigger no workflow, but dispatches do. Dispatching, rather than
-  # calling, release.yml keeps it the top-level workflow that npm, PyPI and crates.io trust.
+  # calling, release.yml keeps it the top-level workflow npm trusts.
   release:
     needs: release-please
     if: needs.release-please.outputs.created == 'true'

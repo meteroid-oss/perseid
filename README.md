@@ -13,8 +13,7 @@ npx perseid init       # finds openapi.json, writes perseid.toml and package ske
 npx perseid generate   # formatted SDKs for every language, in seconds
 ```
 
-Or install it: `curl -fsSL https://sh.meteroid.com/perseid | sh`. Also on PyPI (`uvx perseid`,
-`pipx run perseid`), crates.io (`cargo binstall perseid`, `cargo install perseid`) and as the
+Or install it: `curl -fsSL https://sh.meteroid.com/perseid | sh`, also available as the
 `ghcr.io/meteroid-oss/perseid` image. Linux and macOS, x64 and arm64.
 
 ```ts
