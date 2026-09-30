@@ -30,6 +30,15 @@ pub struct Init {
 }
 
 pub fn run(init: Init, root: &Path) -> Result<Vec<PathBuf>> {
+    run_with(init, root, |_| Ok(()))
+}
+
+/// [`run`], with `layout` editing perseid.toml before any package skeleton is written.
+pub fn run_with(
+    init: Init,
+    root: &Path,
+    layout: impl FnOnce(&Path) -> Result<()>,
+) -> Result<Vec<PathBuf>> {
     let config_path = root.join(config::FILE);
     let mut created = Vec::new();
     let mut toml = if config_path.exists() {
@@ -96,6 +105,7 @@ pub fn run(init: Init, root: &Path) -> Result<Vec<PathBuf>> {
         fsx::write(&config_path, toml.as_bytes())?;
         created.push(config_path.clone());
     }
+    layout(&config_path)?;
     let (config, root) = Config::load(&config_path)?;
     let mut packages = Vec::new();
     for sdk in config.sdks(&[])?.iter().filter(|s| s.repo.is_none()) {
@@ -192,18 +202,62 @@ fn package(config: &Config, sdk: &Sdk, dir: &Path, released: Option<String>) -> 
 
 /// Adds missing `packages` to the release-please files of `repo`, and the workflow releasing them.
 fn release(repo: &Path, packages: &[Package]) -> Result<Vec<PathBuf>> {
+    let read = |path: &str| Ok(std::fs::read_to_string(repo.join(path)).ok());
+    let mut created = Vec::new();
+    for (path, content) in release_files(read, packages)? {
+        let target = repo.join(path);
+        fsx::write(&target, &content)?;
+        created.push(target);
+    }
+    Ok(created)
+}
+
+/// The release files of a repository holding `sdks`, as `perseid init` gives them to a new one.
+pub fn release_scaffold(
+    config: &Config,
+    sdks: &[&Sdk],
+    read: impl Fn(&str) -> Result<Option<String>>,
+) -> Result<Vec<(String, Vec<u8>)>> {
+    let mut packages = Vec::new();
+    for sdk in sdks {
+        let dir = tempfile::tempdir()?;
+        for file in [
+            "package.json",
+            "Cargo.toml",
+            "pyproject.toml",
+            "gradle.properties",
+            "version.go",
+        ] {
+            let path = match sdk.path.as_str() {
+                "." => file.to_owned(),
+                sdk => format!("{sdk}/{file}"),
+            };
+            if let Some(text) = read(&path)? {
+                std::fs::write(dir.path().join(file), text)?;
+            }
+        }
+        let released = manifest_version(dir.path());
+        packages.push(package(config, sdk, dir.path(), released));
+    }
+    release_files(read, &packages)
+}
+
+/// The release-please files and workflow `read` lacks or holds without some of `packages`.
+fn release_files(
+    read: impl Fn(&str) -> Result<Option<String>>,
+    packages: &[Package],
+) -> Result<Vec<(String, Vec<u8>)>> {
     if packages.is_empty() {
         return Ok(vec![]);
     }
-    let read = |path: &Path| -> Result<Option<Value>> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => Ok(Some(serde_json::from_str(&text)?)),
-            Err(_) => Ok(None),
-        }
+    let json = |path: &str| -> Result<Option<Value>> {
+        read(path)?
+            .map(|text| serde_json::from_str(&text).map_err(Into::into))
+            .transpose()
     };
-    let config_path = repo.join("release-please-config.json");
-    let manifest_path = repo.join(".release-please-manifest.json");
-    let mut config = read(&config_path)?.unwrap_or_else(|| {
+    let config_path = "release-please-config.json";
+    let manifest_path = ".release-please-manifest.json";
+    let mut config = json(config_path)?.unwrap_or_else(|| {
         json!({
             "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
             "bump-minor-pre-major": true,
@@ -213,7 +267,7 @@ fn release(repo: &Path, packages: &[Package]) -> Result<Vec<PathBuf>> {
             "packages": {},
         })
     });
-    let mut manifest = read(&manifest_path)?.unwrap_or_else(|| json!({}));
+    let mut manifest = json(manifest_path)?.unwrap_or_else(|| json!({}));
     let (Some(entries), Some(versions)) = (
         config
             .as_object_mut()
@@ -225,7 +279,7 @@ fn release(repo: &Path, packages: &[Package]) -> Result<Vec<PathBuf>> {
     let Some(entries) = entries.as_object_mut() else {
         bail!("`packages` of release-please-config.json must be an object");
     };
-    let mut created = Vec::new();
+    let mut files = Vec::new();
     let mut added = false;
     for package in packages {
         if entries.contains_key(&package.path) {
@@ -239,21 +293,16 @@ fn release(repo: &Path, packages: &[Package]) -> Result<Vec<PathBuf>> {
     }
     if added {
         for (path, value) in [(config_path, &config), (manifest_path, &manifest)] {
-            fsx::write(
-                &path,
-                (serde_json::to_string_pretty(value)? + "\n").as_bytes(),
-            )?;
-            created.push(path);
+            let text = serde_json::to_string_pretty(value)? + "\n";
+            files.push((path.to_owned(), text.into_bytes()));
         }
     }
     for (path, content) in assets::under("scaffold/release") {
-        let target = repo.join(path);
-        if !target.exists() {
-            fsx::write(&target, content)?;
-            created.push(target);
+        if read(path)?.is_none() {
+            files.push((path.to_owned(), content.to_vec()));
         }
     }
-    Ok(created)
+    Ok(files)
 }
 
 /// Scaffold tokens of the package metadata, which manifests leave out when unset.
@@ -451,7 +500,7 @@ fn spdx(name: &str) -> Option<String> {
 }
 
 /// The web URL of the `origin` remote of the repository `root` is in, when it is public.
-fn git_remote(root: &Path) -> Option<String> {
+pub(crate) fn git_remote(root: &Path) -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["remote", "get-url", "origin"])
         .current_dir(root)

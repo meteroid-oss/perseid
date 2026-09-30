@@ -64,6 +64,8 @@ jobs:
           token: ${{ secrets.SDK_TOKEN }}   # contents + pull requests write on the SDK repositories
 ```
 
+`perseid init --github` sets this up: SDK repositories, a GitHub App for the token, and this workflow.
+
 Self-hosted runners and other CIs can use `ghcr.io/meteroid-oss/perseid`, which bundles every pinned formatter.
 
 ## Docs

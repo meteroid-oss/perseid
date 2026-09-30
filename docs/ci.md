@@ -23,6 +23,28 @@ to `perseid/update` and opens or updates a pull request, in this repository or i
 repositories named by `repo`. For pull request checks, pass `command: generate --check`, which
 fails on drift. See [Tokens](#tokens) for which `token` to pass.
 
+## Quick setup: `perseid init --github`
+
+Run in a clone of the repository holding the spec, `perseid init --github` sets up everything
+[Tokens](#tokens) describes, with a GitHub App, so that pushing a spec change opens SDK pull requests:
+
+1. signs in with `GH_TOKEN`, the `gh` CLI's token or a browser login, and stores no token;
+2. offers one repository per SDK (`acme-node`, `acme-python`...), writes their `repo` to
+   `perseid.toml` and creates the missing ones, as private or public as the spec repository;
+3. commits `sdk-release.yml` and the release-please files to each SDK repository, with your
+   token, so the App needs no permission on workflow files;
+4. creates a GitHub App in your browser (Contents and Pull requests write, no webhook) and stores
+   its `SDK_APP_ID` variable and `SDK_APP_PRIVATE_KEY` secret in the spec and SDK repositories;
+5. waits while you install the App on them;
+6. opens a pull request adding `.github/workflows/sdks.yml`, which mints the App's token and runs
+   the Action (`--push` commits it to the default branch instead);
+7. lists what each registry still needs.
+
+Re-running it resumes where it stopped and reuses the repositories, files, App and pull request
+already there. `--yes` takes every default, `--no-browser` prints URLs instead of opening them, and
+`--github-owner` puts the SDK repositories and the App under another account. The rest of this page
+is the same setup by hand.
+
 ## Tokens
 
 Events caused by the default `GITHUB_TOKEN` start no workflow, except `workflow_dispatch` and

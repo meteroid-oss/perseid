@@ -6,6 +6,7 @@ mod format;
 mod fsx;
 pub mod generate;
 mod generator;
+pub mod github;
 pub mod init;
 mod postprocessing;
 pub mod pr;

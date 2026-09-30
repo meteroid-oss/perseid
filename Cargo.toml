@@ -13,12 +13,15 @@ repository = "https://github.com/meteroid-oss/perseid"
 [dependencies]
 aide = "0.14.1"
 anyhow = "1.0.94"
+base64 = "0.22"
 camino = "1.1.9"
 clap = { version = "4.5.23", features = ["derive"] }
+crypto_box = { version = "0.9", features = ["seal"] }
 fs-err = "3.0.0"
 heck = "0.5.0"
 indexmap = "2.7.0"
 itertools = "0.14.0"
+jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
 minijinja = { version = "2.8.0", features = ["loader", "json"] }
 schemars = "0.8.21"
 serde = { version = "1.0.215", features = ["derive", "rc"] }

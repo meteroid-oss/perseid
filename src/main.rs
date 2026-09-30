@@ -39,6 +39,21 @@ enum Command {
         /// Skip the release-please files and the SDK release workflow.
         #[arg(long)]
         no_release: bool,
+        /// Set up GitHub: SDK repositories, a GitHub App and the workflow opening SDK pull requests.
+        #[arg(long)]
+        github: bool,
+        /// Account owning the SDK repositories and the App (default: the spec repository's).
+        #[arg(long, requires = "github")]
+        github_owner: Option<String>,
+        /// Answer every question with its default.
+        #[arg(long, short)]
+        yes: bool,
+        /// Print URLs instead of opening them in a browser.
+        #[arg(long)]
+        no_browser: bool,
+        /// Commit the GitHub workflow to the default branch instead of opening a pull request.
+        #[arg(long, requires = "github")]
+        push: bool,
     },
     /// Generate SDKs.
     Generate {
@@ -89,22 +104,46 @@ fn run(cli: Cli) -> Result<ExitCode> {
             name,
             base_url,
             no_release,
+            github,
+            github_owner,
+            yes,
+            no_browser,
+            push,
         } => {
             let root = cli.config.parent().map(|p| cwd.join(p)).unwrap_or(cwd);
-            let created = init::run(
-                init::Init {
-                    languages,
-                    spec,
-                    name,
-                    base_url,
-                    release: !no_release,
-                },
-                &root,
-            )?;
+            let options = perseid::github::Options {
+                owner: github_owner,
+                yes,
+                browser: !no_browser,
+                push,
+            };
+            let init = init::Init {
+                languages,
+                spec,
+                name,
+                base_url,
+                release: !no_release,
+            };
+            let ui = perseid::github::Ui::new(&options);
+            let created = match github {
+                true => init::run_with(init, &root, |path| {
+                    perseid::github::layout(path, &ui, options.owner.as_deref())
+                })?,
+                false => init::run(init, &root)?,
+            };
             for path in created {
                 println!("+ {}", path.strip_prefix(&root).unwrap_or(&path).display());
             }
-            println!("\nnext: perseid generate");
+            let config_path = root.join(config::FILE);
+            let offered = !github && !yes && perseid::github::offered(&root);
+            if offered && ui.confirm("Set up GitHub automation?", true)? {
+                perseid::github::layout(&config_path, &ui, None)?;
+                perseid::github::setup(&config_path, &options)?;
+            } else if github {
+                perseid::github::setup(&config_path, &options)?;
+            } else {
+                println!("\nnext: perseid generate");
+            }
         }
         Command::Generate {
             languages,
