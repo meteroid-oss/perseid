@@ -3,7 +3,8 @@
 Every SDK retries connection errors, timeouts, 408, 429 and 5xx responses with jittered backoff,
 honoring `Retry-After`, but only when the method is idempotent or the request carries an
 `Idempotency-Key` (POST gets one automatically). Enum values and union variants newer than the SDK
-are kept rather than rejected.
+are kept rather than rejected. API errors carry the status, the response headers (for request
+ids) and the raw body; error files scaffolded by older versions keep working, without the headers.
 
 ## Rust
 
@@ -38,7 +39,8 @@ and async clients. Unions are models holding the discriminator and the variant
 
 Every method takes trailing options for one call: `WithHeader`, `WithTimeout`,
 `WithIdempotencyKey` and `WithMaxRetries`. With `patch_nullable = true`, `Null[T]()` clears a
-PATCH field.
+PATCH field. Generated files start with the `// Code generated ... DO NOT EDIT.` line linters
+and editors look for.
 
 ## Java
 
