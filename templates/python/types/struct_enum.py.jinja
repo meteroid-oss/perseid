@@ -44,11 +44,11 @@ from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
 {% if content_attr == discriminator_attr or content_attr in shared or discriminator_attr in shared -%}
     {{ panic("struct enum `" ~ type.name ~ "`: the discriminator, content and shared fields collide") }}
 {%- endif -%}
-{% set runtime_names = ["TaggedUnionModel", "UnknownVariant"] -%}
+{% set runtime_names = ["FROM_CONTENT", "TaggedUnionModel", "UnknownVariant"] -%}
 {% if type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
     {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
 {% endif -%}
-{{ model_imports(referenced_components, runtime_names) }}
+{{ model_imports(referenced_components, runtime_names, union_refs | reject("in", [type.name]) | list) }}
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -74,7 +74,8 @@ class {{ class_name }}(TaggedUnionModel):
     {%- for variant in type.variants %}
         {{ py_str(variant.name) }},
     {%- endfor %}
-    ]
+    ] = FROM_CONTENT
+    """Defaults to the tag of the `{{ content_attr }}` model."""
     {{ content_attr }}: (
     {%- for c in refs | unique %}
         {% if c %}{{ c | to_upper_camel_case }}{% else %}None{% endif %} |

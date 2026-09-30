@@ -17,17 +17,17 @@ perseid generate   # formatted SDKs for every language, in seconds
 
 ```ts
 const petstore = new Petstore("sk_live_...");
-const pets = await petstore.pets.listPets({ limit: 10, status: "available" });
+const pets = await petstore.pets.list({ limit: 10, status: "available" });
 ```
 
 ```python
 petstore = Petstore("sk_live_...")
-pets = petstore.pets.list_pets(limit=10, status=PetStatus.AVAILABLE)
+pets = petstore.pets.list(limit=10, status=PetStatus.AVAILABLE)
 ```
 
 ```csharp
 using var petstore = new PetstoreClient("sk_live_...");
-var pets = await petstore.Pets.ListPetsAsync(new() { Limit = 10, Status = PetStatus.Available });
+var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.Available });
 ```
 
 It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients), and started as a fork of
@@ -36,7 +36,8 @@ It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients),
 ## What you get
 
 - **SDKs that read like handwritten code.** Typed models, tolerant enums and unions, resource
-  namespaces, retries with `Retry-After`, per-call options, sync and async where the language has them.
+  namespaces with `list`/`create`/`retrieve` methods, typed errors by status, retries with
+  `Retry-After`, per-call options, sync and async where the language has them.
 - **Auth, pagination and streaming.** Bearer, basic, API keys and OAuth2 tokens, iterators over
   paginated lists, server-sent events and file uploads.
 - **Your code stays yours.** Perseid only rewrites or deletes files it marked `@generated`.

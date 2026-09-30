@@ -14,9 +14,12 @@ public sealed partial class @@CLIENT_NAME@@ClientOptions
     /// <summary>The API base URL.</summary>
     public string BaseUrl { get; set; } = DefaultBaseUrl;
 
+    /// <summary>The <see cref="Timeout"/> used when it is not set: @@TIMEOUT@@ seconds.</summary>
+    public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(@@TIMEOUT@@);
+
     /// <summary>Bounds each attempt, body included except for event streams.
     /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> disables it.</summary>
-    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(15);
+    public TimeSpan Timeout { get; set; } = DefaultTimeout;
 
     /// <summary>Retries after network failures, timeouts, 408, 429 and 5xx, with jittered backoff or
     /// <c>Retry-After</c>. Except on 429, only idempotent requests or those with an

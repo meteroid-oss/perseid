@@ -1,4 +1,4 @@
-{% from "types/macros.rs.jinja" import struct_fields, struct_new, unknown_variant, value_type -%}
+{% from "types/macros.rs.jinja" import struct_fields, struct_new, unknown_variant, value_type, union_enums, union_imports -%}
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::models::codec;
@@ -9,6 +9,7 @@ use super::{
     {% endfor -%}
 };
 {% endif %}
+{{ union_imports() }}
 
 {% set recursive = recursive_refs | map("to_upper_camel_case") | list -%}
 {% set type_name = type.name | to_upper_camel_case -%}
@@ -23,11 +24,12 @@ use super::{
 {{ doc_comment }}
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 pub struct {{ type_name }} {
-    {{ struct_fields(shared, recursive, patch_body) }}
+    {{ struct_fields(shared, recursive, patch_body, owner=type_name) }}
 
     #[serde(flatten)]
     pub content: {{ enum_name }},
 }
+{{ union_enums(type_name, shared) }}
 {% endif %}
 
 {% for variant in type.variants if variant.type == "struct" and variant.fields -%}
@@ -35,12 +37,13 @@ pub struct {{ type_name }} {
 /// The `{{ variant.name }}` variant of [`{{ enum_name }}`].
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 pub struct {{ struct_name }} {
-    {{ struct_fields(variant.fields, recursive, false, tag) }}
+    {{ struct_fields(variant.fields, recursive, false, tag, owner=struct_name) }}
 }
 
 impl {{ struct_name }} {
-    {{ struct_new(variant.fields, recursive, tag) }}
+    {{ struct_new(variant.fields, recursive, tag, owner=struct_name) }}
 }
+{{ union_enums(struct_name, variant.fields) }}
 {% endfor %}
 
 {% macro payload(variant) -%}

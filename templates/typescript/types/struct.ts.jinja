@@ -2,6 +2,9 @@
 {% for c in referenced_components -%}
 import { type {{ c | to_upper_camel_case }}, {{ c | to_upper_camel_case }}Serializer } from "./{{ c | to_lower_camel_case }}.js";
 {% endfor -%}
+{% for c in union_refs | default([]) if c != type.name -%}
+import { type {{ c | to_upper_camel_case }}, {{ c | to_upper_camel_case }}Serializer } from "./{{ c | to_lower_camel_case }}.js";
+{% endfor -%}
 
 {% set type_name = type.name | to_upper_camel_case -%}
 {% set ns = namespace(bases=[]) -%}
@@ -33,7 +36,7 @@ export const {{ type_name }}Serializer = {
             {%- for base in base_names %}
             ...{{ base }}Serializer.parse(json),
             {%- endfor %}
-            {{- m.parse_fields(type.fields, "json") }}
+            {{- m.parse_fields(type.fields, "json", type.discriminator_defaults | default({})) }}
         };
     },
 
@@ -42,7 +45,7 @@ export const {{ type_name }}Serializer = {
             {%- for base in base_names %}
             ...{{ base }}Serializer.serialize({% if overridden %}value as unknown as {{ base }}{% else %}value{% endif %}),
             {%- endfor %}
-            {{- m.serialize_fields(type.fields, "value") }}
+            {{- m.serialize_fields(type.fields, "value", type.discriminator_defaults | default({})) }}
         };
     },
 {{ m.legacy_aliases(type_name) }}

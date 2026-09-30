@@ -5,10 +5,10 @@ build-backend = "hatchling.build"
 [project]
 name = "@@PACKAGE_NAME@@"
 version = "@@VERSION@@"
-description = "@@CLIENT_NAME@@ API client"
+description = "@@DESCRIPTION@@"
 readme = "README.md"
-# An SPDX expression, such as "MIT" or "Apache-2.0".
-license = "LicenseRef-Proprietary"
+license = "@@LICENSE@@"
+authors = @@AUTHORS_PYPROJECT@@
 requires-python = ">=3.10"
 dependencies = ["httpx>=0.27,<1"]
 classifiers = [
@@ -22,7 +22,8 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/OWNER/REPOSITORY"
+Repository = "@@REPOSITORY@@"
+Homepage = "@@HOMEPAGE@@"
 
 [project.optional-dependencies]
 dev = ["mypy>=1.18", "pytest>=8", "ruff==0.14.10"]

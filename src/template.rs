@@ -104,11 +104,19 @@ pub fn populate_env(
     );
 
     // --- Comment generation ---
+    // Descriptions of the model are converted already; this is for other text, such as context.
+    env.add_filter("doc", |s: Cow<'_, str>| {
+        crate::api::html::to_markdown(&s).into_owned()
+    });
     env.add_filter(
         "to_doc_comment",
         |s: Cow<'_, str>, kwargs: Kwargs| -> Result<String, minijinja::Error> {
             let style: Cow<'_, str> = kwargs.get("style")?;
             kwargs.assert_all_used()?;
+            let s: Cow<'_, str> = match &*style {
+                "go" => go::doc_text(&s).into(),
+                _ => s,
+            };
 
             let prefix = match &*style {
                 "php_field" => {
@@ -278,10 +286,12 @@ pub fn populate_env(
             let destination = result.map_err(|error| {
                 minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, error.to_string())
             })?;
-            state.set_temp(
-                "extra_generated_file",
-                destination.to_string_lossy().into_owned().into(),
-            );
+            let mut files: String = state
+                .get_temp("extra_generated_file")
+                .and_then(|files| files.as_str().map(|files| format!("{files}\n")))
+                .unwrap_or_default();
+            files.push_str(&destination.to_string_lossy());
+            state.set_temp("extra_generated_file", files.into());
             Ok(())
         },
     );

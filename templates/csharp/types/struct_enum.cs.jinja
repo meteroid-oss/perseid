@@ -13,7 +13,7 @@
 {% macro base_init() -%}
 {% if type.fields | length > 0 %} {
     {% for field in type.fields -%}
-    {% set ty = m.field_type(field) -%}
+    {% set ty = m.field_type(field, m.union_class(field, type_name, type_names)) -%}
     {{ m.member(field.name, type_name) }} = {% if field.required %}Json.Deserialize<{{ ty }}>(Json.Property(root, "{{ field.name }}"), options){% else %}Json.Optional<{{ ty }}>(root, "{{ field.name }}", options){% endif %},
     {% endfor -%}
 }{% endif %}
@@ -29,13 +29,7 @@
 
 namespace {{ sdk.package_name }}.Models;
 
-{% if type.description is defined -%}
-{{ m.doc(type.description) }}
-{% endif -%}
-/// <remarks>
-/// Match on the nested variant records. <see cref="Unrecognized"/> holds variants added to the API
-/// after this SDK version, as raw JSON.
-/// </remarks>
+{{ m.doc(type.description, remarks="Match on the nested variant records. <see cref=\"Unrecognized\"/> holds variants added to the API\nafter this SDK version, as raw JSON.") }}
 {% if type.deprecated %}[Obsolete]
 {% endif -%}
 [JsonConverter(typeof({{ type_name }}Converter))]
@@ -45,7 +39,7 @@ public abstract partial record {{ type_name }}
 
     /// <summary>The <c>{{ tag_json }}</c> tag of this variant.</summary>
     public abstract string {{ tag_prop }} { get; }
-{% with fields = type.fields, owner = type_name %}{% include "types/fields.cs.jinja" %}{% endwith %}
+{% with fields = type.fields, owner = type_name, union_owner = type_name %}{% include "types/fields.cs.jinja" %}{% endwith %}
 {% for variant in type.variants -%}
 {% set class = variant_class(variant) %}
     /// <summary>The <c>{{ variant.name }}</c> variant.</summary>
@@ -63,7 +57,7 @@ public abstract partial record {{ type_name }}
     /// <summary>The fields of the <c>{{ variant.name }}</c> variant.</summary>
     public sealed partial record {{ class }}Data
     {
-{% with fields = variant.fields, owner = class ~ "Data" %}{% include "types/fields.cs.jinja" %}{% endwith %}
+{% with fields = variant.fields, owner = class ~ "Data", union_owner = type_name ~ class %}{% include "types/fields.cs.jinja" %}{% endwith %}
     }
 {% endif -%}
 {% endfor %}
@@ -142,3 +136,7 @@ internal sealed class {{ type_name }}Converter : JsonConverter<{{ type_name }}>
         Json.WriteTagged(writer, "{{ tag_json }}", value.{{ tag_prop }}, fields, options);
     }
 }
+{% with fields = type.fields, union_owner = type_name %}{% include "types/unions.cs.jinja" %}{% endwith %}
+{% for variant in type.variants if variant.type == "struct" -%}
+{% with fields = variant.fields | default([]), union_owner = type_name ~ variant_class(variant) %}{% include "types/unions.cs.jinja" %}{% endwith %}
+{% endfor -%}

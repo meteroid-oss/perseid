@@ -106,7 +106,7 @@ public class RoundTripTests
     [Fact]
     public void VariantsWrapTheirModelAndWriteTheTagOnce()
     {
-        Shape shape = new Shape.Circle(new Circle { Type = "circle", Radius = 2.5 });
+        Shape shape = new Shape.Circle(new Circle { Radius = 2.5 });
         var json = JsonSerializer.Serialize(shape, Context.Shape);
         Assert.Equal("""{"type":"circle","radius":2.5}""", json);
         var parsed = Assert.IsType<Shape.Circle>(JsonSerializer.Deserialize(json, Context.Shape));
@@ -132,5 +132,27 @@ public class RoundTripTests
         Assert.Null(cleared.Description.Value);
         Assert.False(cleared.Count.IsSet);
         Assert.NotEqual(new ThingPatch(), cleared);
+    }
+
+    [Fact]
+    public void PrimitiveOrObjectUnionsAreTypedByTheirJsonValue()
+    {
+        var holder = JsonSerializer.Deserialize(
+            """{"shape":{"type":"circle","radius":1},"shapes":[],"str_or_int":7,"inline_union":["a","b"]}""",
+            Context.UnionHolder
+        )!;
+        Assert.Equal(7L, Assert.IsType<UnionHolderStrOrInt.Integer>(holder.StrOrInt).Value);
+        Assert.Null(holder.StrOrInt!.AsString);
+        Assert.Equal(["a", "b"], holder.InlineUnion!.AsList!);
+
+        holder = holder with { StrOrInt = "seven", InlineUnion = "one" };
+        var json = JsonSerializer.Serialize(holder, Context.UnionHolder);
+        Assert.Contains("\"str_or_int\":\"seven\"", json);
+        Assert.Contains("\"inline_union\":\"one\"", json);
+
+        var unknown = JsonSerializer.Deserialize("""{"shape":{"type":"circle","radius":1},"shapes":[],"str_or_int":{"x":true}}""", Context.UnionHolder)!;
+        var raw = Assert.IsType<UnionHolderStrOrInt.Unrecognized>(unknown.StrOrInt).Raw;
+        Assert.True(raw.GetProperty("x").GetBoolean());
+        Assert.Contains("\"str_or_int\":{\"x\":true}", JsonSerializer.Serialize(unknown, Context.UnionHolder));
     }
 }

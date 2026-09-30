@@ -14,7 +14,7 @@ using System.Threading.Tasks;
 namespace {{ sdk.package_name }};
 
 /// <summary>
-/// Entry point of the {{ sdk.client_name }} API{% if sdk.tagline %} for {{ sdk.tagline }}{% endif %}. Thread-safe: create one and reuse it.
+/// Entry point of the {{ sdk.client_name }} API{% if sdk.tagline %} for {{ m.xml(sdk.tagline | doc) }}{% endif %}. Thread-safe: create one and reuse it.
 /// </summary>
 /// <example>
 /// <code>
@@ -115,5 +115,15 @@ public sealed class {{ keys_type }}
     /// <summary>Sent as the <c>{{ scheme.param }}</c> {% if scheme.in == "query" %}query parameter{% else %}{{ scheme.in }}{% endif %}.</summary>
     public string? {{ m.member(scheme.name, keys_type) }} { get; set; }
 {% endfor -%}
+}
+{% endif -%}
+{% if api.default_error %}
+{% set error_model = api.default_error | to_upper_camel_case %}
+
+public static partial class ApiExceptionExtensions
+{
+    /// <summary>The body parsed as <see cref="Models.{{ error_model }}"/>, the error model of this API, or <c>null</c>.</summary>
+    public static Models.{{ error_model }}? GetError(this ApiException exception) =>
+        exception.GetError<Models.{{ error_model }}>();
 }
 {% endif -%}

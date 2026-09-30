@@ -514,3 +514,26 @@ func marshalUnionVariant(tagField, tagValue string, payload any, shared ...any) 
 
 	return json.Marshal(fields)
 }
+
+// jsonKind names the JSON type of an encoded value, as union variants declare it.
+func jsonKind(data []byte) string {
+	trimmed := bytes.TrimLeft(data, " \t\r\n")
+	if len(trimmed) == 0 {
+		return ""
+	}
+	switch c := trimmed[0]; {
+	case c == '"':
+		return "string"
+	case c == '{':
+		return "object"
+	case c == '[':
+		return "array"
+	case c == 't' || c == 'f':
+		return "boolean"
+	case c == 'n':
+		return "null"
+	case c == '-' || (c >= '0' && c <= '9'):
+		return "number"
+	}
+	return ""
+}

@@ -3,6 +3,8 @@ package @@JAVA_PACKAGE@@.exceptions;
 
 /** Thrown when a webhook payload fails signature verification. */
 public class WebhookVerificationException extends Exception {
+    private static final long serialVersionUID = 1L;
+
     public WebhookVerificationException(String message) {
         super(message);
     }

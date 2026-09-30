@@ -326,6 +326,15 @@ fn has_properties(schema: &Value) -> bool {
         .is_some_and(|p| !p.is_empty())
 }
 
+/// A schema of strings, numbers, booleans or arrays, such as Stripe's `enum: [""]`.
+fn is_scalar(schema: &Value) -> bool {
+    schema.get("enum").is_some()
+        || schema
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|t| ["string", "integer", "number", "boolean", "array"].contains(&t))
+}
+
 /// Whether the schema deserves a named type rather than an inline field type.
 fn is_structured(schema: &Value) -> bool {
     if schema.get("$ref").is_some() || nullable_wrapper(schema).is_some() {
@@ -511,10 +520,19 @@ impl Promoter {
         {
             self.inline(value, format!("{parent}_value"));
         }
+        let own_properties = schema.get("discriminator").is_some() || has_properties(schema);
         for key in ["allOf", "oneOf", "anyOf"] {
             if let Some(Value::Array(parts)) = schema.get_mut(key) {
+                // An object told apart from scalar variants by its JSON type needs a name.
+                let scalar_or_object =
+                    key != "allOf" && !own_properties && parts.iter().any(is_scalar);
                 for part in parts {
-                    if part.get("$ref").is_none() {
+                    if part.get("$ref").is_some() {
+                        continue;
+                    }
+                    if scalar_or_object && is_structured(part) {
+                        self.inline(part, format!("{parent}_object"));
+                    } else {
                         self.children(part, parent);
                     }
                 }

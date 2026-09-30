@@ -2,6 +2,9 @@
 {% for c in referenced_components -%}
 import type { {{ c | to_upper_camel_case }} } from "./{{ c | to_lower_camel_case }}.js";
 {% endfor -%}
+{% for c in union_refs | default([]) if c != type.name -%}
+import type { {{ c | to_upper_camel_case }} } from "./{{ c | to_lower_camel_case }}.js";
+{% endfor -%}
 
 {{ doc_comment }}
 export type {{ type.name | to_upper_camel_case }} = {{ js_type(type.target) }};

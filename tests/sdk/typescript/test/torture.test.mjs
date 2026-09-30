@@ -15,7 +15,7 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 copyFileSync(join(fixtures, "torture.yaml"), join(dir, "openapi.yaml"));
 writeFileSync(
   join(dir, "perseid.toml"),
-  'spec = "openapi.yaml"\nname = "Torture"\nbase_url = "https://torture.test/v1"\n[typescript]\nint64 = "bigint"\n'
+  'spec = "openapi.yaml"\nname = "Torture"\nbase_url = "https://torture.test/v1"\n[typescript]\nint64 = "bigint"\ntyped_unions = true\n'
 );
 execFileSync("perseid", ["init"], { cwd: dir, stdio: "ignore" });
 execFileSync("perseid", ["generate"], { cwd: dir, stdio: "ignore" });
@@ -78,6 +78,11 @@ describe("models", () => {
     const activity = sdk.ActivitySerializer.parse(sdk.parseJson(SAMPLES.Activity));
     assert.equal(activity.kind, "reopened");
     assert.equal(activity.at.toISOString(), "2024-01-02T03:04:05.000Z");
+  });
+
+  it("fills the discriminator of a union variant model", () => {
+    assert.equal(sdk.CircleSerializer.serialize({ radius: 1 }).type, "circle");
+    assert.equal(sdk.CircleSerializer.parse({ radius: 1 }).type, "circle");
   });
 
   it("sends explicit nulls to clear nullable fields", () => {
@@ -185,8 +190,49 @@ describe("client", () => {
     const { calls, torture } = client([hang], { numRetries: 1 });
     // Node does not keep the process alive for `AbortSignal.timeout` alone.
     const alive = setInterval(() => {}, 1000);
-    await assert.rejects(torture.things.getThing("t1", { timeout: 10 }), (error) => error.name === "TimeoutError");
+    await assert.rejects(
+      torture.things.getThing("t1", { timeout: 10 }),
+      (error) => error instanceof sdk.ApiTimeoutError && error.name === "TimeoutError"
+    );
     clearInterval(alive);
     assert.equal(calls.length, 2);
+  });
+
+  it("throws the error class of the status, with the body parsed by its declared schema", async () => {
+    const body = { message: "invalid", fields: { name: ["required"] } };
+    const { torture } = client([json(body, 422, { "x-request-id": "req_1" })]);
+    await assert.rejects(torture.things.createThing({ name: "n", kind: "alpha" }), (error) => {
+      assert.ok(error instanceof sdk.UnprocessableEntityError);
+      assert.ok(error instanceof sdk.ApiError && error instanceof sdk.ApiException);
+      assert.equal(error.name, "UnprocessableEntityError");
+      assert.equal(error.status, 422);
+      assert.deepEqual(error.error, body);
+      assert.equal(error.body, JSON.stringify(body));
+      assert.equal(error.requestId, "req_1");
+      return true;
+    });
+  });
+
+  it("keeps undeclared and unparsable error bodies as text", async () => {
+    const { torture } = client([new Response("gone", { status: 404 })]);
+    await assert.rejects(torture.things.getThing("t1"), (error) => {
+      assert.ok(error instanceof sdk.NotFoundError);
+      assert.equal(error.error, undefined);
+      assert.equal(error.body, "gone");
+      return true;
+    });
+    const { torture: other } = client([json({}, 418), json({}, 503)], { numRetries: 0 });
+    await assert.rejects(other.things.getThing("t1"), (error) => error.constructor === sdk.ApiError);
+    await assert.rejects(other.things.getThing("t1"), sdk.InternalServerError);
+    assert.equal(sdk.Torture.NotFoundError, sdk.NotFoundError);
+  });
+
+  it("times out after the default timeout unless disabled", async () => {
+    const { calls, torture } = client([json(THING)]);
+    await torture.things.getThing("t1");
+    assert.ok(calls[0].init.signal instanceof AbortSignal);
+    const { calls: unbounded, torture: patient } = client([json(THING)], { requestTimeout: Infinity });
+    await patient.things.getThing("t1");
+    assert.equal(unbounded[0].init.signal, undefined);
   });
 });

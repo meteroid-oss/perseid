@@ -1,4 +1,4 @@
-{% from "types/macros.rs.jinja" import struct_fields, struct_new -%}
+{% from "types/macros.rs.jinja" import default_trait, struct_fields, struct_new, union_enums, union_imports -%}
 use serde::{Deserialize, Serialize};
 
 {% if referenced_components -%}
@@ -8,14 +8,39 @@ use super::{
     {% endfor -%}
 };
 {% endif %}
+{{ union_imports() }}
 
 {% set recursive = recursive_refs | map("to_upper_camel_case") | list -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+{% set defaults = type.discriminator_defaults | default({}) if sdk.typed_unions else {} -%}
+{% set defaulted = type.fields | selectattr("required") | rejectattr("nullable") | rejectattr("flatten") | selectattr("name", "in", defaults) | map(attribute="name") | list -%}
 {{ doc_comment }}
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
-pub struct {{ type.name | to_upper_camel_case }} {
-    {{ struct_fields(type.fields, recursive, patch_body) }}
+#[derive(Clone, Debug, {% if not defaulted %}Default, {% endif %}PartialEq, Deserialize, Serialize)]
+pub struct {{ type_name }} {
+    {{ struct_fields(type.fields, recursive, patch_body, owner=type_name) }}
 }
 
-impl {{ type.name | to_upper_camel_case }} {
-    {{ struct_new(type.fields, recursive) }}
+impl {{ type_name }} {
+    {{ struct_new(type.fields, recursive, owner=type_name, defaults=defaults) }}
 }
+{% if defaulted %}
+
+/// Sets {% for field in defaulted %}{% if not loop.first %}, {% endif %}`{{ field }}` to `{{ defaults[field] }}`{% endfor %}.
+impl {{ default_trait() }} for {{ type_name }} {
+    fn default() -> Self {
+        {% if type.fields | selectattr("deprecated") | length > 0 -%}
+        #[allow(deprecated)]
+        {% endif -%}
+        Self {
+            {% for field in type.fields -%}
+            {% if field.name in defaulted -%}
+            {{ field.name | to_rust_ident }}: {{ defaults[field.name] | rust_str }}.into(),
+            {% else -%}
+            {{ field.name | to_rust_ident }}: {{ default_trait() }}::default(),
+            {% endif -%}
+            {% endfor -%}
+        }
+    }
+}
+{% endif %}
+{{ union_enums(type_name, type.fields) }}

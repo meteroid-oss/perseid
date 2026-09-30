@@ -55,6 +55,18 @@ public sealed partial class {{ resource_type_name }}
 {% if op.description is defined -%}
     {{ m.doc(op.description) }}
 {% endif -%}
+{% set thrown = namespace(classes=[]) -%}
+{% for status, _ in op.errors | default({}) | items if m.status_exception(status) not in thrown.classes -%}
+{% set thrown.classes = thrown.classes + [m.status_exception(status)] -%}
+{% endfor -%}
+{% for class in thrown.classes -%}
+{% set statuses = namespace(list=[], schemas=[]) -%}
+{% for status, schema in op.errors | items if m.status_exception(status) == class -%}
+{% set statuses.list = statuses.list + [status] -%}
+{% if schema not in statuses.schemas %}{% set statuses.schemas = statuses.schemas + [schema] %}{% endif -%}
+{% endfor -%}
+    /// <exception cref="{{ class }}">{% for status in statuses.list %}{{ (("Any" if loop.first else "any") ~ " other status") if status == "default" else status }}{% if not loop.last %}, {% endif %}{% endfor %}: {% for schema in statuses.schemas %}{% set error_model = schema | to_upper_camel_case %}{% if schema == default_error %}<c>GetError()</c>{% else %}<c>GetError&lt;{{ error_model }}&gt;()</c>{% endif %} reads the <see cref="Models.{{ error_model }}"/> body{% if not loop.last %}, {% endif %}{% endfor %}.</exception>
+{% endfor -%}
 {% if op.deprecated %}    [Obsolete]
 {% endif -%}
     public {{ returns }} {{ method_name }}(

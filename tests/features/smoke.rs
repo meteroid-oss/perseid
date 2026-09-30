@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use features::api::{
-    BasicAuth, Features, FeaturesOptions, SseEvent, StreamingStreamEventsOptions,
+    BasicAuth, Features, FeaturesOptions, RequestOptions, SseEvent, StreamingStreamEventsOptions,
     StreamingUploadFileBody, TokenProvider, Upload, WidgetsListWidgetEventsOptions,
     WireBetaSearchOptions, WireSearchOptions,
 };
@@ -9,6 +9,7 @@ use features::models::{
     Charge, ChargeItemsItem, ChargeShipping, ChargeShippingAddress, Filter, FilterAmount,
     Health, SearchRange,
 };
+use futures::{StreamExt, TryStreamExt};
 
 fn client(token: &str, options: FeaturesOptions) -> Features {
     let server_url = Some(std::env::var("FEATURES_URL").unwrap());
@@ -39,6 +40,14 @@ async fn smoke() {
     }
     assert_eq!(gadget_ids, ["g1", "g2", "g3"]);
     assert_eq!(ids(tok.records().list_records_iter(None), |r| r.id).await, ["r1", "r2", "r3"]);
+    let streamed: Vec<String> =
+        widgets.list_widgets_iter(None).map_ok(|w| w.id).try_collect().await.unwrap();
+    assert_eq!(streamed, ["w1", "w2", "w3"]);
+    let first = tok.gadgets().list_gadgets_iter(None).take(1).collect::<Vec<_>>().await;
+    assert_eq!(first.len(), 1);
+    let other = RequestOptions::new().header("authorization", "Bearer other");
+    let status = tok.account().with_options(other).machine_status().await.unwrap().status;
+    assert_eq!(status, "Bearer other||");
 
     let basic_auth = Some(BasicAuth { username: "u".into(), password: "p".into() });
     let basic = client("", FeaturesOptions { basic_auth, ..Default::default() });
@@ -140,8 +149,13 @@ async fn wire() {
     assert_eq!(wire.create_charge(None).await.unwrap().status, "|");
     let beta = WireBetaSearchOptions { limit: Some(2), features: Some("x,y".into()) };
     assert_eq!(
-        wire.beta_search(Some(beta)).await.unwrap().status,
+        wire.beta_search(Some(beta.clone())).await.unwrap().status,
         "beta=true&limit=2|features=x,y"
+    );
+    let overridden = client.wire().with_options(RequestOptions::new().header("features", "z"));
+    assert_eq!(
+        overridden.beta_search(Some(beta)).await.unwrap().status,
+        "beta=true&limit=2|features=z"
     );
     let image = wire.put_image(42, Upload::bytes("png")).await.unwrap();
     assert_eq!(image.status, "42:image/png:png");

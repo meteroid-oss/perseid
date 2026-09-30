@@ -4,10 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.torture.internal.Utils;
 import com.torture.models.Activity;
 import com.torture.models.Circle;
 import com.torture.models.Composed;
@@ -21,6 +23,7 @@ import com.torture.models.ThingList;
 import com.torture.models.ThingPatch;
 import com.torture.models.TreeNode;
 import com.torture.models.UnionHolder;
+import com.torture.models.UnionHolder.UnionHolderStrOrInt;
 import com.torture.models.WidgetReactions;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -69,12 +72,34 @@ class RoundTripTest {
     }
 
     @Test
-    void unknownEnumValuesParseAsUnrecognized() throws Exception {
+    void unknownEnumValuesAreKeptAndSentBack() throws Exception {
         Thing thing = Thing.fromJson("{\"kind\":\"brand-new\",\"priority\":99}");
-        assertEquals(Kind.UNRECOGNIZED, thing.getKind());
-        assertEquals(Priority.UNRECOGNIZED, thing.getPriority());
-        assertEquals(Kind.BETA_2, Kind.fromValue("beta-2"));
-        assertEquals(Priority.NEGATIVE, Priority.fromValue(-1));
+        assertEquals("brand-new", thing.getKind().getValue());
+        assertFalse(thing.getKind().isKnown());
+        assertEquals(Kind.Known.UNRECOGNIZED, thing.getKind().known());
+        assertEquals(99L, thing.getPriority().getValue());
+        assertEquals(
+                PLAIN.readTree("{\"kind\":\"brand-new\",\"priority\":99,\"nullable_required\":null}"),
+                PLAIN.readTree(thing.toJson()));
+        assertEquals(Kind.of("brand-new"), thing.getKind());
+    }
+
+    @Test
+    void knownEnumValuesAreTheConstants() {
+        assertTrue(Kind.of("beta-2") == Kind.BETA_2);
+        assertTrue(Kind.BETA_2.isKnown());
+        assertEquals("BETA_2", Kind.BETA_2.name());
+        assertTrue(Kind.valueOf("BETA_2") == Kind.BETA_2);
+        assertEquals(Priority.NEGATIVE, Priority.of(-1));
+        String label;
+        switch (Kind.of("alpha").known()) {
+            case ALPHA:
+                label = "a";
+                break;
+            default:
+                label = "other";
+        }
+        assertEquals("a", label);
     }
 
     @Test
@@ -92,7 +117,26 @@ class RoundTripTest {
                         Thing.class);
         List<Kind> kinds = new ArrayList<>();
         things.forEach(thing -> kinds.add(thing.getKind()));
-        assertEquals(List.of(Kind.UNRECOGNIZED, Kind.ALPHA), kinds);
+        assertEquals(List.of(Kind.of("brand-new"), Kind.ALPHA), kinds);
+    }
+
+    @Test
+    void primitiveOrObjectUnionsAreTypedByJsonType() throws Exception {
+        UnionHolder text = UnionHolder.fromJson("{\"str_or_int\":\"a\"}");
+        assertEquals("a", text.getStrOrInt().asString());
+        UnionHolder number = UnionHolder.fromJson("{\"str_or_int\":7}");
+        assertTrue(number.getStrOrInt().isInteger());
+        assertEquals(7L, number.getStrOrInt().asInteger());
+        assertThrows(IllegalStateException.class, () -> number.getStrOrInt().asString());
+        assertEquals("{\"str_or_int\":7}", new UnionHolder().strOrInt(UnionHolderStrOrInt.ofInteger(7L)).toJson());
+        assertEquals(UnionHolderStrOrInt.ofString("a"), text.getStrOrInt());
+        assertThrows(java.io.UncheckedIOException.class, () -> UnionHolder.fromJson("{\"str_or_int\":true}"));
+    }
+
+    @Test
+    void variantModelsCarryTheirDiscriminatorValue() {
+        assertEquals("circle", new Circle().getType());
+        assertEquals("{\"radius\":1.0,\"type\":\"circle\"}", new Circle().radius(1.0).toJson());
     }
 
     @Test

@@ -48,6 +48,10 @@ pub(crate) fn generate_with_output_context(
     if tpl_file_ext != "rs" {
         api.inline_aliases()?;
     }
+    let typed_unions = sdk["typed_unions"].as_bool().unwrap_or(false);
+    if matches!(tpl_file_ext, "ts" | "py") && !typed_unions {
+        api.untype_unions();
+    }
     if tpl_file_ext == "java" {
         api.inline_string_alias_bodies()?;
     }
@@ -113,12 +117,13 @@ struct Generator<'a> {
 
 impl Generator<'_> {
     fn generate_api_resources_options(self, api: Api) -> anyhow::Result<Vec<Utf8PathBuf>> {
-        self.generate_api_resources_options_inner(api.resources.values())
+        self.generate_api_resources_options_inner(api.resources.values(), &errors_context(&api))
     }
 
     fn generate_api_resources_options_inner<'a>(
         &self,
         resources: impl Iterator<Item = &'a Resource>,
+        errors: &minijinja::Value,
     ) -> anyhow::Result<Vec<Utf8PathBuf>> {
         let mut generated_paths = vec![];
         for resource in resources {
@@ -127,13 +132,14 @@ impl Generator<'_> {
                 if operation.has_query_or_header_params() {
                     generated_paths.extend_from_slice(&self.render_tpl(
                         Some(&format!("{}_{}_Options", resource.name, operation.name)),
-                        context! { operation, resource, referenced_components },
+                        context! { operation, resource, referenced_components, ..errors.clone() },
                     )?);
                 }
             }
 
             generated_paths.extend_from_slice(
-                &self.generate_api_resources_options_inner(resource.subresources.values())?,
+                &self
+                    .generate_api_resources_options_inner(resource.subresources.values(), errors)?,
             );
         }
 
@@ -141,12 +147,13 @@ impl Generator<'_> {
     }
 
     fn generate_api_resources(self, api: Api) -> anyhow::Result<Vec<Utf8PathBuf>> {
-        self.generate_api_resources_inner(api.resources.values())
+        self.generate_api_resources_inner(api.resources.values(), &errors_context(&api))
     }
 
     fn generate_api_resources_inner<'a>(
         &self,
         resources: impl Iterator<Item = &'a Resource>,
+        errors: &minijinja::Value,
     ) -> anyhow::Result<Vec<Utf8PathBuf>> {
         let mut generated_paths = vec![];
 
@@ -154,10 +161,10 @@ impl Generator<'_> {
             let referenced_components = resource.referenced_components();
             generated_paths.extend_from_slice(&self.render_tpl(
                 Some(&resource.name),
-                context! { resource, referenced_components },
+                context! { resource, referenced_components, ..errors.clone() },
             )?);
             generated_paths.extend_from_slice(
-                &self.generate_api_resources_inner(resource.subresources.values())?,
+                &self.generate_api_resources_inner(resource.subresources.values(), errors)?,
             );
         }
 
@@ -179,11 +186,13 @@ impl Generator<'_> {
                 .map(|name| (name.to_upper_camel_case(), true))
                 .collect::<std::collections::BTreeMap<_, _>>(),
         );
+        let errors = errors_context(&api);
         for (name, ty) in &api.types {
             let mut referenced_components = ty.referenced_components();
             // A recursive type refers to itself, which is not an import.
             referenced_components.remove(name.as_str());
             let recursive_refs = recursive_refs(&api.types, ty);
+            let union_refs = ty.union_refs();
             let patch_body = patch_bodies.contains(name.as_str());
             let inherited_fields = ty.inherited_fields(&api.types);
             // Type names, as templates render them, of the schemas `ty` embeds or unites that
@@ -205,11 +214,14 @@ impl Generator<'_> {
                     type => ty,
                     referenced_components,
                     recursive_refs,
+                    union_refs,
                     patch_body,
                     inherited_fields,
                     non_struct_refs,
                     output_dir,
                     type_names => type_names.clone(),
+                    is_error_schema => api.error_schemas.contains(name),
+                    ..errors.clone()
                 },
             )?);
         }
@@ -280,14 +292,19 @@ impl Generator<'_> {
         generated_paths.push(file_path.clone());
         fs::write(&file_path, rendered_data)?;
 
-        if let Some(extra_generated_file) = state.get_temp("extra_generated_file") {
-            let extra_generated_filepath =
-                Utf8PathBuf::from_str(extra_generated_file.as_str().unwrap())?;
-            generated_paths.push(extra_generated_filepath);
+        if let Some(extra_generated_files) = state.get_temp("extra_generated_file") {
+            for file in extra_generated_files.as_str().unwrap().lines() {
+                generated_paths.push(Utf8PathBuf::from_str(file)?);
+            }
         }
 
         Ok(generated_paths)
     }
+}
+
+/// `error_schemas` and `default_error` of the API, for templates rendering a part of it.
+fn errors_context(api: &Api) -> minijinja::Value {
+    context! { error_schemas => api.error_schemas, default_error => api.default_error }
 }
 
 /// Schemas `ty` holds by value that lead back to it, so a language without indirection by

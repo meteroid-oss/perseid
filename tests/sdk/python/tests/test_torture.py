@@ -30,7 +30,7 @@ def generate(name: str, context: str = "", spec: str | None = None) -> object:
         (project / "openapi.yaml").write_text(spec)
     (project / "perseid.toml").write_text(
         f'spec = "openapi.yaml"\nname = "{name.title()}"\n'
-        f'base_url = "https://torture.test/v1"\n[python]\n{context}'
+        f'base_url = "https://torture.test/v1"\n[python]\ntyped_unions = true\n{context}'
     )
     for command in (["init"], ["generate"]):
         subprocess.run(["perseid", *command], cwd=project, check=True, capture_output=True)
@@ -75,10 +75,43 @@ components:
             type: {type: string, enum: [none]}
 """
 
+EXPANDABLE_SPEC = """
+openapi: 3.1.0
+info: {title: Expandable, version: "1"}
+paths:
+  /charges/{id}:
+    get:
+      operationId: GetChargesId
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses:
+        "200":
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/Charge'}}}
+components:
+  schemas:
+    Customer: {type: object, required: [id], properties: {id: {type: string}}}
+    Shipping: {type: object, properties: {name: {type: string}}}
+    Charge:
+      type: object
+      required: [customer]
+      properties:
+        customer: {anyOf: [{type: string}, {$ref: '#/components/schemas/Customer'}]}
+        shipping: {anyOf: [{$ref: '#/components/schemas/Shipping'}, {type: string, enum: [""]}]}
+        tags: {anyOf: [{type: array, items: {type: string}}, {type: boolean}]}
+"""
+
 torture = generate("torture")
+named = generate("named", 'method_names = "resource"\n')
+expandable = generate("expandable", spec=EXPANDABLE_SPEC)
 flat = generate("flat", "[python.context]\nflat_unions = true\n")
 adjacent = generate("adjacent", spec=ADJACENT_SPEC)
 from torture import Torture, TortureOptions, models  # noqa: E402
+from torture.api import (  # noqa: E402
+    ApiStatusError,
+    InternalServerError,
+    NotFoundError,
+    UnprocessableEntityError,
+)
 from torture.errors import ApiException, NetworkException  # noqa: E402
 from torture.serialization import UNSET, UnknownVariant, from_json_value  # noqa: E402
 
@@ -347,6 +380,87 @@ class ClientTest(unittest.TestCase):
             echoed = api.class_.echo_reserved(models.Reserved.from_dict(reserved))
         self.assertEqual(echoed.class_, "c")
         self.assertEqual(json.loads(self.requests[0].content), reserved)
+
+
+class ScoresTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.requests: list[httpx.Request] = []
+
+    def respond(self, *responses: httpx.Response):
+        queue = list(responses)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.requests.append(request)
+            return queue.pop(0) if len(queue) > 1 else queue[0]
+
+        return handler
+
+    def test_errors_are_typed_by_status_and_decode_the_declared_body(self) -> None:
+        create = models.ThingCreate(name="n", kind=models.Kind.ALPHA)
+        invalid = httpx.Response(
+            422, json={"message": "bad", "fields": {"name": ["short"]}}, headers={"request-id": "r1"}
+        )
+        with client(self.respond(invalid)) as api:
+            with self.assertRaises(UnprocessableEntityError) as raised:
+                api.things.create_thing(create)
+        self.assertIsInstance(raised.exception, ApiException)
+        self.assertEqual(raised.exception.body, models.ValidationError(message="bad", fields={"name": ["short"]}))
+        self.assertEqual(raised.exception.request_id, "r1")
+        for status, error in ((404, NotFoundError), (500, InternalServerError), (418, ApiStatusError)):
+            with self.subTest(status=status):
+                response = httpx.Response(status, json={"title": "t"})
+                with client(self.respond(response), num_retries=0) as api:
+                    with self.assertRaises(error) as raised:
+                        api.widgets.create_widget(models.WidgetUpdate(name="n"))
+                self.assertIs(type(raised.exception), error)
+                expected = models.Problem(title="t") if status < 500 else None
+                self.assertEqual(raised.exception.body, expected)
+        with client(self.respond(httpx.Response(503, text="<html>")), num_retries=0) as api:
+            with self.assertRaises(InternalServerError) as raised:
+                api.widgets.list_widgets()
+        self.assertIsNone(raised.exception.body)
+
+    def test_503_is_not_replayed_for_non_idempotent_requests(self) -> None:
+        unavailable = httpx.Response(503, headers={"retry-after": "0"})
+        responses = (unavailable, unavailable, httpx.Response(200, json=THING))
+        with client(self.respond(*responses), retry_schedule=[0.0]) as api:
+            with self.assertRaises(InternalServerError):
+                api.things.update_thing("t", models.ThingPatch())
+            self.assertEqual(len(self.requests), 1)
+            api.things.get_thing("t")
+        self.assertEqual(len(self.requests), 3)
+
+    def test_union_variants_default_their_discriminator(self) -> None:
+        circle = models.Circle(radius=1.5)
+        self.assertEqual(circle.to_dict(), SAMPLES["Shape"])
+        shape = models.Shape(content=circle)
+        self.assertEqual((shape.type, shape.to_dict()), ("circle", SAMPLES["Shape"]))
+        unknown = models.Shape(content=UnknownVariant("hexagon", {"type": "hexagon"}))
+        self.assertEqual(unknown.type, "hexagon")
+
+    def test_primitive_or_object_unions_are_typed(self) -> None:
+        Charge = expandable.models.Charge
+        for data in (
+            {"customer": "cus_1", "shipping": "", "tags": True},
+            {"customer": {"id": "cus_1"}, "shipping": {"name": "n"}, "tags": ["a"]},
+        ):
+            with self.subTest(data=data):
+                self.assertEqual(Charge.from_dict(data).to_dict(), data)
+        charge = Charge.from_dict({"customer": {"id": "cus_1"}, "shipping": {"name": "n"}})
+        self.assertEqual(charge.customer, expandable.models.Customer(id="cus_1"))
+        self.assertEqual(charge.shipping, expandable.models.Shipping(name="n"))
+        with self.assertRaises(expandable.serialization.ModelParseError):
+            Charge.from_dict({"customer": 1})
+        self.assertEqual(round_trip(torture, "StringOrInt", 3), 3)
+        self.assertEqual(round_trip(torture, "StringOrInt", "3"), "3")
+
+    def test_resource_method_names(self) -> None:
+        transport = httpx.MockTransport(self.respond(httpx.Response(200, json=THING)))
+        with named.Named("token", httpx_client=httpx.Client(transport=transport)) as api:
+            thing = api.things.retrieve("a/b")
+            api.things.update("a/b", named.models.ThingPatch())
+        self.assertEqual(thing.id, "a/b")
+        self.assertEqual([r.method for r in self.requests], ["GET", "PATCH"])
 
 
 if __name__ == "__main__":

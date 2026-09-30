@@ -1,0 +1,150 @@
+{#- The typed unions of `fields`, named after `union_owner`. -#}
+{% set models = "global::" ~ sdk.package_name ~ ".Models." -%}
+{% for field in fields -%}
+{% set name = m.union_class(field, union_owner, type_names) -%}
+{% if name -%}
+{% set t = namespace(ty=field.type) -%}
+{% for _ in range(8) -%}
+{% if t.ty.is_list() or t.ty.is_set() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
+{% endfor -%}
+{% set variants = namespace(list=[]) -%}
+{% for v in t.ty.union_variants() -%}
+{% set class = m.union_variant_class(v, name) -%}
+{% set leaf = namespace(ty=v.type) -%}
+{% for _ in range(8) -%}
+{% if leaf.ty.is_list() or leaf.ty.is_set() %}{% set leaf.ty = leaf.ty.inner_type() %}{% elif leaf.ty.is_map() %}{% set leaf.ty = leaf.ty.value_type() %}{% endif -%}
+{% endfor -%}
+{% set ty = v.type.to_csharp() -%}
+{% if leaf.ty.is_schema_ref() and leaf.ty.to_csharp() not in ["string", "JsonNode"] -%}
+{% set ty = ty | replace(leaf.ty.to_csharp(), models ~ leaf.ty.to_csharp()) -%}
+{% endif -%}
+{% set ty = ty | replace("List<", "global::System.Collections.Generic.List<") | replace("Dictionary<", "global::System.Collections.Generic.Dictionary<") -%}
+{% set kind = "empty" if v.empty
+    else "string" if ty == "string"
+    else "bool" if ty == "bool"
+    else "date_time" if ty == "DateTimeOffset"
+    else "decimal" if ty == "decimal"
+    else "number" if ty in ["short", "int", "long", "ushort", "ulong", "float", "double"]
+    else "node" if ty == "JsonNode"
+    else "json" -%}
+{% set variants.list = variants.list + [{"class": class, "type": ty, "kind": kind, "json_type": v.json_type, "doc": v.type.to_csharp() if not v.empty else "\"\""}] -%}
+{% endfor %}
+
+/// <summary>
+/// The <c>{{ field.name }}</c> value, one of {% for v in variants.list %}<see cref="{{ v.class }}"/>{% if not loop.last %}, {% endif %}{% endfor %}.
+/// </summary>
+/// <remarks>
+/// Match on the nested variant records, or assign a variant's value directly. <see cref="Unrecognized"/>
+/// holds any other JSON value, as sent by a newer API version.
+/// </remarks>
+[JsonConverter(typeof({{ name }}Converter))]
+public abstract partial record {{ name }}
+{
+    private {{ name }}() { }
+{% for v in variants.list %}
+{% if v.kind == "empty" %}
+    /// <summary>The empty string, which unsets the value.</summary>
+    public sealed record {{ v.class }}() : {{ name }};
+
+    /// <summary>Whether this is <see cref="{{ v.class }}"/>, the empty string.</summary>
+    public bool IsEmpty => this is {{ v.class }};
+{% else %}
+    /// <summary>A <c>{{ v.doc | replace("<", "&lt;") | replace(">", "&gt;") }}</c> value.</summary>
+    public sealed record {{ v.class }}({{ v.type }} Value) : {{ name }};
+
+    public static implicit operator {{ name }}({{ v.type }} value) => new {{ v.class }}(value);
+
+    /// <summary>The value if this is <see cref="{{ v.class }}"/>, else <c>null</c>.</summary>
+    public {{ v.type }}? As{{ v.class }} => this is {{ v.class }} variant ? variant.Value : null;
+{% endif -%}
+{% endfor %}
+    /// <summary>A value of none of the known variants, kept as raw JSON.</summary>
+    public sealed record Unrecognized(JsonElement Raw) : {{ name }};
+}
+
+internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
+{
+    public override {{ name }} Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options
+    )
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        var root = document.RootElement;
+        try
+        {
+            switch (root.ValueKind)
+            {
+{% for v in variants.list -%}
+{% set create = "new " ~ name ~ "." ~ v.class -%}
+{% if v.kind == "empty" -%}
+                case JsonValueKind.String when root.ValueEquals(""):
+                    return {{ create }}();
+{% elif v.kind == "string" -%}
+                case JsonValueKind.String:
+                    return {{ create }}(root.GetString()!);
+{% elif v.kind == "date_time" -%}
+                case JsonValueKind.String when root.TryGetDateTimeOffset(out var dateTime):
+                    return {{ create }}(dateTime);
+{% elif v.kind == "decimal" -%}
+                case JsonValueKind.String
+                    when decimal.TryParse(root.GetString(), global::System.Globalization.NumberStyles.Float, global::System.Globalization.CultureInfo.InvariantCulture, out var number):
+                    return {{ create }}(number);
+{% elif v.kind == "bool" -%}
+                case JsonValueKind.True or JsonValueKind.False:
+                    return {{ create }}(root.GetBoolean());
+{% elif v.kind == "number" -%}
+{% set getter = {"short": "Int16", "int": "Int32", "long": "Int64", "ushort": "UInt16", "ulong": "UInt64", "float": "Single", "double": "Double"}[v.type] -%}
+                case JsonValueKind.Number when root.TryGet{{ getter }}(out var number):
+                    return {{ create }}(number);
+{% elif v.kind == "node" -%}
+                case JsonValueKind.Object:
+                    return {{ create }}(JsonNode.Parse(root.GetRawText())!);
+{% else -%}
+{% set kinds = {"string": "String", "integer": "Number", "number": "Number", "boolean": "True or JsonValueKind.False", "array": "Array", "object": "Object"} -%}
+                case JsonValueKind.{{ kinds[v.json_type] }}:
+                    return {{ create }}(Json.Deserialize<{{ v.type }}>(root, options));
+{% endif -%}
+{% endfor -%}
+            }
+        }
+        catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException) { }
+        return new {{ name }}.Unrecognized(root.Clone());
+    }
+
+    public override void Write(Utf8JsonWriter writer, {{ name }} value, JsonSerializerOptions options)
+    {
+        switch (value)
+        {
+{% for v in variants.list -%}
+{% if v.kind == "empty" -%}
+            case {{ name }}.{{ v.class }}:
+                writer.WriteStringValue("");
+                break;
+{% else -%}
+            case {{ name }}.{{ v.class }} variant:
+{% if v.kind in ["string", "date_time"] -%}
+                writer.WriteStringValue(variant.Value);
+{% elif v.kind == "decimal" -%}
+                writer.WriteStringValue(variant.Value.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
+{% elif v.kind == "bool" -%}
+                writer.WriteBooleanValue(variant.Value);
+{% elif v.kind == "number" -%}
+                writer.WriteNumberValue(variant.Value);
+{% elif v.kind == "node" -%}
+                variant.Value.WriteTo(writer, options);
+{% else -%}
+                JsonSerializer.Serialize(writer, variant.Value, Json.TypeInfo<{{ v.type }}>(options));
+{% endif -%}
+                break;
+{% endif -%}
+{% endfor -%}
+            case {{ name }}.Unrecognized unrecognized:
+                unrecognized.Raw.WriteTo(writer);
+                break;
+        }
+    }
+}
+{% endif -%}
+{% endfor -%}

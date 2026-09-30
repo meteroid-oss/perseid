@@ -43,6 +43,18 @@ impl ApiError {
     pub fn json<T: serde::de::DeserializeOwned>(&self) -> serde_json::Result<T> {
         serde_json::from_slice(&self.body)
     }
+
+    /// The body decoded as the error schema most operations document, if it is one.
+    pub fn payload(&self) -> Option<crate::api::ErrorBody> {
+        self.json().ok()
+    }
+
+    /// The `x-request-id` (or `request-id`) response header, to quote when reporting an issue.
+    pub fn request_id(&self) -> Option<&str> {
+        ["x-request-id", "request-id"]
+            .iter()
+            .find_map(|name| self.headers.get(*name)?.to_str().ok())
+    }
 }
 
 impl Error {
@@ -66,8 +78,13 @@ impl Error {
 
     /// The HTTP status of an API error.
     pub fn status(&self) -> Option<StatusCode> {
+        self.api().map(|error| error.status)
+    }
+
+    /// The response of an API error.
+    pub fn api(&self) -> Option<&ApiError> {
         match self {
-            Self::Api(error) => Some(error.status),
+            Self::Api(error) => Some(error),
             _ => None,
         }
     }

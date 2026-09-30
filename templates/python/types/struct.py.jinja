@@ -1,9 +1,11 @@
 {% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, model_imports, py_ident -%}
+{#- A union variant's discriminator defaults to its tag: `Circle(radius=1)`. -#}
+{% set defaults = type.discriminator_defaults if type.discriminator_defaults is defined else {} -%}
 {% set runtime_names = ["BaseModel"] -%}
 {% if type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
     {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
 {% endif -%}
-{{ model_imports(referenced_components, runtime_names) }}
+{{ model_imports(referenced_components, runtime_names, union_refs | reject("in", [type.name]) | list) }}
 
 {% set json_keys %}
     {#- Keyed by the attribute name: a keyword field `class` is exposed as `class_`. -#}
@@ -41,6 +43,7 @@ class {{ type.name | to_upper_camel_case }}(BaseModel):
         {%- for field in type.fields if field.required == required_pass %}
 
     {{ field_ident(field) }}: {{ field_decl(field) }}
+            {%- if field.required and not field.nullable and field.name in defaults and field.type.to_python() == "str" %} = {{ py_str(defaults[field.name]) }}{% endif %}
             {%- if field.description is defined or field.deprecated %}
     {{ docstring(((field.description if field.description is defined else "") ~ ("\n\n.. deprecated:: This field is deprecated." if field.deprecated else "")) | trim) | indent(4) }}
             {%- endif %}

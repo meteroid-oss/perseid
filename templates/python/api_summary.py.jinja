@@ -11,6 +11,18 @@
 {% if streaming.used -%}
 from ._streaming import AsyncEventStream, EventStream, SseEvent, Upload
 {% endif -%}
+from ._errors import (
+    ApiStatusError,
+    AuthenticationError,
+    BadRequestError,
+    ConflictError,
+    ErrorBody,
+    InternalServerError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+    UnprocessableEntityError,
+)
 from .client import {{ sdk.client_name }}, {{ sdk.client_name }}Async, {{ sdk.client_name }}Options
 {% for resource in api.resources -%}
     {% set cls = resource.name | to_upper_camel_case -%}
@@ -21,6 +33,16 @@ __all__ = [
     "{{ sdk.client_name }}",
     "{{ sdk.client_name }}Async",
     "{{ sdk.client_name }}Options",
+    "ApiStatusError",
+    "AuthenticationError",
+    "BadRequestError",
+    "ConflictError",
+    "ErrorBody",
+    "InternalServerError",
+    "NotFoundError",
+    "PermissionDeniedError",
+    "RateLimitError",
+    "UnprocessableEntityError",
     {% if streaming.used -%}
     "AsyncEventStream",
     "EventStream",
@@ -72,7 +94,7 @@ class {{ sdk.client_name }}Options:
     """Custom server URL. Defaults to `{{ sdk.default_base_url }}`."""
 
     timeout: float | None = DEFAULT_TIMEOUT
-    """Timeout for HTTP requests, in seconds. `None` disables the timeout."""
+    """Timeout for HTTP requests, in seconds (default {{ sdk.timeout }}). `None` disables it."""
 
     num_retries: int | None = None
     """Number of retries on connection failures, 429, 5xx and timeouts. Defaults to 2."""
@@ -265,3 +287,108 @@ class {{ sdk.client_name }}Async:
 {% endfor %}
 {% endset %}
 {% set _ = generate_extra_file(output_dir ~ "/client.py", client_py) %}
+
+{% set errors_py %}# this file is @generated
+"""API errors by status, carrying the decoded error body."""
+
+from __future__ import annotations
+
+import typing as t
+
+{% if api.error_schemas | length > 0 -%}
+from .. import models as _models
+{% endif -%}
+from ..errors import ApiException
+
+__all__ = [
+    "ApiStatusError",
+    "AuthenticationError",
+    "BadRequestError",
+    "ConflictError",
+    "ErrorBody",
+    "InternalServerError",
+    "NotFoundError",
+    "PermissionDeniedError",
+    "RateLimitError",
+    "UnprocessableEntityError",
+    "error_class",
+]
+
+{% if api.error_schemas | length > 0 -%}
+ErrorBody: t.TypeAlias = {% for name in api.error_schemas %}{% if not loop.first %} | {% endif %}_models.{{ name | to_upper_camel_case }}{% endfor %}
+"""The error responses the API declares."""
+{%- else -%}
+ErrorBody: t.TypeAlias = t.Any
+"""The decoded JSON of an error response: the API declares no error schema."""
+{%- endif %}
+
+_REQUEST_ID_HEADERS = ("x-request-id", "request-id")
+
+
+class ApiStatusError(ApiException):
+    """The API answered with a non-2xx status. Subclasses tell the common ones apart."""
+
+    body: ErrorBody | None = None
+    """The error response decoded into the schema the operation declares for its
+    status, `None` when it matches none."""
+
+    @property
+    def request_id(self) -> str | None:
+        """The request id to quote to support, when the API sends one."""
+        headers: t.Mapping[str, str] = getattr(self, "headers", None) or {}
+        for name in _REQUEST_ID_HEADERS:
+            if name in headers:
+                return headers[name]
+        return None
+
+
+class BadRequestError(ApiStatusError):
+    """400 Bad Request."""
+
+
+class AuthenticationError(ApiStatusError):
+    """401 Unauthorized."""
+
+
+class PermissionDeniedError(ApiStatusError):
+    """403 Forbidden."""
+
+
+class NotFoundError(ApiStatusError):
+    """404 Not Found."""
+
+
+class ConflictError(ApiStatusError):
+    """409 Conflict."""
+
+
+class UnprocessableEntityError(ApiStatusError):
+    """422 Unprocessable Entity."""
+
+
+class RateLimitError(ApiStatusError):
+    """429 Too Many Requests, once retries are exhausted."""
+
+
+class InternalServerError(ApiStatusError):
+    """Any 5xx status, once retries are exhausted."""
+
+
+_BY_STATUS: dict[int, type[ApiStatusError]] = {
+    400: BadRequestError,
+    401: AuthenticationError,
+    403: PermissionDeniedError,
+    404: NotFoundError,
+    409: ConflictError,
+    422: UnprocessableEntityError,
+    429: RateLimitError,
+}
+
+
+def error_class(status_code: int) -> type[ApiStatusError]:
+    """The error raised for a response with this status."""
+    if status_code >= 500:
+        return InternalServerError
+    return _BY_STATUS.get(status_code, ApiStatusError)
+{% endset %}
+{% set _ = generate_extra_file(output_dir ~ "/_errors.py", errors_py) %}

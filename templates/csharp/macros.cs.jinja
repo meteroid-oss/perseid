@@ -1,7 +1,44 @@
-{% macro doc(text) -%}
-/// <summary>
-{{ text | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") | to_doc_comment(style="csharp") }}
-/// </summary>
+{# Markdown inline text as XML doc text: escaped, with `code` spans as <c>. -#}
+{% macro xml(text) -%}
+{% set escaped = text | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") -%}
+{% set parts = escaped | split("`") | list -%}
+{% if parts | length is odd and "```" not in escaped -%}
+{% for part in parts %}{% if loop.index is even %}<c>{{ part }}</c>{% else %}{{ part }}{% endif %}{% endfor %}
+{%- else -%}
+{{ escaped }}
+{%- endif %}
+{%- endmacro %}
+
+{# One Markdown paragraph, or a `-` list, as XML doc lines. -#}
+{% macro block(text) -%}
+{% set lines = text | lines | list -%}
+{% if lines | reject("startingwith", "- ") | list | length == 0 -%}
+<list type="bullet">
+{% for line in lines %}<item><description>{{ xml(line[2:]) }}</description></item>
+{% endfor %}</list>
+{%- else -%}
+{{ xml(text) }}
+{%- endif %}
+{%- endmacro %}
+
+{# The XML doc of a Markdown description: its first paragraph as the summary, others and
+   `remarks` (XML) as remarks. -#}
+{% macro doc(text, remarks="") -%}
+{% set text = text | default("") | trim -%}
+{% set blocks = (text | split("\n\n") | list if "```" not in text else [text]) if text else [] -%}
+{% set out = namespace(lines=[]) -%}
+{% if blocks %}{% set out.lines = ["<summary>", block(blocks[0]), "</summary>"] %}{% endif -%}
+{% if blocks | length > 1 or remarks -%}
+{% set out.lines = out.lines + ["<remarks>"] -%}
+{% if blocks | length == 2 and not remarks -%}
+{% set out.lines = out.lines + [block(blocks[1])] -%}
+{% else -%}
+{% for b in blocks[1:] %}{% set out.lines = out.lines + ["<para>", block(b), "</para>"] %}{% endfor -%}
+{% endif -%}
+{% if remarks %}{% set out.lines = out.lines + [remarks] %}{% endif -%}
+{% set out.lines = out.lines + ["</remarks>"] -%}
+{% endif -%}
+{{ out.lines | join("\n") | to_doc_comment(style="csharp") }}
 {%- endmacro %}
 
 {# A lowerCamelCase parameter name, `@`-escaped when it is a C# keyword. -#}
@@ -40,12 +77,28 @@
 {% set id = name | to_upper_camel_case -%}
 {% if id in ["ApiRequest", "ApiTransport", "ApiException", "ApiAuth", "RequestOptions", "Upload",
     "MultipartBody", "EventStream", "SseEvent", "Pagination", "Paginator", "Credentials",
-    "BasicCredentials", "SecurityScheme", "SchemeKind", "Webhook"] %}Models.{% endif %}{{ id }}
+    "BasicCredentials", "SecurityScheme", "SchemeKind", "Webhook", "BadRequestException",
+    "UnauthorizedException", "ForbiddenException", "NotFoundException", "ConflictException",
+    "UnprocessableEntityException", "RateLimitException", "ServerErrorException",
+    "ApiExceptionExtensions"] %}Models.{% endif %}{{ id }}
 {%- endmacro %}
 
-{# The property type of a model field or query parameter. -#}
-{% macro field_type(field) -%}
-{{ field.type.to_csharp() }}{% if field.nullable or not field.required %}?{% endif %}
+{# The property type of a model field or query parameter, `union` naming its typed union. -#}
+{% macro field_type(field, union="") -%}
+{% set ty = field.type.to_csharp() -%}
+{{ ty | replace("JsonNode", union) if union else ty }}{% if field.nullable or not field.required %}?{% endif %}
+{%- endmacro %}
+
+{# The class of the union a field of `owner` holds, directly or in collections; empty without. -#}
+{% macro union_class(field, owner, taken) -%}
+{% set t = namespace(ty=field.type) -%}
+{% for _ in range(8) -%}
+{% if t.ty.is_list() or t.ty.is_set() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
+{% endfor -%}
+{% if sdk.typed_unions | default(false) and t.ty.is_union() -%}
+{% set id = owner ~ (field.name | to_rust_variant) -%}
+{{ id }}{% if id in taken %}Union{% endif %}
+{%- endif %}
 {%- endmacro %}
 
 
@@ -73,4 +126,18 @@
 {% set clr = {"string": "String", "bool": "Boolean", "int": "Int32", "long": "Int64", "short": "Int16",
     "ushort": "UInt16", "ulong": "UInt64", "float": "Single", "double": "Double", "decimal": "Decimal"} -%}
 {% if "<" in type %}Json{{ type | to_upper_camel_case }}{% else %}{{ clr[type] | default(type) }}{% endif %}
+{%- endmacro %}
+
+{# The nested record of union variant `v` in the union class `union`. -#}
+{% macro union_variant_class(v, union) -%}
+{% set class = v.name | to_rust_variant -%}
+{{ class }}{% if class in [union, "Unrecognized", "Value", "Raw", "Id", "EqualityContract", "Deconstruct", "PrintMembers", "Equals", "GetHashCode", "ToString", "IsEmpty"] %}Variant{% endif %}
+{%- endmacro %}
+
+{# The exception class thrown for an error response status: `404`, `4XX` or `default`. -#}
+{% macro status_exception(status) -%}
+{% set classes = {"400": "BadRequestException", "401": "UnauthorizedException", "403": "ForbiddenException",
+    "404": "NotFoundException", "409": "ConflictException", "422": "UnprocessableEntityException",
+    "429": "RateLimitException", "5XX": "ServerErrorException"} -%}
+{{ classes[status] | default("ServerErrorException" if status is startingwith("5") else "ApiException") }}
 {%- endmacro %}

@@ -9,12 +9,16 @@
 
 {# `unknown` for any-JSON values, so callers narrow them before use. -#}
 {% macro js_type(type) -%}
-    {%- if type.is_json_object() -%}
+    {%- if type.is_union() -%}
+        {%- for v in type.union_variants() -%}
+            {% if not loop.first %} | {% endif %}{% if v.empty %}""{% elif untyped_int64(v) %}number{% else %}{{ js_type(v.type) }}{% endif %}
+        {%- endfor -%}
+    {%- elif type.is_json_object() -%}
         unknown
     {%- elif is_int64(type) -%}
         {{ sdk.int64 }}
     {%- elif type.is_list() or type.is_set() -%}
-        {{ js_type(type.inner_type()) }}[]
+        {% if type.inner_type().is_union() %}({{ js_type(type.inner_type()) }})[]{% else %}{{ js_type(type.inner_type()) }}[]{% endif %}
     {%- elif type.is_map() -%}
         { [key: string]: {{ js_type(type.value_type()) }} }
     {%- else -%}
@@ -38,9 +42,33 @@
     {{ doc(field.description, field.deprecated) }}{{ field.name | ident("camel") }}{% if not field.required %}?{% endif %}: {{ field_type(field) }};
 {%- endmacro %}
 
+{#- An int64 union variant stays a number when int64 values are strings, which would be
+    indistinguishable from a string variant. -#}
+{% macro untyped_int64(variant) -%}
+    {%- if sdk.int64 | default("number") == "string" and is_int64(variant.type) %}yes{% endif -%}
+{%- endmacro %}
+
+{% macro variant_converted(variant, outgoing) -%}
+    {%- if not untyped_int64(variant) %}{{ converted(variant.type, outgoing) }}{% endif -%}
+{%- endmacro %}
+
+{#- The test that a value, on the wire or in its TypeScript form, holds the union variant
+    of `json_type`. -#}
+{% macro is_variant(expr, json_type) -%}
+    {%- if json_type == "array" -%}
+        Array.isArray({{ expr }})
+    {%- elif json_type == "object" -%}
+        isJsonObject({{ expr }})
+    {%- else -%}
+        typeof {{ expr }} === "{{ "number" if json_type == "integer" else json_type }}"
+    {%- endif -%}
+{%- endmacro %}
+
 {# `yes` when values of `type` need converting from JSON, or to JSON with `outgoing`. -#}
 {% macro converted(type, outgoing=false) -%}
-    {%- if type.is_schema_ref() -%}
+    {%- if type.is_union() -%}
+        {%- for v in type.union_variants() if variant_converted(v, outgoing) %}{% if loop.first %}yes{% endif %}{% endfor -%}
+    {%- elif type.is_schema_ref() -%}
         yes
     {%- elif outgoing and is_int64(type) and sdk.int64 == "string" -%}
         yes
@@ -54,7 +82,9 @@
 {%- endmacro %}
 
 {% macro from_json(expr, type) -%}
-    {%- if type.is_datetime() -%}
+    {%- if type.is_union() and converted(type) -%}
+        ({% for v in type.union_variants() if variant_converted(v, false) %}{{ is_variant(expr, v.json_type) }} ? {{ from_json(expr, v.type) }} : {% endfor %}{{ expr }})
+    {%- elif type.is_datetime() -%}
         parseDateTime({{ expr }})
     {%- elif type.is_schema_ref() -%}
         {{ type.to_js() }}Serializer.parse({{ expr }})
@@ -71,7 +101,9 @@
 
 {# Dates are left to `JSON.stringify`, which calls `toISOString`. -#}
 {% macro to_json(expr, type) -%}
-    {%- if type.is_schema_ref() -%}
+    {%- if type.is_union() and converted(type, true) -%}
+        ({% for v in type.union_variants() if variant_converted(v, true) %}{{ is_variant(expr, v.json_type) }} ? {{ to_json(expr, v.type) }} : {% endfor %}{{ expr }})
+    {%- elif type.is_schema_ref() -%}
         {{ type.to_js() }}Serializer.serialize({{ expr }})
     {%- elif is_int64(type) and sdk.int64 == "string" -%}
         BigInt({{ expr }})
@@ -84,9 +116,10 @@
     {%- endif -%}
 {%- endmacro %}
 
-{# Absent and null values are passed through, keeping `null` for nullable fields only. -#}
+{# Absent and null values are passed through, keeping `null` for nullable fields only. A
+   union's conversion already passes them through. -#}
 {% macro guarded(expr, field, conversion, outgoing) -%}
-    {%- if converted(field.type, outgoing) and (not field.required or field.nullable) -%}
+    {%- if converted(field.type, outgoing) and (not field.required or field.nullable) and not (field.nullable and field.type.is_union()) -%}
         {{ expr }} != null ? {{ conversion }} : {{ expr if field.nullable else "undefined" }}
     {%- else -%}
         {{ conversion }}
@@ -103,16 +136,17 @@
     {{ guarded(expr, field, to_json(expr, field.type), true) }}
 {%- endmacro %}
 
-{#- The object literal members parsing `fields` out of `json`. -#}
-{% macro parse_fields(fields, json) -%}
+{#- The object literal members parsing `fields` out of `json`. `defaults` fills the
+    discriminator of a union variant model when it is missing. -#}
+{% macro parse_fields(fields, json, defaults={}) -%}
     {%- for field in fields if not field.flatten %}
-    {{ field.name | ident("camel") }}: {{ field_from_json(json, field) }},
+    {{ field.name | ident("camel") }}: {{ field_from_json(json, field) }}{% if field.name in defaults %} ?? {{ defaults[field.name] | tojson }}{% endif %},
     {%- endfor %}
 {%- endmacro %}
 
-{% macro serialize_fields(fields, value) -%}
+{% macro serialize_fields(fields, value, defaults={}) -%}
     {%- for field in fields if not field.flatten %}
-    {{ field.name | tojson }}: {{ field_to_json(value, field) }},
+    {{ field.name | tojson }}: {{ field_to_json(value, field) }}{% if field.name in defaults %} ?? {{ defaults[field.name] | tojson }}{% endif %},
     {%- endfor %}
 {%- endmacro %}
 

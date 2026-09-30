@@ -14,7 +14,16 @@ from __future__ import annotations
 import typing as t
 from datetime import datetime
 from decimal import Decimal
-{% if referenced_components | length > 0 %}
+{%- set error_types = namespace(used=false) %}
+{%- if error_schemas | length > 0 %}
+{%- for op in resource.operations if op.errors | length > 0 or default_error %}
+{%- set error_types.used = true %}
+{%- endfor %}
+{%- endif %}
+{%- if error_types.used %}
+from .. import models as _models
+{%- endif %}
+{%- if referenced_components | length > 0 %}
 from ..models import (
 {%- for c in referenced_components %}
     {{ c | to_upper_camel_case }},
@@ -255,6 +264,18 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- endif %}
 {%- if op.response_is_event_stream %}
             stream=True,
+{%- endif %}
+{%- if error_schemas | length > 0 %}
+{#- Statuses sharing the default schema are left to the `default` entry. #}
+{%- set fallback = op.errors["default"] if "default" in op.errors else default_error %}
+            error_types={
+{%- for status, name in op.errors | items if name != fallback %}
+                {{ py_str(status) }}: _models.{{ name | to_upper_camel_case }},
+{%- endfor %}
+{%- if fallback %}
+                "default": _models.{{ fallback | to_upper_camel_case }},
+{%- endif %}
+            },
 {%- endif %}
             extra_headers={{ headers_kw }},
             timeout={{ timeout_kw }},

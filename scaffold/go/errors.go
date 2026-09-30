@@ -5,7 +5,8 @@ import (
 	"net/http"
 )
 
-// APIError is returned for every non-2xx response.
+// APIError is returned for every non-2xx response. errors.Is matches it against
+// status sentinels such as [ErrNotFound], and [ErrorBody] decodes its body.
 type APIError struct {
 	StatusCode int
 	// Header holds the response headers, such as the request id to quote to support.
@@ -22,8 +23,22 @@ func (e *APIError) setHeader(header http.Header) {
 	e.Header = header
 }
 
+// RequestID returns the id the API gave the request, to quote to support.
+func (e *APIError) RequestID() string {
+	for _, name := range []string{"X-Request-Id", "Request-Id"} {
+		if id := e.Header.Get(name); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
 func (e *APIError) Error() string {
-	return fmt.Sprintf("@@PACKAGE_NAME@@: API error (status %d): %s", e.StatusCode, e.RawBody)
+	body := e.RawBody
+	if len(body) > 512 {
+		body = append(body[:512:512], "..."...)
+	}
+	return fmt.Sprintf("@@PACKAGE_NAME@@: API error (status %d): %s", e.StatusCode, body)
 }
 
 // TransportError is returned when no response was received.

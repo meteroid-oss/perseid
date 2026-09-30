@@ -1,5 +1,5 @@
 // this file is @generated
-{% from "types/macros.rs.jinja" import rust_type -%}
+{% from "types/macros.rs.jinja" import rust_type, union_enum, union_imports, union_name -%}
 {% if type.description is defined -%}
 {% set doc_comment = type.description | to_doc_comment(style="rust") -%}
 {% else -%}
@@ -20,8 +20,17 @@
     {% for c in referenced_components -%}
     use super::{{ c | to_upper_camel_case }};
     {% endfor -%}
+    {{ union_imports() }}
+    {% set type_name = type.name | to_upper_camel_case -%}
+    {% if sdk.typed_unions and type.target.is_union() -%}
     {{ doc_comment }}
-    pub type {{ type.name | to_upper_camel_case }} = {{ rust_type(type.target) }};
+    {{ union_enum(type_name, type.target) }}
+    {% else -%}
+    {% set union = union_name(type_name, "item", type.target) -%}
+    {{ doc_comment }}
+    pub type {{ type_name }} = {{ rust_type(type.target, union) }};
+    {% if union %}{{ union_enum(union, type.target) }}{% endif %}
+    {% endif -%}
 {% else -%}
     compile_error!("{{ type.kind }} types are not supported by this codegen template");
 {% endif %}

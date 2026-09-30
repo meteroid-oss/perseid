@@ -30,3 +30,70 @@ impl crate::request::QueryParamValue for chrono::NaiveDate {
     }
 }
 {% endif %}
+{% if sdk.typed_unions %}
+{% from "types/macros.rs.jinja" import has_union, union_name -%}
+{% set type_names = api.types | items | map(attribute=1) | map(attribute="name") | map("to_upper_camel_case") | list -%}
+{% set ids = namespace(all=[]) -%}
+{% for _, type in api.types | items if type.kind == "struct" -%}
+{% for field in type.fields if field.name == "id" and not field.flatten and not field.deprecated and field.type.to_rust() == "String" and not field.type.is_datetime() and not field.type.is_date() -%}
+{% set ids.all = ids.all + [(type.name | to_snake_case) ~ (":required" if field.required and not field.nullable else ":optional")] -%}
+{% endfor -%}
+{% endfor -%}
+{% macro union_exports(module, owner, fields) -%}
+{% for field in fields -%}
+{% set union = union_name(owner, field.name, field.type, type_names) -%}
+{% if union %}pub use self::{{ module }}::{{ union }};
+{{ nested_exports(module, union, field.type) }}
+{% if field.type.is_union() %}{{ expandable_id(module, union, field.type) }}{% endif -%}
+{% endif -%}
+{% endfor -%}
+{%- endmacro %}
+{% macro nested_exports(module, name, ty) -%}
+{% if ty.is_list() or ty.is_set() -%}
+{{ nested_exports(module, name, ty.inner_type()) }}
+{%- elif ty.is_map() -%}
+{{ nested_exports(module, name, ty.value_type()) }}
+{%- else -%}
+{% for variant in ty.union_variants() if has_union(variant.type) -%}
+{% set nested = name ~ (variant.name | to_upper_camel_case) -%}
+pub use self::{{ module }}::{{ nested }};
+{{ nested_exports(module, nested, variant.type) }}
+{% endfor -%}
+{%- endif %}
+{%- endmacro %}
+{% macro expandable_id(module, union, ty) -%}
+{% set variants = ty.union_variants() -%}
+{% set refs = variants | selectattr("json_type", "equalto", "object") | list -%}
+{% if variants | selectattr("name", "equalto", "string") | list and refs and refs[0].type.is_schema_ref() -%}
+{% set required = refs[0].name ~ ":required" in ids.all -%}
+{% if required or refs[0].name ~ ":optional" in ids.all %}
+
+impl {{ module }}::{{ union }} {
+    /// The id of the object, expanded or not.
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::String(id) => Some(id.as_str()),
+            Self::{{ refs[0].name | to_upper_camel_case }}(object) => {% if required %}Some(object.id.as_str()){% else %}object.id.as_deref(){% endif %},
+            _ => None,
+        }
+    }
+}
+{% endif -%}
+{% endif -%}
+{%- endmacro %}
+
+{% for _, type in api.types | items -%}
+{% set module = type.name | to_rust_ident -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+{% if type.kind == "struct" -%}
+{{ union_exports(module, type_name, type.fields) }}
+{%- elif type.kind == "struct_enum" -%}
+{{ union_exports(module, type_name, type.fields | rejectattr("name", "equalto", type.discriminator_field)) }}
+{%- for variant in type.variants if variant.type == "struct" and variant.fields -%}
+{{ union_exports(module, type_name ~ (variant.name | to_rust_variant) ~ "Variant", variant.fields) }}
+{%- endfor -%}
+{%- elif type.kind == "alias" and not type.target.is_union() -%}
+{{ union_exports(module, type_name, [{"name": "item", "type": type.target}]) }}
+{%- endif -%}
+{% endfor -%}
+{% endif %}

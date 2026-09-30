@@ -1,15 +1,21 @@
-{% from "types/macros.go.jinja" import go_type, go_ident -%}
-{% set target = go_type(type.target) -%}
+{% from "types/macros.go.jinja" import go_type, go_ident, go_has_union, go_union -%}
+{% set union = go_has_union(type.target) == "true" -%}
+{% set union_name = go_ident(type.name) ~ ("" if type.target.is_union() else "Item") -%}
+{% set target = go_type(type.target, union_name if union else none) -%}
+{% set rendered = target ~ (go_union(union_name, type.target) if union else "") -%}
 package {{ sdk.package_name }}
-{% if "time.Time" in target and "json.RawMessage" in target %}
+{% if "time.Time" in rendered and "json." in rendered %}
 import (
 	"encoding/json"
 	"time"
 )
-{% elif "time.Time" in target %}
+{% elif "time.Time" in rendered %}
 import "time"
-{% elif "json.RawMessage" in target %}
+{% elif "json." in rendered %}
 import "encoding/json"
 {% endif %}
-{{ doc_comment }}
+{% if union and type.target.is_union() %}{{ go_union(union_name, type.target) | replace("// " ~ union_name ~ " is one of", doc_comment ~ "\n//\n// " ~ union_name ~ " is one of" if doc_comment else "// " ~ union_name ~ " is one of") }}
+{% else %}{{ doc_comment }}
 type {{ go_ident(type.name) }} = {{ target }}
+{% if union %}{{ go_union(union_name, type.target) }}
+{% endif %}{% endif %}

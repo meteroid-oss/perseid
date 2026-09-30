@@ -1,6 +1,8 @@
-{#- Properties of `fields`, inside a type named `owner`. -#}
+{#- Properties of `fields`, inside a type named `owner`, their unions named after `union_owner`. -#}
 {% for field in fields -%}
-{% set ty = m.field_type(field) -%}
+{% set ty = m.field_type(field, m.union_class(field, union_owner, type_names)) -%}
+{% set tags = type.discriminator_defaults | default({}) if owner == type_name else {} -%}
+{% set tag_default = tags[field.name] if field.required and field.name in tags else none -%}
 {% set patch = sdk.patch_nullable and (patch_body | default(false) or owner is endingwith "Patch") and field.nullable -%}
 {% if field.description is defined %}
 {{ m.doc(field.description) }}
@@ -20,6 +22,8 @@
 {% endif -%}
 {% if patch -%}
 public MaybeUnset<{{ ty }}> {{ m.member(field.name, owner) }} { get; set; }
+{% elif tag_default is not none -%}
+public {{ ty }} {{ m.member(field.name, owner) }} { get; set; } = {{ tag_default | tojson }};
 {% else -%}
 public {% if field.required %}required {% endif %}{{ ty }} {{ m.member(field.name, owner) }} { get; set; }
 {% endif %}

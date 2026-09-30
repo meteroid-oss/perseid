@@ -4,7 +4,7 @@ from __future__ import annotations
 import typing as t
 from datetime import datetime
 from decimal import Decimal
-{% for c in referenced_components %}
+{% for c in (referenced_components | list) + (union_refs | reject("in", (referenced_components | list) + [type.name]) | sort | list) %}
 from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
 {%- endfor %}
 

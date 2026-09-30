@@ -47,6 +47,50 @@ namespace {{ sdk.package_name }}.Models;
 [JsonSerializable(typeof({{ name[8:] }}?), TypeInfoPropertyName = "Json{{ name }}")]
 {% endif -%}
 {% endfor -%}
+{% set expandables = namespace(list=[]) -%}
+{% if sdk.typed_unions | default(false) -%}
+{% set taken = api.types | list | map("to_upper_camel_case") | list -%}
+{% for _, type in api.types | items if type.kind in ["struct", "struct_enum"] -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+{% set owners = namespace(list=[(type.fields, type_name)]) -%}
+{% for variant in type.variants | default([]) if variant.type == "struct" -%}
+{% set class = variant.name | to_rust_variant -%}
+{% if class == type_name %}{% set class = class ~ "Value" %}{% endif -%}
+{% if class in [type.discriminator_field | to_rust_variant, "Unrecognized"] %}{% set class = class ~ "Variant" %}{% endif -%}
+{% set owners.list = owners.list + [(variant.fields | default([]), type_name ~ class)] -%}
+{% endfor -%}
+{% for fields, owner in owners.list -%}
+{% for field in fields -%}
+{% set union = m.union_class(field, owner, taken) -%}
+{% if union -%}
+[JsonSerializable(typeof({{ union }}))]
+{% set t = namespace(ty=field.type) -%}
+{% for _ in range(8) -%}
+{% if t.ty.is_list() or t.ty.is_set() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
+{% endfor -%}
+{% set ids = namespace(cases=[], strings=0) -%}
+{% for v in t.ty.union_variants() -%}
+{% set class = m.union_variant_class(v, union) -%}
+{#- Schema keys are usually the variant's snake_case name or its class name. -#}
+{% set target = (api.types[v.name] or api.types[v.type.to_csharp()]) if v.type.is_schema_ref() else none -%}
+{% set id_field = (target.fields | default([]) | selectattr("name", "equalto", "id") | first) if target and target.kind == "struct" else none -%}
+{% if v.type.to_csharp() == "string" and not v.empty -%}
+{% set ids.strings = ids.strings + 1 -%}
+{% set ids.cases = ids.cases + [union ~ "." ~ class ~ " variant => variant.Value"] -%}
+{% elif id_field and id_field.type.to_csharp() == "string" -%}
+{% set ids.cases = ids.cases + [union ~ "." ~ class ~ " variant => variant.Value." ~ m.member("id", v.type.to_csharp())] -%}
+{% endif -%}
+{% endfor -%}
+{% if ids.strings == 1 and ids.cases | length > 1 %}{% set expandables.list = expandables.list + [(union, ids.cases)] %}{% endif -%}
+{% for v in t.ty.union_variants() if "<" in v.type.to_csharp() and v.type.to_csharp() not in generic.types -%}
+{% set generic.types = generic.types + [v.type.to_csharp()] -%}
+[JsonSerializable(typeof({{ v.type.to_csharp() }}), TypeInfoPropertyName = "{{ m.type_info(v.type.to_csharp()) }}")]
+{% endfor -%}
+{% endif -%}
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
+{% endif -%}
 {% for resource in api.resources -%}
 {% for op in resource.operations -%}
 {% set op_types = namespace(list=[m.body_type(op), m.response_type(op)]) -%}
@@ -64,3 +108,16 @@ namespace {{ sdk.package_name }}.Models;
 {% endfor -%}
 {% endfor -%}
 public sealed partial class {{ sdk.client_name }}JsonContext : JsonSerializerContext { }
+{% for union, cases in expandables.list %}
+
+public abstract partial record {{ union }}
+{
+    /// <summary>The ID: the string, or the <c>id</c> of the expanded object.</summary>
+    public string? Id =>
+        this switch
+        {
+{% for case in cases %}            {{ case }},
+{% endfor %}            _ => null,
+        };
+}
+{% endfor -%}

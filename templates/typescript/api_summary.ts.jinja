@@ -11,8 +11,31 @@ import type { Security, SecurityScheme } from "./auth.js";
 import type { Middleware } from "./middleware.js";
 import type { {{ sdk.client_name }}RequestContext } from "./request.js";
 import type { XOR } from "./util.js";
-
+{% set ns = namespace(models=[]) -%}
+{% for _, type in api.types | items %}{% set ns.models = ns.models + [type.name | to_upper_camel_case] %}{% endfor -%}
+{% set model_names = ns.models -%}
+{% set error_classes = ["ApiError", "BadRequestError", "AuthenticationError", "PermissionDeniedError", "NotFoundError", "ConflictError", "UnprocessableEntityError", "RateLimitError", "InternalServerError", "ApiTimeoutError"] -%}
+{% set exported_errors = error_classes | reject("in", model_names) | list -%}
+import {
+    {% for name in error_classes %}{{ name }}{% if name in model_names %} as {{ name }}Class{% endif %},{% endfor %}
+} from "./apiErrors.js";
+{% if api.default_error -%}
+import { {{ api.default_error | to_upper_camel_case }}Serializer } from "./models/{{ api.default_error | to_lower_camel_case }}.js";
+{% endif %}
 export { ApiException } from "./util.js";
+{% if exported_errors -%}
+export { {{ exported_errors | join(", ") }} } from "./apiErrors.js";
+{% endif -%}
+{% if api.error_schemas -%}
+/** The error bodies the API declares, `ApiError.error` once parsed. */
+export type {{ sdk.client_name }}ErrorBody =
+    {%- for name in api.error_schemas %}
+    | import("./models/{{ name | to_lower_camel_case }}.js").{{ name | to_upper_camel_case }}
+    {%- endfor %};
+{% else -%}
+/** The API declares no error body schema. */
+export type {{ sdk.client_name }}ErrorBody = unknown;
+{% endif -%}
 export type { XOR } from "./util.js";
 export type { Middleware } from "./middleware.js";
 export { parseJson, stringifyJson } from "./json.js";
@@ -43,7 +66,10 @@ export type {{ sdk.client_name }}Options = {
   debug?: boolean;
   /** Custom API server URL. Defaults to `{{ sdk.default_base_url }}`. */
   serverUrl?: string;
-  /** Time in milliseconds to wait for each attempt to get a response. */
+  /**
+   * Time in milliseconds to wait for each attempt to get a response. Default:
+   * {{ (sdk.timeout * 1000) | int }} ({{ sdk.timeout }} seconds); `Infinity` waits forever.
+   */
   requestTimeout?: number;
   /** Custom fetch implementation, for tests or non-standard runtimes. */
   fetch?: typeof fetch;
@@ -84,6 +110,7 @@ export type {{ sdk.client_name }}Options = {
 >;
 
 const DEFAULT_BASE_URL = "{{ sdk.default_base_url }}";
+const DEFAULT_TIMEOUT_MS = {{ (sdk.timeout * 1000) | int }};
 
 const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
   schemes: {
@@ -94,8 +121,9 @@ const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
   security: {{ api.security | tojson }},
 };
 
+{% set summary = sdk.client_name ~ " API client for " ~ sdk.tagline if sdk.tagline else sdk.description | default(sdk.client_name ~ " API client", true) -%}
 /**
- * {{ sdk.client_name }} API client{% if sdk.tagline %} for {{ sdk.tagline }}{% endif %}.
+ * {{ summary | doc | replace("\n", " ") | replace("*/", "*\\/") | trim | trim(".") }}.
  *
  * @example
  * ```typescript
@@ -111,7 +139,13 @@ const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
  * ```
  */
 export class {{ sdk.client_name }} {
+  {% for name in error_classes -%}
+  static readonly {{ name }} = {{ name }}{% if name in model_names %}Class{% endif %};
+  {% endfor %}
   private readonly requestCtx: {{ sdk.client_name }}RequestContext;
+  {% for resource in api.resources -%}
+  private _{{ resource.name | to_lower_camel_case }}?: {{ resource.name | to_upper_camel_case }};
+  {% endfor %}
 
   /**
    * @param token API token for authentication{% if "api_key" in kinds %}, also the default API key{% endif %}
@@ -131,7 +165,10 @@ export class {{ sdk.client_name }} {
       },
       {% endif -%}
       baseUrl: (options.serverUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, ""),
-      timeout: options.requestTimeout,
+      timeout: options.requestTimeout ?? DEFAULT_TIMEOUT_MS,
+      {% if api.default_error -%}
+      parseError: {{ api.default_error | to_upper_camel_case }}Serializer.parse,
+      {% endif -%}
       debug: options.debug,
       fetch: options.fetch,
       middleware: options.middleware,
@@ -141,9 +178,12 @@ export class {{ sdk.client_name }} {
   }
 
   {% for resource in api.resources %}
-  /** The {{ resource.name | to_snake_case | replace("_", " ") }} API. */
+  {% set words = resource.name | to_snake_case | replace("_", " ") -%}
+  {% if words == "api" %}{% set words = "" %}{% elif words[-4:] == " api" %}{% set words = words[:-4] %}{% endif -%}
+  /** The {% if words %}{{ words }} {% endif %}API. */
   public get {{ resource.name | to_lower_camel_case }}(): {{ resource.name | to_upper_camel_case }} {
-    return new {{ resource.name | to_upper_camel_case }}(this.requestCtx);
+    this._{{ resource.name | to_lower_camel_case }} ??= new {{ resource.name | to_upper_camel_case }}(this.requestCtx);
+    return this._{{ resource.name | to_lower_camel_case }};
   }
   {% endfor %}
 }

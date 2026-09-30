@@ -36,3 +36,12 @@ export function stringifyJson(value: unknown): string {
   });
   return bigints ? json.replace(BIGINT_MARKED, "$1") : json;
 }
+
+/** @internal Whether a union holds its object variant: not a scalar, list or `Date`. */
+export function isJsonObject<T>(
+  value: T
+): value is Exclude<T, string | number | boolean | bigint | unknown[] | Date | null | undefined> {
+  return (
+    typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date)
+  );
+}

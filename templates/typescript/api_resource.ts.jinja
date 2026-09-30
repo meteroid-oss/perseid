@@ -1,7 +1,13 @@
-// this file is @generated
 {% import "types/macros.ts.jinja" as m -%}
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
+// this file is @generated
 
+{# A blank line keeps the marker apart from the imports, which may be removed if unused.
+   Operations declaring an error schema other than the API default parse their own. -#}
+{% set errs = namespace(ops=[]) -%}
+{% for op in resource.operations -%}
+{% for _, schema in op.errors | items %}{% if schema != default_error and op.id not in errs.ops %}{% set errs.ops = errs.ops + [op.id] %}{% endif %}{% endfor -%}
+{% endfor -%}
 {% for c in referenced_components -%}
 import { type {{ c | to_upper_camel_case }}, {{ c | to_upper_camel_case }}Serializer } from "../models/{{ c | to_lower_camel_case }}.js";
 {% endfor -%}
@@ -101,16 +107,19 @@ export class {{ resource_type_name }} {
             {% if op.security is defined -%}
                 request.setSecurity({{ op.security | tojson }});
             {% endif -%}
+            {% if op.id in errs.ops -%}
+                request.setErrors({
+                    {% for status, schema in op.errors | items -%}
+                    {{ status | tojson }}: {{ schema | to_upper_camel_case }}Serializer.parse,
+                    {% endfor -%}
+                });
+            {% endif -%}
 
             {% for p in op.query_params -%}
                 {% set accessor %}options{% if not p.required %}?{% endif %}.{{ p.name | ident("camel") }}{% endset -%}
                 {% if p.structured -%}
-                    {
-                        const value = {{ accessor }};
-                        if (value != null) {
-                            request.setStructuredQueryParam({{ p.name | tojson }}, {{ m.to_json("value", p.type) }}, {{ p.deep_object | lower }}, {{ p.explode | lower }});
-                        }
-                    }
+                    {% set value = accessor if not m.converted(p.type, true) else accessor ~ " != null ? " ~ m.to_json("options." ~ (p.name | ident("camel")), p.type) ~ " : undefined" -%}
+                    request.setStructuredQueryParam({{ p.name | tojson }}, {{ value }}, {{ p.deep_object | lower }}, {{ p.explode | lower }});
                 {% elif (p.type.is_list() or p.type.is_set()) and p.explode | default(true) -%}
                     request.setExplodedQueryParam({{ p.name | tojson }}, {{ accessor }});
                 {% else -%}

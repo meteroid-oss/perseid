@@ -33,6 +33,7 @@ __all__ = [
     "UNSET",
     "BaseModel",
     "Discriminator",
+    "FROM_CONTENT",
     "IntEnum",
     "@@CLIENT_NAME@@Error",
     "ModelParseError",
@@ -77,6 +78,9 @@ class Unset(enum.Enum):
     def __repr__(self) -> str:
         return "UNSET"
 
+
+FROM_CONTENT: t.Any = None
+"""Default of a tagged union's discriminator: the tag of its content's model."""
 
 UNSET: t.Final = Unset.UNSET
 """Default of the optional fields that also accept ``null``: the field is left
@@ -194,7 +198,9 @@ def to_json_value(value: t.Any, annotation: t.Any = t.Any) -> t.Any:
         return to_json_value(value, base)
     if origin in _UNION_TYPES:
         members = [a for a in t.get_args(annotation) if a not in (_NoneType, Unset)]
-        return to_json_value(value, members[0] if len(members) == 1 else t.Any)
+        if len(members) == 1:
+            return to_json_value(value, members[0])
+        return to_json_value(value, _union_member(members, _value_kind(value)) or t.Any)
     if isinstance(value, enum.Enum):
         return to_json_value(value.value)
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -349,7 +355,10 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
         members = [a for a in args if a not in (_NoneType, Unset)]
         if len(members) == 1:
             return _from_json_value(members[0], value, ctx)
-        raise ModelParseError(f"{ctx}: cannot deserialize into union {annotation!r}")
+        member = _union_member(members, _value_kind(value))
+        if member is None:
+            raise ModelParseError(f"{ctx}: {value!r} matches no member of {annotation!r}")
+        return _from_json_value(member, value, ctx)
 
     if origin in (list, set, frozenset, tuple):
         inner = args[0] if args else t.Any
@@ -409,6 +418,64 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
             return value
 
     return value
+
+
+_STRING_TYPES = (str, _datetime.datetime, _datetime.date, Decimal)
+
+
+def _json_kind(annotation: t.Any) -> str | None:
+    """The JSON type of the values of ``annotation``, ``None`` when it takes any."""
+    origin = t.get_origin(annotation)
+    if origin is t.Annotated:
+        base, *metadata = t.get_args(annotation)
+        if any(isinstance(meta, Discriminator) for meta in metadata):
+            return "object"
+        return _json_kind(base)
+    if origin is t.Literal:
+        return _value_kind(t.get_args(annotation)[0])
+    if origin in (list, set, frozenset, tuple):
+        return "array"
+    if origin is dict:
+        return "object"
+    if isinstance(annotation, type):
+        if issubclass(annotation, bool):
+            return "boolean"
+        if issubclass(annotation, (int, float)):
+            return "number"
+        if issubclass(annotation, _STRING_TYPES):
+            return "string"
+        if issubclass(annotation, BaseModel):
+            return "object"
+    return None
+
+
+def _value_kind(value: t.Any) -> str | None:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, _STRING_TYPES):
+        return "string"
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return "array"
+    if isinstance(value, (t.Mapping, BaseModel, UnknownVariant)):
+        return "object"
+    return None
+
+
+def _union_member(members: list[t.Any], kind: str | None) -> t.Any:
+    """The member of an untagged union whose JSON type is ``kind``.
+
+    Such unions are only generated when every member has a distinct JSON type.
+    """
+    fallback = None
+    for member in members:
+        member_kind = _json_kind(member)
+        if member_kind == kind:
+            return member
+        if member_kind is None:
+            fallback = member
+    return fallback
 
 
 # --------------------------------------------------------------------------
@@ -539,6 +606,22 @@ class TaggedUnionModel(BaseModel):
         if isinstance(variant, str):
             variant = _namespace(cls)[variant]
         return variant
+
+    def __post_init__(self) -> None:
+        if getattr(self, self._DISCRIMINATOR_ATTR) is None:
+            setattr(self, self._DISCRIMINATOR_ATTR, self._tag_of(getattr(self, self._CONTENT_ATTR)))
+
+    @classmethod
+    def _tag_of(cls, content: t.Any) -> str:
+        if isinstance(content, UnknownVariant):
+            return content.tag
+        tags = [tag for tag in cls._VARIANTS if cls._variant(tag) is type(content)]
+        if len(tags) != 1:
+            raise TypeError(
+                f"{cls.__name__}: pass {cls._DISCRIMINATOR_ATTR}=, it cannot be told"
+                f" from a {type(content).__name__} content"
+            )
+        return tags[0]
 
     def to_dict(self) -> dict[str, t.Any]:
         tag = getattr(self, self._DISCRIMINATOR_ATTR)

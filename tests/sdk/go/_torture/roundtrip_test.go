@@ -58,7 +58,7 @@ func TestRoundTrip(t *testing.T) {
 		{"inline variant", `{"event":"deleted","reason":null}`, "", roundTrip[InlineEvent]},
 		{"allOf", `{"id":"b1","created_at":"2024-01-02T03:04:05Z","extra":"e","sibling_prop":"s"}`, "", roundTrip[Composed]},
 		{"recursion", `{"value":"root","children":[{"value":"c","children":[]}],"next":{"value":"n","children":[]}}`, "", roundTrip[TreeNode]},
-		{"nested unions", `{"shape":{"type":"circle","radius":1},"shapes":[{"type":"square","side":1}],"shape_map":{"k":{"type":"square","side":3}},"inline_union":["a",1],"empty":{},"free_form":{"any":1},"counts":{"a":9007199254740993}}`, "", roundTrip[UnionHolder]},
+		{"nested unions", `{"shape":{"type":"circle","radius":1},"shapes":[{"type":"square","side":1}],"shape_map":{"k":{"type":"square","side":3}},"inline_union":["a","b"],"empty":{},"free_form":{"any":1},"counts":{"a":9007199254740993}}`, "", roundTrip[UnionHolder]},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

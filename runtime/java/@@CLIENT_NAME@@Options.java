@@ -14,7 +14,7 @@ import java.util.function.Supplier;
 
 public final class @@CLIENT_NAME@@Options {
     public static final String DEFAULT_URL = "@@DEFAULT_BASE_URL@@";
-    public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(60);
+    public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(@@TIMEOUT@@);
 
     private String serverUrl = DEFAULT_URL;
     private final List<Long> retrySchedule = new ArrayList<>(List.of(500L, 1000L));

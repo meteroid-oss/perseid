@@ -13,13 +13,19 @@
     "Map", "Set", "Optional", "ArrayList", "HashMap", "LinkedHashMap", "LinkedHashSet", "BigDecimal",
     "OffsetDateTime", "URI", "Visibility", "JsonAnyGetter", "JsonAnySetter", "JsonAutoDetect",
     "JsonIgnoreProperties", "JsonInclude", "JsonProperty", "JsonSubTypes", "JsonTypeInfo",
-    "JsonTypeName", "JsonUnwrapped", "JsonProcessingException"] -%}
+    "JsonTypeName", "JsonUnwrapped", "JsonProcessingException"] or (sdk.edition >= 2 and cls in [
+    "JsonValue", "TypeReference", "DeserializationContext", "JsonNode", "JsonDeserialize", "IOException"]) -%}
 {% set ns.classes = ns.classes + [cls ~ "Variant" if shadowed else cls] -%}
 {% endfor -%}
 {% set classes = ns.classes -%}
 {% set vars = m.field_idents(type.fields, "camel", owner) | split(" ") | reject("equalto", "") | list -%}
 {% set pascals = m.field_idents(type.fields, "pascal", owner) | split(" ") | reject("equalto", "") | list -%}
 {% set adjacent = type.repr == "adjacently_tagged" -%}
+{% set ns.unions = [] -%}
+{% for field in type.fields -%}
+{% set ns.unions = ns.unions + [m.union_name(field, type_name, pascals[loop.index0])] -%}
+{% endfor -%}
+{% set unions = ns.unions -%}
 {% set shared = type.fields | length > 0 -%}
 // This file is @generated
 package {{ sdk.java_package }}.models;
@@ -35,8 +41,17 @@ import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
+{% if sdk.edition >= 2 -%}
+import com.fasterxml.jackson.annotation.JsonValue;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import java.io.IOException;
+{% else -%}
 import com.fasterxml.jackson.core.JsonProcessingException;
-import {{ sdk.java_package }}.Utils;
+{% endif -%}
+import {{ sdk.java_internal_package }}.Utils;
 
 import java.math.BigDecimal;
 import java.net.URI;
@@ -52,7 +67,7 @@ import java.util.Optional;
 import java.util.Set;
 
 {% set summary -%}
-{% if type.description is defined %}{{ type.description | e }}
+{% if type.description is defined %}{{ m.html(type.description) }}
 
 {% endif -%}
 One of the variants below, told apart by {@code {{ disc }}}. A value this version of the SDK does not know
@@ -81,11 +96,11 @@ parses as {@link Unrecognized}, which keeps its properties.
         setterVisibility = Visibility.NONE)
 public abstract class {{ type_name }} {
     {% for field in type.fields -%}
-    {{ m.declaration(field, vars[loop.index0]) | replace("private ", "protected ") }}
+    {{ m.declaration(field, vars[loop.index0], unions[loop.index0]) | replace("private ", "protected ") }}
     {% endfor %}
 
     {% for field in type.fields -%}
-    {{ m.accessors(field, vars[loop.index0], pascals[loop.index0], type_name) }}
+    {{ m.accessors(field, vars[loop.index0], pascals[loop.index0], type_name, unions[loop.index0]) }}
 
     {% endfor -%}
 
@@ -97,24 +112,16 @@ public abstract class {{ type_name }} {
     {{ m.value_methods(type_name, vars) }}
     {% endif %}
 
-    /**
-     * Parse {@code json} as {@code {{ type_name }}}.
-     *
-     * @throws JsonProcessingException if it is not valid JSON of this shape
-     */
-    public static {{ type_name }} fromJson(String json) throws JsonProcessingException {
-        return Utils.fromJson(json, {{ type_name }}.class);
-    }
+    {{ m.json_methods(type_name) }}
+    {% for field in type.fields %}{% if unions[loop.index0] %}
 
-    /** This {{ type_name }} as JSON. */
-    public String toJson() throws JsonProcessingException {
-        return Utils.toJson(this);
-    }
+    {{ m.union_class(field.type, unions[loop.index0], classes + [type_name]) }}
+    {%- endif %}{% endfor %}
     {% for variant in type.variants -%}
     {% set cls = classes[loop.index0] -%}
     {% set content = type.content_field if adjacent else none -%}
 
-    /** The {@code {{ variant.name | e }}} variant. */
+    /** The {@code {{ m.html(variant.name) }}} variant. */
     @JsonTypeName({{ variant.name | tojson }})
     public static final class {{ cls }} extends {{ type_name }} {
     {% if variant.type == "ref" and variant.schema_ref is defined -%}
@@ -158,6 +165,11 @@ public abstract class {{ type_name }} {
         {% set fvars = m.field_idents(variant.fields, "camel", variant_owner) | split(" ") | reject("equalto", "") | list -%}
         {% set fpascals = m.field_idents(variant.fields, "pascal", variant_owner) | split(" ") | reject("equalto", "") | list -%}
         {% set holder = "Content" if content else cls -%}
+        {% set vn = namespace(unions=[]) -%}
+        {% for field in variant.fields -%}
+        {% set vn.unions = vn.unions + [m.union_name(field, type_name ~ cls, fpascals[loop.index0])] -%}
+        {% endfor -%}
+        {% set vunions = vn.unions -%}
         {% if content -%}
         @JsonProperty({{ content | tojson }})
         private Content data = new Content();
@@ -189,13 +201,17 @@ public abstract class {{ type_name }} {
         public static final class Content {
         {% endif -%}
         {% for field in variant.fields -%}
-        {{ m.declaration(field, fvars[loop.index0]) }}
+        {{ m.declaration(field, fvars[loop.index0], vunions[loop.index0]) }}
         {% endfor %}
 
         {% for field in variant.fields -%}
-        {{ m.accessors(field, fvars[loop.index0], fpascals[loop.index0], holder) }}
+        {{ m.accessors(field, fvars[loop.index0], fpascals[loop.index0], holder, vunions[loop.index0]) }}
 
         {% endfor -%}
+        {% for field in variant.fields %}{% if vunions[loop.index0] -%}
+        {{ m.union_class(field.type, vunions[loop.index0], classes + [type_name]) }}
+
+        {% endif %}{% endfor -%}
         {% if content -%}
             {{ m.value_methods("Content", fvars) }}
         }

@@ -42,11 +42,22 @@ use crate::{error::Result, models::*, Configuration};
 
 pub struct {{ resource_type_name }}<'a> {
     cfg: &'a Configuration,
+    options: crate::api::RequestOptions,
 }
 
 impl<'a> {{ resource_type_name }}<'a> {
     pub(super) fn new(cfg: &'a Configuration) -> Self {
-        Self { cfg }
+        Self {
+            cfg,
+            options: crate::api::RequestOptions::default(),
+        }
+    }
+
+    /// Applies `options` (headers, timeout, retries, idempotency key) to the calls made
+    /// through the returned value.
+    pub fn with_options(mut self, options: crate::api::RequestOptions) -> Self {
+        self.options = options;
+        self
     }
 
     {% set extension %}extensions/{{ resource.name | to_snake_case }}.rs{% endset -%}
@@ -60,6 +71,14 @@ impl<'a> {{ resource_type_name }}<'a> {
     {% endif -%}
     {% if op.description is defined -%}
         {{ op.description | to_doc_comment(style="rust") }}
+    {% endif -%}
+    {% if op.errors -%}
+    {% set schemas = op.errors | dictsort | map(attribute=1) | unique | list -%}
+    {% if op.description is defined %}///
+    {% endif -%}
+    /// # Errors
+    ///
+    /// An API error's body is{% for schema in schemas %}{% if not loop.first %}{% if loop.last %} or{% else %},{% endif %}{% endif %} [`{{ schema | to_upper_camel_case }}`](crate::models::{{ schema | to_upper_camel_case }}) ({% for status, s in op.errors | dictsort if s == schema %}{% if not loop.first %}, {% endif %}{{ "other statuses" if status == "default" else status }}{% endfor %}){% endfor %}.
     {% endif -%}
     {% if op.deprecated -%}
         #[deprecated]
@@ -176,6 +195,7 @@ impl<'a> {{ resource_type_name }}<'a> {
             .{% if op.request_body_optional %}with_optional_body_param{% else %}with_body_param{% endif %}(body)
         {% endif -%}
 
+        .with_options(&self.options)
         {% if op.response_is_event_stream -%}
             .execute_event_stream(self.cfg)
             .await
@@ -197,6 +217,9 @@ impl<'a> {{ resource_type_name }}<'a> {
     {% set pg = op.pagination -%}
     {% set param = (op.query_params | selectattr("name", "equalto", pg.param) | first) -%}
     /// Iterates over every item of [`Self::{{ op.name | to_rust_ident }}`], fetching further pages on demand.
+    {% if op.deprecated -%}
+    #[deprecated]
+    {% endif -%}
     pub fn {{ op.name | to_snake_case }}_iter(
         &self,
         {% for p in op.path_params -%}
@@ -229,11 +252,13 @@ impl<'a> {{ resource_type_name }}<'a> {
             .ok()
             .filter(|start| !start.is_null());
         let cfg = self.cfg;
+        let request_options = self.options.clone();
         crate::api::Paginator::new(
             &SPEC,
             start,
             Box::new(move |param| {
                 let mut options = options.clone();
+                let request_options = request_options.clone();
                 {% for p in op.path_params -%}
                 let {{ p | to_rust_ident }} = {{ p | to_rust_ident }}.clone();
                 {% endfor -%}
@@ -247,7 +272,11 @@ impl<'a> {{ resource_type_name }}<'a> {
                         options.{{ pg.param | to_rust_ident }} =
                             serde_json::from_value(param).map_err(crate::request::decode_error)?;
                     }
+                    {% if op.deprecated -%}
+                    #[allow(deprecated)]
+                    {% endif -%}
                     let page = Self::new(cfg)
+                        .with_options(request_options)
                         .{{ op.name | to_rust_ident }}(
                             {% for p in op.path_params %}{{ p | to_rust_ident }}, {% endfor %}
                             {% if op.request_body_schema_name is defined %}{{ body_ident }}, {% elif op.request_body_json_type is defined %}body, {% endif %}

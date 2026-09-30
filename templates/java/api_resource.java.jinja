@@ -1,13 +1,22 @@
+{% import "types/macros.java.jinja" as m -%}
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
 // this file is @generated
 package {{ sdk.java_package }}.api;
 
-import {{ sdk.java_package }}.{{ sdk.client_name }}HttpClient;
+{% set edition2 = sdk.edition >= 2 -%}
+{% set models = referenced_components | map("to_upper_camel_case") | list -%}
+{% set request_options = sdk.java_package ~ ".RequestOptions" if "RequestOptions" in models else "RequestOptions" -%}
+import {{ sdk.java_internal_package }}.{{ sdk.client_name }}HttpClient;
 {% if resource.operations | selectattr("pagination", "defined") | list | length > 0 -%}
 import {{ sdk.java_package }}.Paginator;
 {% endif -%}
-import {{ sdk.java_package }}.Utils;
+{% if request_options == "RequestOptions" -%}
+import {{ sdk.java_package }}.RequestOptions;
+{% endif -%}
+import {{ sdk.java_internal_package }}.Utils;
+{% if not edition2 -%}
 import {{ sdk.java_package }}.exceptions.ApiException;
+{% endif -%}
 {% set body_kinds = resource.operations | map(attribute="request_body_kind") | list -%}
 {% if "multipart" in body_kinds -%}
 import {{ sdk.java_package }}.streaming.Multipart;
@@ -19,7 +28,9 @@ import {{ sdk.java_package }}.streaming.Upload;
 import {{ sdk.java_package }}.streaming.EventStream;
 {% endif -%}
 
+{% if not edition2 -%}
 import java.io.IOException;
+{% endif -%}
 import java.util.List;
 import java.util.Map;
 
@@ -61,7 +72,7 @@ public class {{ resource_type_name }} {
         {% set ty = "Upload" if field.is_file else field.type.to_java() -%}
         {% set accessor = accessors[loop.index0] ~ ("_" if accessors[loop.index0] == "Class" else "") -%}
         {% if field.description is defined -%}
-        {{ field.description | to_doc_comment(style="java") }}
+        {{ m.javadoc(field.description) }}
         {% endif -%}
         public {{ ty }} get{{ accessor }}() {
             return {{ fields[loop.index0] }};
@@ -76,8 +87,9 @@ public class {{ resource_type_name }} {
 {% endfor %}
 
 {% for op in resource.operations -%}
-    {% set throws = "throws IOException, ApiException" -%}
+    {% set throws = "" if edition2 else " throws IOException, ApiException" -%}
     {% set res_type = "void" -%}
+    {% set terminal = "send" if edition2 else "execute" -%}
     {% set res_java_type = none -%}
     {% if op.response_is_event_stream -%}
         {% set res_type = "EventStream" -%}
@@ -128,7 +140,7 @@ public class {{ resource_type_name }} {
     {% set has_options = op | has_query_or_header_params -%}
     {% set doc -%}
         {% if op.description or op.deprecated -%}
-        {{ op.description | default("") | with_javadoc_deprecation(op.deprecated) | to_doc_comment(style="java") }}
+        {{ m.html(op.description | default("")) | with_javadoc_deprecation(op.deprecated) | to_doc_comment(style="java") }}
         {% endif -%}
         {% if op.deprecated %}@Deprecated{% endif %}
     {%- endset -%}
@@ -144,27 +156,35 @@ public class {{ resource_type_name }} {
             final {{ op.name | to_upper_camel_case }}Body body,
         {% endif -%}
     {% endset -%}
-    {% if has_options -%}
+    {% set call_args -%}
+        {%- for p in path_args %}{{ p }}, {% endfor -%}
+        {%- if has_body %}{{ req_body_field_name }}, {% elif op.request_body_kind in ["binary", "multipart"] %}body, {% endif -%}
+    {% endset -%}
 
-        {{ doc }}
-    public {{ res_type }} {{ op_name }}({{ func_args | strip_trailing_comma }}) {{ throws }} {
-        {% if res_type != "void" %}return {% endif %}{{ op_name }}(
-            {%- for p in path_args %}{{ p }}, {% endfor -%}
-            {%- if has_body %}{{ req_body_field_name }}, {% elif op.request_body_kind in ["binary", "multipart"] %}body, {% endif -%}
-            new {{ options_type }}());
+    {{ doc }}
+    public {{ res_type }} {{ op_name }}({{ func_args | strip_trailing_comma }}){{ throws }} {
+        {% if res_type != "void" %}return {% endif %}{{ op_name }}({{ call_args }}{% if has_options %}new {{ options_type }}(), {% endif %}{{ request_options }}.none());
     }
-    {% endif -%}
+    {% if has_options %}
+
+    {{ doc }}
+    public {{ res_type }} {{ op_name }}({{ func_args }}final {{ options_type }} options){{ throws }} {
+        {% if res_type != "void" %}return {% endif %}{{ op_name }}({{ call_args }}options, {{ request_options }}.none());
+    }
+    {% if edition2 %}
+
+    {{ doc }}
+    public {{ res_type }} {{ op_name }}({{ func_args }}final {{ request_options }} requestOptions) {
+        {% if res_type != "void" %}return {% endif %}{{ op_name }}({{ call_args }}new {{ options_type }}(), requestOptions);
+    }
+    {% endif %}
+    {% endif %}
 
     {{ doc }}
     public {{ res_type }} {{ op_name }}(
-    {% set all_args -%}
-        {{ func_args }}
-        {% if has_options -%}
-            final {{ options_type }} options,
-        {% endif -%}
-    {% endset -%}
-    {{ all_args | strip_trailing_comma }}
-    ) {{ throws }}  {
+            {{ func_args }}
+            {%- if has_options %}final {{ options_type }} options, {% endif -%}
+            final {{ request_options }} requestOptions){{ throws }} {
         {% set ns = namespace(literal=[], calls=[], expr="") -%}
         {% set path_and_query = op.path | split("?") | list -%}
         {% for segment in (path_and_query[0] | split("/") | list)[1:] -%}
@@ -222,41 +242,46 @@ public class {{ resource_type_name }} {
         }
         {% endfor -%}
         {% endif -%}
-        {% set headers_arg = "headers.build()" if op.header_params | length > 0 else "null" -%}
-        {% set body_arg = req_body_field_name if has_body else "null" -%}
-
-        {% if res_type != "void" %}return {% endif -%}
-        {% if op.response_is_event_stream -%}
-        {{ http_client }}.executeEventStream({{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }}, {{ headers_arg }});
-        {% elif op.request_body_kind in ["binary", "multipart"] -%}
+        {% set chain = [] -%}
+        {% if op.header_params | length > 0 %}{% set chain = chain + [".headers(headers.build())"] %}{% endif -%}
         {% if op.request_body_kind == "binary" -%}
-        {% set body_expr = "body.toRequestBody(" ~ (op.request_body_content_type | default("application/octet-stream") | tojson) ~ ")" -%}
-        {% else -%}
-        {% set body_expr -%}
-            new Multipart()
-            {%- for field in op.multipart_fields %}
-                .{% if field.is_file %}file{% else %}field{% endif %}({{ field.name | tojson }}, body.get{{ multipart_accessors[loop.index0] }}())
-            {%- endfor %}
-                .build()
-        {%- endset -%}
+            {% set body_expr = "body.toRequestBody(" ~ (op.request_body_content_type | default("application/octet-stream") | tojson) ~ ")" -%}
+            {% set chain = chain + [".body(" ~ ("body == null ? null : " if op.request_body_optional else "") ~ body_expr ~ ")"] -%}
+        {% elif op.request_body_kind == "multipart" -%}
+            {% set body_expr -%}
+                new Multipart()
+                {%- for field in op.multipart_fields %}
+                    .{% if field.is_file %}file{% else %}field{% endif %}({{ field.name | tojson }}, body.get{{ multipart_accessors[loop.index0] }}())
+                {%- endfor %}
+                    .build()
+            {%- endset -%}
+            {% set chain = chain + [".body(" ~ ("body == null ? null : " if op.request_body_optional else "") ~ body_expr ~ ")"] -%}
+        {% elif has_body and op.request_body_is_form -%}
+            {% set chain = chain + [".form(" ~ req_body_field_name ~ ", List.of(" ~ (op.form_deep_object | default([]) | map("tojson") | join(", ")) ~ "), List.of(" ~ (op.form_unexploded | default([]) | map("tojson") | join(", ")) ~ "))"] -%}
+        {% elif has_body -%}
+            {% set chain = chain + [".json(" ~ req_body_field_name ~ ")"] -%}
         {% endif -%}
-        {{ http_client }}.executeBodyRequest(
-            {{ op.method | upper | tojson }},
-            {{ "url.build()" if has_query else "url" }},
-            {{ headers_arg }},
-            {% if op.request_body_optional %}body == null ? null : {% endif %}{{ body_expr }},
-            {{ res_java_type or "(com.fasterxml.jackson.databind.JavaType) null" }});
+        {% if op.errors -%}
+            {% set errs = namespace(schemas=[], statuses=[], calls=[]) -%}
+            {% for status, schema in op.errors | items %}{% if schema not in errs.schemas %}{% set errs.schemas = errs.schemas + [schema] %}{% endif %}{% endfor -%}
+            {% for schema in errs.schemas -%}
+                {% set errs.statuses = [] -%}
+                {% for status, s in op.errors | items %}{% if s == schema %}{% set errs.statuses = errs.statuses + [status | tojson] %}{% endif %}{% endfor -%}
+                {% set errs.calls = errs.calls + [".errors(" ~ sdk.java_package ~ ".models." ~ (schema | to_upper_camel_case) ~ ".class, " ~ (errs.statuses | join(", ")) ~ ")"] -%}
+            {% endfor -%}
+            {% set chain = chain + errs.calls -%}
+        {% endif -%}
+        {% set chain = chain + [".options(requestOptions)"] -%}
+        {% if op.response_is_event_stream -%}
+            {% set chain = chain + ["." ~ terminal ~ "EventStream()"] -%}
         {% elif op.response_is_binary -%}
-        {{ http_client }}.executeBinaryRequest({{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }}, {{ headers_arg }}, {{ body_arg }});
+            {% set chain = chain + ["." ~ terminal ~ "Bytes()"] -%}
         {% else -%}
-        {% if op.request_body_is_form -%}
-        {% set form_lists %}, List.of({% for n in op.form_deep_object | default([]) %}{{ n | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}), List.of({% for n in op.form_unexploded | default([]) %}{{ n | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}){% endset -%}
-        {% else -%}
-        {% set form_lists = "" -%}
+            {% set chain = chain + ["." ~ terminal ~ "(" ~ (res_java_type or "Void.class") ~ ")"] -%}
         {% endif -%}
-        {{ http_client }}.{{ "executeFormRequest" if op.request_body_is_form else "executeRequest" }}(
-            {{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }}, {{ headers_arg }}, {{ body_arg }}, {{ res_java_type or "Void.class" }}{{ form_lists }});
-        {% endif -%}
+        {% if res_type != "void" %}return {% endif -%}
+        {{ http_client }}.call({{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }})
+            {{ chain | join("\n            ") }};
     }
     {% if op.pagination is defined -%}
     {% set pg = op.pagination -%}
@@ -270,18 +295,27 @@ public class {{ resource_type_name }} {
     {% endfor -%}
     {% set pager_accessors = pager.accessors -%}
     {% set param_accessor = pager.param -%}
-    {% set call_args -%}
-        {%- for p in path_args %}{{ p }}, {% endfor -%}
-        {%- if has_body %}{{ req_body_field_name }}, {% elif op.request_body_kind in ["binary", "multipart"] %}body, {% endif -%}
-    {% endset -%}
 
     /** Iterates over every item of {@link #{{ op_name }}}, fetching further pages on demand. */
     public Paginator<{{ item_ty }}> {{ op_name }}Iter({{ func_args | strip_trailing_comma }}) {
-        return {{ op_name }}Iter({{ call_args }}new {{ options_type }}());
+        return {{ op_name }}Iter({{ call_args }}new {{ options_type }}(), {{ request_options }}.none());
     }
 
     /** Iterates over every item of {@link #{{ op_name }}}, fetching further pages on demand. */
     public Paginator<{{ item_ty }}> {{ op_name }}Iter({{ func_args }}final {{ options_type }} options) {
+        return {{ op_name }}Iter({{ call_args }}options, {{ request_options }}.none());
+    }
+
+    {% if edition2 -%}
+    /** Iterates over every item of {@link #{{ op_name }}}, fetching further pages on demand. */
+    public Paginator<{{ item_ty }}> {{ op_name }}Iter({{ func_args }}final {{ request_options }} requestOptions) {
+        return {{ op_name }}Iter({{ call_args }}new {{ options_type }}(), requestOptions);
+    }
+
+    {% endif -%}
+    /** Iterates over every item of {@link #{{ op_name }}}, fetching further pages on demand. */
+    public Paginator<{{ item_ty }}> {{ op_name }}Iter(
+            {{ func_args }}final {{ options_type }} options, final {{ request_options }} requestOptions) {
         return new Paginator<>(
                 new Paginator.Spec(
                         {{ pg.style | tojson }},
@@ -309,7 +343,7 @@ public class {{ resource_type_name }} {
                         page.set{{ param_accessor }}(((Number) param).{% if jt == "Long" %}longValue{% elif jt == "Short" %}shortValue{% else %}intValue{% endif %}());
                         {% endif -%}
                     }
-                    return this.{{ op_name }}({{ call_args }}page);
+                    return this.{{ op_name }}({{ call_args }}page, requestOptions);
                 },
                 {{ item_ty }}.class);
     }

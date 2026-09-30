@@ -5,9 +5,15 @@
 {% set owner = "schema `" ~ type.name ~ "`" -%}
 {% set vars = m.field_idents(type.fields, "camel", owner) | split(" ") | reject("equalto", "") | list -%}
 {% set pascals = m.field_idents(type.fields, "pascal", owner) | split(" ") | reject("equalto", "") | list -%}
+{% set ns = namespace(unions=[]) -%}
+{% for field in type.fields -%}
+{% set ns.unions = ns.unions + [m.union_name(field, class_ty, pascals[loop.index0])] -%}
+{% endfor -%}
+{% set unions = ns.unions -%}
+{% set defaults = type.discriminator_defaults | default({}) -%}
 package {{ sdk.java_package }}.models;
 
-import {{ sdk.java_package }}.Utils;
+import {{ sdk.java_internal_package }}.Utils;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
@@ -15,7 +21,17 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
+{% if unions | select | list -%}
+import com.fasterxml.jackson.annotation.JsonValue;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import java.io.IOException;
+{% endif -%}
+{% if sdk.edition < 2 -%}
 import com.fasterxml.jackson.core.JsonProcessingException;
+{% endif %}
 
 import java.math.BigDecimal;
 import java.net.URI;
@@ -30,7 +46,7 @@ import java.util.Optional;
 import java.util.Set;
 
 {% if type.description is defined -%}
-{{ type.description | e | to_doc_comment(style="java") }}
+{{ m.javadoc(type.description) }}
 {% endif -%}
 {% if type.deprecated %}@Deprecated{% endif %}
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -41,28 +57,20 @@ import java.util.Set;
         setterVisibility = Visibility.NONE)
 public class {{ class_ty }} {
 {% for field in type.fields -%}
-    {{ m.declaration(field, vars[loop.index0]) }}
+    {{ m.declaration(field, vars[loop.index0], unions[loop.index0], defaults[field.name] if field.name in defaults else none) }}
 {% endfor %}
 
     public {{ class_ty }}() {}
 
 {% for field in type.fields -%}
-    {{ m.accessors(field, vars[loop.index0], pascals[loop.index0], class_ty) }}
+    {{ m.accessors(field, vars[loop.index0], pascals[loop.index0], class_ty, unions[loop.index0]) }}
 
 {% endfor -%}
     {{ m.value_methods(class_ty, vars) }}
 
-    /**
-     * Parse {@code json} as {@code {{ class_ty }}}.
-     *
-     * @throws JsonProcessingException if it is not valid JSON of this shape
-     */
-    public static {{ class_ty }} fromJson(String json) throws JsonProcessingException {
-        return Utils.fromJson(json, {{ class_ty }}.class);
-    }
+    {{ m.json_methods(class_ty) }}
+{% for field in type.fields %}{% if unions[loop.index0] %}
 
-    /** This {{ class_ty }} as JSON. */
-    public String toJson() throws JsonProcessingException {
-        return Utils.toJson(this);
-    }
+    {{ m.union_class(field.type, unions[loop.index0]) }}
+{%- endif %}{% endfor %}
 }

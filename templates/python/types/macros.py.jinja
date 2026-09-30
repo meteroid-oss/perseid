@@ -43,9 +43,15 @@
 {%- endmacro %}
 
 {#- The Python annotation for a field type. An any-JSON schema (`{}`) is
-    `t.Any`, as its value may be a list, a scalar or `null` too. -#}
+    `t.Any`, as its value may be a list, a scalar or `null` too. A union told
+    apart by JSON type is `str | Customer`, its `""` variant `t.Literal[""]`. -#}
 {% macro py_type(ty) -%}
-    {%- if ty.is_json_object() -%}
+    {%- if ty.is_union() -%}
+        {%- for variant in ty.union_variants() -%}
+            {%- if not loop.first %} | {% endif -%}
+            {%- if variant.empty %}t.Literal[""]{% else %}{{ py_type(variant.type) }}{% endif -%}
+        {%- endfor -%}
+    {%- elif ty.is_json_object() -%}
         t.Any
     {%- elif ty.is_list() or ty.is_set() -%}
         list[{{ py_type(ty.inner_type()) }}]
@@ -82,7 +88,8 @@
 {#- `from __future__` and imports shared by the model modules. Other models are
     imported for type checkers only, which keeps recursive schemas importable:
     the runtime resolves their names in the models package. -#}
-{% macro model_imports(referenced_components, runtime_names) -%}
+{% macro model_imports(referenced_components, runtime_names, union_refs=[]) -%}
+{%- set referenced_components = (referenced_components | list) + (union_refs | reject("in", referenced_components | list) | sort | list) -%}
 from __future__ import annotations
 
 import dataclasses

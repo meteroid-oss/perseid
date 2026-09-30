@@ -29,6 +29,7 @@ GRADLE
   rust)
     mkdir -p tests && cp "$here/smoke.rs" tests/
     cargo add -q --dev tokio --features macros,rt-multi-thread
+    cargo add -q --dev futures@0.3
     cargo test -q --test smoke ;;
   csharp)
     mkdir -p smoke && cp "$here/Smoke.cs" smoke/

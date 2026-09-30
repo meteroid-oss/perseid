@@ -119,7 +119,7 @@ fn resolve_schema_refs_in_resource(resource: &mut Resource, string_alias_names: 
 pub(crate) fn mark_structured_query_params(resources: &mut Resources, types: &Types) {
     fn is_structured(ty: &FieldType, types: &Types, depth: usize) -> bool {
         match ty {
-            FieldType::JsonObject | FieldType::Map { .. } => true,
+            FieldType::JsonObject | FieldType::Union { .. } | FieldType::Map { .. } => true,
             FieldType::List { inner } | FieldType::Set { inner } => {
                 is_structured(inner, types, depth)
             }
@@ -247,6 +247,7 @@ impl Resource {
             for field in &mut operation.multipart_fields {
                 field.field.r#type.inline_aliases(aliases);
             }
+            operation.untype_unions();
         }
         for resource in self.subresources.values_mut() {
             resource.inline_aliases(aliases)?;
@@ -433,6 +434,17 @@ pub(crate) struct Operation {
     pub(crate) id: String,
     /// The name to use for the operation in code.
     pub(crate) name: String,
+    /// The name after the HTTP method and the path within the resource (`list`, `retrieve`,
+    /// `create_source`), or the override of `[names]`/`x-perseid-name`. It is `name` when
+    /// `method_names = "resource"`.
+    #[serde(default)]
+    pub(crate) method_name: String,
+    /// `x-perseid-name` of the operation.
+    #[serde(skip)]
+    pub(crate) x_perseid_name: Option<String>,
+    /// Whether this is the `_stream` twin of another operation.
+    #[serde(skip)]
+    pub(crate) stream: bool,
     /// Description of the operation to use for documentation.
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
@@ -441,9 +453,9 @@ pub(crate) struct Operation {
     /// The HTTP method.
     ///
     /// Encoded as "get", "post" or such because that's what aide's PathItem iterator gives us.
-    method: String,
+    pub(crate) method: String,
     /// The operation's endpoint path.
-    path: String,
+    pub(crate) path: String,
     /// Path parameters.
     ///
     /// Only required string-typed parameters are currently supported.
@@ -517,6 +529,9 @@ pub(crate) struct Operation {
     /// schemas (e.g. `RestErrorResponse`) into the generated models alongside everything else.
     #[serde(skip)]
     error_response_schema_names: BTreeSet<String>,
+    /// Schema of the JSON body of each error response, by status: `404`, `4XX` or `default`.
+    #[serde(default)]
+    pub(crate) errors: BTreeMap<String, String>,
     /// Security requirement, when it differs from the API-wide one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     security: Option<Requirement>,
@@ -618,7 +633,7 @@ impl Operation {
 
                     query_params.push(QueryParam {
                         name,
-                        description: parameter_data.description,
+                        description: super::html::doc(parameter_data.description),
                         required: parameter_data.required,
                         r#type,
                         explode,
@@ -650,14 +665,24 @@ impl Operation {
         }
 
         let responses = op.responses.unwrap_or_default();
-        let (response, error_response_schema_names) =
-            responses_from_openapi(responses, component_schemas)?;
+        let (response, errors) = responses_from_openapi(responses, component_schemas)?;
+        let error_response_schema_names = errors.values().cloned().collect();
 
         let x_pagination = op.extensions.get("x-pagination").cloned();
+        let x_perseid_name = match op.extensions.get("x-perseid-name") {
+            None => None,
+            Some(serde_json::Value::String(name)) if !name.trim().is_empty() => {
+                Some(name.trim().to_owned())
+            }
+            Some(_) => bail!("`x-perseid-name` must be a non-empty string"),
+        };
         let op = Operation {
+            method_name: op_name.clone(),
+            x_perseid_name,
+            stream: false,
             id: op_id,
             name: op_name,
-            description: operation_doc(op.summary, op.description),
+            description: super::html::doc(operation_doc(op.summary, op.description)),
             deprecated: op.deprecated,
             method: method.to_owned(),
             path: path.to_owned(),
@@ -683,6 +708,7 @@ impl Operation {
             response_is_event_stream: response.kind == ResponseKind::EventStream,
             json_or_event_stream: response.also_event_stream,
             error_response_schema_names,
+            errors,
             security: None,
             pagination: None,
             x_pagination,
@@ -695,6 +721,8 @@ impl Operation {
     fn event_stream_variant(&self) -> Option<Self> {
         self.json_or_event_stream.then(|| Self {
             name: format!("{}_stream", self.name),
+            method_name: format!("{}_stream", self.method_name),
+            stream: true,
             response_body_schema_name: None,
             response_body_is_list: false,
             response_body_json_type: None,
@@ -709,9 +737,13 @@ impl Operation {
     fn inline_body_aliases(&mut self, aliases: &BTreeMap<String, FieldType>) -> anyhow::Result<()> {
         self.error_response_schema_names
             .retain(|name| !aliases.contains_key(name));
+        self.errors.retain(|_, name| !aliases.contains_key(name));
         if let Some(name) = self.response_body_schema_name.clone()
             && let Some(target) = aliases.get(&name)
         {
+            let mut target = target.clone();
+            target.untype_unions();
+            let target = &target;
             match target {
                 FieldType::List { inner } if !self.response_body_is_list => {
                     let FieldType::SchemaRef { name: item, .. } = &**inner else {
@@ -737,6 +769,9 @@ impl Operation {
         if let Some(name) = self.request_body_schema_name.clone()
             && let Some(target) = aliases.get(&name)
         {
+            let mut target = target.clone();
+            target.untype_unions();
+            let target = &target;
             match target {
                 FieldType::List { inner } if !self.request_body_is_list => {
                     let FieldType::SchemaRef { name: item, .. } = &**inner else {
@@ -800,6 +835,24 @@ impl Operation {
             }
         };
         Ok(())
+    }
+
+    /// Types the unions of its parameters and bodies as untyped JSON.
+    pub(crate) fn untype_unions(&mut self) {
+        let types = self
+            .query_params
+            .iter_mut()
+            .map(|p| &mut p.r#type)
+            .chain(
+                self.multipart_fields
+                    .iter_mut()
+                    .map(|f| &mut f.field.r#type),
+            )
+            .chain(self.request_body_json_type.as_mut())
+            .chain(self.response_body_json_type.as_mut());
+        for ty in types {
+            ty.untype_unions();
+        }
     }
 
     pub(crate) fn has_query_or_header_params(&self) -> bool {
@@ -1086,11 +1139,12 @@ struct ResponseBody {
 }
 
 /// Picks the body the SDK decodes on success: the lowest 2xx status with content, or `default`
-/// when no 2xx is declared. Returns it with the JSON error schemas of 4xx, 5xx and `default`.
+/// when no 2xx is declared. Returns it with the JSON error schemas of 4xx, 5xx and `default`,
+/// by status.
 fn responses_from_openapi(
     responses: openapi::Responses,
     schemas: &IndexMap<String, openapi::SchemaObject>,
-) -> anyhow::Result<(ResponseBody, BTreeSet<String>)> {
+) -> anyhow::Result<(ResponseBody, BTreeMap<String, String>)> {
     let mut success = Vec::new();
     let mut errors = Vec::new();
     for (status, response) in responses.responses {
@@ -1101,7 +1155,7 @@ fn responses_from_openapi(
             openapi::StatusCode::Code(code @ 200..300) => success.push((code, status, response)),
             openapi::StatusCode::Range(2) => success.push((299, status, response)),
             openapi::StatusCode::Code(400..) | openapi::StatusCode::Range(4 | 5) => {
-                errors.push(response)
+                errors.push((status.to_string(), response))
             }
             // Informational and redirect responses have no body for the SDK to decode.
             _ => {}
@@ -1113,7 +1167,7 @@ fn responses_from_openapi(
         };
         match success.is_empty() {
             true => success.push((0, openapi::StatusCode::Code(0), default)),
-            false => errors.push(default),
+            false => errors.push(("default".to_owned(), default)),
         }
     }
     success.sort_by_key(|(code, ..)| *code);
@@ -1137,12 +1191,12 @@ fn responses_from_openapi(
     }
     let error_schemas = errors
         .into_iter()
-        .filter_map(|response| {
+        .filter_map(|(status, response)| {
             let schema = response.content.get("application/json")?.schema.as_ref()?;
             let Schema::Object(obj) = &schema.json_schema else {
                 return None;
             };
-            get_schema_name(obj.reference.as_deref())
+            Some((status, get_schema_name(obj.reference.as_deref())?))
         })
         .collect();
     Ok((
@@ -1323,7 +1377,7 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
-    fn responses(value: Value) -> anyhow::Result<(ResponseBody, BTreeSet<String>)> {
+    fn responses(value: Value) -> anyhow::Result<(ResponseBody, BTreeMap<String, String>)> {
         let schemas = schemas(json!({
             "Widgets": { "type": "array", "items": { "$ref": "#/components/schemas/Widget" } }
         }));
@@ -1365,7 +1419,13 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(body.schema_name.as_deref(), Some("Widget"));
-        assert_eq!(errors, BTreeSet::from(["Error".into(), "Invalid".into()]));
+        assert_eq!(
+            errors,
+            BTreeMap::from([
+                ("default".into(), "Error".into()),
+                ("4XX".into(), "Invalid".into())
+            ])
+        );
     }
 
     #[test]

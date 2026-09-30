@@ -4,7 +4,10 @@ plugins {
 }
 group = GROUP
 version = VERSION_NAME
-java { sourceCompatibility = JavaVersion.VERSION_11; targetCompatibility = JavaVersion.VERSION_11 }
+tasks.withType(JavaCompile).configureEach {
+    options.release = 11
+    options.compilerArgs += ['-Xlint:all,-deprecation', '-Werror']
+}
 repositories { mavenCentral() }
 dependencies {
     api 'com.fasterxml.jackson.core:jackson-databind:2.18.2'

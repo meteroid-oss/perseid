@@ -1,3 +1,4 @@
+{% import "types/macros.java.jinja" as m -%}
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
 {% set class_name = resource_type_name ~ (operation.name | to_upper_camel_case) ~ "Options" -%}
 {% set params = operation.query_params + operation.header_params -%}
@@ -29,7 +30,7 @@ public class {{ class_name }} {
     {% set field = fields[loop.index0] -%}
     {% set accessor = accessors[loop.index0] ~ ("_" if accessors[loop.index0] == "Class" else "") -%}
     {% if p.description is defined -%}
-    {{ p.description | to_doc_comment(style="java") }}
+    {{ m.javadoc(p.description) }}
     {% endif -%}
     public {{ class_name }} {{ field }}({{ ty }} {{ field }}) {
         this.{{ field }} = {{ field }};

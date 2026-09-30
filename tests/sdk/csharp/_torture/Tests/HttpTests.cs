@@ -126,7 +126,7 @@ public class HttpTests
     {
         var (client, server) = Client(_ => Reply(status));
         using var _ = client;
-        var error = await Assert.ThrowsAsync<ApiException>(() => client.Things.GetThingAsync("t1"));
+        var error = await Assert.ThrowsAnyAsync<ApiException>(() => client.Things.GetThingAsync("t1"));
         Assert.Equal(status, error.StatusCode);
         Assert.Equal(attempts, server.Seen.Count);
         if (attempts > 1)
@@ -140,9 +140,9 @@ public class HttpTests
     {
         var (client, server) = Client(_ => Reply(HttpStatusCode.InternalServerError));
         using var _ = client;
-        await Assert.ThrowsAsync<ApiException>(() => client.Things.UpdateThingAsync("t1", new()));
+        await Assert.ThrowsAnyAsync<ApiException>(() => client.Things.UpdateThingAsync("t1", new()));
         Assert.Single(server.Seen);
-        await Assert.ThrowsAsync<ApiException>(
+        await Assert.ThrowsAnyAsync<ApiException>(
             () => client.Things.UpdateThingAsync("t1", new(), new() { IdempotencyKey = "k" })
         );
         Assert.Equal(4, server.Seen.Count);
@@ -221,5 +221,28 @@ public class HttpTests
         );
         using var _ = client;
         Assert.Equal([1, 2, 3], await client.Things.DownloadThingAsync("t1"));
+    }
+
+    [Fact]
+    public async Task ErrorsAreThrownAsTheirStatusClassWithATypedBody()
+    {
+        var (client, _) = Client(n =>
+        {
+            var response = Reply(
+                n == 1 ? HttpStatusCode.UnprocessableEntity : HttpStatusCode.NotFound,
+                """{"message":"invalid","fields":{"name":["empty"]}}"""
+            );
+            response.Headers.TryAddWithoutValidation("x-request-id", "req_1");
+            return response;
+        });
+        using var _ = client;
+        var invalid = await Assert.ThrowsAsync<UnprocessableEntityException>(
+            () => client.Things.CreateThingAsync(new ThingCreate { Name = "", Kind = Kind.Alpha })
+        );
+        Assert.Equal(["empty"], invalid.GetError<ValidationError>()!.Fields!["name"]);
+        Assert.Equal("req_1", invalid.GetRequestId());
+        var missing = await Assert.ThrowsAsync<NotFoundException>(() => client.Things.GetThingAsync("t1"));
+        Assert.IsAssignableFrom<ApiException>(missing);
+        Assert.Null(missing.GetError<Problem>());
     }
 }

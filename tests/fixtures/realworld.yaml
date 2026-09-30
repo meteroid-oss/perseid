@@ -104,6 +104,102 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Customer' }
+  /v1/charges:
+    get:
+      operationId: GetCharges
+      summary: List all charges
+      description: <p>Returns a list of charges, the most recent first. Use <code>created</code> &amp; <a href="https://docs.example.com/expand">expand</a>.</p><ul><li>Paginated</li><li>Filterable</li></ul>
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Charge' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: PostCharges
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Charge' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Charge' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/charges/search:
+    get:
+      operationId: GetChargesSearch
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Charge' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/charges/{charge}:
+    parameters:
+      - { name: charge, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: GetChargesCharge
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Charge' }
+        '404':
+          description: not found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: PostChargesCharge
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Charge' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Charge' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/charges/{charge}/capture:
+    post:
+      operationId: PostChargesChargeCapture
+      parameters:
+        - { name: charge, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Charge' }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/charges/{charge}/refunds:
+    get:
+      operationId: GetChargesChargeRefunds
+      x-perseid-name: refunds
+      parameters:
+        - { name: charge, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Charge' }
+        default: { $ref: '#/components/responses/Error' }
   /advisories:
     get:
       operationId: security-advisories/list-global-advisories
@@ -116,6 +212,9 @@ paths:
               - type: string
               - type: array
                 items: { type: string }
+        - name: state
+          in: query
+          schema: { $ref: '#/components/schemas/StateReasonFilter' }
       responses:
         '200':
           description: ok
@@ -308,7 +407,62 @@ paths:
         '200':
           description: ok
 components:
+  responses:
+    Error:
+      description: error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
   schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          properties:
+            message: { type: string }
+            type: { type: string }
+    Charge:
+      type: object
+      description: <p>A <code>Charge</code> moves money&nbsp;from a card. See <a href="https://docs.example.com/charges">charges</a>.</p>
+      required: [id, customer]
+      properties:
+        id: { type: string }
+        customer:
+          description: <p>ID of the customer this charge is for, or the <code>Customer</code> when expanded.</p>
+          nullable: true
+          anyOf:
+            - type: string
+              maxLength: 5000
+            - $ref: '#/components/schemas/Customer'
+          x-expansionResources:
+            oneOf:
+              - $ref: '#/components/schemas/Customer'
+        amount:
+          anyOf:
+            - type: integer
+            - type: string
+              enum: ['']
+        shipping:
+          anyOf:
+            - type: object
+              title: charge_shipping
+              properties:
+                name: { type: string }
+                phone: { type: string }
+            - type: string
+              enum: ['']
+        tags:
+          anyOf:
+            - type: array
+              items: { type: string }
+            - type: string
+        source:
+          anyOf:
+            - type: string
+            - $ref: '#/components/schemas/Customer'
+            - $ref: '#/components/schemas/Upload'
     Metadata:
       type: object
       additionalProperties: { type: string }
@@ -355,6 +509,11 @@ components:
     StateReason:
       type: string
       enum: [completed, not_planned]
+    StateReasonFilter:
+      oneOf:
+        - { $ref: '#/components/schemas/StateReason' }
+        - type: array
+          items: { $ref: '#/components/schemas/StateReason' }
     NullableStateReason:
       type: string
       enum: [completed, reopened]
@@ -367,6 +526,14 @@ components:
           allOf:
             - $ref: '#/components/schemas/StateReason'
         previous_reason: { $ref: '#/components/schemas/NullableStateReason' }
+        body:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                oneOf:
+                  - $ref: '#/components/schemas/Customer'
+                  - $ref: '#/components/schemas/Upload'
     PaymentMethod:
       type: object
       properties:

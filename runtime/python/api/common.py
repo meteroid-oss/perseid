@@ -5,8 +5,9 @@ Authentication, an automatic ``idempotency-key`` on POST, retries with jittered
 exponential backoff, per-request timeouts and headers, and typed errors.
 
 Retries: a request is retried when it never reached the server (connection
-failure), on HTTP 429 and 503 (honouring ``Retry-After``), and, when replaying
-it is safe, on other 5xx statuses, 408 and transport errors such as timeouts.
+failure), on HTTP 429 (honouring ``Retry-After``), and, when replaying it is
+safe, on 5xx statuses (503 honouring ``Retry-After`` too), 408 and transport
+errors such as timeouts.
 Replaying is safe for GET, HEAD, OPTIONS, PUT and DELETE, and for any request
 carrying an ``idempotency-key`` -- which every POST gets automatically. A
 timed-out request can therefore take up to ``timeout * (1 + len(retry_schedule))``
@@ -50,6 +51,7 @@ from ._auth import (
     needs_token_provider,
     sync_token,
 )
+from ._errors import ApiStatusError, error_class
 from ._streaming import (
     UploadContent,
     is_event_stream,
@@ -74,7 +76,7 @@ __all__ = [
 ]
 
 DEFAULT_SERVER_URL = "@@DEFAULT_BASE_URL@@"
-DEFAULT_TIMEOUT = 15.0
+DEFAULT_TIMEOUT: float = @@TIMEOUT@@
 DEFAULT_NUM_RETRIES = 2
 _MAX_BACKOFF = 8.0
 _MAX_RETRY_AFTER = 60.0
@@ -214,20 +216,47 @@ class Configuration:
         return httpx.Headers({"user-agent": self.user_agent, "accept": "application/json"})
 
 
-def _raise_for_status(response: httpx.Response) -> httpx.Response:
+ErrorTypes = t.Mapping[str, t.Any]
+"""The schema of each error response by status: ``"404"``, ``"4XX"`` or ``"default"``."""
+
+
+def _raise_for_status(response: httpx.Response, error_types: ErrorTypes | None) -> httpx.Response:
     if response.is_success:
         return response
-    # Any other status -- 4xx, 5xx, or a 3xx left unfollowed -- is an error;
-    # see `ApiException` for how the body is decoded.
+    # Any other status -- 4xx, 5xx, or a 3xx left unfollowed -- is an error.
     args: tuple[t.Any, ...] = (response.status_code, response.content)
     if _FROM_RESPONSE_TAKES_HEADERS:
         args += (response.headers,)
-    raise _from_response(*args)
+    error = error_class(response.status_code).from_response(*args)
+    if isinstance(error, ApiStatusError):
+        error.body = _error_body(response, error_types)
+    raise error
 
 
-_from_response: t.Callable[..., ApiException] = ApiException.from_response
 # An `errors.py` scaffolded before response headers were passed takes two arguments.
-_FROM_RESPONSE_TAKES_HEADERS = len(inspect.signature(_from_response).parameters) >= 3
+_FROM_RESPONSE_TAKES_HEADERS = len(inspect.signature(ApiException.from_response).parameters) >= 3
+
+
+def _error_body(response: httpx.Response, error_types: ErrorTypes | None) -> t.Any:
+    """The error response as its declared schema, or its JSON when the API declares none."""
+    status = response.status_code
+    if error_types is None:
+        type_: t.Any = t.Any
+    else:
+        type_ = next(
+            (
+                error_types[key]
+                for key in (str(status), f"{status // 100}XX", "default")
+                if key in error_types
+            ),
+            None,
+        )
+        if type_ is None:
+            return None
+    try:
+        return from_json_value(type_, response.json())
+    except (ValueError, TypeError):
+        return None
 
 
 @t.overload
@@ -269,7 +298,7 @@ def _retry_after(response: httpx.Response) -> float | None:
     except ValueError:
         pass
     try:
-        date = email.utils.parsedate_to_datetime(header)
+        date: _datetime.datetime = email.utils.parsedate_to_datetime(header)
     except (TypeError, ValueError):
         return None
     return (date - _datetime.datetime.now(_datetime.timezone.utc)).total_seconds()
@@ -372,12 +401,12 @@ class ApiBase:
         )
         if response is not None:
             status = response.status_code
+            if status != 429 and not (replayable and (status == 408 or status >= 500)):
+                return None
             if status in (429, 503):
                 retry_after = _retry_after(response)
                 if retry_after is not None and 0 <= retry_after <= _MAX_RETRY_AFTER:
                     return retry_after
-            elif not (replayable and (status == 408 or status >= 500)):
-                return None
         elif not isinstance(error, httpx.TransportError) or (
             not replayable and not isinstance(error, _UNSENT_ERRORS)
         ):
@@ -404,7 +433,9 @@ class ApiBaseSync(ApiBase):
             response.read()
         return response
 
-    def _request_sync(self, stream: bool = False, **options: t.Any) -> httpx.Response:
+    def _request_sync(
+        self, stream: bool = False, error_types: ErrorTypes | None = None, **options: t.Any
+    ) -> httpx.Response:
         kwargs = self._request_kwargs(**options)
         needs_token = needs_token_provider(self._cfg, kwargs["auth_schemes"])
         self._authenticate(kwargs, sync_token(self._cfg) if needs_token else None)
@@ -421,7 +452,7 @@ class ApiBaseSync(ApiBase):
             else:
                 delay = self._retry_delay(attempt, kwargs, response=response)
                 if delay is None:
-                    _raise_for_status(response)
+                    _raise_for_status(response, error_types)
                     if stream and not is_event_stream(response):
                         response.close()
                         raise not_an_event_stream(response)
@@ -452,7 +483,9 @@ class ApiBaseAsync(ApiBase):
             await response.aread()
         return response
 
-    async def _request_asyncio(self, stream: bool = False, **options: t.Any) -> httpx.Response:
+    async def _request_asyncio(
+        self, stream: bool = False, error_types: ErrorTypes | None = None, **options: t.Any
+    ) -> httpx.Response:
         kwargs = self._request_kwargs(**options)
         needs_token = needs_token_provider(self._cfg, kwargs["auth_schemes"])
         self._authenticate(kwargs, await async_token(self._cfg) if needs_token else None)
@@ -469,7 +502,7 @@ class ApiBaseAsync(ApiBase):
             else:
                 delay = self._retry_delay(attempt, kwargs, response=response)
                 if delay is None:
-                    _raise_for_status(response)
+                    _raise_for_status(response, error_types)
                     if stream and not is_event_stream(response):
                         await response.aclose()
                         raise not_an_event_stream(response)

@@ -2,7 +2,7 @@
 package @@JAVA_PACKAGE@@.streaming;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import @@JAVA_PACKAGE@@.Utils;
+import @@JAVA_INTERNAL_PACKAGE@@.Utils;
 
 import java.nio.charset.StandardCharsets;
 

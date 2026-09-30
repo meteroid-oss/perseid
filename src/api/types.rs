@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::spec::IncludeMode;
 
-use heck::ToUpperCamelCase as _;
+use heck::{ToSnakeCase as _, ToUpperCamelCase as _};
 
 use super::{
     get_schema_name,
@@ -66,6 +66,7 @@ pub(crate) fn from_referenced_components(
                 extra_components.extend(
                     ty.referenced_components()
                         .into_iter()
+                        .chain(ty.union_refs())
                         .filter(|&c| c != schema_name && !types.contains_key(c))
                         .map(ToOwned::to_owned),
                 );
@@ -80,6 +81,7 @@ pub(crate) fn from_referenced_components(
                         name: schema_name.to_owned(),
                         description: None,
                         deprecated: false,
+                        discriminator_defaults: BTreeMap::new(),
                         data: TypeData::Alias {
                             target: Box::new(FieldType::JsonObject),
                         },
@@ -163,6 +165,107 @@ pub(crate) fn untag_unions_with_non_object_variants(types: &mut Types) {
     }
 }
 
+/// Settles the JSON type of the variants of every union referencing a schema, typing the unions
+/// whose variants cannot be told apart as untyped JSON. Operations only take untyped JSON.
+pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
+    fn json_type(types: &Types, name: &str, depth: usize) -> Option<&'static str> {
+        match &types.get(name)?.data {
+            TypeData::Struct { .. } | TypeData::StructEnum { .. } => Some("object"),
+            TypeData::StringEnum { .. } | TypeData::StringAlias => Some("string"),
+            TypeData::IntegerEnum { .. } => Some("integer"),
+            TypeData::Alias { target } if depth < 16 => match &**target {
+                FieldType::SchemaRef { name, .. } => json_type(types, name, depth + 1),
+                FieldType::JsonObject | FieldType::Union { .. } | FieldType::StringEnum { .. } => {
+                    None
+                }
+                target => UnionVariant::json_type_of(target),
+            },
+            TypeData::Alias { .. } => None,
+        }
+    }
+    fn settle(ty: &mut FieldType, kinds: &BTreeMap<String, Option<&'static str>>, owner: &str) {
+        match ty {
+            FieldType::Union { variants } => {
+                let mut known = true;
+                for variant in variants.iter_mut() {
+                    settle(&mut variant.r#type, kinds, owner);
+                    if let FieldType::SchemaRef { name, .. } = &variant.r#type {
+                        match kinds.get(name).copied().flatten() {
+                            Some(kind) => variant.json_type = kind.to_owned(),
+                            None => known = false,
+                        }
+                    }
+                }
+                if !known || !distinct_json_types(variants) {
+                    let _span = tracing::warn_span!("schema", name = %owner).entered();
+                    tracing::warn!(
+                        "`oneOf`/`anyOf` without a discriminator is typed as an untyped JSON value"
+                    );
+                    *ty = FieldType::JsonObject;
+                }
+            }
+            FieldType::List { inner } | FieldType::Set { inner } => {
+                settle(Arc::make_mut(inner), kinds, owner)
+            }
+            FieldType::Map { value_ty } => settle(Arc::make_mut(value_ty), kinds, owner),
+            _ => {}
+        }
+    }
+    let kinds: BTreeMap<String, Option<&'static str>> = types
+        .keys()
+        .map(|name| (name.clone(), json_type(types, name, 0)))
+        .collect();
+    for (name, ty) in types.iter_mut() {
+        ty.data.for_each_field_type(|t| settle(t, &kinds, name));
+    }
+    let mut stack: Vec<&mut Resource> = resources.values_mut().collect();
+    while let Some(resource) = stack.pop() {
+        for op in &mut resource.operations {
+            op.untype_unions();
+        }
+        stack.extend(resource.subresources.values_mut());
+    }
+}
+
+/// Sets the `discriminator_defaults` of the structs that are variants of internally tagged unions.
+pub(crate) fn set_discriminator_defaults(types: &mut Types) {
+    let mut values: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+    for ty in types.values() {
+        let TypeData::StructEnum {
+            discriminator_field,
+            repr: StructEnumRepr::InternallyTagged { variants },
+            ..
+        } = &ty.data
+        else {
+            continue;
+        };
+        for variant in variants {
+            if let EnumVariantType::Ref {
+                schema_ref: Some(target),
+                ..
+            } = &variant.content
+            {
+                values
+                    .entry((target.clone(), discriminator_field.clone()))
+                    .or_default()
+                    .insert(variant.name.clone());
+            }
+        }
+    }
+    for ((target, field), values) in values {
+        let Some(ty) = types.get_mut(&target) else {
+            continue;
+        };
+        let TypeData::Struct { fields } = &ty.data else {
+            continue;
+        };
+        let own = fields.iter().any(|f| f.name == field && !f.flatten);
+        if let (true, [value]) = (own, &values.into_iter().collect::<Vec<_>>()[..]) {
+            ty.discriminator_defaults.insert(field, value.clone());
+        }
+    }
+}
+
 /// Types string enums whose values would share an identifier, such as `bps` and `Bps`, as
 /// strings: no SDK could name both members.
 pub(crate) fn untype_clashing_enums(types: &mut Types) {
@@ -206,7 +309,11 @@ pub(crate) fn relax_access_modes<'a>(
             if let Some(ty) = types.get(&name)
                 && seen.insert(name)
             {
-                stack.extend(ty.referenced_components().into_iter().map(str::to_owned));
+                let refs = ty
+                    .referenced_components()
+                    .into_iter()
+                    .chain(ty.union_refs());
+                stack.extend(refs.map(str::to_owned));
             }
         }
         seen
@@ -333,6 +440,7 @@ fn resolve_schema_ref_in_field_type(
                 name: name.clone(),
                 description: None,
                 deprecated: false,
+                discriminator_defaults: BTreeMap::new(),
                 data: TypeData::StringAlias,
             });
         }
@@ -342,12 +450,24 @@ fn resolve_schema_ref_in_field_type(
         FieldType::Map { value_ty } => {
             resolve_schema_ref_in_field_type(Arc::make_mut(value_ty), string_alias_names);
         }
+        FieldType::Union { variants } => {
+            for variant in variants {
+                resolve_schema_ref_in_field_type(&mut variant.r#type, string_alias_names);
+            }
+        }
         _ => {}
     }
 }
 
 /// Replaces the embedded `allOf` parts of every struct by their fields, for targets that
 /// cannot flatten a nested object when (de)serializing.
+/// Types the unions of every schema as untyped JSON.
+pub(crate) fn untype_unions(types: &mut Types) {
+    for ty in types.values_mut() {
+        ty.data.for_each_field_type(FieldType::untype_unions);
+    }
+}
+
 pub(crate) fn inline_flattened_fields(types: &mut Types) -> anyhow::Result<()> {
     let snapshot = types.clone();
     for (name, ty) in types.iter_mut() {
@@ -459,10 +579,14 @@ fn resolve_alias_targets(types: &Types) -> anyhow::Result<BTreeMap<String, Field
         ensure!(!stack.contains(&name), "cyclic alias schema `{name}`");
         stack.push(name);
         let source = raw[name];
-        if let Some(inner) = source.referenced_schema()
-            && raw.contains_key(inner)
+        for inner in source
+            .referenced_schema()
+            .into_iter()
+            .chain(source.union_refs())
         {
-            resolve(inner, raw, resolved, stack)?;
+            if raw.contains_key(inner) {
+                resolve(inner, raw, resolved, stack)?;
+            }
         }
         let mut target = source.clone();
         target.inline_aliases(resolved);
@@ -646,6 +770,7 @@ fn promote_field_type(
                 name: name.clone(),
                 description: None,
                 deprecated: false,
+                discriminator_defaults: BTreeMap::new(),
                 data,
             });
             *ft = FieldType::SchemaRef { name, inner: None };
@@ -679,6 +804,7 @@ fn promote_field_type(
         | FieldType::DateTime
         | FieldType::Uri
         | FieldType::JsonObject
+        | FieldType::Union { .. }
         | FieldType::SchemaRef { .. }
         | FieldType::Date => {}
     }
@@ -691,6 +817,10 @@ pub(crate) struct Type {
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     deprecated: bool,
+    /// Wire value of a field telling this struct apart in the unions it is a variant of, such as
+    /// `{"type": "circle"}`, when every such union agrees: constructors can default it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) discriminator_defaults: BTreeMap<String, String>,
     #[serde(flatten)]
     pub data: TypeData,
 }
@@ -706,8 +836,9 @@ impl Type {
         let metadata = s.metadata.clone().unwrap_or_default();
         let ty = |data| Self {
             name: name.clone(),
-            description: metadata.description.clone(),
+            description: super::html::doc(metadata.description.clone()),
             deprecated: metadata.deprecated,
+            discriminator_defaults: BTreeMap::new(),
             data,
         };
         let alias = |s: SchemaObject| -> anyhow::Result<Self> {
@@ -806,6 +937,16 @@ impl Type {
                 res
             }
         }
+    }
+
+    /// Schemas referenced by the variants of its unions, which [`Self::referenced_components`]
+    /// leaves out for templates rendering unions as untyped JSON.
+    pub(crate) fn union_refs(&self) -> BTreeSet<&str> {
+        self.data
+            .field_types()
+            .into_iter()
+            .flat_map(FieldType::union_refs)
+            .collect()
     }
 
     /// The wire names of the fields a struct gets from its `allOf` parts.
@@ -959,6 +1100,26 @@ pub(crate) enum TypeData {
 }
 
 impl TypeData {
+    fn field_types(&self) -> Vec<&FieldType> {
+        match self {
+            Self::Alias { target } => vec![&**target],
+            Self::Struct { fields } => fields.iter().map(|f| &f.r#type).collect(),
+            Self::StructEnum { fields, repr, .. } => {
+                let (StructEnumRepr::AdjacentlyTagged { variants, .. }
+                | StructEnumRepr::InternallyTagged { variants }) = repr;
+                let own = fields.iter().map(|f| &f.r#type);
+                let nested = variants.iter().flat_map(|v| match &v.content {
+                    EnumVariantType::Struct { fields } => {
+                        fields.iter().map(|f| &f.r#type).collect()
+                    }
+                    EnumVariantType::Ref { .. } => Vec::new(),
+                });
+                own.chain(nested).collect()
+            }
+            Self::StringEnum { .. } | Self::IntegerEnum { .. } | Self::StringAlias => Vec::new(),
+        }
+    }
+
     fn for_each_field(&mut self, mut visit: impl FnMut(&mut Field)) {
         match self {
             Self::Struct { fields } => fields.iter_mut().for_each(visit),
@@ -1329,7 +1490,7 @@ impl Field {
             name,
             r#type: field_type,
             default: metadata.default,
-            description: metadata.description,
+            description: super::html::doc(metadata.description),
             required,
             nullable,
             deprecated: metadata.deprecated,
@@ -1361,6 +1522,120 @@ pub(crate) struct SimpleVariant {
     pub name: String,
     #[serde(flatten)]
     pub content: EnumVariantType,
+}
+
+/// A member of a [`FieldType::Union`].
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+pub(crate) struct UnionVariant {
+    /// Unique in its union: the snake_case schema name of a reference, else `string`,
+    /// `integer`, `number`, `boolean`, `date_time`, `decimal`, `list`, `object` or `empty`.
+    pub name: String,
+    /// JSON type deciding the variant when decoding: `string`, `integer`, `number`, `boolean`,
+    /// `array` or `object`. No two variants of a union share one (`integer` and `number` count
+    /// as one).
+    pub json_type: String,
+    /// Only the empty string, which Stripe accepts to unset a value (`enum: [""]`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub empty: bool,
+    #[serde(serialize_with = "serialize_field_type")]
+    pub r#type: FieldType,
+}
+
+impl UnionVariant {
+    fn from_schema(schema: &Schema) -> Option<Self> {
+        let Schema::Object(obj) = schema else {
+            return None;
+        };
+        let empty = [serde_json::Value::String(String::new())];
+        if obj.enum_values.as_deref() == Some(&empty) {
+            return Some(Self {
+                name: "empty".into(),
+                json_type: "string".into(),
+                empty: true,
+                r#type: FieldType::String,
+            });
+        }
+        let explicit_object = obj.instance_type == Some(InstanceType::Object.into());
+        let r#type = match FieldType::from_schema_object(obj.clone()).ok()? {
+            FieldType::StringEnum { .. } => FieldType::String,
+            FieldType::JsonObject if !explicit_object => return None,
+            ty => ty,
+        };
+        let (name, json_type) = match &r#type {
+            FieldType::SchemaRef { name, .. } => (name.to_snake_case(), String::new()),
+            ty => (
+                Self::name_of(ty)?.to_owned(),
+                Self::json_type_of(ty)?.to_owned(),
+            ),
+        };
+        Some(Self {
+            name,
+            json_type,
+            empty: false,
+            r#type,
+        })
+    }
+
+    fn name_of(ty: &FieldType) -> Option<&'static str> {
+        Some(match ty {
+            FieldType::Bool => "boolean",
+            FieldType::Int16
+            | FieldType::UInt16
+            | FieldType::Int32
+            | FieldType::Int64
+            | FieldType::UInt64 => "integer",
+            FieldType::Float | FieldType::Double => "number",
+            FieldType::String | FieldType::Uri | FieldType::Date => "string",
+            FieldType::DateTime => "date_time",
+            FieldType::Decimal => "decimal",
+            FieldType::List { .. } | FieldType::Set { .. } => "list",
+            FieldType::Map { .. } | FieldType::JsonObject => "object",
+            FieldType::SchemaRef { .. }
+            | FieldType::Union { .. }
+            | FieldType::StringEnum { .. } => {
+                return None;
+            }
+        })
+    }
+
+    /// The JSON type of values of `ty`, unknown for references.
+    fn json_type_of(ty: &FieldType) -> Option<&'static str> {
+        Some(match ty {
+            FieldType::Bool => "boolean",
+            FieldType::Int16
+            | FieldType::UInt16
+            | FieldType::Int32
+            | FieldType::Int64
+            | FieldType::UInt64 => "integer",
+            FieldType::Float | FieldType::Double => "number",
+            FieldType::String
+            | FieldType::Uri
+            | FieldType::Date
+            | FieldType::DateTime
+            | FieldType::Decimal
+            | FieldType::StringEnum { .. } => "string",
+            FieldType::List { .. } | FieldType::Set { .. } => "array",
+            FieldType::Map { .. } | FieldType::JsonObject => "object",
+            FieldType::SchemaRef { .. } | FieldType::Union { .. } => return None,
+        })
+    }
+}
+
+/// Whether variants are told apart by their JSON types, those of references being unknown yet.
+fn distinct_json_types(variants: &[UnionVariant]) -> bool {
+    let group = |t: &str| {
+        if t == "integer" {
+            "number".to_owned()
+        } else {
+            t.to_owned()
+        }
+    };
+    let known: Vec<String> = variants
+        .iter()
+        .filter(|v| !v.json_type.is_empty())
+        .map(|v| group(&v.json_type))
+        .collect();
+    known.iter().all_unique() && variants.iter().map(|v| &v.name).all_unique()
 }
 
 /// Supported field type.
@@ -1404,6 +1679,13 @@ pub(crate) enum FieldType {
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         inner: Option<Type>,
+    },
+
+    /// A value of one of several types told apart by their JSON type, such as Stripe's
+    /// expandable `string | Customer`. Templates render it as untyped JSON (it answers
+    /// `is_json_object`) unless they check `is_union` first.
+    Union {
+        variants: Vec<UnionVariant>,
     },
 
     /// An inline string enum that will be promoted to a named top-level type
@@ -1459,10 +1741,22 @@ impl FieldType {
                     let (field_type, _) = Self::from_schema_object_with_nullable(inner)?;
                     return Ok((field_type, true));
                 }
+                let nullable = variants.iter().any(is_null_schema);
+                let members: Option<Vec<UnionVariant>> = variants
+                    .iter()
+                    .filter(|v| !is_null_schema(v))
+                    .map(UnionVariant::from_schema)
+                    .collect();
+                if let Some(variants) = members
+                    && variants.len() > 1
+                    && distinct_json_types(&variants)
+                {
+                    return Ok((Self::Union { variants }, nullable));
+                }
                 tracing::warn!(
                     "`oneOf`/`anyOf` without a discriminator is typed as an untyped JSON value"
                 );
-                return Ok((Self::JsonObject, variants.iter().any(is_null_schema)));
+                return Ok((Self::JsonObject, nullable));
             }
         }
 
@@ -1581,7 +1875,7 @@ impl FieldType {
             Self::String | Self::Uri => "string".into(),
             Self::Decimal => "decimal".into(),
             Self::DateTime => "DateTimeOffset".into(),
-            Self::JsonObject => "JsonNode".into(),
+            Self::JsonObject | Self::Union { .. } => "JsonNode".into(),
             Self::Map { value_ty } => {
                 format!("Dictionary<string, {}>", value_ty.to_csharp_typename()).into()
             }
@@ -1609,7 +1903,7 @@ impl FieldType {
             Self::Double => "float64".into(),
             Self::Uri | Self::String | Self::Decimal => "string".into(),
             Self::DateTime => "time.Time".into(),
-            Self::JsonObject => "map[string]any".into(),
+            Self::JsonObject | Self::Union { .. } => "map[string]any".into(),
             Self::Map { value_ty } => format!("map[string]{}", value_ty.to_go_typename()).into(),
             Self::List { inner } | Self::Set { inner } => {
                 format!("[]{}", inner.to_go_typename()).into()
@@ -1636,7 +1930,7 @@ impl FieldType {
             Self::Map { value_ty } => {
                 format!("Map<String,{}>", value_ty.to_kotlin_typename()).into()
             }
-            Self::JsonObject => "Map<String,Any>".into(),
+            Self::JsonObject | Self::Union { .. } => "Map<String,Any>".into(),
             Self::List { inner } => format!("List<{}>", inner.to_kotlin_typename()).into(),
             Self::Set { inner } => format!("Set<{}>", inner.to_kotlin_typename()).into(),
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
@@ -1661,7 +1955,7 @@ impl FieldType {
             Self::Decimal => "string".into(),
             Self::String | Self::Uri => "string".into(),
             Self::DateTime => "Date".into(),
-            Self::JsonObject => "any".into(),
+            Self::JsonObject | Self::Union { .. } => "any".into(),
             Self::List { inner } | Self::Set { inner } => {
                 format!("{}[]", inner.to_js_typename()).into()
             }
@@ -1689,7 +1983,7 @@ impl FieldType {
             Self::Decimal => "rust_decimal::Decimal".into(),
             // FIXME: Depends on those chrono imports being in scope, not that great..
             Self::DateTime => "DateTime<Utc>".into(),
-            Self::JsonObject => "serde_json::Value".into(),
+            Self::JsonObject | Self::Union { .. } => "serde_json::Value".into(),
             // FIXME: Treat set differently? (BTreeSet)
             Self::List { inner } | Self::Set { inner } => {
                 format!("Vec<{}>", inner.to_rust_typename()).into()
@@ -1720,7 +2014,8 @@ impl FieldType {
             | Self::String
             | Self::Date
             | Self::Uri
-            | Self::JsonObject => true,
+            | Self::JsonObject
+            | Self::Union { .. } => true,
             Self::List { inner } | Self::Set { inner } => inner.is_plain_json(),
             Self::Map { value_ty } => value_ty.is_plain_json(),
             Self::Decimal | Self::DateTime | Self::SchemaRef { .. } | Self::StringEnum { .. } => {
@@ -1740,6 +2035,45 @@ impl FieldType {
                 Arc::make_mut(inner).inline_aliases(aliases);
             }
             Self::Map { value_ty } => Arc::make_mut(value_ty).inline_aliases(aliases),
+            Self::Union { variants } => {
+                for variant in variants.iter_mut() {
+                    variant.r#type.inline_aliases(aliases);
+                }
+                let untyped = variants.iter().any(|v| {
+                    matches!(v.r#type, Self::JsonObject | Self::Union { .. })
+                        && v.json_type != "object"
+                });
+                if untyped {
+                    *self = Self::JsonObject;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Schemas the variants of the unions in this type reference.
+    pub(crate) fn union_refs(&self) -> BTreeSet<&str> {
+        match self {
+            Self::Union { variants } => variants
+                .iter()
+                .flat_map(|v| {
+                    let mut refs = v.r#type.union_refs();
+                    refs.extend(v.r#type.referenced_schema());
+                    refs
+                })
+                .collect(),
+            Self::List { inner } | Self::Set { inner } => inner.union_refs(),
+            Self::Map { value_ty } => value_ty.union_refs(),
+            _ => BTreeSet::new(),
+        }
+    }
+
+    /// This type with its unions typed as untyped JSON.
+    pub(crate) fn untype_unions(&mut self) {
+        match self {
+            Self::Union { .. } => *self = Self::JsonObject,
+            Self::List { inner } | Self::Set { inner } => Arc::make_mut(inner).untype_unions(),
+            Self::Map { value_ty } => Arc::make_mut(value_ty).untype_unions(),
             _ => {}
         }
     }
@@ -1764,7 +2098,7 @@ impl FieldType {
             Self::DateTime => "datetime".into(),
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
             Self::Uri => "str".into(),
-            Self::JsonObject => "t.Dict[str, t.Any]".into(),
+            Self::JsonObject | Self::Union { .. } => "t.Dict[str, t.Any]".into(),
             Self::Set { inner } | Self::List { inner } => {
                 format!("t.List[{}]", inner.to_python_typename()).into()
             }
@@ -1789,7 +2123,7 @@ impl FieldType {
             FieldType::Decimal => "BigDecimal".into(),
             FieldType::DateTime => "OffsetDateTime".into(),
             FieldType::Uri => "URI".into(),
-            FieldType::JsonObject => "Object".into(),
+            FieldType::JsonObject | FieldType::Union { .. } => "Object".into(),
             FieldType::List { inner } => format!("List<{}>", inner.to_java_typename()).into(),
             FieldType::Set { inner: field_type } => {
                 format!("Set<{}>", field_type.to_java_typename()).into()
@@ -1828,6 +2162,7 @@ impl FieldType {
             | FieldType::DateTime
             | FieldType::Uri
             | FieldType::JsonObject
+            | FieldType::Union { .. }
             | FieldType::Date => false,
             FieldType::StringEnum { .. } => false,
             FieldType::List { inner } | FieldType::Set { inner } => inner.needs_java_import(),
@@ -1866,6 +2201,7 @@ impl FieldType {
             | FieldType::DateTime
             | FieldType::Uri
             | FieldType::JsonObject
+            | FieldType::Union { .. }
             | FieldType::Date
             | FieldType::SchemaRef { .. } => self.to_php_typename(),
             FieldType::StringEnum { .. } => "string".into(),
@@ -1892,6 +2228,7 @@ impl FieldType {
             FieldType::DateTime => r#"\DateTimeImmutable"#.into(),
 
             FieldType::JsonObject
+            | FieldType::Union { .. }
             | FieldType::List { .. }
             | FieldType::Set { .. }
             | FieldType::Map { .. } => "array".into(),
@@ -2003,6 +2340,7 @@ impl minijinja::value::Object for FieldType {
                     | F::DateTime
                     | F::Uri
                     | F::JsonObject
+                    | F::Union { .. }
                     | F::List { .. }
                     | F::Set { .. }
                     | F::Map { .. }
@@ -2014,7 +2352,18 @@ impl minijinja::value::Object for FieldType {
             }
             "is_json_object" => {
                 ensure_no_args(args, "is_json_object")?;
-                Ok(matches!(**self, Self::JsonObject).into())
+                Ok(matches!(**self, Self::JsonObject | Self::Union { .. }).into())
+            }
+            "is_union" => {
+                ensure_no_args(args, "is_union")?;
+                Ok(matches!(**self, Self::Union { .. }).into())
+            }
+            "union_variants" => {
+                ensure_no_args(args, "union_variants")?;
+                Ok(match &**self {
+                    Self::Union { variants } => minijinja::Value::from_serialize(variants),
+                    _ => minijinja::Value::from(Vec::<minijinja::Value>::new()),
+                })
             }
             "is_date" => {
                 ensure_no_args(args, "is_date")?;
@@ -2275,15 +2624,89 @@ mod tests {
         Field::from_schema("f".into(), Schema::Object(schema(value)), false).unwrap()
     }
 
+    fn variants(ty: &FieldType) -> Vec<(&str, &str)> {
+        let FieldType::Union { variants } = ty else {
+            panic!("{ty:?} is not a union");
+        };
+        variants
+            .iter()
+            .map(|v| (v.name.as_str(), v.json_type.as_str()))
+            .collect()
+    }
+
     #[test]
-    fn unions_without_a_discriminator_are_untyped_json() {
+    fn unions_told_apart_by_json_type_are_typed() {
         let f = field(json!({"oneOf": [{"$ref": "#/components/schemas/A"}, {"type": "string"}]}));
-        assert_eq!((f.r#type, f.nullable), (FieldType::JsonObject, false));
+        assert_eq!(variants(&f.r#type), [("a", ""), ("string", "string")]);
         let f =
             field(json!({"anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}]}));
-        assert_eq!((f.r#type, f.nullable), (FieldType::JsonObject, true));
+        assert_eq!(
+            variants(&f.r#type),
+            [("string", "string"), ("integer", "integer")]
+        );
+        assert!(f.nullable);
+        let emptyable = json!({"anyOf": [{"type": "object", "additionalProperties": {"type": "string"}}, {"type": "string", "enum": [""]}]});
+        let FieldType::Union { variants } = field(emptyable).r#type else {
+            panic!("not a union");
+        };
+        assert_eq!(
+            (variants[0].name.as_str(), variants[0].json_type.as_str()),
+            ("object", "object")
+        );
+        assert!(variants[1].empty && variants[1].json_type == "string");
+    }
+
+    #[test]
+    fn ambiguous_unions_are_untyped_json() {
+        let f = field(
+            json!({"anyOf": [{"type": "string"}, {"type": "string", "format": "date-time"}]}),
+        );
+        assert_eq!(f.r#type, FieldType::JsonObject);
+        let f = field(json!({"anyOf": [{"type": "integer"}, {"type": "number"}]}));
+        assert_eq!(f.r#type, FieldType::JsonObject);
+        let f = field(json!({"anyOf": [{"type": "string"}, {}]}));
+        assert_eq!(f.r#type, FieldType::JsonObject);
         let f = field(json!({"type": ["string", "integer"]}));
         assert_eq!(f.r#type, FieldType::JsonObject);
+    }
+
+    #[test]
+    fn union_references_settle_their_json_type_or_untype_the_union() {
+        let customer = |a: &str, b: &str| {
+            json!({"anyOf": [
+                {"$ref": format!("#/components/schemas/{a}")},
+                {"$ref": format!("#/components/schemas/{b}")},
+                {"type": "string"}
+            ]})
+        };
+        let mut types = types_from(json!({
+            "Charge": {"type": "object", "properties": {
+                "customer": customer("Customer", "Tier"),
+                "both": customer("Customer", "Deleted"),
+                "code": customer("Code", "Customer")
+            }},
+            "Customer": {"type": "object", "properties": {"id": {"type": "string"}}},
+            "Deleted": {"type": "object", "properties": {"id": {"type": "string"}}},
+            "Tier": {"type": "integer", "enum": [1, 2]},
+            "Code": {"type": "string", "enum": ["a", "b"]}
+        }));
+        let mut resources = Resources::new();
+        resolve_unions(&mut types, &mut resources);
+        assert_eq!(
+            variants(field_type(&types, "Charge", "customer")),
+            [
+                ("customer", "object"),
+                ("tier", "integer"),
+                ("string", "string")
+            ]
+        );
+        assert_eq!(field_type(&types, "Charge", "both"), &FieldType::JsonObject);
+        assert_eq!(field_type(&types, "Charge", "code"), &FieldType::JsonObject);
+        assert_eq!(
+            types["Charge"].union_refs(),
+            BTreeSet::from(["Customer", "Tier"])
+        );
+        assert!(types["Charge"].referenced_components().is_empty());
     }
 
     #[test]

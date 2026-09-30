@@ -229,11 +229,11 @@ internal sealed class ApiTransport : IDisposable
                     var retry = status == 429 || (retryable && (status == 408 || status >= 500));
                     if (!retry || attempt >= retries)
                     {
-                        throw ApiException.FromResponse(
-                            response.StatusCode,
-                            System.Text.Encoding.UTF8.GetString(body),
-                            response.Headers
-                        );
+                        var text = System.Text.Encoding.UTF8.GetString(body);
+                        var error = ApiException.FromResponse(response.StatusCode, text, response.Headers);
+                        throw error.GetType() == typeof(ApiException)
+                            ? ApiExceptionExtensions.ForStatus(response.StatusCode, text, response.Headers)
+                            : error;
                     }
                     retried = response;
                 }

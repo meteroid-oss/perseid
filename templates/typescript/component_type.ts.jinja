@@ -31,4 +31,7 @@
 {% if "parseDateTime(" in body -%}
 import { parseDateTime } from "../datetime.js";
 {% endif -%}
+{% if "isJsonObject(" in body -%}
+import { isJsonObject } from "../json.js";
+{% endif -%}
 {{ body }}

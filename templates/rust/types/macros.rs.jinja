@@ -2,37 +2,216 @@
     {{ name | to_rust_ident }}
 {% endmacro -%}
 
-{# The Rust type of a spec type. Dates are chrono types when the crate depends on chrono. -#}
-{% macro rust_type(ty) -%}
-{% if ty.is_datetime() -%}
+{# The Rust type of a spec type. Dates are chrono types when the crate depends on chrono.
+   With `typed_unions`, a union is the enum named `union`. -#}
+{% macro rust_type(ty, union=none) -%}
+{% if union and ty.is_union() -%}
+{{ union }}
+{%- elif ty.is_datetime() -%}
 {% if sdk.chrono %}chrono::DateTime<chrono::Utc>{% else %}String{% endif -%}
 {% elif ty.is_date() -%}
 {% if sdk.chrono %}chrono::NaiveDate{% else %}String{% endif -%}
 {% elif ty.is_list() or ty.is_set() -%}
-Vec<{{ rust_type(ty.inner_type()) }}>
+Vec<{{ rust_type(ty.inner_type(), union) }}>
 {%- elif ty.is_map() -%}
-std::collections::HashMap<String, {{ rust_type(ty.value_type()) }}>
+std::collections::HashMap<String, {{ rust_type(ty.value_type(), union) }}>
 {%- else -%}
 {{ ty.to_rust() }}
 {%- endif %}
 {%- endmacro %}
 
 {# Boxes the types that lead back to the one being defined. -#}
-{% macro value_type(ty, recursive) -%}
+{% macro value_type(ty, recursive, union=none) -%}
 {% if ty.is_schema_ref() and ty.to_rust() in recursive -%}
 Box<{{ ty.to_rust() }}>
 {%- else -%}
-{{ rust_type(ty) }}
+{{ rust_type(ty, union) }}
 {%- endif %}
+{%- endmacro %}
+
+{# The union `ty` holds, directly or as list items or map values: "1" or "". -#}
+{% macro has_union(ty) -%}
+{% if ty.is_union() %}1{% elif ty.is_list() or ty.is_set() %}{{ has_union(ty.inner_type()) }}{% elif ty.is_map() %}{{ has_union(ty.value_type()) }}{% endif %}
 {%- endmacro %}
 
 {% macro unknown_variant(names) -%}
 {% if "Unknown" not in names %}Unknown{% elif "Other" not in names %}Other{% else %}UnknownValue{% endif %}
 {%- endmacro %}
 
+{# The enum of a union nested in variant `variant` of the union `name`. -#}
+{% macro nested_union(name, variant) -%}
+{% if has_union(variant.type) %}{{ name }}{{ variant.name | to_upper_camel_case }}{% endif -%}
+{%- endmacro %}
+
+{% macro variant_payload(name, variant) -%}
+{% if variant.type.is_schema_ref() %}Box<{{ variant.type.to_rust() }}>{% else %}{{ variant_type(name, variant) }}{% endif -%}
+{%- endmacro %}
+
+{% macro variant_type(name, variant) -%}
+{% if variant.type.is_schema_ref() %}{{ variant.type.to_rust() }}{% else %}{{ rust_type(variant.type, nested_union(name, variant)) }}{% endif -%}
+{%- endmacro %}
+
+{# `Default`, unless a model of that name is in scope. -#}
+{% macro default_trait() -%}
+{% if "Default" in (referenced_components | map("to_upper_camel_case") | list) or "Default" in (union_refs | map("to_upper_camel_case") | list) %}std::default::Default{% else %}Default{% endif -%}
+{%- endmacro %}
+
+{% macro union_enum(name, ty) -%}
+{% if ty.is_list() or ty.is_set() -%}
+{{ union_enum(name, ty.inner_type()) }}
+{%- elif ty.is_map() -%}
+{{ union_enum(name, ty.value_type()) }}
+{%- else -%}
+{% set variants = ty.union_variants() -%}
+{% set names = variants | map(attribute="name") | map("to_upper_camel_case") | list -%}
+{% set unknown = unknown_variant(names) -%}
+
+/// One of {% for variant in variants %}{% if not loop.first %}{% if loop.last %} or {% else %}, {% endif %}{% endif %}{% if variant.empty %}`""`{% elif variant.type.is_schema_ref() %}[`{{ variant.type.to_rust() }}`]{% else %}{{ variant.json_type }}{% endif %}{% endfor %}.
+#[derive(Clone, Debug, {% if variants[0].empty %}Default, {% endif %}PartialEq)]
+#[non_exhaustive]
+pub enum {{ name }} {
+    {% for variant in variants -%}
+    {% if variant.empty -%}
+    /// The empty string.
+    {% if loop.first %}#[default]
+    {% endif -%}
+    {{ variant.name | to_upper_camel_case }},
+    {% else -%}
+    {{ variant.name | to_upper_camel_case }}({{ variant_payload(name, variant) }}),
+    {% endif -%}
+    {% endfor -%}
+    /// A value of another JSON type, as received.
+    {{ unknown }}(serde_json::Value),
+}
+
+impl {{ name }} {
+    {% for variant in variants -%}
+    {% set v = variant.name | to_upper_camel_case -%}
+    {% if not loop.first %}
+    {% endif -%}
+    {% if variant.empty -%}
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::{{ v }})
+    }
+    {% elif variant.json_type in ["integer", "number", "boolean"] and not variant.type.is_schema_ref() -%}
+    pub fn as_{{ variant.name | to_snake_case }}(&self) -> Option<{{ variant_type(name, variant) }}> {
+        match self {
+            Self::{{ v }}(value) => Some(*value),
+            _ => None,
+        }
+    }
+    {% elif variant_type(name, variant) == "String" -%}
+    pub fn as_{{ variant.name | to_snake_case }}(&self) -> Option<&str> {
+        match self {
+            Self::{{ v }}(value) => Some(value.as_str()),
+            _ => None,
+        }
+    }
+    {% else -%}
+    pub fn as_{{ variant.name | to_snake_case }}(&self) -> Option<&{{ variant_type(name, variant) }}> {
+        match self {
+            Self::{{ v }}(value) => Some({% if variant.type.is_schema_ref() %}&**value{% else %}value{% endif %}),
+            _ => None,
+        }
+    }
+    {% endif -%}
+    {% endfor -%}
+}
+
+{% if not variants[0].empty -%}
+impl {{ default_trait() }} for {{ name }} {
+    fn default() -> Self {
+        Self::{{ variants[0].name | to_upper_camel_case }}({{ default_trait() }}::default())
+    }
+}
+{% endif %}
+
+{% for variant in variants if not variant.empty -%}
+impl From<{{ variant_type(name, variant) }}> for {{ name }} {
+    fn from(value: {{ variant_type(name, variant) }}) -> Self {
+        Self::{{ variant.name | to_upper_camel_case }}(value{% if variant.type.is_schema_ref() %}.into(){% endif %})
+    }
+}
+
+{% if variant_type(name, variant) == "String" -%}
+impl From<&str> for {{ name }} {
+    fn from(value: &str) -> Self {
+        Self::{{ variant.name | to_upper_camel_case }}(value.to_owned())
+    }
+}
+
+{% endif -%}
+{% endfor -%}
+impl serde::Serialize for {{ name }} {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            {% for variant in variants -%}
+            {% if variant.empty -%}
+            Self::{{ variant.name | to_upper_camel_case }} => serializer.serialize_str(""),
+            {% else -%}
+            Self::{{ variant.name | to_upper_camel_case }}(value) => serde::Serialize::serialize(value, serializer),
+            {% endif -%}
+            {% endfor -%}
+            Self::{{ unknown }}(value) => serde::Serialize::serialize(value, serializer),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for {{ name }} {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+        Ok(match crate::models::codec::json_type(&value) {
+            {% for variant in variants -%}
+            {% set v = variant.name | to_upper_camel_case -%}
+            {% if variant.empty -%}
+            "empty" => Self::{{ v }},
+            {% elif variant.json_type == "string" -%}
+            "string" | "empty" => Self::{{ v }}(crate::models::codec::from_value(value)?),
+            {% elif variant.json_type == "number" -%}
+            "integer" | "number" => Self::{{ v }}(crate::models::codec::from_value(value)?),
+            {% else -%}
+            {{ variant.json_type | tojson }} => Self::{{ v }}(crate::models::codec::from_value(value)?),
+            {% endif -%}
+            {% endfor -%}
+            _ => Self::{{ unknown }}(value),
+        })
+    }
+}
+{% for variant in variants if has_union(variant.type) -%}
+{{ union_enum(nested_union(name, variant), variant.type) }}
+{% endfor -%}
+{%- endif %}
+{%- endmacro %}
+
+{# The enums of the unions in `fields` of `owner`, told apart by JSON type. -#}
+{% macro union_enums(owner, fields) -%}
+{% for field in fields -%}
+{% set name = union_name(owner, field.name, field.type) -%}
+{% if name %}{{ union_enum(name, field.type) }}{% endif -%}
+{% endfor -%}
+{%- endmacro %}
+
+
+{# The enum of the union in field `field` of `owner`, when unions are typed. -#}
+{% macro union_name(owner, field, ty, names=none) -%}
+{% if sdk.typed_unions and has_union(ty) -%}
+{% set name = owner ~ (field | to_upper_camel_case) -%}
+{{ name }}{% if name in (type_names if names is none else names) %}Union{% endif %}
+{%- endif %}
+{%- endmacro %}
+
+{# Schemas only unions refer to, which `referenced_components` leaves out. -#}
+{% macro union_imports() -%}
+{% if sdk.typed_unions -%}
+{% for c in union_refs if c != type.name and c not in referenced_components -%}
+use super::{{ c | to_rust_ident }}::{{ c | to_upper_camel_case }};
+{% endfor -%}
+{% endif -%}
+{%- endmacro %}
+
 {# A struct's fields. Required nullable fields always serialize, `null` included; nullable
    optional fields of PATCH bodies are `Option<Option<T>>`, where `Some(None)` sends `null`. -#}
-{% macro struct_fields(fields, recursive, patch_body, skip=none) -%}
+{% macro struct_fields(fields, recursive, patch_body, skip=none, owner=none) -%}
 {% for field in fields if field.name != skip %}
     {% if field.description is defined -%}
         {{ field.description | to_doc_comment(style="rust") }}
@@ -44,7 +223,7 @@ Box<{{ ty.to_rust() }}>
     {% if field.deprecated -%}
         #[deprecated]
     {% endif -%}
-    {% set ty = value_type(field.type, recursive) -%}
+    {% set ty = value_type(field.type, recursive, union_name(owner, field.name, field.type)) -%}
     {% set rename = "" -%}
     {% if field.name != field.name | to_rust_ident | replace("r#", "") -%}
         {% set rename %}rename = {{ field.name | rust_str }}{% endset -%}
@@ -68,16 +247,22 @@ Box<{{ ty.to_rust() }}>
 {% endfor %}
 {%- endmacro %}
 
-{# `new` takes the required, non-nullable fields; strings as `impl Into<String>`. -#}
-{% macro struct_new(fields, recursive, skip=none) -%}
-{% set params = fields | rejectattr("flatten") | selectattr("required") | rejectattr("nullable") | rejectattr("name", "equalto", skip) | list -%}
+{# `new` takes the required, non-nullable fields but those with a `defaults` value; strings
+   and unions as `impl Into<_>`. -#}
+{% macro struct_new(fields, recursive, skip=none, owner=none, defaults={}) -%}
+{% set params = fields | rejectattr("flatten") | selectattr("required") | rejectattr("nullable") | rejectattr("name", "equalto", skip) | rejectattr("name", "in", defaults) | list -%}
 {% if params -%}
 /// Creates a value from its required fields.
 {% endif -%}
 pub fn new(
     {% for field in params -%}
+        {% set union = union_name(owner, field.name, field.type) -%}
         {% if field.type.to_rust() == "String" and not field.type.is_datetime() and not field.type.is_date() -%}
         {{ field_name(field.name) }}: impl Into<String>,
+        {% elif union and field.type.is_union() -%}
+        {{ field_name(field.name) }}: impl Into<{{ union }}>,
+        {% elif union -%}
+        {{ field_name(field.name) }}: {{ rust_type(field.type, union) }},
         {% else -%}
         {{ field_name(field.name) }}: {{ rust_type(field.type) }},
         {% endif -%}
@@ -88,8 +273,10 @@ pub fn new(
     {% endif -%}
     Self {
         {% for field in fields if field.name != skip -%}
-            {% if field in params -%}
-                {% if field.type.to_rust() == "String" and not field.type.is_datetime() and not field.type.is_date() -%}
+            {% if field.name in defaults and field.required and not field.nullable and not field.flatten -%}
+                {{ field_name(field.name) }}: {{ defaults[field.name] | rust_str }}.into(),
+            {% elif field in params -%}
+                {% if (field.type.to_rust() == "String" and not field.type.is_datetime() and not field.type.is_date()) or (field.type.is_union() and union_name(owner, field.name, field.type)) -%}
                 {{ field_name(field.name) }}: {{ field_name(field.name) }}.into(),
                 {% elif field.type.is_schema_ref() and field.type.to_rust() in recursive -%}
                 {{ field_name(field.name) }}: Box::new({{ field_name(field.name) }}),

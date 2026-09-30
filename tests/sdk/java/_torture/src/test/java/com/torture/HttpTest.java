@@ -7,9 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.sun.net.httpserver.HttpServer;
 import com.torture.api.ThingsListThingsOptions;
 import com.torture.exceptions.ApiException;
+import com.torture.exceptions.ApiTimeoutException;
+import com.torture.exceptions.InternalServerException;
+import com.torture.exceptions.NotFoundException;
+import com.torture.exceptions.UnprocessableEntityException;
+import com.torture.models.ValidationError;
 import com.torture.models.Kind;
 import com.torture.models.ThingPatch;
-import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -31,21 +35,24 @@ class HttpTest {
     private HttpServer server;
     private final List<String> requests = new ArrayList<>();
     private final List<String> idempotencyKeys = new ArrayList<>();
+    private final List<String> traces = new ArrayList<>();
+    private String errorBody = "{\"title\":\"no\"}";
     private final Deque<Integer> statuses = new ArrayDeque<>();
     private String retryAfter;
 
     @BeforeEach
-    void start() throws IOException {
+    void start() throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/", exchange -> {
             requests.add(exchange.getRequestMethod() + " " + exchange.getRequestURI().getRawPath()
                     + (exchange.getRequestURI().getRawQuery() == null ? "" : "?" + exchange.getRequestURI().getRawQuery()));
             idempotencyKeys.add(exchange.getRequestHeaders().getFirst("idempotency-key"));
+            traces.add(exchange.getRequestHeaders().getFirst("x-trace"));
             int status = statuses.isEmpty() ? 200 : statuses.poll();
             if (retryAfter != null && status != 200) {
                 exchange.getResponseHeaders().add("Retry-After", retryAfter);
             }
-            byte[] body = (status == 200 ? THING : "{\"title\":\"no\"}").getBytes(StandardCharsets.UTF_8);
+            byte[] body = (status == 200 ? THING : errorBody).getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(status, body.length);
             exchange.getResponseBody().write(body);
             exchange.close();
@@ -147,6 +154,54 @@ class HttpTest {
         options.setServerUrl("http://127.0.0.1:" + server.getAddress().getPort());
         options.setTimeout(Duration.ofMillis(200));
         options.setRetrySchedule(List.of());
-        assertThrows(IOException.class, () -> new Torture("token", options).getThings().getThing("t"));
+        ApiTimeoutException error =
+                assertThrows(ApiTimeoutException.class, () -> new Torture("token", options).getThings().getThing("t"));
+        assertEquals(0, error.getCode());
+    }
+
+    @Test
+    void requestOptionsApplyToOneCall() {
+        statuses.add(503);
+        RequestOptions once =
+                RequestOptions.builder().header("x-trace", "t1").maxRetries(0).idempotencyKey("k1").build();
+        InternalServerException error = assertThrows(
+                InternalServerException.class,
+                () -> client().getThings().createThing(new com.torture.models.ThingCreate().name("n"), once));
+        assertEquals(503, error.getCode());
+        assertEquals(List.of("t1"), traces);
+        assertEquals(List.of("k1"), idempotencyKeys);
+        client().getThings().listThings(RequestOptions.builder().header("x-trace", "t2").build());
+        assertEquals(List.of("t1", "t2"), traces);
+    }
+
+    @Test
+    void aPerCallTimeoutOverridesTheClients() {
+        server.removeContext("/");
+        server.createContext("/", exchange -> {
+            try {
+                Thread.sleep(2000);
+            } catch (InterruptedException ignored) {
+            }
+            exchange.close();
+        });
+        RequestOptions fast = RequestOptions.builder().timeout(Duration.ofMillis(200)).maxRetries(0).build();
+        assertThrows(ApiTimeoutException.class, () -> client().getThings().getThing("t", fast));
+    }
+
+    @Test
+    void errorsHaveAStatusClassAndATypedBody() {
+        statuses.add(404);
+        NotFoundException missing = assertThrows(NotFoundException.class, () -> client().getThings().getThing("t"));
+        assertEquals(404, missing.getCode());
+
+        statuses.add(422);
+        errorBody = "{\"message\":\"bad name\",\"fields\":{\"name\":[\"too short\"]}}";
+        UnprocessableEntityException invalid = assertThrows(
+                UnprocessableEntityException.class,
+                () -> client().getThings().createThing(new com.torture.models.ThingCreate().name("n")));
+        ValidationError body = invalid.getError(ValidationError.class).orElseThrow();
+        assertEquals("bad name", body.getMessage());
+        assertEquals(List.of("too short"), body.getFields().get("name"));
+        assertTrue(invalid.getMessage().contains("422") && invalid.getMessage().contains("bad name"));
     }
 }

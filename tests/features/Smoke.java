@@ -6,6 +6,7 @@ import com.features.api.StreamingStreamEventsOptions;
 import com.features.api.WidgetsListWidgetEventsOptions;
 import com.features.api.WireBetaSearchOptions;
 import com.features.api.WireSearchOptions;
+import com.features.exceptions.ApiException;
 import com.features.models.Charge;
 import com.features.models.ChargeItemsItem;
 import com.features.models.ChargeShipping;
@@ -74,7 +75,10 @@ public class Smoke {
         try {
             new Features(null, options()).getWidgets().listWidgetsIter().iterator().hasNext();
             throw new AssertionError("expected an authentication error");
-        } catch (Paginator.PaginationException expected) {
+        } catch (RuntimeException expected) {
+            // Checked (edition 1) API errors are wrapped, unchecked ones thrown as they are.
+            Throwable error = expected instanceof Paginator.PaginationException ? expected.getCause() : expected;
+            expect(((ApiException) error).getCode(), 401);
         }
 
         StreamingStreamEventsOptions topic = new StreamingStreamEventsOptions();

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.introspect.AnnotatedMember;
 import com.fasterxml.jackson.databind.introspect.BeanPropertyDefinition;
+import @@JAVA_INTERNAL_PACKAGE@@.Utils;
 import @@JAVA_PACKAGE@@.exceptions.ApiException;
 
 import java.io.IOException;
@@ -20,8 +21,9 @@ import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
 /**
- * Every item of a paginated list operation, fetched page by page. Each iteration starts over, and
- * throws {@link PaginationException} when a page cannot be fetched.
+ * Every item of a paginated list operation, fetched page by page. Each iteration starts over. When
+ * a page cannot be fetched, an unchecked {@link ApiException} is thrown as is, and a checked one or
+ * an {@link IOException} wrapped in a {@link PaginationException}.
  */
 public final class Paginator<T> implements Iterable<T> {
     /** Fetches the page selected by a cursor, page number or offset. */
@@ -63,6 +65,8 @@ public final class Paginator<T> implements Iterable<T> {
 
     /** Wraps the {@link IOException} or {@link ApiException} that stopped an iteration. */
     public static final class PaginationException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+
         PaginationException(Exception cause) {
             super(cause.getMessage(), cause);
         }
@@ -75,6 +79,7 @@ public final class Paginator<T> implements Iterable<T> {
     private final PageFetcher fetcher;
     private final Class<T> itemClass;
 
+    /** Internal: built by the generated resources. */
     public Paginator(Spec spec, Object start, PageFetcher fetcher, Class<T> itemClass) {
         this.spec = spec;
         this.start = start;
@@ -131,6 +136,10 @@ public final class Paginator<T> implements Iterable<T> {
                     done = !advance(page, items);
                 } catch (IOException | ApiException e) {
                     done = true;
+                    Exception cause = e;
+                    if (cause instanceof RuntimeException) {
+                        throw (RuntimeException) cause;
+                    }
                     throw new PaginationException(e);
                 }
             }

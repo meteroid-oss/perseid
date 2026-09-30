@@ -1,12 +1,11 @@
 {
   "name": "@@NPM_PACKAGE@@",
   "version": "@@VERSION@@",
-  "description": "@@CLIENT_NAME@@ API client",
-  "license": "UNLICENSED",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/OWNER/REPOSITORY.git"
-  },
+  "description": "@@DESCRIPTION@@",
+  "license": "@@LICENSE@@",
+  "repository": { "type": "git", "url": "git+@@REPOSITORY@@.git" },
+  "homepage": "@@HOMEPAGE@@",
+  "author": "@@AUTHOR@@",
   "type": "module",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",

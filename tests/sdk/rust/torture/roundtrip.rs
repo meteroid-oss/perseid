@@ -15,8 +15,8 @@ use serde_json::{json, Value};
 use torture::{
     api::{
         middleware::{BoxError, BoxFuture, Middleware, Next, Request, Response},
-        HttpClient, RequestBody, ThingsCreateThingOptions, ThingsListThingsOptions, Torture,
-        TortureOptions,
+        HttpClient, RequestBody, RequestOptions, ThingsCreateThingOptions, ThingsListThingsOptions,
+        Torture, TortureOptions,
     },
     error::Error,
     models::*,
@@ -323,4 +323,72 @@ async fn http_client_and_connector_can_be_replaced() {
     };
     Torture::new("t", Some(options)).things().get_thing("i").await.unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn primitive_or_object_unions_are_enums() {
+    let holder: UnionHolder = serde_json::from_value(json!({
+        "shape": {"type": "circle", "radius": 1.0}, "shapes": [],
+        "inline_union": ["a", "b"], "str_or_int": 7,
+    }))
+    .unwrap();
+    assert_eq!(holder.inline_union.as_ref().and_then(|u| u.as_list()), Some(&vec!["a".to_owned(), "b".to_owned()]));
+    assert_eq!(holder.str_or_int, Some(StringOrInt::Integer(7)));
+    for input in [json!("text"), json!(""), json!(3), json!(true), json!(null)] {
+        assert_eq!(round_trip::<StringOrInt>(input.clone()), input);
+    }
+    assert_eq!(serde_json::from_value::<StringOrInt>(json!(true)).unwrap(), StringOrInt::Unknown(json!(true)));
+    assert_eq!(StringOrInt::from("x").as_string(), Some("x"));
+    assert_eq!(serde_json::to_value(UnionHolderInlineUnion::from("s")).unwrap(), json!("s"));
+}
+
+#[test]
+fn union_variants_default_their_tag() {
+    assert_eq!(Circle::new(2.0).r#type, "circle");
+    assert_eq!(Circle::default().r#type, "circle");
+    assert_eq!(Cat::new(true).pet_type, "Cat");
+    let shape = Shape::Square(Square::new(3.0));
+    assert_eq!(serde_json::to_value(&shape).unwrap(), json!({"type": "square", "side": 3.0}));
+}
+
+#[tokio::test]
+async fn request_options_apply_to_one_call() {
+    let origin = Origin::replying(vec![(503, vec![], "busy"), (503, vec![], "busy")]);
+    let options = RequestOptions::new()
+        .header("authorization", "Bearer other")
+        .header("x-trace", "t")
+        .idempotency_key("k1")
+        .max_retries(0);
+    let error = origin
+        .client()
+        .things()
+        .with_options(options)
+        .create_thing(ThingCreate::new(Kind::Alpha, "n"), None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.status(), Some(StatusCode::SERVICE_UNAVAILABLE));
+    let requests = origin.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].1["authorization"], "Bearer other");
+    assert_eq!(requests[0].1["x-trace"], "t");
+    assert_eq!(requests[0].1["idempotency-key"], "k1");
+
+    let slow = Origin { delay: Some(Duration::from_secs(5)), ..Origin::default() };
+    let options = RequestOptions::new().timeout(Duration::from_millis(20)).max_retries(0);
+    let error = slow.client().tree().with_options(options).get_tree().await.unwrap_err();
+    assert!(matches!(error, Error::Timeout), "{error:?}");
+
+    let invalid = RequestOptions::new().header("bad header", "v");
+    let error = Origin::default().client().tree().with_options(invalid).get_tree().await.unwrap_err();
+    assert!(matches!(error, Error::Request(_)), "{error:?}");
+}
+
+#[tokio::test]
+async fn api_errors_expose_their_payload_and_request_id() {
+    let origin = Origin::replying(vec![(404, vec![("x-request-id", "req_1")], r#"{"title":"gone"}"#)]);
+    let error = origin.client().tree().get_tree().await.unwrap_err();
+    let api = error.api().unwrap();
+    assert_eq!(api.request_id(), Some("req_1"));
+    let payload: torture::api::ErrorBody = api.payload().unwrap();
+    assert_eq!(payload["title"], "gone");
 }

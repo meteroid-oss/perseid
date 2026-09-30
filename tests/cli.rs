@@ -15,7 +15,20 @@ fn project() -> tempfile::TempDir {
     project_from("petstore.yaml", &["rust", "go"])
 }
 
+/// A project naming methods after operation ids, which the assertions below spell.
 fn project_from(fixture: &str, languages: &[&str]) -> tempfile::TempDir {
+    let dir = project_named_by_resource(fixture, languages);
+    let config = dir.path().join("perseid.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    let text = text.replace(
+        "method_names = \"resource\"",
+        "method_names = \"operation_id\"",
+    );
+    fs::write(config, text).unwrap();
+    dir
+}
+
+fn project_named_by_resource(fixture: &str, languages: &[&str]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     fs::copy(
         Path::new("tests/fixtures").join(fixture),
@@ -268,7 +281,7 @@ fn csharp_init_and_generate_lay_out_a_dotnet_project() {
     for file in [
         "PetstoreClient.cs",
         "Api/PetsApi.cs",
-        "Api/PetsListPetsOptions.cs",
+        "Api/PetsListOptions.cs",
         "Models/Pet.cs",
         "Models/PetstoreJsonContext.cs",
         "ApiTransport.cs",
@@ -276,7 +289,8 @@ fn csharp_init_and_generate_lay_out_a_dotnet_project() {
         assert!(sdk.join("Petstore").join(file).exists(), "{file}: {out}");
     }
     let api = fs::read_to_string(sdk.join("Petstore/Api/PetsApi.cs")).unwrap();
-    assert!(api.contains("public Task<Pet> GetPetAsync("), "{api}");
+    assert!(api.contains("public Task<Pet> RetrieveAsync("), "{api}");
+    assert!(api.contains("public Task<Pet> CreateAsync("), "{api}");
 }
 
 #[test]
@@ -678,7 +692,7 @@ fn torture_fixture_generates_every_language() {
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
     assert_eq!(
-        out.matches("schema `StringOrInt`: `oneOf`").count(),
+        out.matches("schema `CatOrDog`: `oneOf`").count(),
         1,
         "warnings are printed once for all languages: {out}"
     );
@@ -774,7 +788,8 @@ info: { title: Edge, version: "1" }
 paths:
   /token:
     post:
-      operationId: rotate
+      operationId: rotate_token
+      x-perseid-name: rotate
       tags: [tokens]
       parameters: [{ name: previous, in: query, schema: { $ref: "#/components/schemas/Token" } }]
       requestBody: { content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } } }
@@ -927,4 +942,565 @@ fn typescript_int64_is_opt_in() {
         !ok && out.contains("only supported in [typescript]"),
         "{out}"
     );
+}
+
+fn edit_config(dir: &Path, edit: impl FnOnce(String) -> String) {
+    let path = dir.join("perseid.toml");
+    let text = fs::read_to_string(&path).unwrap();
+    fs::write(path, edit(text)).unwrap();
+}
+
+fn inspect(dir: &Path) -> serde_json::Value {
+    let (ok, out) = perseid(dir, &["inspect"]);
+    assert!(ok, "{out}");
+    serde_json::from_str(&out).unwrap()
+}
+
+#[test]
+fn init_names_methods_after_their_resource_path() {
+    let dir = project_named_by_resource("realworld.yaml", &["rust", "typescript"]);
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(config.contains("method_names = \"resource\""), "{config}");
+    let model = inspect(dir.path());
+    for (id, name) in [
+        ("GetCharges", "list"),
+        ("PostCharges", "create"),
+        ("GetChargesSearch", "search"),
+        ("GetChargesCharge", "retrieve"),
+        ("PostChargesCharge", "update"),
+        ("PostChargesChargeCapture", "capture"),
+        ("GetChargesChargeRefunds", "refunds"),
+        ("PutCustomer", "update"),
+    ] {
+        let op = operation(&model, id);
+        assert_eq!(
+            (op["name"].as_str(), op["method_name"].as_str()),
+            (Some(name), Some(name))
+        );
+    }
+
+    edit_config(dir.path(), |c| {
+        c.replacen(
+            "[rust]\n",
+            "[rust]\nnames = { GetChargesSearch = \"find\" }\n",
+            1,
+        ) + "\n[names]\nPostChargesChargeCapture = \"capture_payment\"\n"
+    });
+    assert_eq!(
+        operation(&inspect(dir.path()), "PostChargesChargeCapture")["name"],
+        "capture_payment"
+    );
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let rust = fs::read_to_string(dir.path().join("rust/src/api/charges.rs")).unwrap();
+    for method in [
+        "fn find(",
+        "fn capture_payment(",
+        "fn retrieve(",
+        "fn refunds(",
+    ] {
+        assert!(rust.contains(method), "no `{method}` in {rust}");
+    }
+    let ts = fs::read_to_string(dir.path().join("typescript/src/api/charges.ts")).unwrap();
+    assert!(
+        ts.contains("public search(") && ts.contains("public capturePayment("),
+        "{ts}"
+    );
+
+    edit_config(dir.path(), |c| c + "GetCharges = \"capture_payment\"\n");
+    let (ok, out) = perseid(dir.path(), &["inspect"]);
+    assert!(
+        !ok && out.contains("are both named `capture_payment`"),
+        "{out}"
+    );
+}
+
+#[test]
+fn operation_id_names_keep_overrides_and_colliding_derived_names_fall_back() {
+    let dir = project_from("realworld.yaml", &["rust"]);
+    let model = inspect(dir.path());
+    let refunds = operation(&model, "GetChargesChargeRefunds");
+    assert_eq!(refunds["name"], "refunds");
+    let list = operation(&model, "GetCharges");
+    assert_eq!(
+        (list["name"].as_str(), list["method_name"].as_str()),
+        (Some("GetCharges"), Some("list"))
+    );
+}
+
+#[test]
+fn error_responses_are_typed_per_operation() {
+    let dir = project_from("realworld.yaml", &["rust"]);
+    let model = inspect(dir.path());
+    assert_eq!(model["error_schemas"], serde_json::json!(["Error"]));
+    assert_eq!(model["default_error"], "Error");
+    assert_eq!(
+        operation(&model, "GetChargesCharge")["errors"],
+        serde_json::json!({ "404": "Error", "default": "Error" })
+    );
+    assert_eq!(
+        operation(&model, "PutCustomer")["errors"],
+        serde_json::json!({})
+    );
+}
+
+#[test]
+fn primitive_or_object_unions_are_modelled() {
+    let dir = project_from("realworld.yaml", &["rust"]);
+    let model = inspect(dir.path());
+    let fields = model["types"]["Charge"]["fields"].as_array().unwrap();
+    let field = |name: &str| &fields.iter().find(|f| f["name"] == name).unwrap()["type"];
+    let variants = |name: &str| -> Vec<(String, String)> {
+        field(name)["variants"]
+            .as_array()
+            .unwrap_or_else(|| panic!("`{name}` is not a union"))
+            .iter()
+            .map(|v| {
+                (
+                    v["name"].as_str().unwrap().into(),
+                    v["json_type"].as_str().unwrap().into(),
+                )
+            })
+            .collect()
+    };
+    let pair = |a: &str, b: &str| (a.to_owned(), b.to_owned());
+    assert_eq!(
+        variants("customer"),
+        [pair("string", "string"), pair("customer", "object")]
+    );
+    assert_eq!(
+        variants("shipping"),
+        [pair("charge_shipping", "object"), pair("empty", "string")]
+    );
+    assert_eq!(
+        variants("amount"),
+        [pair("integer", "integer"), pair("empty", "string")]
+    );
+    assert_eq!(field("source")["id"], "JsonObject");
+    assert!(model["types"]["ChargeShipping"].is_object());
+}
+
+#[test]
+fn html_descriptions_become_markdown_doc_comments() {
+    let dir = project_from("realworld.yaml", &["rust"]);
+    let model = inspect(dir.path());
+    assert_eq!(
+        model["types"]["Charge"]["description"],
+        "A `Charge` moves money from a card. See [charges](https://docs.example.com/charges)."
+    );
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let api = fs::read_to_string(dir.path().join("rust/src/api/charges.rs")).unwrap();
+    assert!(api.contains("/// Returns a list of charges, the most recent first. Use `created` & [expand](https://docs.example.com/expand)."), "{api}");
+    assert!(
+        api.contains("/// - Paginated") && !api.contains("<p>"),
+        "{api}"
+    );
+}
+
+#[test]
+fn union_variants_default_their_discriminator() {
+    let dir = project_from("torture.yaml", &["rust"]);
+    let model = inspect(dir.path());
+    assert_eq!(
+        model["types"]["Circle"]["discriminator_defaults"],
+        serde_json::json!({ "type": "circle" })
+    );
+    assert!(
+        model["types"]["Widget"]
+            .get("discriminator_defaults")
+            .is_none()
+    );
+}
+
+#[test]
+fn init_fills_package_metadata_from_the_spec() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = fs::read_to_string("tests/fixtures/petstore.yaml").unwrap().replacen(
+        "info:\n",
+        "info:\n  description: The Petstore API. Manage pets.\n  license: { name: MIT }\n  contact: { name: Pet Team, email: pets@example.com, url: https://pets.example.com }\n",
+        1,
+    );
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let langs = ["rust", "typescript", "python", "java", "csharp"];
+    let (ok, out) = perseid(dir.path(), &[&["init"], &langs[..]].concat());
+    assert!(ok, "{out}");
+    let read = |path: &str| fs::read_to_string(dir.path().join(path)).unwrap();
+    let config = read("perseid.toml");
+    for line in [
+        "description = \"The Petstore API.\"",
+        "license = \"MIT\"",
+        "homepage = \"https://pets.example.com\"",
+        "authors = [\"Pet Team <pets@example.com>\"]",
+    ] {
+        assert!(config.contains(line), "no `{line}` in {config}");
+    }
+    let cargo = read("rust/Cargo.toml");
+    assert!(
+        cargo.contains("license = \"MIT\"")
+            && cargo.contains("authors = [\"Pet Team <pets@example.com>\"]"),
+        "{cargo}"
+    );
+    assert!(
+        !cargo.contains("repository") && !cargo.contains("@@"),
+        "{cargo}"
+    );
+    let package: serde_json::Value =
+        serde_json::from_str(&read("typescript/package.json")).unwrap();
+    assert_eq!(
+        (package["license"].as_str(), package["author"].as_str()),
+        (Some("MIT"), Some("Pet Team <pets@example.com>"))
+    );
+    let pyproject = read("python/pyproject.toml");
+    assert!(
+        pyproject.contains("authors = [{ name = \"Pet Team\", email = \"pets@example.com\" }]"),
+        "{pyproject}"
+    );
+    let properties = read("java/gradle.properties");
+    assert!(
+        properties.contains("POM_LICENSE_URL=https://spdx.org/licenses/MIT.html")
+            && !properties.contains("POM_SCM_URL"),
+        "{properties}"
+    );
+    let csproj = read("csharp/Petstore/Petstore.csproj");
+    assert!(
+        csproj.contains("<PackageLicenseExpression>MIT</PackageLicenseExpression>")
+            && csproj.contains("<Authors>Pet Team</Authors>"),
+        "{csproj}"
+    );
+}
+
+#[test]
+fn rust_unions_and_tag_defaults_are_typed_when_init_opts_in() {
+    let dir = project_named_by_resource("realworld.yaml", &["rust"]);
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(config.contains("[rust]\ntyped_unions = true"), "{config}");
+    let charge = || {
+        let (ok, out) = perseid(dir.path(), &["generate", "rust", "--no-format"]);
+        assert!(ok, "{out}");
+        let path = dir.path().join("rust/src/models/charge.rs");
+        fs::read_to_string(path)
+            .unwrap()
+            .split_whitespace()
+            .collect::<String>()
+    };
+    let typed = charge();
+    assert!(typed.contains("customer:Option<ChargeCustomer>"), "{typed}");
+    assert!(
+        typed.contains("pubenumChargeCustomer{String(String),Customer(Box<Customer>),"),
+        "{typed}"
+    );
+    assert!(
+        typed.contains("pubenumChargeAmount{Integer(i64),///Theemptystring.Empty,"),
+        "{typed}"
+    );
+    let models = fs::read_to_string(dir.path().join("rust/src/models/mod.rs")).unwrap();
+    assert!(
+        models.contains("pub fn id(&self) -> Option<&str>"),
+        "{models}"
+    );
+
+    edit_config(dir.path(), |text| text.replace("typed_unions = true\n", ""));
+    let untyped = charge();
+    assert!(
+        untyped.contains("customer:Option<serde_json::Value>"),
+        "{untyped}"
+    );
+    assert!(!untyped.contains("enumChargeCustomer"), "{untyped}");
+}
+
+#[test]
+fn rust_timeout_stream_and_error_docs_follow_the_config() {
+    let dir = project_from("torture.yaml", &["rust"]);
+    let read = |path: &str| {
+        let (ok, out) = perseid(dir.path(), &["generate", "rust", "--no-format"]);
+        assert!(ok, "{out}");
+        fs::read_to_string(dir.path().join("rust/src").join(path)).unwrap()
+    };
+    assert!(read("api/client.rs").contains("Some(Duration::from_secs(60))"));
+    let api = read("api/mod.rs");
+    assert!(api.contains("futures_core::Stream for Paginator"), "{api}");
+    assert!(
+        api.contains("pub type ErrorBody = serde_json::Value;"),
+        "{api}"
+    );
+    let things = read("api/things.rs");
+    assert!(
+        things.contains("[`ValidationError`](crate::models::ValidationError) (422)"),
+        "{things}"
+    );
+    let circle = read("models/circle.rs")
+        .split_whitespace()
+        .collect::<String>();
+    assert!(circle.contains("pubfnnew(radius:f64,)"), "{circle}");
+
+    edit_config(dir.path(), |text| format!("timeout = 15\n{text}"));
+    let manifest = dir.path().join("rust/Cargo.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(&manifest, text.replace("futures-core = \"0.3\"\n", "")).unwrap();
+    assert!(read("api/client.rs").contains("Some(Duration::from_secs(15))"));
+    assert!(!read("api/mod.rs").contains("futures_core"));
+}
+
+#[test]
+fn typescript_types_unions_errors_and_the_default_timeout() {
+    let dir = project_named_by_resource("realworld.yaml", &["typescript"]);
+    edit_config(dir.path(), |text| {
+        text.replace(
+            "[typescript]",
+            "timeout = 15\nwebhooks = true\n[typescript]",
+        )
+    });
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let read =
+        |path: &str| fs::read_to_string(dir.path().join("typescript/src").join(path)).unwrap();
+    let charge = read("models/charge.ts");
+    for decl in [
+        "customer: string | Customer | null;",
+        "amount?: number | \"\";",
+        "shipping?: ChargeShipping | \"\";",
+        "source?: unknown;",
+    ] {
+        assert!(charge.contains(decl), "no `{decl}` in {charge}");
+    }
+    assert!(
+        charge.contains(
+            "isJsonObject(json[\"customer\"]) ? CustomerSerializer.parse(json[\"customer\"])"
+        ),
+        "{charge}"
+    );
+    let index = read("index.ts");
+    for text in [
+        "const DEFAULT_TIMEOUT_MS = 15000;",
+        "parseError: ErrorSerializer.parse,",
+        "export type RealWorldErrorBody =",
+        "NotFoundError,",
+        "static readonly NotFoundError = NotFoundError;",
+    ] {
+        assert!(index.contains(text), "no `{text}` in {index}");
+    }
+    assert!(read("api/charges.ts").contains("public retrieve("));
+    assert!(!read("webhook.ts").contains("from \"node:"));
+
+    edit_config(dir.path(), |text| text.replace("typed_unions = true\n", ""));
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let charge = read("models/charge.ts");
+    assert!(charge.contains("customer: unknown | null;"), "{charge}");
+}
+
+#[test]
+fn python_types_errors_unions_and_discriminator_defaults() {
+    let dir = project_named_by_resource("realworld.yaml", &["python"]);
+    fs::write(
+        dir.path().join("perseid.toml"),
+        fs::read_to_string(dir.path().join("perseid.toml")).unwrap() + "timeout = 15\n",
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let read = |path: &str| fs::read_to_string(dir.path().join(path)).unwrap();
+    let errors = read("python/real_world/api/_errors.py");
+    assert!(
+        errors.contains("ErrorBody: t.TypeAlias = _models.Error\n"),
+        "{errors}"
+    );
+    assert!(read("python/real_world/api/client.py").contains("class RealWorld:"));
+    let charge = read("python/real_world/models/charge.py");
+    for decl in [
+        "customer: str | Customer | None",
+        "shipping: ChargeShipping | t.Literal[\"\"] | None = None",
+        "from .customer import Customer",
+    ] {
+        assert!(charge.contains(decl), "no `{decl}` in {charge}");
+    }
+    let common = read("python/real_world/api/common.py");
+    assert!(common.contains("DEFAULT_TIMEOUT: float = 15\n"), "{common}");
+
+    edit_config(dir.path(), |text| text.replace("typed_unions = true\n", ""));
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let charge = read("python/real_world/models/charge.py");
+    assert!(charge.contains("customer: t.Any"), "{charge}");
+
+    let dir = project_from("torture.yaml", &["python"]);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let read = |path: &str| fs::read_to_string(dir.path().join(path)).unwrap();
+    let circle = read("python/torture/models/circle.py");
+    assert!(circle.contains("type: str = \"circle\""), "{circle}");
+    let things = read("python/torture/api/things.py");
+    assert!(
+        things.contains("\"422\": _models.ValidationError,")
+            && things.contains("def create_thing("),
+        "{things}"
+    );
+}
+
+#[test]
+fn go_types_unions_and_error_bodies_when_opted_in() {
+    let dir = project_named_by_resource("realworld.yaml", &["go"]);
+    let config = dir.path().join("perseid.toml");
+    let (ok, out) = perseid(dir.path(), &["generate", "go", "--no-format"]);
+    assert!(ok, "{out}");
+    let read = |path: &str| fs::read_to_string(dir.path().join("go").join(path)).unwrap();
+    let charge = read("charge.go");
+    assert!(
+        charge.contains("Customer *ChargeCustomer `json:\"customer\"`")
+            && charge.contains("func NewChargeCustomerFromCustomer(value Customer) ChargeCustomer"),
+        "{charge}"
+    );
+    let client = read("client.go");
+    assert!(
+        client.contains("func (e *APIError) Detail() *Error {")
+            && client.contains("const DefaultTimeout = 60 * time.Second")
+            && client.contains("//\tresult, err := client.Charges().List(ctx)"),
+        "{client}"
+    );
+    assert!(read("README.md").contains("go get github.com/real-world/real-world-go"));
+
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(
+        &config,
+        text.replace("typed_unions = true\n", "timeout = 15\n"),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "go", "--no-format"]);
+    assert!(ok, "{out}");
+    let charge = read("charge.go");
+    assert!(
+        charge.contains("Customer json.RawMessage") && !charge.contains("ChargeCustomer"),
+        "{charge}"
+    );
+    assert!(read("client.go").contains("const DefaultTimeout = 15 * time.Second"));
+}
+
+#[test]
+fn java_edition_2_is_unchecked_and_hides_plumbing() {
+    let dir = project_from("petstore.yaml", &["java"]);
+    let config = dir.path().join("perseid.toml");
+    assert!(
+        fs::read_to_string(&config)
+            .unwrap()
+            .contains("[java]\nedition = 2\n")
+    );
+    let (ok, out) = perseid(dir.path(), &["generate"]);
+    assert!(ok, "{out}");
+    let root = dir.path().join("java/src/main/java/com/petstore");
+    let read = |path: &str| fs::read_to_string(root.join(path)).unwrap();
+    assert!(read("internal/Utils.java").starts_with("// this file is @generated"));
+    assert!(read("internal/PetstoreHttpClient.java").contains("package com.petstore.internal;"));
+    let pets = read("api/Pets.java");
+    assert!(!pets.contains("throws"), "{pets}");
+    assert!(
+        pets.contains("final RequestOptions requestOptions)"),
+        "{pets}"
+    );
+    assert!(read("exceptions/ApiException.java").contains("extends RuntimeException"));
+
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, text.replace("edition = 2", "edition = 1")).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate"]);
+    assert!(ok, "{out}");
+    assert!(!root.join("internal/Utils.java").exists());
+    assert!(read("PetstoreHttpClient.java").contains("package com.petstore;"));
+    assert!(read("api/Pets.java").contains("throws IOException, ApiException"));
+}
+
+#[test]
+fn java_edition_is_validated() {
+    let dir = project_from("petstore.yaml", &["java", "go"]);
+    let config = dir.path().join("perseid.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, text.replace("edition = 2", "edition = 3")).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate"]);
+    assert!(!ok && out.contains("`edition` must be 1 or 2"), "{out}");
+    fs::write(&config, text.replace("[go]\n", "[go]\nedition = 2\n")).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate"]);
+    assert!(
+        !ok && out.contains("`edition` is only supported in [java]"),
+        "{out}"
+    );
+}
+
+#[test]
+fn java_enums_keep_unknown_values_and_docs_are_html() {
+    let dir = project_from("realworld.yaml", &["java"]);
+    let (ok, out) = perseid(dir.path(), &["generate"]);
+    assert!(ok, "{out}");
+    let models = dir.path().join("java/src/main/java/com/realworld/models");
+    let status = fs::read_to_string(models.join("StateReason.java")).unwrap();
+    for part in [
+        "public final class StateReason",
+        "public static StateReason of(String value)",
+        "public boolean isKnown()",
+        "public enum Known {",
+    ] {
+        assert!(status.contains(part), "no `{part}` in {status}");
+    }
+    let api = fs::read_to_string(
+        dir.path()
+            .join("java/src/main/java/com/realworld/api/Charges.java"),
+    )
+    .unwrap();
+    assert!(api.contains("<code>created</code> &amp;"), "{api}");
+}
+
+#[test]
+fn csharp_types_unions_errors_and_timeout_when_initialized() {
+    let dir = project_named_by_resource("realworld.yaml", &["csharp"]);
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(
+        config.contains("[csharp]\npatch_nullable = true\ntyped_unions = true"),
+        "{config}"
+    );
+    fs::write(
+        dir.path().join("perseid.toml"),
+        config.replacen("\n[csharp]", "timeout = 15\n\n[csharp]", 1),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let read =
+        |path: &str| fs::read_to_string(dir.path().join("csharp/RealWorld").join(path)).unwrap();
+    let charge = read("Models/Charge.cs");
+    for expected in [
+        "public required ChargeCustomer? Customer { get; set; }",
+        "public sealed record Customer(global::RealWorld.Models.Customer Value) : ChargeCustomer;",
+        "public static implicit operator ChargeCustomer(string value) => new String(value);",
+        "public sealed record Empty() : ChargeAmount;",
+        "/// A <c>Charge</c> moves money from a card.",
+    ] {
+        assert!(charge.contains(expected), "no `{expected}` in {charge}");
+    }
+    assert!(
+        read("Models/RealWorldJsonContext.cs")
+            .contains("ChargeCustomer.Customer variant => variant.Value.Id,")
+    );
+    let charges = read("Api/ChargesApi.cs");
+    assert!(charges.contains("RetrieveAsync("), "{charges}");
+    assert!(
+        charges.contains("/// <exception cref=\"NotFoundException\">404: <c>GetError()</c> reads the <see cref=\"Models.Error\"/> body.</exception>"),
+        "{charges}"
+    );
+    assert!(
+        read("RealWorldClient.cs")
+            .contains("public static Models.Error? GetError(this ApiException exception)")
+    );
+    assert!(read("RealWorldClientOptions.cs").contains("TimeSpan.FromSeconds(15)"));
+
+    fs::write(
+        dir.path().join("perseid.toml"),
+        config.replace("typed_unions = true", "typed_unions = false"),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let charge = read("Models/Charge.cs");
+    assert!(
+        charge.contains("public required JsonNode? Customer { get; set; }"),
+        "{charge}"
+    );
+    assert!(read("RealWorldClientOptions.cs").contains("TimeSpan.FromSeconds(60)"));
 }

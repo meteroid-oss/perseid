@@ -2,6 +2,7 @@ package features
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"reflect"
@@ -55,6 +56,9 @@ func TestSmoke(t *testing.T) {
 	expect(t, gadgets.Err(), nil)
 	expect(t, gadgetIds, []string{"g1", "g2", "g3"})
 	expect(t, ids(t, client.Records().ListRecordsIter(ctx, nil), func(r Entry) string { return r.ID }), []string{"r1", "r2", "r3"})
+
+	_, err := New("", &Options{ServerURL: url}).Widgets().ListWidgets(ctx, nil)
+	expect(t, errors.Is(err, ErrUnauthorized) && !errors.Is(err, ErrNotFound), true)
 
 	basic := New("", &Options{ServerURL: url, BasicAuth: &BasicAuth{Username: "u", Password: "p"}})
 	expect(t, status(basic.Account().CreateSession(ctx)), "Basic dTpw||")

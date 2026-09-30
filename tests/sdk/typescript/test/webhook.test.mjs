@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { createHmac, randomBytes } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { Webhook, WebhookVerificationError } from "../dist/esm/index.js";
 
@@ -63,4 +65,20 @@ test("rejects unusable secrets", () => {
   assert.throws(() => new Webhook("whsec_!!!"));
   assert.throws(() => new Webhook("whsec_"));
   assert.throws(() => new Webhook(new Uint8Array()));
+});
+
+test("signs like node:crypto for every block boundary, without importing it", () => {
+  for (const keyLength of [1, 32, 64, 65, 200]) {
+    const key = randomBytes(keyLength);
+    const webhook = new Webhook(key);
+    for (const size of [0, 1, 40, 41, 55, 56, 64, 119, 120, 1000]) {
+      const payload = randomBytes(size).toString("latin1");
+      const expected = createHmac("sha256", key).update(`msg.1.${payload}`, "utf8").digest("base64");
+      assert.equal(webhook.sign("msg", new Date(1000), payload), `v1,${expected}`);
+    }
+  }
+  for (const format of ["esm", "cjs"]) {
+    const source = readFileSync(new URL(`../dist/${format}/webhook.js`, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /from "node:|require\("node:|Buffer\./);
+  }
 });

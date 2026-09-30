@@ -1,3 +1,5 @@
+pub(crate) mod html;
+pub(crate) mod naming;
 pub(crate) mod pagination;
 pub(crate) mod resources;
 pub(crate) mod security;
@@ -25,6 +27,13 @@ pub(crate) struct Api {
     /// Requirement of every operation that does not declare its own `security`.
     #[serde(default)]
     pub security: security::Requirement,
+    /// Distinct schemas of the JSON bodies of error responses.
+    #[serde(default)]
+    pub error_schemas: Vec<String>,
+    /// The error schema of (nearly) every operation declaring error responses, which SDKs can
+    /// decode any API error with.
+    #[serde(default)]
+    pub default_error: Option<String>,
 }
 
 impl Api {
@@ -43,6 +52,9 @@ impl Api {
             &filters.excluded,
             &filters.specified,
         );
+        if let Err(e) = naming::apply(&mut resources, filters.method_names, &filters.names) {
+            errors.push(format!("{e:#}"));
+        }
         let (mut types, type_errors) = types::from_referenced_components(
             &resources,
             &mut components.schemas,
@@ -51,6 +63,7 @@ impl Api {
         );
         errors.extend(type_errors);
         types::untag_unions_with_non_object_variants(&mut types);
+        types::resolve_unions(&mut types, &mut resources);
         let (requests, responses) = resources::request_and_response_roots(&resources);
         let responses = responses
             .into_iter()
@@ -86,21 +99,61 @@ impl Api {
         let string_alias_names = types::collect_string_alias_names(&types);
         resources::resolve_schema_refs_in_resources(&mut resources, &string_alias_names);
 
+        types::set_discriminator_defaults(&mut types);
+
         let security = security::Security::from_spec(raw_spec);
         for resource in resources.values_mut() {
             resource.resolve_extensions(&security, &filters.pagination, &types)?;
         }
 
-        Ok(Self {
+        let mut api = Self {
             resources,
             types,
             security_schemes: security.schemes,
             security: security.default,
-        })
+            error_schemas: Vec::new(),
+            default_error: None,
+        };
+        api.collect_errors();
+        Ok(api)
+    }
+
+    fn collect_errors(&mut self) {
+        let mut stack: Vec<&Resource> = self.resources.values().collect();
+        let mut uses = std::collections::BTreeMap::<&str, usize>::new();
+        let mut declaring = 0;
+        while let Some(resource) = stack.pop() {
+            stack.extend(resource.subresources.values());
+            for op in resource
+                .operations
+                .iter()
+                .filter(|op| !op.errors.is_empty())
+            {
+                declaring += 1;
+                let schemas: std::collections::BTreeSet<&str> =
+                    op.errors.values().map(String::as_str).collect();
+                for schema in schemas {
+                    *uses.entry(schema).or_default() += 1;
+                }
+            }
+        }
+        self.error_schemas = uses.keys().map(|s| (*s).to_owned()).collect();
+        self.default_error = uses
+            .iter()
+            .rev()
+            .max_by_key(|(_, count)| **count)
+            .filter(|(_, count)| **count * 10 >= declaring * 9)
+            .map(|(schema, _)| (*schema).to_owned());
     }
 
     pub(crate) fn inline_aliases(&mut self) -> anyhow::Result<()> {
-        types::inline_aliases(&mut self.types, &mut self.resources)
+        types::inline_aliases(&mut self.types, &mut self.resources)?;
+        self.collect_errors();
+        Ok(())
+    }
+
+    pub(crate) fn untype_unions(&mut self) {
+        types::untype_unions(&mut self.types);
     }
 
     pub(crate) fn inline_flattened_fields(&mut self) -> anyhow::Result<()> {

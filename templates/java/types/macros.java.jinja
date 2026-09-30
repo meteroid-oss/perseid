@@ -13,30 +13,77 @@
 {{ "true" if field.nullable and not field.required and not field.flatten }}
 {%- endmacro %}
 
-{#- Declaration of `field`, named `var`. -#}
-{% macro declaration(field, var) -%}
+{#- Java type of `ty`, its unions rendered as the `union_cls` class. -#}
+{% macro java_type(ty, union_cls="") -%}
+{%- if ty.is_union() and union_cls -%}{{ union_cls }}
+{%- elif ty.is_list() -%}List<{{ java_type(ty.inner_type(), union_cls) }}>
+{%- elif ty.is_set() -%}Set<{{ java_type(ty.inner_type(), union_cls) }}>
+{%- elif ty.is_map() -%}Map<String,{{ java_type(ty.value_type(), union_cls) }}>
+{%- else -%}{{ ty.to_java() }}
+{%- endif -%}
+{%- endmacro %}
+
+{#- Whether `ty` holds a typed union, which edition 2 renders as a class. -#}
+{% macro has_union(ty) -%}
+{%- if sdk.edition >= 2 -%}
+{%- if ty.is_union() -%}true
+{%- elif ty.is_list() or ty.is_set() -%}{{ has_union(ty.inner_type()) }}
+{%- elif ty.is_map() -%}{{ has_union(ty.value_type()) }}
+{%- endif -%}
+{%- endif -%}
+{%- endmacro %}
+
+{#- Name of the class of the union in `field` of `owner`, empty without one. -#}
+{% macro union_name(field, owner, pascal) -%}
+{%- if has_union(field.type) and not field.flatten -%}
+{%- set name = owner ~ (pascal | replace("_", "")) -%}
+{{ name ~ "Value" if name in type_names else name }}
+{%- endif -%}
+{%- endmacro %}
+
+{#- Markdown `text` as Javadoc HTML: escaped, with its code spans in `<code>`. -#}
+{% macro html(text) -%}
+{%- set text = text | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") | replace("@", "&#64;") -%}
+{%- set parts = text | split("`") | list -%}
+{%- if "```" in text or parts | length is even -%}{{ text }}
+{%- else -%}{% for part in parts %}{% if loop.index0 is odd %}<code>{{ part }}</code>{% else %}{{ part }}{% endif %}{% endfor -%}
+{%- endif -%}
+{%- endmacro %}
+
+{#- Markdown `text` as a Javadoc comment. -#}
+{% macro javadoc(text) -%}
+{{ html(text) | to_doc_comment(style="java") }}
+{%- endmacro %}
+
+{#- Declaration of `field`, named `var`, initialized to its discriminator value if any. -#}
+{% macro declaration(field, var, union_cls="", default=none) -%}
+{% set ty = java_type(field.type, union_cls) -%}
 {% if field.flatten -%}
 @JsonUnwrapped
-private {{ field.type.to_java() }} {{ var }};
+private {{ ty }} {{ var }};
 {% else -%}
+{% if default is not none -%}
+{% set value = default | tojson if ty == "String" else ty ~ ".of(" ~ (default | tojson) ~ ")" -%}
+{% set init = " = " ~ ("Optional.of(" ~ value ~ ")" if is_optional(field) else value) -%}
+{% endif -%}
 @JsonProperty({{ field.name | tojson }})
 {% if field.required and field.nullable %}@JsonInclude(JsonInclude.Include.ALWAYS){% endif %}
-private {% if is_optional(field) %}Optional<{{ field.type.to_java() }}>{% else %}{{ field.type.to_java() }}{% endif %} {{ var }};
+private {% if is_optional(field) %}Optional<{{ ty }}>{% else %}{{ ty }}{% endif %} {{ var }}{{ init | default("") }};
 {% endif -%}
 {%- endmacro %}
 
 {#- Fluent setter, getter, bean setter and collection helpers of `field` in `cls`. -#}
-{% macro accessors(field, var, pascal, cls) -%}
+{% macro accessors(field, var, pascal, cls, union_cls="") -%}
 {% set m = {
     "var": var,
     "accessor": pascal ~ "_" if pascal == "Class" else pascal,
-    "type": field.type.to_java(),
+    "type": java_type(field.type, union_cls),
     "optional": is_optional(field) == "true",
 } -%}
 {% set deprecated = "@Deprecated " if field.deprecated else "" -%}
 {% set wrap = "Optional.ofNullable(" ~ m.var ~ ")" if m.optional else m.var -%}
 {% if field.description is defined -%}
-{{ field.description | e | to_doc_comment(style="java") }}
+{{ javadoc(field.description) }}
 {% endif -%}
 {{ deprecated }}public {{ cls }} {{ m.var }}({{ m.type }} {{ m.var }}) {
     this.{{ m.var }} = {{ wrap }};
@@ -45,7 +92,7 @@ private {% if is_optional(field) %}Optional<{{ field.type.to_java() }}>{% else %
 
 {% if field.type.is_list() or field.type.is_set() or field.type.is_map() -%}
 {% set is_map = field.type.is_map() -%}
-{% set item_ty = field.type.value_type().to_java() if is_map else field.type.inner_type().to_java() -%}
+{% set item_ty = java_type(field.type.value_type() if is_map else field.type.inner_type(), union_cls) -%}
 {% set empty = "new HashMap<>()" if is_map else ("new LinkedHashSet<>()" if field.type.is_set() else "new ArrayList<>()") -%}
 {% set current = "this." ~ m.var ~ (".get()" if m.optional else "") -%}
 {{ deprecated }}public {{ cls }} {{ "put" if is_map else "add" }}{{ pascal }}Item({% if is_map %}String key, {% endif %}{{ item_ty }} item) {
@@ -115,5 +162,196 @@ public String toString() {
     "Override", "Deprecated", "List", "Map", "Set", "Optional", "Objects", "ArrayList", "HashMap",
     "LinkedHashSet", "LinkedHashMap", "BigDecimal", "OffsetDateTime", "URI", "Utils"] -%}
 {{ panic("java codegen: schema `" ~ name ~ "` would shadow java's own `" ~ name ~ "`, rename it in the spec") }}
+{%- endif %}
+{%- endmacro %}
+
+{#- The `cls` class of the union in `ty`: one subclass per variant, told apart by JSON type. -#}
+{% macro union_class(ty, cls, shadowed=[]) -%}
+{% if ty.is_list() or ty.is_set() -%}
+{{ union_class(ty.inner_type(), cls, shadowed) }}
+{%- elif ty.is_map() -%}
+{{ union_class(ty.value_type(), cls, shadowed) }}
+{%- else -%}
+{% set variants = ty.union_variants() -%}
+{% set pascals = variants | map(attribute="name") | list | idents("pascal", "java", "union `" ~ cls ~ "`") -%}
+{% set ns = namespace(types=[]) -%}
+{% for v in variants -%}
+{% set t = v.type.to_java() -%}
+{% set ns.types = ns.types + [sdk.java_package ~ ".models." ~ t if t in shadowed + ["Empty", "Deserializer"] else t] -%}
+{% endfor -%}
+{% set checks = {
+    "string": "node.isTextual()",
+    "integer": "node.isIntegralNumber()",
+    "number": "node.isNumber()",
+    "boolean": "node.isBoolean()",
+    "array": "node.isArray()",
+    "object": "node.isObject()",
+} -%}
+/**
+ * One of {% for v in variants %}{% if not loop.first %}{{ ", " if not loop.last else " or " }}{% endif %}{% if v.empty %}{@code ""}{% elif v.type.is_schema_ref() %}{@link {{ ns.types[loop.index0] }}}{% else %}a JSON {{ v.json_type }}{% endif %}{% endfor %}, told apart
+ * by JSON type: {@code of...} builds one, {@code is...} and {@code as...} read it.
+ */
+@JsonDeserialize(using = {{ cls }}.Deserializer.class)
+public abstract static class {{ cls }} {
+    private {{ cls }}() {}
+
+    /** The value, as sent. */
+    @JsonValue
+    public abstract Object getValue();
+    {% for v in variants -%}
+    {% set p = pascals[loop.index0] -%}
+    {% set t = ns.types[loop.index0] -%}
+    {% if v.empty %}
+
+    /** The empty string, which clears the value. */
+    public static {{ cls }} empty() {
+        return Empty.INSTANCE;
+    }
+
+    public boolean isEmpty() {
+        return this instanceof Empty;
+    }
+    {% else %}
+
+    public static {{ cls }} of{{ p }}({{ t }} value) {
+        return new Of{{ p }}(Objects.requireNonNull(value, "value"));
+    }
+
+    public boolean is{{ p }}() {
+        return this instanceof Of{{ p }};
+    }
+
+    /** @throws IllegalStateException if this is another variant */
+    public {{ t }} as{{ p }}() {
+        if (this instanceof Of{{ p }}) {
+            return ((Of{{ p }}) this).value;
+        }
+        throw new IllegalStateException("not the {{ v.name }} variant: " + this);
+    }
+    {% endif -%}
+    {% endfor %}
+    {% for v in variants -%}
+    {% set p = pascals[loop.index0] -%}
+    {% set t = ns.types[loop.index0] -%}
+    {% if v.empty %}
+
+    public static final class Empty extends {{ cls }} {
+        private static final Empty INSTANCE = new Empty();
+
+        private Empty() {}
+
+        @Override
+        @JsonValue
+        public String getValue() {
+            return "";
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof Empty;
+        }
+
+        @Override
+        public int hashCode() {
+            return 0;
+        }
+
+        @Override
+        public String toString() {
+            return "{{ cls }}.Empty";
+        }
+    }
+    {% else %}
+
+    public static final class Of{{ p }} extends {{ cls }} {
+        private final {{ t }} value;
+
+        private Of{{ p }}({{ t }} value) {
+            this.value = value;
+        }
+
+        @Override
+        @JsonValue
+        public {{ t }} getValue() {
+            return value;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof Of{{ p }} && value.equals(((Of{{ p }}) o).value);
+        }
+
+        @Override
+        public int hashCode() {
+            return value.hashCode();
+        }
+
+        @Override
+        public String toString() {
+            return "{{ cls }}.Of{{ p }}{" + value + "}";
+        }
+    }
+    {% endif -%}
+    {% endfor %}
+
+    static final class Deserializer extends Utils.UnionDeserializer<{{ cls }}> {
+        private static final long serialVersionUID = 1L;
+
+        Deserializer() {
+            super({{ cls }}.class);
+        }
+
+        @Override
+        protected {{ cls }} decode(JsonNode node, DeserializationContext ctxt) throws IOException {
+            {% for v in variants -%}
+            {% set p = pascals[loop.index0] -%}
+            {% if v.empty -%}
+            if (node.isTextual() && node.textValue().isEmpty()) {
+                return Empty.INSTANCE;
+            }
+            {% else -%}
+            {% set json_type = v.json_type or "object" -%}
+            if ({{ checks[json_type] }}) {
+                return new Of{{ p }}(read(node, ctxt, new TypeReference<{{ ns.types[loop.index0] }}>() {}));
+            }
+            {% endif -%}
+            {% endfor -%}
+            return null;
+        }
+    }
+}
+{% endif -%}
+{%- endmacro %}
+
+{#- fromJson and toJson of `cls`, unchecked from edition 2. -#}
+{% macro json_methods(cls) -%}
+{% if sdk.edition >= 2 -%}
+/**
+ * Parse {@code json} as {@code {{ cls }}}.
+ *
+ * @throws java.io.UncheckedIOException if it is not valid JSON of this shape
+ */
+public static {{ cls }} fromJson(String json) {
+    return Utils.parse(json, {{ cls }}.class);
+}
+
+/** This {{ cls }} as JSON. */
+public String toJson() {
+    return Utils.json(this);
+}
+{%- else -%}
+/**
+ * Parse {@code json} as {@code {{ cls }}}.
+ *
+ * @throws JsonProcessingException if it is not valid JSON of this shape
+ */
+public static {{ cls }} fromJson(String json) throws JsonProcessingException {
+    return Utils.fromJson(json, {{ cls }}.class);
+}
+
+/** This {{ cls }} as JSON. */
+public String toJson() throws JsonProcessingException {
+    return Utils.toJson(this);
+}
 {%- endif %}
 {%- endmacro %}

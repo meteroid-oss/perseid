@@ -12,5 +12,6 @@ namespace {{ sdk.package_name }}.Models;
 {% endif -%}
 public sealed partial record {{ type_name }}
 {
-{% with fields = type.fields, owner = type_name %}{% include "types/fields.cs.jinja" %}{% endwith %}
+{% with fields = type.fields, owner = type_name, union_owner = type_name %}{% include "types/fields.cs.jinja" %}{% endwith %}
 }
+{% with fields = type.fields, union_owner = type_name %}{% include "types/unions.cs.jinja" %}{% endwith %}

@@ -55,6 +55,8 @@ pub fn run(init: Init, root: &Path) -> Result<Vec<PathBuf>> {
         if let Some(url) = base_url {
             toml += &format!("base_url = {url:?}\n");
         }
+        toml += "method_names = \"resource\"\n";
+        toml += &metadata(&doc, root);
         toml
     };
     let existing: toml::Table = toml.parse()?;
@@ -76,11 +78,17 @@ pub fn run(init: Init, root: &Path) -> Result<Vec<PathBuf>> {
         toml += &format!("\n[{language}]\n");
         if language == "go" {
             toml += &format!(
-                "module = \"github.com/{name}/{name}-go\"\ninitialisms = true\npatch_nullable = true\n"
+                "module = \"github.com/{name}/{name}-go\"\ninitialisms = true\npatch_nullable = true\ntyped_unions = true\n"
             );
         }
         if language == "csharp" {
-            toml += "patch_nullable = true\n";
+            toml += "patch_nullable = true\ntyped_unions = true\n";
+        }
+        if ["rust", "typescript", "python"].contains(&language.as_str()) {
+            toml += "typed_unions = true\n";
+        }
+        if language == "java" {
+            toml += "edition = 2\n";
         }
         added = true;
     }
@@ -133,12 +141,14 @@ fn scaffold(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<PathBuf>> {
     let mut context = config.context(sdk, dir);
     let path = context["java_package"].as_str().unwrap().replace('.', "/");
     context["java_package_path"] = path.into();
+    package_metadata(config, &mut context);
     for (path, content) in assets::under(&format!("scaffold/{}", sdk.language)) {
         let target = dir.join(tokens(path, &context)?);
         if target.exists() {
             continue;
         }
-        let content = tokens(std::str::from_utf8(content)?, &context)?;
+        let content = without_unset_metadata(std::str::from_utf8(content)?, &context);
+        let content = tokens(&content, &context)?;
         fsx::write(&target, content.as_bytes())?;
         created.push(target);
     }
@@ -246,6 +256,225 @@ fn release(repo: &Path, packages: &[Package]) -> Result<Vec<PathBuf>> {
     Ok(created)
 }
 
+/// Scaffold tokens of the package metadata, which manifests leave out when unset.
+const METADATA: [&str; 10] = [
+    "LICENSE",
+    "LICENSE_URL",
+    "REPOSITORY",
+    "HOMEPAGE",
+    "PROJECT_URL",
+    "AUTHOR",
+    "AUTHOR_ID",
+    "AUTHOR_NAME",
+    "AUTHORS_JSON",
+    "AUTHORS_PYPROJECT",
+];
+
+/// Metadata values fit for any manifest: one line, without quotes, backslashes or markup.
+fn manifest_text(text: &str) -> String {
+    let text: String = text
+        .chars()
+        .map(|c| match c {
+            '"' => '\'',
+            '\\' | '<' | '>' | '&' => ' ',
+            c if c.is_control() => ' ',
+            c => c,
+        })
+        .collect();
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `Jane Doe <jane@example.com>` as its name and email.
+fn author_parts(author: &str) -> (String, Option<String>) {
+    match author.split_once('<') {
+        Some((name, email)) => (
+            manifest_text(name),
+            Some(manifest_text(email.trim_end_matches('>'))).filter(|e| !e.is_empty()),
+        ),
+        None => (manifest_text(author), None),
+    }
+}
+
+fn package_metadata(config: &Config, context: &mut Value) {
+    let text = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(manifest_text)
+            .filter(|v| !v.is_empty())
+            .map_or(Value::Null, Value::from)
+    };
+    let license = text(&config.license);
+    let project = config
+        .homepage
+        .clone()
+        .or_else(|| config.repository.clone());
+    context["license_url"] = license
+        .as_str()
+        .filter(|l| {
+            !l.starts_with("LicenseRef-")
+                && l.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-.+".contains(&b))
+        })
+        .map_or(Value::Null, |l| {
+            format!("https://spdx.org/licenses/{l}.html").into()
+        });
+    context["license"] = license;
+    context["repository"] = text(&config.repository);
+    context["homepage"] = text(&config.homepage);
+    context["project_url"] = text(&project);
+    context["description"] =
+        manifest_text(context["description"].as_str().unwrap_or_default()).into();
+    let authors: Vec<(String, Option<String>)> = config
+        .authors
+        .iter()
+        .map(|a| author_parts(a))
+        .filter(|(name, _)| !name.is_empty())
+        .collect();
+    let full = |(name, email): &(String, Option<String>)| match email {
+        Some(email) => format!("{name} <{email}>"),
+        None => name.clone(),
+    };
+    context["author"] = authors.first().map_or(Value::Null, |a| full(a).into());
+    context["author_name"] = authors.first().map_or(Value::Null, |a| a.0.clone().into());
+    context["author_id"] = authors
+        .first()
+        .map_or(Value::Null, |a| a.0.to_kebab_case().into());
+    context["authors_names"] = match authors.is_empty() {
+        true => config.name.clone().into(),
+        false => authors
+            .iter()
+            .map(|a| a.0.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+            .into(),
+    };
+    context["authors_json"] = match authors.is_empty() {
+        true => Value::Null,
+        false => serde_json::to_string(&authors.iter().map(full).collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into(),
+    };
+    context["authors_pyproject"] = match authors.is_empty() {
+        true => Value::Null,
+        false => {
+            let entries = authors.iter().map(|(name, email)| match email {
+                Some(email) => format!("{{ name = \"{name}\", email = \"{email}\" }}"),
+                None => format!("{{ name = \"{name}\" }}"),
+            });
+            format!("[{}]", entries.collect::<Vec<_>>().join(", ")).into()
+        }
+    };
+}
+
+/// Drops the lines of `source` holding a metadata token without a value.
+fn without_unset_metadata(source: &str, context: &Value) -> String {
+    let unset = |key: &str| {
+        context
+            .get(key.to_lowercase())
+            .is_none_or(|v| v.is_null() || v.as_str() == Some(""))
+    };
+    let mut out = String::with_capacity(source.len());
+    for line in source.split_inclusive('\n') {
+        let dropped = METADATA
+            .iter()
+            .any(|key| line.contains(&format!("@@{key}@@")) && unset(key));
+        if !dropped {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
+/// The perseid.toml lines of the package metadata the spec and the git remote tell.
+fn metadata(doc: &Value, root: &Path) -> String {
+    let info = &doc["info"];
+    let text = |v: &Value| {
+        v.as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    let mut out = String::new();
+    let mut line = |key: &str, value: Option<String>| {
+        if let Some(value) = value {
+            out += &format!("{key} = {}\n", toml::Value::String(value));
+        }
+    };
+    let description = text(&info["summary"]).or_else(|| {
+        let description = text(&info["description"])?;
+        let markdown = crate::api::html::to_markdown(&description);
+        let first = markdown.split("\n\n").next()?.trim();
+        let first = first.split_inclusive(". ").next().unwrap_or(first).trim();
+        (first.len() <= 200 && !first.starts_with('#')).then(|| manifest_text(first))
+    });
+    line("description", description.filter(|d| !d.is_empty()));
+    let license = text(&info["license"]["identifier"])
+        .or_else(|| text(&info["license"]["name"]).and_then(|n| spdx(&n)));
+    line("license", license);
+    line("repository", git_remote(root));
+    line(
+        "homepage",
+        text(&info["contact"]["url"]).filter(|u| u.starts_with("http")),
+    );
+    let author = text(&info["contact"]["name"]).map(|name| match text(&info["contact"]["email"]) {
+        Some(email) => format!("{name} <{email}>"),
+        None => name,
+    });
+    if let Some(author) = author {
+        out += &format!("authors = [{}]\n", toml::Value::String(author));
+    }
+    out
+}
+
+/// The SPDX identifier of a license name such as `Apache 2.0`.
+fn spdx(name: &str) -> Option<String> {
+    let known = [
+        ("apache 2.0", "Apache-2.0"),
+        ("apache-2.0", "Apache-2.0"),
+        ("apache license 2.0", "Apache-2.0"),
+        ("apache license, version 2.0", "Apache-2.0"),
+        ("mit", "MIT"),
+        ("mit license", "MIT"),
+        ("bsd-3-clause", "BSD-3-Clause"),
+        ("bsd 3-clause", "BSD-3-Clause"),
+        ("isc", "ISC"),
+        ("mpl-2.0", "MPL-2.0"),
+        ("gpl-3.0", "GPL-3.0-only"),
+        ("agpl-3.0", "AGPL-3.0-only"),
+        ("unlicense", "Unlicense"),
+    ];
+    let lower = name.trim().to_lowercase();
+    known
+        .iter()
+        .find(|(n, _)| *n == lower)
+        .map(|(_, id)| (*id).to_owned())
+}
+
+/// The web URL of the `origin` remote of the repository `root` is in, when it is public.
+fn git_remote(root: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["remote", "get-url", "origin"])
+        .current_dir(root)
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    web_url(String::from_utf8(output.stdout).ok()?.trim())
+}
+
+/// `git@github.com:o/r.git` and `https://user@github.com/o/r` as `https://github.com/o/r`.
+fn web_url(remote: &str) -> Option<String> {
+    let (host, path) = match remote.split_once("://") {
+        Some((_, rest)) => rest.split_once('/')?,
+        None => remote.strip_prefix("git@")?.split_once(':')?,
+    };
+    let host = host.rsplit('@').next()?.split(':').next()?;
+    let public = host.contains('.')
+        && host != "localhost"
+        && !host.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    let path = path.trim_end_matches('/').trim_end_matches(".git");
+    (public && !path.is_empty()).then(|| format!("https://{host}/{path}"))
+}
+
 fn name_from_title(doc: &Value) -> String {
     let title = doc["info"]["title"].as_str().unwrap_or("Client");
     let words: Vec<_> = title
@@ -260,5 +489,49 @@ fn name_from_title(doc: &Value) -> String {
             "Client".into()
         }
         name => name,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_remotes_become_web_urls() {
+        let url = |remote| web_url(remote);
+        assert_eq!(
+            url("git@github.com:acme/sdk.git").as_deref(),
+            Some("https://github.com/acme/sdk")
+        );
+        assert_eq!(
+            url("https://token@github.com/acme/sdk").as_deref(),
+            Some("https://github.com/acme/sdk")
+        );
+        assert_eq!(url("http://proxy@127.0.0.1:8080/git/acme/sdk"), None);
+        assert_eq!(url("/tmp/origin.git"), None);
+    }
+
+    #[test]
+    fn metadata_comes_from_the_spec_info() {
+        let doc = serde_json::json!({ "info": {
+            "title": "Acme", "description": "<p>The Acme API. Manage widgets.</p>",
+            "license": { "name": "Apache 2.0" },
+            "contact": { "name": "Acme", "email": "dev@acme.com", "url": "https://acme.com" }
+        }});
+        let toml = metadata(&doc, Path::new("/"));
+        assert_eq!(
+            toml,
+            "description = \"The Acme API.\"\nlicense = \"Apache-2.0\"\nhomepage = \"https://acme.com\"\nauthors = [\"Acme <dev@acme.com>\"]\n"
+        );
+    }
+
+    #[test]
+    fn unset_metadata_lines_are_dropped() {
+        let context = serde_json::json!({ "license": null, "repository": "https://x.dev/r" });
+        let source = "a\nlicense = \"@@LICENSE@@\"\nrepository = \"@@REPOSITORY@@\"\n";
+        assert_eq!(
+            without_unset_metadata(source, &context),
+            "a\nrepository = \"@@REPOSITORY@@\"\n"
+        );
     }
 }

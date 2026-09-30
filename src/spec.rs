@@ -44,6 +44,9 @@ pub struct Filters {
     pub pagination: Vec<crate::config::Pagination>,
     /// Type names the SDK's runtime or language already uses, which schemas are renamed from.
     pub reserved: BTreeSet<String>,
+    pub method_names: crate::config::MethodNames,
+    /// Method names by operation id.
+    pub names: BTreeMap<String, String>,
 }
 
 /// Reads an OpenAPI document (JSON or YAML) from a path or an http(s) URL, as JSON text, upgraded to 3.1 when it is 3.0.

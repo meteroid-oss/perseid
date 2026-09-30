@@ -30,9 +30,109 @@
 {%- endmacro %}
 
 {#- The Go type of a value. Any-JSON (`{}` in the spec) is `json.RawMessage` at
-    any depth: `map[string]any` would reject arrays, scalars and null. -#}
-{% macro go_type(ty) -%}
-    {{ ty.to_go() | replace("map[string]any", "json.RawMessage") | go_name }}
+    any depth: `map[string]any` would reject arrays, scalars and null. A typed
+    union, when `union` names its Go type, is that type. -#}
+{% macro go_type(ty, union=none) -%}
+    {%- if union and ty.is_union() -%}
+        {{ union }}
+    {%- elif union and (ty.is_list() or ty.is_set()) -%}
+        []{{ go_type(ty.inner_type(), union) }}
+    {%- elif union and ty.is_map() -%}
+        map[string]{{ go_type(ty.value_type(), union) }}
+    {%- else -%}
+        {{ ty.to_go() | replace("map[string]any", "json.RawMessage") | go_name }}
+    {%- endif -%}
+{%- endmacro %}
+
+{#- Non-empty when `ty` is a union, or a collection of one, rendered as a type. -#}
+{% macro go_has_union(ty) -%}
+    {%- if ty.is_union() -%}
+        {{ sdk.typed_unions | default(false) }}
+    {%- elif ty.is_list() or ty.is_set() -%}
+        {{ go_has_union(ty.inner_type()) }}
+    {%- elif ty.is_map() -%}
+        {{ go_has_union(ty.value_type()) }}
+    {%- endif -%}
+{%- endmacro %}
+
+{#- The Go type of the union in field `name` of `owner`: `{Owner}{Field}`, with
+    `Item` for the items of a collection. Empty when the field has no typed union. -#}
+{% macro go_union_name(owner, name, ty, type_names) -%}
+    {%- if go_has_union(ty) == "true" -%}
+        {%- set base = (owner | to_upper_camel_case) ~ (name | ident("pascal", "go")) ~ ("" if ty.is_union() else "Item") -%}
+        {{ (base ~ ("Union" if base in type_names else "")) | go_name }}
+    {%- endif -%}
+{%- endmacro %}
+
+{% macro go_union_field(variant) -%}
+    {%- set field = variant.name | ident("pascal", "go") | go_name -%}
+    {{ field ~ ("Variant" if field in ["Raw", "MarshalJSON", "UnmarshalJSON"] else "") }}
+{%- endmacro %}
+
+{#- The declaration of the union `name` found in `ty`: one pointer per variant,
+    decoded by the JSON type of the value. -#}
+{% macro go_union(name, ty) -%}
+{%- if ty.is_list() or ty.is_set() -%}
+{{ go_union(name, ty.inner_type()) }}
+{%- elif ty.is_map() -%}
+{{ go_union(name, ty.value_type()) }}
+{%- else -%}
+{%- set variants = ty.union_variants() %}
+// {{ name }} is one of {% for v in variants %}{% if not loop.first %}{{ " or " if loop.last else ", " }}{% endif %}{% if v.empty %}the empty string{% elif v.type.is_schema_ref() %}{{ go_article(go_type(v.type)) }} [{{ go_type(v.type) }}]{% else %}{{ "an" if v.name[0] in "aeiou" else "a" }} {{ v.name | replace("_", " ") }}{% endif %}{% endfor %}.
+//
+// At most one field is set, and the zero value encodes as null. A value of
+// another JSON type, from a newer API version, is kept as [{{ name }}.Raw].
+type {{ name }} struct {
+{% for v in variants %}{% if v.empty %}	// {{ go_union_field(v) }} reports the empty string.
+	{{ go_union_field(v) }} bool
+{% else %}	{{ go_union_field(v) }} {% if not (v.type.is_list() or v.type.is_set() or v.type.is_map() or v.type.is_json_object()) %}*{% endif %}{{ go_type(v.type) }}
+{% endif %}{% endfor %}
+	raw json.RawMessage
+}
+{% for v in variants %}
+// New{{ name }}{% if v.empty %}Empty returns the empty string {{ name }}.
+func New{{ name }}Empty() {{ name }} {
+	return {{ name }}{ {{ go_union_field(v) }}: true}
+}
+{% else %}From{{ go_union_field(v) }} returns a {{ name }} holding value.
+func New{{ name }}From{{ go_union_field(v) }}(value {{ go_type(v.type) }}) {{ name }} {
+	return {{ name }}{ {{ go_union_field(v) }}: {% if not (v.type.is_list() or v.type.is_set() or v.type.is_map() or v.type.is_json_object()) %}&{% endif %}value}
+}
+{% endif %}{% endfor %}
+// Raw returns the JSON of a value of a type this SDK version does not expect,
+// as decoded, or nil.
+func (u {{ name }}) Raw() json.RawMessage {
+	return append(json.RawMessage(nil), u.raw...)
+}
+
+// MarshalJSON implements json.Marshaler.
+func (u {{ name }}) MarshalJSON() ([]byte, error) {
+	switch {
+{% for v in variants %}	case u.{{ go_union_field(v) }}{% if not v.empty %} != nil{% endif %}:
+		return {% if v.empty %}[]byte(`""`), nil{% else %}json.Marshal(u.{{ go_union_field(v) }}){% endif %}
+{% endfor %}	case len(u.raw) > 0:
+		return u.raw, nil
+	}
+	return []byte("null"), nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (u *{{ name }}) UnmarshalJSON(data []byte) error {
+	*u = {{ name }}{}
+	switch jsonKind(data) {
+	case "null":
+		return nil
+{% for v in variants %}	case "{{ "number" if v.json_type == "integer" else v.json_type }}":
+{% if v.empty %}		if string(data) == `""` {
+			u.{{ go_union_field(v) }} = true
+			return nil
+		}
+{% else %}		return json.Unmarshal(data, &u.{{ go_union_field(v) }})
+{% endif %}{% endfor %}	}
+	u.raw = append(json.RawMessage(nil), data...)
+	return nil
+}
+{%- endif -%}
 {%- endmacro %}
 
 {#- A type or schema name as a Go identifier. -#}
@@ -56,8 +156,20 @@
     nil), required non-nullable collections marshal nil as `[]`/`{}` through
     RequiredSlice/RequiredMap, and optional nullable fields of a PATCH body are
     *Nullable[T] so they can be cleared. -#}
-{% macro go_field_type(field, patch=false) -%}
-    {%- if field.type.is_json_object() -%}
+{% macro go_field_type(field, patch=false, union=none) -%}
+    {%- if union -%}
+        {%- if patch and field.nullable and not field.required -%}
+            *Nullable[{{ go_type(field.type, union) }}]
+        {%- elif field.required and not field.nullable and (field.type.is_list() or field.type.is_set()) -%}
+            RequiredSlice[{{ go_type(field.type.inner_type(), union) }}]
+        {%- elif field.required and not field.nullable and field.type.is_map() -%}
+            RequiredMap[{{ go_type(field.type.value_type(), union) }}]
+        {%- elif (field.required and not field.nullable) or not field.type.is_union() -%}
+            {{ go_type(field.type, union) }}
+        {%- else -%}
+            *{{ union }}
+        {%- endif -%}
+    {%- elif field.type.is_json_object() -%}
         json.RawMessage
     {%- elif patch and field.nullable and not field.required -%}
         *Nullable[{{ go_type(field.type) }}]
@@ -141,4 +253,14 @@
 
 {% macro go_strings(values) -%}
 []string{ {%- for v in values %}{% if not loop.first %}, {% endif %}"{{ v }}"{% endfor -%} }
+{%- endmacro %}
+
+{#- A resource name in prose, without a trailing "api" that the text adds. -#}
+{% macro go_words(name) -%}
+    {%- set words = name | to_snake_case | replace("_", " ") -%}
+    {{ words[:-4] if words is endingwith(" api") else words }}
+{%- endmacro %}
+
+{% macro go_article(word) -%}
+    {{ "an" if word[0] in "AEIOU" else "a" }}
 {%- endmacro %}

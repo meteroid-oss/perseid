@@ -22,7 +22,8 @@ public class ApiException : Exception
 
     public HttpResponseHeaders Headers { get; }
 
-    /// <summary>Called by the SDK for every error response: return a subclass to map specific errors.</summary>
+    /// <summary>Called by the SDK for every error response: return a subclass to map specific errors.
+    /// A plain <see cref="ApiException"/> becomes the status class, such as <see cref="NotFoundException"/>.</summary>
     internal static ApiException FromResponse(
         HttpStatusCode statusCode,
         string body,

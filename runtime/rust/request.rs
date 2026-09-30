@@ -20,7 +20,7 @@ use crate::api::{
     auth_schemes::Security,
     middleware::{BoxError, Next, Request as MiddlewareRequest, Response},
     upload::{Multipart, RequestBody},
-    EventStream, Upload,
+    EventStream, RequestOptions, Upload,
 };
 use crate::{error::Error, Configuration};
 
@@ -136,6 +136,9 @@ pub(crate) struct Request {
     multipart: Option<Multipart>,
     error: Option<Error>,
     security: Option<Security>,
+    overrides: HeaderMap,
+    timeout: Option<Option<Duration>>,
+    max_retries: Option<u32>,
 }
 
 impl Request {
@@ -153,7 +156,33 @@ impl Request {
             multipart: None,
             error: None,
             security: None,
+            overrides: HeaderMap::new(),
+            timeout: None,
+            max_retries: None,
         }
+    }
+
+    /// Applies the settings of one call. Its headers win over every other header.
+    pub fn with_options(mut self, options: &RequestOptions) -> Self {
+        for (name, value) in &options.headers {
+            match header(name, value) {
+                Ok((name, value)) => {
+                    self.overrides.append(name, value);
+                }
+                Err(error) => self.fail(error),
+            }
+        }
+        if let Some(key) = &options.idempotency_key {
+            match header(IDEMPOTENCY_KEY, key) {
+                Ok((name, value)) => {
+                    self.headers.insert(name, value);
+                }
+                Err(error) => self.fail(error),
+            }
+        }
+        self.timeout = options.timeout.or(self.timeout);
+        self.max_retries = options.max_retries.or(self.max_retries);
+        self
     }
 
     fn fail(&mut self, error: impl Into<BoxError>) {
@@ -221,11 +250,7 @@ impl Request {
     }
 
     pub fn with_header_param(mut self, name: &'static str, value: String) -> Self {
-        let name = HeaderName::from_bytes(name.as_bytes());
-        match name.map_err(BoxError::from).and_then(|name| {
-            let value = HeaderValue::try_from(value)?;
-            Ok((name, value))
-        }) {
+        match header(name, &value) {
             Ok((name, value)) => {
                 self.headers.insert(name, value);
             }
@@ -358,6 +383,12 @@ impl Request {
             value.set_sensitive(true);
             self.headers.insert(name, value);
         }
+        for name in self.overrides.keys() {
+            self.headers.remove(name);
+        }
+        for (name, value) in &self.overrides {
+            self.headers.append(name, value.clone());
+        }
         if self.method == Method::POST && !self.headers.contains_key(IDEMPOTENCY_KEY) {
             let key = format!("auto_{}", uuid::Uuid::new_v4());
             self.headers
@@ -371,9 +402,10 @@ impl Request {
         let idempotent = self.method.is_idempotent() || self.headers.contains_key(IDEMPOTENCY_KEY);
         let replayable = self.upload.as_ref().is_none_or(Upload::replayable)
             && self.multipart.as_ref().is_none_or(Multipart::replayable);
-        let max_retries = match &conf.retry_schedule {
-            Some(schedule) => schedule.len(),
-            None => conf.num_retries as usize,
+        let max_retries = match (self.max_retries, &conf.retry_schedule) {
+            (Some(max_retries), _) => max_retries as usize,
+            (None, Some(schedule)) => schedule.len(),
+            (None, None) => conf.num_retries as usize,
         };
         let mut retries = 0;
         loop {
@@ -417,7 +449,7 @@ impl Request {
                 false => Attempt::Status(status, headers, body),
             })
         };
-        let result = match conf.timeout {
+        let result = match self.timeout.unwrap_or(conf.timeout) {
             Some(timeout) => tokio::time::timeout(timeout, exchange)
                 .await
                 .unwrap_or(Err(Failure::Timeout)),
@@ -478,11 +510,18 @@ impl Request {
         if let Some(user_agent) = &conf.user_agent {
             headers.insert(USER_AGENT, HeaderValue::try_from(user_agent)?);
         }
+        for name in self.headers.keys() {
+            headers.remove(name);
+        }
         for (name, value) in &self.headers {
-            headers.insert(name, value.clone());
+            headers.append(name, value.clone());
         }
         Ok(request)
     }
+}
+
+fn header(name: &str, value: &str) -> Result<(HeaderName, HeaderValue), BoxError> {
+    Ok((HeaderName::from_bytes(name.as_bytes())?, HeaderValue::try_from(value)?))
 }
 
 fn open_event_stream(response: Response) -> Result<ResponseBody, Failure> {

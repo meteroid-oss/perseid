@@ -44,22 +44,23 @@ first_page = 0
 iterator next to the list method:
 
 ```ts
-for await (const customer of client.customers.listCustomersIter({ perPage: 100 })) { ... }
+for await (const customer of client.customers.listIter({ perPage: 100 })) { ... }
 ```
 
 ```python
-for customer in client.customers.list_customers_iter(per_page=100): ...
-async for customer in async_client.customers.list_customers_iter(): ...
+for customer in client.customers.list_iter(per_page=100): ...
+async for customer in async_client.customers.list_iter(): ...
 ```
 
 ```go
-pager := client.Customers().ListCustomersIter(ctx, nil)
+pager := client.Customers().ListIter(ctx, nil)
 for pager.Next() { customer := pager.Current() }   // or range over pager.All() with Go 1.23+
 ```
 
-Rust has `let mut customers = client.customers().list_customers_iter(None); customers.next().await`,
-Java a `Paginator<Customer>` from `listCustomersIter()` that is `Iterable` and has `stream()`, C# an
-`IAsyncEnumerable<Customer>` from `ListCustomersIterAsync()` for `await foreach`.
+Rust has `let mut customers = client.customers().list_iter(None); customers.next().await`
+(also a `Stream`),
+Java a `Paginator<Customer>` from `listIter()` that is `Iterable` and has `stream()`, C# an
+`IAsyncEnumerable<Customer>` from `ListIterAsync()` for `await foreach`.
 
 ## Streaming
 
