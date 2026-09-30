@@ -68,8 +68,9 @@ jobs:
             gh release create "$TAG" --verify-tag --generate-notes perseid-*.tar.gz SHA256SUMS
           fi
 
+  # After the GitHub release, whose archives the npm launcher downloads.
   npm:
-    needs: build
+    needs: publish
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -91,13 +92,11 @@ jobs:
       - run: |
           version="${TAG#v}"
           npm/stage.sh "$version" dist staged
-          for package in perseid-linux-x64 perseid-linux-arm64 perseid-darwin-x64 perseid-darwin-arm64 perseid; do
-            if [ -n "$(npm view "$package@$version" version 2>/dev/null)" ]; then
-              echo "$package@$version is already published"
-            else
-              npm publish "./staged/$package" --provenance --access public
-            fi
-          done
+          if [ -n "$(npm view "perseid@$version" version 2>/dev/null)" ]; then
+            echo "perseid@$version is already published"
+          else
+            npm publish ./staged --provenance --access public
+          fi
 
   image:
     strategy:

@@ -180,10 +180,10 @@ That is only safe while the SDKs accept unknown enum values, which generated SDK
   that trigger no workflow, so nothing would be released or published.
 
 **Perseid's own releases** are dispatched by `release-please.yml` to `release.yml`, which publishes
-the binaries to GitHub, ghcr.io and npm with trusted publishing, no stored tokens. The one-time
-setup registers `release.yml` of `meteroid-oss/perseid` as the trusted publisher of `perseid`,
-`perseid-linux-x64`, `perseid-linux-arm64`, `perseid-darwin-x64` and `perseid-darwin-arm64` on npm
-(a package must exist first: publish a placeholder version once).
+the binaries to GitHub and ghcr.io, and the `perseid` npm package with trusted publishing (register
+`release.yml` of `meteroid-oss/perseid` as its trusted publisher once). The package holds no binary:
+on first run it downloads the release archive for its version, checks it against the checksums
+published with it, and caches it.
 
 ## Formatting
 
