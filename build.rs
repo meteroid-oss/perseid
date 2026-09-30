@@ -26,7 +26,10 @@ fn main() {
         .map(|path| {
             let absolute = fs::canonicalize(path).unwrap();
             // `cargo package` drops directories holding a Cargo.toml, so scaffolds ship it as Cargo.toml.in.
-            let key = path.to_str().unwrap().replace("Cargo.toml.in", "Cargo.toml");
+            let key = path
+                .to_str()
+                .unwrap()
+                .replace("Cargo.toml.in", "Cargo.toml");
             format!("({key:?}, include_bytes!({absolute:?})),\n")
         })
         .collect();
