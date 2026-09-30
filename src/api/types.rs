@@ -272,7 +272,7 @@ fn decide_objects(
     variants: &mut [UnionVariant],
     shapes: &BTreeMap<String, Option<Vec<unions::Property>>>,
 ) -> Option<UnionMode> {
-    let (objects, others): (Vec<_>, Vec<_>) =
+    let (mut objects, others): (Vec<_>, Vec<_>) =
         variants.iter_mut().partition(|v| v.json_type == "object");
     let others: Vec<UnionVariant> = others.into_iter().map(|v| v.clone()).collect();
     if objects.len() < 2 || !distinct_json_types(&others) {
@@ -285,7 +285,6 @@ fn decide_objects(
             _ => None,
         })
         .collect::<Option<Vec<_>>>()?;
-    let mut objects = objects;
     match unions::infer(&object_shapes) {
         Some(rules) => {
             for (variant, (rank, when)) in objects.iter_mut().zip(rules) {
@@ -535,8 +534,6 @@ fn resolve_schema_ref_in_field_type(
     }
 }
 
-/// Replaces the embedded `allOf` parts of every struct by their fields, for targets that
-/// cannot flatten a nested object when (de)serializing.
 /// See [`super::Api::settle_object_unions`].
 pub(crate) fn settle_object_unions(
     types: &mut Types,
@@ -558,6 +555,8 @@ pub(crate) fn untype_unions(types: &mut Types) {
     }
 }
 
+/// Replaces the embedded `allOf` parts of every struct by their fields, for targets that
+/// cannot flatten a nested object when (de)serializing.
 pub(crate) fn inline_flattened_fields(types: &mut Types) -> anyhow::Result<()> {
     let snapshot = types.clone();
     for (name, ty) in types.iter_mut() {
@@ -1892,11 +1891,10 @@ impl FieldType {
                     && variants.len() > 1
                     && distinct_json_types(&variants)
                 {
-                    let mode = UnionMode::Json;
                     return Ok((
                         Self::Union {
                             variants,
-                            mode,
+                            mode: UnionMode::Json,
                             requested,
                         },
                         nullable,
