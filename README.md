@@ -9,11 +9,13 @@ and land as pull requests, in one repository or one per language.
 One static binary, running in your CI: an open-source and headless alternative to Fern, Speakeasy and Stainless.
 
 ```sh
-curl -fsSL https://sh.meteroid.com/perseid | sh
-
-perseid init       # finds openapi.json, writes perseid.toml and package skeletons
-perseid generate   # formatted SDKs for every language, in seconds
+npx perseid init       # finds openapi.json, writes perseid.toml and package skeletons
+npx perseid generate   # formatted SDKs for every language, in seconds
 ```
+
+Or install it: `curl -fsSL https://sh.meteroid.com/perseid | sh`. Also on PyPI (`uvx perseid`,
+`pipx run perseid`), crates.io (`cargo binstall perseid`, `cargo install perseid`) and as the
+`ghcr.io/meteroid-oss/perseid` image. Linux and macOS, x64 and arm64.
 
 ```ts
 const petstore = new Petstore("sk_live_...");

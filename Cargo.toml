@@ -9,6 +9,21 @@ readme = "README.md"
 keywords = ["openapi", "sdk", "codegen", "api", "generator"]
 categories = ["development-tools", "command-line-utilities"]
 repository = "https://github.com/meteroid-oss/perseid"
+include = [
+  "/src",
+  "/build.rs",
+  "/templates",
+  "/runtime",
+  "/scaffold",
+  "/README.md",
+  "/LICENSE*",
+  "/NOTICE",
+]
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/perseid-{ target }.tar.gz"
+pkg-fmt = "tgz"
+bin-dir = "perseid{ binary-ext }"
 
 [dependencies]
 aide = "0.14.1"

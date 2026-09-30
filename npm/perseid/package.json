@@ -1,0 +1,25 @@
+{
+  "name": "perseid",
+  "version": "0.0.0",
+  "description": "OpenAPI in, idiomatic SDKs out: Rust, TypeScript, Python, Go, Java and C# from one static binary",
+  "keywords": ["openapi", "sdk", "codegen", "api", "generator"],
+  "homepage": "https://github.com/meteroid-oss/perseid",
+  "license": "Apache-2.0 AND MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meteroid-oss/perseid.git"
+  },
+  "bin": {
+    "perseid": "bin/perseid.js"
+  },
+  "files": ["bin/perseid.js", "LICENSE*", "NOTICE"],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "perseid-linux-x64": "0.0.0",
+    "perseid-linux-arm64": "0.0.0",
+    "perseid-darwin-x64": "0.0.0",
+    "perseid-darwin-arm64": "0.0.0"
+  }
+}

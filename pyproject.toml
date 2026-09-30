@@ -1,0 +1,26 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "perseid"
+description = "OpenAPI in, idiomatic SDKs out: Rust, TypeScript, Python, Go and Java from one static binary"
+readme = "README.md"
+license = "Apache-2.0 AND MIT"
+license-files = ["LICENSE", "LICENSE-Meteroid", "LICENSE-Svix", "NOTICE"]
+requires-python = ">=3.8"
+keywords = ["openapi", "sdk", "codegen", "api", "generator"]
+classifiers = [
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Rust",
+  "Topic :: Software Development :: Code Generators",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/meteroid-oss/perseid"
+Changelog = "https://github.com/meteroid-oss/perseid/blob/main/CHANGELOG.md"
+
+[tool.maturin]
+bindings = "bin"

@@ -179,6 +179,14 @@ That is only safe while the SDKs accept unknown enum values, which generated SDK
   or a personal access token): auto-merges enabled with the default `GITHUB_TOKEN` push commits
   that trigger no workflow, so nothing would be released or published.
 
+**Perseid's own releases** are dispatched by `release-please.yml` to `release.yml`, which publishes
+the binaries to GitHub, ghcr.io, npm, PyPI and crates.io with trusted publishing, no stored tokens.
+The one-time setup registers `release.yml` of `meteroid-oss/perseid` as the trusted publisher of
+`perseid`, `perseid-linux-x64`, `perseid-linux-arm64`, `perseid-darwin-x64` and
+`perseid-darwin-arm64` on npm (a package must exist first: publish a placeholder version once), as
+a pending publisher for `perseid` on PyPI, and for the `perseid` crate on crates.io, after a first
+manual `cargo publish`.
+
 ## Formatting
 
 Output goes through `rustfmt`, `biome`, `ruff`, `gofmt`, `google-java-format` and `csharpier`,
