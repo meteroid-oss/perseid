@@ -8,13 +8,22 @@ and land as pull requests, in one repository or one per language.
 
 One static binary, running in your CI: an open-source and headless alternative to Fern, Speakeasy and Stainless.
 
+## Get started
+
+In the repository holding your `openapi.json`:
+
 ```sh
-npx perseid init       # finds openapi.json, writes perseid.toml and package skeletons
-npx perseid generate   # formatted SDKs for every language, in seconds
+npx perseid init --github
 ```
 
-Or install it: `curl -fsSL https://sh.meteroid.com/perseid | sh`, also available as the
-`ghcr.io/meteroid-oss/perseid` image. Linux and macOS, x64 and arm64.
+It generates the SDKs, creates their repositories, sets up a GitHub App and opens a pull request
+with the workflow. Merge it, and every spec change lands as SDK pull requests, then releases.
+
+Just trying it? `npx perseid init && npx perseid generate` writes the SDKs locally. Also installable
+with `curl -fsSL https://sh.meteroid.com/perseid | sh` or as the `ghcr.io/meteroid-oss/perseid`
+image; Linux and macOS, x64 and arm64.
+
+What your users get:
 
 ```ts
 const petstore = new Petstore("sk_live_...");
@@ -49,25 +58,9 @@ It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients),
 
 ## In your CI
 
-```yaml
-# .github/workflows/sdks.yml in the repository that owns openapi.json
-on:
-  push:
-    branches: [main]
-    paths: [openapi.json, perseid.toml]
-jobs:
-  sdks:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: meteroid-oss/perseid@v0
-        with:
-          token: ${{ secrets.SDK_TOKEN }}   # contents + pull requests write on the SDK repositories
-```
-
-`perseid init --github` sets this up: SDK repositories, a GitHub App for the token, and this workflow.
-
-Self-hosted runners and other CIs can use `ghcr.io/meteroid-oss/perseid`, which bundles every pinned formatter.
+`perseid init --github` writes the workflow for you: it runs the `meteroid-oss/perseid@v0` Action
+on every spec change. To set it up by hand, or on self-hosted runners and other CIs with the
+`ghcr.io/meteroid-oss/perseid` image, see [CI and releases](docs/ci.md).
 
 ## Docs
 

@@ -25,6 +25,14 @@ fails on drift. See [Tokens](#tokens) for which `token` to pass.
 
 ## Quick setup: `perseid init --github`
 
+You need:
+
+- Node 18+ for `npx perseid`, or the `curl` install;
+- on the account that will own the SDK repositories: permission to create repositories and, in an
+  organization, to create GitHub Apps (organization owner or GitHub App manager);
+- for each SDK you publish, an account on its registry (npm, PyPI, crates.io, Maven Central,
+  NuGet) to set up trusted publishing at the end.
+
 Run in a clone of the repository holding the spec, `perseid init --github` sets up everything
 [Tokens](#tokens) describes, with a GitHub App, so that pushing a spec change opens SDK pull requests:
 
