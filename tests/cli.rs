@@ -1398,6 +1398,7 @@ fn java_edition_2_is_unchecked_and_hides_plumbing() {
         "{pets}"
     );
     assert!(read("exceptions/ApiException.java").contains("extends RuntimeException"));
+    assert!(read("models/PetStatus.java").contains("public final class PetStatus"));
 
     let text = fs::read_to_string(&config).unwrap();
     fs::write(&config, text.replace("edition = 2", "edition = 1")).unwrap();
@@ -1406,6 +1407,10 @@ fn java_edition_2_is_unchecked_and_hides_plumbing() {
     assert!(!root.join("internal/Utils.java").exists());
     assert!(read("PetstoreHttpClient.java").contains("package com.petstore;"));
     assert!(read("api/Pets.java").contains("throws IOException, ApiException"));
+    // Enums stay Java enums: an open enum class would break `switch` statements.
+    assert!(
+        read("models/PetStatus.java").contains("public enum PetStatus implements ToQueryParam")
+    );
 }
 
 #[test]

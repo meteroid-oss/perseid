@@ -63,7 +63,7 @@
 private {{ ty }} {{ var }};
 {% else -%}
 {% if default is not none -%}
-{% set value = default | tojson if ty == "String" else ty ~ ".of(" ~ (default | tojson) ~ ")" -%}
+{% set value = default | tojson if ty == "String" else ty ~ (".of(" if sdk.edition >= 2 else ".fromValue(") ~ (default | tojson) ~ ")" -%}
 {% set init = " = " ~ ("Optional.of(" ~ value ~ ")" if is_optional(field) else value) -%}
 {% endif -%}
 @JsonProperty({{ field.name | tojson }})

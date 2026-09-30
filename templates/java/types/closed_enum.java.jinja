@@ -1,0 +1,46 @@
+{#- An enum of edition 1: `members` name `values` (Java literals), then the unknown member, which
+    serializes as null. Edition 2 renders `open_enum.java.jinja` instead. -#}
+{% set value_ty = "Long" if integer is defined else "String" -%}
+package {{ sdk.java_package }}.models;
+
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonValue;
+import {{ sdk.java_internal_package }}.Utils.ToQueryParam;
+
+{% if type.description is defined -%}
+{{ type.description | e | to_doc_comment(style="java") }}
+{% endif -%}
+public enum {{ ty_name }} implements ToQueryParam {
+    {% for value in values -%}
+    {{ members[loop.index0] }}({{ value }}),
+    {% endfor -%}
+    /** A value this version of the SDK does not know, which serializes as null. */
+    {{ unknown }}(null);
+
+    private final {{ value_ty }} value;
+
+    {{ ty_name }}({{ value_ty }} value) {
+        this.value = value;
+    }
+
+    @JsonValue
+    public {{ value_ty }} getValue() {
+        return this.value;
+    }
+
+    /** The constant for {@code value}, or {@link #{{ unknown }}} for an unknown value. */
+    @JsonCreator
+    public static {{ ty_name }} fromValue({{ "long" if integer is defined else "String" }} value) {
+        for ({{ ty_name }} known : values()) {
+            if (known.value != null && {% if integer is defined %}known.value == value{% else %}known.value.equals(value){% endif %}) {
+                return known;
+            }
+        }
+        return {{ unknown }};
+    }
+
+    @Override
+    public String toQueryParam() {
+        return {% if integer is defined %}String.valueOf(this.value){% else %}this.value{% endif %};
+    }
+}

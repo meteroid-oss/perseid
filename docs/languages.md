@@ -77,15 +77,15 @@ and editors look for.
 
 ## Java
 
-Plain classes with explicit accessors, OkHttp underneath. Enums are classes with a constant per
-value: an unknown value is kept and sent back unchanged, `isKnown()` tells it apart and `known()`
-returns an enum to `switch` on. `x(null)` sends an explicit `null` for optional nullable fields.
+Plain classes with explicit accessors, OkHttp underneath. Enums are Java enums whose unknown
+values parse as `UNRECOGNIZED`. `x(null)` sends an explicit `null` for optional nullable fields.
 Every method has an overload taking a `RequestOptions` (headers, timeout, max retries,
 idempotency key) last. Errors are `ApiException`s, with a subclass per common status
 (`NotFoundException`, `RateLimitException`...) and `ApiConnectionException`/`ApiTimeoutException`
 when no response came; `getError(Type.class)` parses the body as the schema the operation declares.
-With `edition = 2`, which `init` sets, exceptions are unchecked, unions of a primitive and an
-object are typed (`Charge.ChargeCustomer.ofString("cus_1")`), and plumbing lives in an `internal`
+With `edition = 2`, which `init` sets, exceptions are unchecked, enums are classes with a constant
+per value (an unknown value is kept and sent back unchanged, `isKnown()` tells it apart and
+`known()` returns an enum to `switch` on), unions of a primitive and an object are typed (`Charge.ChargeCustomer.ofString("cus_1")`), and plumbing lives in an `internal`
 package.
 
 ## C#

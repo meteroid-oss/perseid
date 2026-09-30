@@ -56,8 +56,8 @@ Language-specific keys:
   (default, exact up to 2^53), `"bigint"` or `"string"`.
 - `[csharp]`: with `patch_nullable = true`, nullable optional PATCH fields are `MaybeUnset<T>`.
 - `[java]`: `edition = 2` makes exceptions unchecked (no `throws IOException, ApiException`),
-  types primitive-or-object unions as classes, and moves the HTTP client and `Utils` to an
-  `internal` package. The scaffolded `ApiException` must extend `RuntimeException`.
+  enums classes that keep unknown values, types primitive-or-object unions as classes, and moves
+  the HTTP client and `Utils` to an `internal` package. The scaffolded `ApiException` must extend `RuntimeException`.
 - `[python.context]`: `flat_unions = true` types unions as `Circle | Square` instead of a wrapper model.
 
 `perseid init` turns on `method_names = "resource"`, `initialisms`, `typed_unions`,
