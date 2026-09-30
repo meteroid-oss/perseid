@@ -87,7 +87,7 @@ def apply_auth(
         else:
             key = cfg.api_keys.get(name) or cfg.bearer_access_token or ""
             if scheme.location == "query":
-                request_kwargs.setdefault("params", {})[scheme.param] = key
+                request_kwargs.setdefault("params", []).append((scheme.param, key))
             elif scheme.location == "cookie":
                 cookie = f"{scheme.param}={key}"
                 headers["cookie"] = f"{headers['cookie']}; {cookie}" if "cookie" in headers else cookie

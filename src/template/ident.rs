@@ -20,6 +20,8 @@ const PYTHON: &[&str] = &[
     "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import",
     "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while",
     "with", "yield", "match", "case",
+    // Not keywords, but names that linters reject as ambiguous (E741).
+    "I", "O", "l",
 ];
 const GO: &[&str] = &[
     "break",

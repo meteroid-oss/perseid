@@ -95,12 +95,13 @@ func TestSmokeStreaming(t *testing.T) {
 		Name:  "doc",
 		Count: &count,
 		Meta:  &Health{Status: "ok"},
+		Tags:  []string{"a", "b"},
 	}
 	uploaded, err := client.Streaming().UploadFile(ctx, body)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expect(t, uploaded.Status, `count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc`)
+	expect(t, uploaded.Status, `count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc;tags=::a;tags=::b`)
 	content, err := client.Streaming().UploadContent(ctx, "f1", strings.NewReader("raw"))
 	if err != nil {
 		t.Fatal(err)
@@ -111,4 +112,44 @@ func TestSmokeStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect(t, piped.Status, "application/octet-stream:piped")
+}
+
+func TestSmokeWire(t *testing.T) {
+	ctx := context.Background()
+	wire := New("tok", &Options{ServerURL: os.Getenv("FEATURES_URL")}).Wire()
+	status := func(health *Health, err error) string {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return health.Status
+	}
+	search := &WireSearchOptions{
+		Filter:   &Filter{Status: Ptr("open"), Amount: &FilterAmount{Gte: Ptr[int64](5)}},
+		Expand:   []string{"a", "b"},
+		Metadata: map[string]string{"k": "v"},
+		IDs:      []byte(`["x", "y"]`),
+		Tags:     []string{"t1", "t2"},
+		Range:    &SearchRange{Gte: Ptr[int64](1), Lt: Ptr[int64](9)},
+	}
+	expect(t, status(wire.Search(ctx, search)),
+		"expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y"+
+			"&metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2")
+	charge := Charge{
+		Amount:   100,
+		Capture:  Ptr(true),
+		Metadata: map[string]string{"order": "7"},
+		Items:    []ChargeItemsItem{{Price: "p1", Quantity: Ptr[int64](2)}, {Price: "p2"}},
+		Expand:   []string{"customer"},
+		Statuses: []string{"a", "b"},
+		Codes:    []string{"c1", "c2"},
+		Shipping: &ChargeShipping{Address: &ChargeShippingAddress{Line1: Ptr("1 Main"), City: Ptr("Paris")}},
+	}
+	expect(t, status(wire.CreateCharge(ctx, charge)),
+		"application/x-www-form-urlencoded|amount=100&capture=true&codes=c1,c2&expand[]=customer"+
+			"&items[0][price]=p1&items[0][quantity]=2&items[1][price]=p2&metadata[order]=7"+
+			"&shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b")
+	beta := &WireBetaSearchOptions{Limit: Ptr[int32](2), Features: Ptr("x,y")}
+	expect(t, status(wire.BetaSearch(ctx, beta)), "beta=true&limit=2|features=x,y")
+	expect(t, status(wire.PutImage(ctx, "42", strings.NewReader("png"))), "42:image/png:png")
 }

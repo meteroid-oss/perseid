@@ -141,6 +141,7 @@ paths:
                 name: { type: string }
                 count: { type: integer, format: int32 }
                 meta: { $ref: '#/components/schemas/Health' }
+                tags: { type: array, items: { type: string } }
       responses:
         '200':
           description: ok
@@ -161,6 +162,104 @@ paths:
       responses:
         '200':
           description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /wire/search:
+    get:
+      operationId: search
+      tags: [wire]
+      parameters:
+        - name: filter
+          in: query
+          style: deepObject
+          explode: true
+          schema: { $ref: '#/components/schemas/Filter' }
+        - name: expand
+          in: query
+          style: deepObject
+          schema: { type: array, items: { type: string } }
+        - name: metadata
+          in: query
+          schema: { type: object, additionalProperties: { type: string } }
+        - name: ids
+          in: query
+          schema:
+            oneOf:
+              - { type: string }
+              - { type: array, items: { type: string } }
+        - name: tags
+          in: query
+          explode: false
+          schema: { type: array, items: { type: string } }
+        - name: range
+          in: query
+          style: deepObject
+          schema:
+            type: object
+            properties:
+              gte: { type: integer }
+              lt: { type: integer }
+      responses:
+        '200':
+          description: the query as the server read it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /wire/charges:
+    post:
+      operationId: create_charge
+      tags: [wire]
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema: { $ref: '#/components/schemas/Charge' }
+            encoding:
+              expand: { style: deepObject, explode: true }
+              shipping: { style: deepObject, explode: true }
+              codes: { style: form, explode: false }
+      responses:
+        '200':
+          description: the body as the server read it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /wire/beta?beta=true:
+    get:
+      operationId: beta_search
+      tags: [wire]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, format: int32 } }
+        - name: features
+          in: header
+          schema: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: the query as the server read it
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /wire/images/{image_id}:
+    put:
+      operationId: put_image
+      tags: [wire]
+      parameters:
+        - name: image_id
+          in: path
+          required: true
+          schema:
+            anyOf:
+              - { type: integer }
+              - { type: string }
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: the body as the server read it
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
@@ -252,3 +351,38 @@ components:
       required: [status]
       properties:
         status: { type: string }
+    Filter:
+      type: object
+      properties:
+        status: { type: string }
+        amount:
+          type: object
+          properties:
+            gte: { type: integer }
+    Charge:
+      type: object
+      required: [id, amount]
+      properties:
+        id: { type: string, readOnly: true }
+        amount: { type: integer }
+        capture: { type: boolean }
+        metadata: { type: object, additionalProperties: { type: string } }
+        items:
+          type: array
+          items:
+            type: object
+            required: [price]
+            properties:
+              price: { type: string }
+              quantity: { type: integer }
+        expand: { type: array, items: { type: string } }
+        statuses: { type: array, items: { type: string } }
+        codes: { type: array, items: { type: string } }
+        shipping:
+          type: object
+          properties:
+            address:
+              type: object
+              properties:
+                line1: { type: string }
+                city: { type: string }

@@ -6,7 +6,7 @@ Prints its base URL on the first line of stdout, then serves until killed.
 import json
 from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, parse_qsl, urlparse
 
 WIDGETS = {None: (["w1", "w2"], "c2"), "c2": (["w3"], None)}
 EVENTS = {None: (["e1", "e2"], True), "e2": (["e3"], False)}
@@ -18,6 +18,12 @@ STREAM = (
     "data: line1\ndata: line2\n\n"
     "id: 3\r\nretry: 1500\r\ndata: {\"n\": 3}\r\n\r\n"
 )
+
+
+def pairs(encoded):
+    """Decoded `name=value` pairs by name, repeated names in the order they were sent."""
+    decoded = sorted(parse_qsl(encoded, keep_blank_values=True), key=lambda pair: pair[0])
+    return "&".join(f"{k}={v}" for k, v in decoded)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -87,6 +93,18 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/files/f1/content":
             body = self.body().decode()
             return self.reply(200, {"status": f"{self.headers['content-type']}:{body}"})
+        if path in ("/wire/search", "/wire/beta"):
+            status = pairs(url.query)
+            if "features" in self.headers:
+                status += f"|features={self.headers['features']}"
+            return self.reply(200, {"status": status})
+        if path == "/wire/charges":
+            kind = self.headers.get("content-type", "").split(";")[0]
+            return self.reply(200, {"status": f"{kind}|{pairs(self.body().decode())}"})
+        if path.startswith("/wire/images/"):
+            image = path.rsplit("/", 1)[1]
+            body = self.body().decode()
+            return self.reply(200, {"status": f"{image}:{self.headers['content-type']}:{body}"})
         if path in ("/health", "/session", "/machine"):
             return self.reply(200, {"status": self.auth()})
         if path == "/widgets":

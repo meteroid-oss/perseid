@@ -1,0 +1,83 @@
+name: Real-world specs
+# Generates and compiles SDKs from large published specs, off the pull request path: they
+# change without notice and take a while to build.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 4 * * 1'
+permissions:
+  contents: read
+jobs:
+  sdk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        spec: [stripe, github, openai]
+        language: [rust, typescript, python, go, java, csharp]
+        include:
+          - spec: stripe
+            url: https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json
+            exclude: '"PostFiles"'
+          - spec: github
+            url: https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json
+            exclude: ''
+          - spec: openai
+            url: https://raw.githubusercontent.com/openai/openai-openapi/master/openapi.yaml
+            exclude: '"create-realtime-call"'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - if: matrix.language == 'go'
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - if: matrix.language == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - if: matrix.language == 'java'
+        uses: gradle/actions/setup-gradle@v4
+      - if: matrix.language == 'python'
+        uses: astral-sh/setup-uv@v6
+      - if: matrix.language == 'csharp'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: cargo install --locked --path . --root "$RUNNER_TEMP/perseid"
+      - name: Generate
+        working-directory: ${{ runner.temp }}
+        env:
+          SPEC_URL: ${{ matrix.url }}
+          EXCLUDE: ${{ matrix.exclude }}
+          LANGUAGE: ${{ matrix.language }}
+        run: |
+          mkdir sdk && cd sdk
+          "$RUNNER_TEMP/perseid/bin/perseid" init --no-release --spec "$SPEC_URL" "$LANGUAGE"
+          sed -i "1i exclude = [$EXCLUDE]" perseid.toml
+          "$RUNNER_TEMP/perseid/bin/perseid" generate --no-format
+          "$RUNNER_TEMP/perseid/bin/perseid" generate --no-format --check
+      - if: matrix.language == 'rust'
+        working-directory: ${{ runner.temp }}/sdk/rust
+        run: cargo check
+      - if: matrix.language == 'typescript'
+        working-directory: ${{ runner.temp }}/sdk/typescript
+        run: npm install --no-audit --no-fund && npx tsc --noEmit
+      - if: matrix.language == 'python'
+        working-directory: ${{ runner.temp }}/sdk/python
+        run: |
+          package=$(sed -n 's/^name = "\(.*\)"/\1/p' pyproject.toml | tr - _)
+          uv venv && uv pip install -e . mypy
+          uv run mypy --strict "$package"
+      - if: matrix.language == 'go'
+        working-directory: ${{ runner.temp }}/sdk/go
+        run: go vet ./...
+      - if: matrix.language == 'java'
+        working-directory: ${{ runner.temp }}/sdk/java
+        run: gradle compileJava --no-daemon
+      - if: matrix.language == 'csharp'
+        working-directory: ${{ runner.temp }}/sdk/csharp
+        run: dotnet build -warnaserror

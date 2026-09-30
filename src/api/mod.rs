@@ -51,17 +51,22 @@ impl Api {
         );
         errors.extend(type_errors);
         types::untag_unions_with_non_object_variants(&mut types);
+        let (requests, responses) = resources::request_and_response_roots(&resources);
+        let responses = responses
+            .into_iter()
+            .chain(webhooks.iter().map(String::as_str));
+        types::relax_access_modes(&mut types, requests, responses);
 
         // Promote inline enums (e.g. array-of-enum query params) to named
         // top-level types so generated SDKs get real enum types instead of
         // `Vec<String>`. Must run before we collect string alias names, since
         // promotion may add new `SchemaRef`s that need resolving.
-        if let Err(e) = types::promote_inline_enums(&mut types, &mut resources) {
+        if let Err(e) = types::promote_inline_enums(&mut types, &mut resources, &filters.reserved) {
             errors.push(format!("{e:#}"));
         }
         errors.extend(types::clashing_type_names(&types));
+        types::untype_clashing_enums(&mut types);
         errors.extend(types::clashing_identifiers(&types));
-        errors.extend(resources::object_query_params(&resources, &types));
         ensure!(
             errors.is_empty(),
             "the spec uses {} perseid does not support (skip an operation with \
@@ -73,7 +78,8 @@ impl Api {
             errors.join("\n  - ")
         );
 
-        resources::rename_resources_named_like_types(&mut resources, &types);
+        resources::rename_resources_named_like_types(&mut resources, &types, &filters.reserved);
+        resources::mark_structured_query_params(&mut resources, &types);
 
         // Resolve string alias references in operation query params
         // This must happen after types are created so we know which types are string aliases

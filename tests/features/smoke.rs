@@ -3,8 +3,12 @@ use std::time::Duration;
 use features::api::{
     BasicAuth, Features, FeaturesOptions, SseEvent, StreamingStreamEventsOptions,
     StreamingUploadFileBody, TokenProvider, Upload, WidgetsListWidgetEventsOptions,
+    WireBetaSearchOptions, WireSearchOptions,
 };
-use features::models::Health;
+use features::models::{
+    Charge, ChargeItemsItem, ChargeShipping, ChargeShippingAddress, Filter, FilterAmount,
+    Health, SearchRange,
+};
 
 fn client(token: &str, options: FeaturesOptions) -> Features {
     let server_url = Some(std::env::var("FEATURES_URL").unwrap());
@@ -78,11 +82,67 @@ async fn streaming() {
         name: "doc".into(),
         count: Some(2),
         meta: Some(Health { status: "ok".into() }),
+        tags: Some(vec!["a".into(), "b".into()]),
     };
     assert_eq!(
         streaming.upload_file(body).await.unwrap().status,
-        r#"count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc"#
+        r#"count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc;tags=::a;tags=::b"#
     );
     let raw = streaming.upload_content("f1", Upload::bytes("raw")).await.unwrap();
     assert_eq!(raw.status, "application/octet-stream:raw");
+}
+
+#[tokio::test]
+async fn wire() {
+    let client = client("tok", Default::default());
+    let wire = client.wire();
+    let search = WireSearchOptions {
+        filter: Some(Filter {
+            status: Some("open".into()),
+            amount: Some(FilterAmount { gte: Some(5) }),
+        }),
+        expand: Some(vec!["a".into(), "b".into()]),
+        metadata: Some([("k".to_owned(), "v".to_owned())].into()),
+        ids: Some(serde_json::json!(["x", "y"])),
+        tags: Some(vec!["t1".into(), "t2".into()]),
+        range: Some(SearchRange { gte: Some(1), lt: Some(9) }),
+    };
+    assert_eq!(
+        wire.search(Some(search)).await.unwrap().status,
+        "expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y\
+         &metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2"
+    );
+    let charge = Charge {
+        amount: 100,
+        capture: Some(true),
+        metadata: Some([("order".to_owned(), "7".to_owned())].into()),
+        items: Some(vec![
+            ChargeItemsItem { quantity: Some(2), ..ChargeItemsItem::new("p1") },
+            ChargeItemsItem::new("p2"),
+        ]),
+        expand: Some(vec!["customer".into()]),
+        statuses: Some(vec!["a".into(), "b".into()]),
+        codes: Some(vec!["c1".into(), "c2".into()]),
+        shipping: Some(ChargeShipping {
+            address: Some(ChargeShippingAddress {
+                line1: Some("1 Main".into()),
+                city: Some("Paris".into()),
+            }),
+        }),
+        ..Charge::new(100)
+    };
+    assert_eq!(
+        wire.create_charge(Some(charge)).await.unwrap().status,
+        "application/x-www-form-urlencoded|amount=100&capture=true&codes=c1,c2&expand[]=customer\
+         &items[0][price]=p1&items[0][quantity]=2&items[1][price]=p2&metadata[order]=7\
+         &shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b"
+    );
+    assert_eq!(wire.create_charge(None).await.unwrap().status, "|");
+    let beta = WireBetaSearchOptions { limit: Some(2), features: Some("x,y".into()) };
+    assert_eq!(
+        wire.beta_search(Some(beta)).await.unwrap().status,
+        "beta=true&limit=2|features=x,y"
+    );
+    let image = wire.put_image(42, Upload::bytes("png")).await.unwrap();
+    assert_eq!(image.status, "42:image/png:png");
 }

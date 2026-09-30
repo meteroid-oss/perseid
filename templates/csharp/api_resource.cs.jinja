@@ -33,6 +33,7 @@ public sealed partial class {{ resource_type_name }}
 {% set has_body = op.request_body_schema_name is defined or op.request_body_json_type is defined -%}
 {% set body_type = m.body_type(op) -%}
 {% set body = m.param(op.request_body_schema_name | default("body")) -%}
+{% if body in ["options", "requestOptions", "cancellationToken", "request", "form"] or body in (op.path_params | map("to_lower_camel_case") | list) %}{% set body = "body" %}{% endif -%}
 {% if op.request_body_kind == "binary" -%}
 {% set body_type = "Upload" -%}
 {% elif op.request_body_kind == "multipart" -%}
@@ -60,7 +61,8 @@ public sealed partial class {{ resource_type_name }}
 {% for p in op.path_params %}        string {{ m.param(p) }},
 {% endfor -%}
 {% if takes_body -%}
-{% if op.request_body_optional %}        {{ body_type }}? {{ body }} = null,
+{% if op.request_body_optional and required_options %}        {{ body_type }}? {{ body }},
+{% elif op.request_body_optional %}        {{ body_type }}? {{ body }} = null,
 {% else %}        {{ body_type }} {{ body }},
 {% endif -%}
 {% endif -%}
@@ -89,25 +91,36 @@ public sealed partial class {{ resource_type_name }}
 {% endif -%}
 {% for p in op.query_params -%}
 {% set explode = p.explode | default(true) -%}
+{% set value %}options{% if not required_options %}?{% endif %}.{{ m.member(p.name, options_type) }}{% endset -%}
+{% if p.structured and p.type.to_csharp() == "JsonNode" -%}
+        request.AddStructuredQuery("{{ p.name }}", {{ value }}, {{ p.deep_object | lower }}, {{ explode | lower }});
+{% elif p.structured -%}
+        request.AddStructuredQuery("{{ p.name }}", {{ value }}, {{ context }}.{{ m.type_info(p.type.to_csharp()) }}, {{ p.deep_object | lower }}, {{ explode | lower }});
+{% else -%}
         request.AddQuery("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.name, options_type) }}{% if (p.type.is_list() or p.type.is_set()) and not explode %}, explode: false{% endif %});
+{% endif -%}
 {% endfor -%}
 {% for p in op.header_params -%}
         request.SetHeader("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.name, options_type) }});
 {% endfor -%}
 {% if has_body -%}
 {% set setter = "SetFormBody" if op.request_body_is_form else "SetJsonBody" -%}
+{% set form_lists = "" -%}
+{% if op.request_body_is_form and (op.form_deep_object or op.form_unexploded) -%}
+{% set form_lists %}, [{% for n in op.form_deep_object | default([]) %}{{ n | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}], [{% for n in op.form_unexploded | default([]) %}{{ n | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]{% endset -%}
+{% endif -%}
 {% if op.request_body_optional %}        if ({{ body }} is not null)
         {
-            request.{{ setter }}({{ body }}, {{ context }}.{{ m.type_info(body_type) }});
+            request.{{ setter }}({{ body }}, {{ context }}.{{ m.type_info(body_type) }}{{ form_lists }});
         }
-{% else %}        request.{{ setter }}({{ body }}, {{ context }}.{{ m.type_info(body_type) }});
+{% else %}        request.{{ setter }}({{ body }}, {{ context }}.{{ m.type_info(body_type) }}{{ form_lists }});
 {% endif -%}
 {% elif op.request_body_kind == "binary" -%}
 {% if op.request_body_optional %}        if ({{ body }} is not null)
         {
-            request.SetUploadBody({{ body }});
+            request.SetUploadBody({{ body }}{% if op.request_body_content_type is defined %}, {{ op.request_body_content_type | tojson }}{% endif %});
         }
-{% else %}        request.SetUploadBody({{ body }});
+{% else %}        request.SetUploadBody({{ body }}{% if op.request_body_content_type is defined %}, {{ op.request_body_content_type | tojson }}{% endif %});
 {% endif -%}
 {% elif op.request_body_kind == "multipart" -%}
 {% if op.request_body_optional %}        if ({{ body }} is not null)
@@ -144,7 +157,8 @@ public sealed partial class {{ resource_type_name }}
 {% for p in op.path_params %}        string {{ m.param(p) }},
 {% endfor -%}
 {% if takes_body -%}
-{% if op.request_body_optional %}        {{ body_type }}? {{ body }} = null,
+{% if op.request_body_optional and required_options %}        {{ body_type }}? {{ body }},
+{% elif op.request_body_optional %}        {{ body_type }}? {{ body }} = null,
 {% else %}        {{ body_type }} {{ body }},
 {% endif -%}
 {% endif -%}

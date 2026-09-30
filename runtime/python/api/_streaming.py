@@ -189,10 +189,11 @@ def multipart_files(fields: t.Sequence[t.Tuple[str, t.Any, bool]]) -> t.List[t.A
             files.append((name, (filename, upload.content, upload.content_type)))
             continue
         value = to_json_value(value)
-        if isinstance(value, (dict, list)):
-            files.append((name, (None, json.dumps(value), "application/json")))
-        else:
-            files.append((name, (None, _scalar(value), None)))
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, (dict, list)):
+                files.append((name, (None, json.dumps(item), "application/json")))
+            elif item is not None:
+                files.append((name, (None, _scalar(item), None)))
     return files
 
 

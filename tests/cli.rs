@@ -604,6 +604,67 @@ fn field_names(model: &serde_json::Value, ty: &str) -> Vec<String> {
 }
 
 #[test]
+fn real_world_constructs_generate_every_language() {
+    let langs = ["rust", "typescript", "python", "go", "java", "csharp"];
+    let dir = project_from("realworld.yaml", &langs);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    for warning in [
+        "schema `Timezone`: `Etc/GMT-0` and `Etc/GMT0` both become the identifier `EtcGmt0`, so \
+         the enum is typed as a string",
+        "schema `PaymentMethodData`: inline schema in oneOf must have discriminator enum value, \
+         so the schema is typed as an untyped JSON value",
+    ] {
+        assert!(out.contains(warning), "missing `{warning}` in:\n{out}");
+    }
+
+    let (ok, model) = perseid(dir.path(), &["inspect"]);
+    assert!(ok, "{model}");
+    let model: serde_json::Value = serde_json::from_str(&model).unwrap();
+    let list = operation(&model, "GetCustomers");
+    let params = &list["query_params"];
+    assert_eq!(params[0]["name"], "created");
+    assert_eq!(params[0]["deep_object"], true);
+    assert_eq!(params[2]["name"], "metadata");
+    assert_eq!(params[2]["structured"], true);
+    assert_eq!(params[2]["deep_object"], false);
+    let create = operation(&model, "PostCustomers");
+    assert_eq!(
+        create["form_deep_object"],
+        serde_json::json!(["address", "expand", "metadata"])
+    );
+    let beta = operation(&model, "beta_createResponse");
+    assert_eq!(beta["path"], "/responses?beta=true");
+    assert_eq!(beta["request_body_schema_name"], "Options");
+    let raw = operation(&model, "markdown/render-raw");
+    assert_eq!(raw["request_body_content_type"], "text/plain");
+    let customer = &model["types"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|t| t["name"] == "Customer")
+        .unwrap()["fields"];
+    let id = customer
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "id");
+    assert_eq!(
+        id.unwrap()["required"],
+        false,
+        "read-only in a request body"
+    );
+
+    let csharp = dir.path().join("csharp/RealWorld/Models/OptionsModel.cs");
+    assert!(
+        csharp.is_file(),
+        "`Options` names the JSON context options in C#"
+    );
+    let rust = fs::read_to_string(dir.path().join("rust/src/models/options.rs")).unwrap();
+    assert!(rust.contains("pub struct Options"), "{rust}");
+}
+
+#[test]
 fn torture_fixture_generates_every_language() {
     let langs = ["rust", "typescript", "python", "go", "java", "csharp"];
     let dir = project_from("torture.yaml", &langs);
@@ -749,12 +810,13 @@ paths:
     get:
       operationId: search
       parameters:
-        - { name: filter, in: query, style: deepObject, schema: { type: object } }
+        - { name: ids, in: query, style: pipeDelimited, schema: { type: array, items: { type: string } } }
         - { name: session, in: cookie, schema: { type: string } }
       responses: { "204": { description: ok } }
-  /render:
+  /render/{spec}:
     post:
-      requestBody: { content: { text/plain: { schema: { type: string } } } }
+      parameters:
+        - { name: spec, in: path, required: true, schema: { type: object } }
       responses: { "204": { description: ok } }
   /clash:
     get:
@@ -775,8 +837,8 @@ components:
     assert!(!ok);
     assert!(!out.contains("panicked"), "{out}");
     for line in [
-        "operation `search` (GET /search): query parameter `filter`: style \"deepObject\" is not supported",
-        "operation `post_render` (POST /render): request body: content type `text/plain` is not supported",
+        "operation `search` (GET /search): query parameter `ids`: style \"pipeDelimited\" is not supported",
+        "operation `post_render_by_spec` (POST /render/{spec}): path parameter `spec`: only scalar values are supported, not type `object`",
         "schema `Clash`: `@type` and `type` both become the identifier `type`",
     ] {
         assert!(out.contains(line), "missing `{line}` in:\n{out}");

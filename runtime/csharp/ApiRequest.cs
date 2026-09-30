@@ -20,6 +20,7 @@ internal sealed class ApiRequest(HttpMethod method, string path)
     private byte[]? _json;
     private List<KeyValuePair<string, string>>? _form;
     private Upload? _upload;
+    private string _uploadType = "application/octet-stream";
     private MultipartBody? _multipart;
 
     public HttpMethod Method { get; } = method;
@@ -69,6 +70,26 @@ internal sealed class ApiRequest(HttpMethod method, string path)
         }
     }
 
+    /// <summary>Adds the JSON form of <paramref name="value"/> unless it is null: objects as
+    /// <c>name[key]=value</c>, lists as repeated <c>name=item</c> (<c>name[]=item</c> with
+    /// <paramref name="deepObject"/>, comma-joined without <paramref name="explode"/>).</summary>
+    public void AddStructuredQuery<T>(
+        string name,
+        T? value,
+        JsonTypeInfo<T> typeInfo,
+        bool deepObject,
+        bool explode
+    )
+    {
+        if (value is not null)
+        {
+            EncodeParam(name, JsonSerializer.SerializeToNode(value, typeInfo), deepObject, explode, _query);
+        }
+    }
+
+    public void AddStructuredQuery(string name, JsonNode? value, bool deepObject, bool explode) =>
+        EncodeParam(name, value, deepObject, explode, _query);
+
     public void SetHeader(string name, string? value)
     {
         if (value is not null)
@@ -81,8 +102,15 @@ internal sealed class ApiRequest(HttpMethod method, string path)
         _json = JsonSerializer.SerializeToUtf8Bytes(body, typeInfo);
 
     /// <summary>Sets an <c>application/x-www-form-urlencoded</c> body from the JSON form of
-    /// <paramref name="body"/>, so wire names come from the model's attributes.</summary>
-    public void SetFormBody<T>(T body, JsonTypeInfo<T> typeInfo)
+    /// <paramref name="body"/>, so wire names come from the model's attributes. Lists of the
+    /// <paramref name="deepObject"/> properties are sent as <c>name[]=item</c>, those of the
+    /// <paramref name="unexploded"/> ones comma-joined.</summary>
+    public void SetFormBody<T>(
+        T body,
+        JsonTypeInfo<T> typeInfo,
+        string[]? deepObject = null,
+        string[]? unexploded = null
+    )
     {
         if (JsonSerializer.SerializeToNode(body, typeInfo) is not JsonObject fields)
         {
@@ -91,32 +119,25 @@ internal sealed class ApiRequest(HttpMethod method, string path)
         _form = [];
         foreach (var (name, value) in fields)
         {
-            if (value is JsonArray array)
-            {
-                foreach (var item in array)
-                {
-                    if (item is not null)
-                    {
-                        _form.Add(new(name, FormValue(item)));
-                    }
-                }
-            }
-            else if (value is not null)
-            {
-                _form.Add(new(name, FormValue(value)));
-            }
+            var deep = deepObject is not null && Array.IndexOf(deepObject, name) >= 0;
+            var explode = unexploded is null || Array.IndexOf(unexploded, name) < 0;
+            EncodeParam(name, value, deep, explode, _form);
         }
     }
 
-    /// <summary>Sets a raw <c>application/octet-stream</c> body, unless the upload names its type.</summary>
-    public void SetUploadBody(Upload body) => _upload = body;
+    /// <summary>Sets a raw body of the operation's media type, unless the upload names its type.</summary>
+    public void SetUploadBody(Upload body, string contentType = "application/octet-stream")
+    {
+        _upload = body;
+        _uploadType = contentType;
+    }
 
     public void SetMultipartBody(MultipartBody body) => _multipart = body;
 
     public Uri BuildUri(string baseUrl, IEnumerable<KeyValuePair<string, string>> extraQuery)
     {
         var url = new StringBuilder(baseUrl.TrimEnd('/')).Append(Path);
-        var first = true;
+        var first = !Path.Contains('?');
         foreach (var (name, value) in _query.Concat(extraQuery))
         {
             url.Append(first ? '?' : '&')
@@ -144,7 +165,7 @@ internal sealed class ApiRequest(HttpMethod method, string path)
         {
             return new FormUrlEncodedContent(_form);
         }
-        return _upload?.CreateContent() ?? _multipart?.CreateContent();
+        return _upload?.CreateContent(_uploadType) ?? _multipart?.CreateContent();
     }
 
     private static string Format(object value) =>
@@ -157,6 +178,70 @@ internal sealed class ApiRequest(HttpMethod method, string path)
             _ => value.ToString() ?? string.Empty,
         };
 
-    private static string FormValue(JsonNode node) =>
-        node.GetValueKind() == JsonValueKind.String ? node.GetValue<string>() : node.ToJsonString();
+    private static bool IsNested(JsonNode? node) => node is JsonObject or JsonArray;
+
+    private static string ScalarText(JsonNode node) =>
+        node.GetValueKind() switch
+        {
+            JsonValueKind.String => node.GetValue<string>(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => node.ToJsonString(),
+        };
+
+    /// <summary>One JSON value as pairs, nested values the way Stripe-style APIs read them:
+    /// <c>name[key]=value</c>, <c>name[]=item</c> for lists of scalars and
+    /// <c>name[0][key]=value</c> for lists of objects.</summary>
+    private static void EncodeParam(
+        string name,
+        JsonNode? value,
+        bool deepObject,
+        bool explode,
+        List<KeyValuePair<string, string>> output
+    )
+    {
+        if (value is JsonArray items && !deepObject && !items.Any(IsNested))
+        {
+            var texts = items.OfType<JsonNode>().Select(ScalarText).ToList();
+            if (explode)
+            {
+                texts.ForEach(text => output.Add(new(name, text)));
+            }
+            else if (texts.Count > 0)
+            {
+                output.Add(new(name, string.Join(",", texts)));
+            }
+            return;
+        }
+        FlattenParam(name, value, output);
+    }
+
+    private static void FlattenParam(
+        string prefix,
+        JsonNode? value,
+        List<KeyValuePair<string, string>> output
+    )
+    {
+        switch (value)
+        {
+            case null:
+                return;
+            case JsonObject fields:
+                foreach (var (key, item) in fields)
+                {
+                    FlattenParam($"{prefix}[{key}]", item, output);
+                }
+                return;
+            case JsonArray items:
+                for (var index = 0; index < items.Count; index++)
+                {
+                    var item = items[index];
+                    FlattenParam(IsNested(item) ? $"{prefix}[{index}]" : $"{prefix}[]", item, output);
+                }
+                return;
+            default:
+                output.Add(new(prefix, ScalarText(value)));
+                return;
+        }
+    }
 }

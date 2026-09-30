@@ -126,12 +126,13 @@ impl Attempt {
 pub(crate) struct Request {
     method: Method,
     path: &'static str,
-    query_params: Vec<(&'static str, String)>,
+    query_params: Vec<(String, String)>,
     path_params: Vec<(&'static str, String)>,
     headers: HeaderMap,
     serialized_body: Option<Bytes>,
     body_is_form: bool,
     upload: Option<Upload>,
+    upload_content_type: &'static str,
     multipart: Option<Multipart>,
     error: Option<Error>,
     security: Option<Security>,
@@ -148,6 +149,7 @@ impl Request {
             serialized_body: None,
             body_is_form: false,
             upload: None,
+            upload_content_type: "application/octet-stream",
             multipart: None,
             error: None,
             security: None,
@@ -173,17 +175,37 @@ impl Request {
         }
     }
 
-    pub fn with_form_body_param<T: serde::Serialize>(mut self, param: T) -> Self {
-        match serde_urlencoded::to_string(&param) {
-            Ok(body) => self.serialized_body = Some(body.into()),
+    /// Encodes the properties of `param` as `a=1&b[c]=2`, given those whose lists are sent as
+    /// `name[]=x` (`deepObject`) or comma-separated (`explode: false`).
+    pub fn with_form_body_param<T: serde::Serialize>(
+        mut self,
+        param: T,
+        deep_object: &[&str],
+        unexploded: &[&str],
+    ) -> Self {
+        match serde_json::to_value(&param) {
+            Ok(serde_json::Value::Object(fields)) => {
+                let mut pairs = Vec::new();
+                for (name, value) in &fields {
+                    let deep = deep_object.contains(&name.as_str());
+                    let explode = !unexploded.contains(&name.as_str());
+                    encode_param(name, value, deep, explode, &mut pairs);
+                }
+                let mut form = url::form_urlencoded::Serializer::new(String::new());
+                form.extend_pairs(pairs);
+                self.serialized_body = Some(form.finish().into());
+            }
+            Ok(serde_json::Value::Null) => return self,
+            Ok(_) => self.fail("a form body must be an object"),
             Err(error) => self.fail(error),
         }
         self.body_is_form = true;
         self
     }
 
-    pub fn with_upload_body(mut self, body: Option<Upload>) -> Self {
+    pub fn with_upload_body(mut self, body: Option<Upload>, content_type: &'static str) -> Self {
         self.upload = body;
+        self.upload_content_type = content_type;
         self
     }
 
@@ -220,7 +242,26 @@ impl Request {
     }
 
     pub fn with_query_param(mut self, name: &'static str, param: impl QueryParamValue) -> Self {
-        self.query_params.push((name, param.encode()));
+        self.query_params.push((name.to_owned(), param.encode()));
+        self
+    }
+
+    /// Sends the JSON value of `param`: objects as `name[key]=value`, lists as `name=a&name=b`
+    /// (`name[]=a` with `deep_object`, `name=a,b` without `explode`).
+    pub fn with_structured_query_param<T: serde::Serialize>(
+        mut self,
+        name: &'static str,
+        param: Option<T>,
+        deep_object: bool,
+        explode: bool,
+    ) -> Self {
+        match param.map(serde_json::to_value).transpose() {
+            Ok(Some(value)) => {
+                encode_param(name, &value, deep_object, explode, &mut self.query_params)
+            }
+            Ok(None) => {}
+            Err(error) => self.fail(error),
+        }
         self
     }
 
@@ -242,7 +283,7 @@ impl Request {
         values: Vec<T>,
     ) -> Self {
         for value in values {
-            self.query_params.push((name, value.encode()));
+            self.query_params.push((name.to_owned(), value.encode()));
         }
         self
     }
@@ -309,7 +350,8 @@ impl Request {
         }
         let token = conf.bearer_access_token.as_deref().filter(|t| !t.is_empty());
         let auth = conf.credentials.apply(self.security, token).await?;
-        self.query_params.extend(auth.query);
+        self.query_params
+            .extend(auth.query.into_iter().map(|(name, value)| (name.to_owned(), value)));
         for (name, value) in auth.headers {
             let name = HeaderName::from_bytes(name.as_bytes()).map_err(request_error)?;
             let mut value = HeaderValue::try_from(value).map_err(request_error)?;
@@ -403,14 +445,14 @@ impl Request {
             for (name, value) in &self.query_params {
                 query.append_pair(name, value);
             }
-            uri.push('?');
+            uri.push(if path.contains('?') { '&' } else { '?' });
             uri.push_str(&query.finish());
         }
 
         let (body, content_type) = if let Some(form) = &mut self.multipart {
             (form.body()?, Some(form.content_type()))
         } else if let Some(upload) = &mut self.upload {
-            (upload.body()?, Some("application/octet-stream".to_owned()))
+            (upload.body()?, Some(self.upload_content_type.to_owned()))
         } else if let Some(body) = &self.serialized_body {
             let content_type = match self.body_is_form {
                 true => "application/x-www-form-urlencoded",
@@ -508,6 +550,60 @@ fn httpdate(value: &str) -> Option<SystemTime> {
     let days = (era * 146_097 + doe).checked_sub(719_468)?;
     let seconds = days * 86_400 + h * 3600 + m * 60 + s;
     Some(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds))
+}
+
+fn scalar_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// One parameter as query or form pairs, nested values the way Stripe-style APIs read them.
+fn encode_param(
+    name: &str,
+    value: &serde_json::Value,
+    deep_object: bool,
+    explode: bool,
+    out: &mut Vec<(String, String)>,
+) {
+    let nested = |v: &serde_json::Value| v.is_object() || v.is_array();
+    match value {
+        serde_json::Value::Array(items) if !deep_object && !items.iter().any(nested) => {
+            let texts = items.iter().filter_map(scalar_text);
+            if explode {
+                out.extend(texts.map(|text| (name.to_owned(), text)));
+            } else {
+                let joined = texts.collect::<Vec<_>>().join(",");
+                if !joined.is_empty() {
+                    out.push((name.to_owned(), joined));
+                }
+            }
+        }
+        value => flatten_param(name.to_owned(), value, out),
+    }
+}
+
+fn flatten_param(prefix: String, value: &serde_json::Value, out: &mut Vec<(String, String)>) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            for (key, value) in fields {
+                flatten_param(format!("{prefix}[{key}]"), value, out);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                if item.is_object() || item.is_array() {
+                    flatten_param(format!("{prefix}[{index}]"), item, out);
+                } else if let Some(text) = scalar_text(item) {
+                    out.push((format!("{prefix}[]"), text));
+                }
+            }
+        }
+        value => out.extend(scalar_text(value).map(|text| (prefix, text))),
+    }
 }
 
 pub(crate) trait QueryParamValue {

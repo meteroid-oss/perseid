@@ -265,6 +265,18 @@ impl Generator<'_> {
             None => self.output_dir.join(format!("{basename}.{tpl_file_ext}")),
         };
 
+        // rustfmt refuses items it cannot fit in its width when they keep trailing whitespace.
+        let rendered_data = match tpl_file_ext {
+            "rs" => {
+                rendered_data
+                    .lines()
+                    .map(str::trim_end)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n"
+            }
+            _ => rendered_data,
+        };
         generated_paths.push(file_path.clone());
         fs::write(&file_path, rendered_data)?;
 

@@ -22,7 +22,13 @@ from ..models import (
 )
 {%- endif %}
 from ..serialization import UNSET, Unset, to_json_value
-from .common import ApiBaseAsync, ApiBaseSync, decode_response, serialize_query_params
+from .common import (
+    ApiBaseAsync,
+    ApiBaseSync,
+    decode_response,
+    serialize_form_body,
+    serialize_query_params,
+)
 {%- if resource.operations | selectattr("pagination", "defined") | list | length > 0 %}
 from ._pagination import Pagination, paginate_async, paginate_sync
 {%- endif %}
@@ -98,6 +104,8 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- set body_type = py_type(op.request_body_json_type) %}
 {%- elif op.request_body_schema_name is defined %}
 {%- set body_param = py_ident(op.request_body_schema_name) %}
+{%- set taken = (op.path_params | list) + (op.query_params | map(attribute="name") | list) + (op.header_params | map(attribute="name") | list) %}
+{%- if body_param in ["self", "extra_headers", "timeout"] or body_param in (taken | map("ident", "snake", "python") | list) %}{% set body_param = "body" %}{% endif %}
 {%- set body_type = op.request_body_schema_name | to_upper_camel_case %}
 {%- if op.request_body_is_list %}{% set body_type = "list[" ~ body_type ~ "]" %}{% endif %}
 {%- elif op.request_body_kind == "binary" %}
@@ -184,12 +192,28 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- endfor %}
                 },
 {%- set comma_joined %}
-{%- for p in op.query_params if (p.type.is_list() or p.type.is_set()) and not p.explode -%}
+{%- for p in op.query_params if (p.type.is_list() or p.type.is_set() or p.structured) and not p.explode -%}
 {{ py_str(p.name) }},
 {%- endfor -%}
 {%- endset %}
 {%- if comma_joined | trim %}
                 comma_joined=({{ comma_joined | trim }}),
+{%- endif %}
+{%- set structured %}
+{%- for p in op.query_params if p.structured -%}
+{{ py_str(p.name) }},
+{%- endfor -%}
+{%- endset %}
+{%- if structured | trim %}
+                structured=({{ structured | trim }}),
+{%- endif %}
+{%- set deep_object %}
+{%- for p in op.query_params if p.deep_object -%}
+{{ py_str(p.name) }},
+{%- endfor -%}
+{%- endset %}
+{%- if deep_object | trim %}
+                deep_object=({{ deep_object | trim }}),
 {%- endif %}
             ),
 {%- endif %}
@@ -205,6 +229,9 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- endif %}
 {%- if op.request_body_kind == "binary" %}
             upload_body=body,
+{%- if op.request_body_content_type is defined %}
+            upload_content_type={{ py_str(op.request_body_content_type) }},
+{%- endif %}
 {%- elif op.request_body_kind == "multipart" %}
             multipart={% if op.request_body_optional %}None if body is None else {% endif %}[
 {%- for field in op.multipart_fields %}
@@ -212,7 +239,19 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- endfor %}
             ],
 {%- elif body_param is not none %}
-            {% if op.request_body_is_form %}form_body{% else %}json_body{% endif %}=to_json_value({{ body_param }}, {{ body_type }}),
+{%- if op.request_body_is_form %}
+            form_body=serialize_form_body(
+                to_json_value({{ body_param }}, {{ body_type }}),
+{%- if op.form_deep_object %}
+                deep_object=({% for n in op.form_deep_object %}{{ py_str(n) }}, {% endfor %}),
+{%- endif %}
+{%- if op.form_unexploded %}
+                unexploded=({% for n in op.form_unexploded %}{{ py_str(n) }}, {% endfor %}),
+{%- endif %}
+            ),
+{%- else %}
+            json_body=to_json_value({{ body_param }}, {{ body_type }}),
+{%- endif %}
 {%- endif %}
 {%- if op.response_is_event_stream %}
             stream=True,

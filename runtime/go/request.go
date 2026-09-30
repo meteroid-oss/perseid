@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -97,12 +98,33 @@ func (r *request) SetJSONBody(v any) {
 	r.contentType = "application/json"
 }
 
-// SetFormBody serializes v as an application/x-www-form-urlencoded body.
-func (r *request) SetFormBody(v any) {
-	values, err := formValues(v)
+// AddStructuredQueryParam sends the JSON value of v: objects as name[key]=value,
+// lists as repeated name=item (name[]=item with deepObject, name=a,b without explode).
+func (r *request) AddStructuredQueryParam(name string, v any, deepObject, explode bool) {
+	value, err := jsonValue(v)
 	if err != nil {
-		r.err = err
+		r.err = fmt.Errorf("@@PACKAGE_NAME@@: encoding query parameter %q: %w", name, err)
 		return
+	}
+	encodeParam(name, value, deepObject, explode, r.query)
+}
+
+// SetFormBody serializes v as an application/x-www-form-urlencoded body, given the
+// properties whose lists are sent as name[]=item (deepObject) or comma-separated.
+func (r *request) SetFormBody(v any, deepObject, unexploded []string) {
+	value, err := jsonValue(v)
+	if err != nil {
+		r.err = fmt.Errorf("@@PACKAGE_NAME@@: encoding form body: %w", err)
+		return
+	}
+	fields, ok := value.(map[string]any)
+	if !ok {
+		r.err = fmt.Errorf("@@PACKAGE_NAME@@: form bodies must be JSON objects, not %T", value)
+		return
+	}
+	values := url.Values{}
+	for name, field := range fields {
+		encodeParam(name, field, slices.Contains(deepObject, name), !slices.Contains(unexploded, name), values)
 	}
 	r.body = []byte(values.Encode())
 	r.contentType = "application/x-www-form-urlencoded"
@@ -120,7 +142,11 @@ func (r *request) url(serverURL string) (string, error) {
 
 	full := serverURL + path
 	if encoded := r.query.Encode(); encoded != "" {
-		full += "?" + encoded
+		separator := "?"
+		if strings.Contains(path, "?") {
+			separator = "&"
+		}
+		full += separator + encoded
 	}
 	if _, err := url.Parse(full); err != nil {
 		return "", fmt.Errorf("@@PACKAGE_NAME@@: invalid request URL %q: %w", full, err)
@@ -341,54 +367,83 @@ func setDefault(header http.Header, name, value string) {
 	}
 }
 
-// formValues turns a struct into form fields by round-tripping it through its
-// JSON representation, so that the `json` tags of the generated models stay the
-// single source of truth for wire names.
-func formValues(v any) (url.Values, error) {
+// jsonValue round-trips v through its JSON representation, so that the `json` tags
+// of the generated models stay the single source of truth for wire names.
+func jsonValue(v any) (any, error) {
 	encoded, err := json.Marshal(v)
 	if err != nil {
-		return nil, fmt.Errorf("@@PACKAGE_NAME@@: encoding form body: %w", err)
+		return nil, err
 	}
-
-	var fields map[string]any
-	if err := json.Unmarshal(encoded, &fields); err != nil {
-		return nil, fmt.Errorf("@@PACKAGE_NAME@@: form bodies must be JSON objects: %w", err)
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
 	}
-
-	values := url.Values{}
-	for name, value := range fields {
-		if value == nil {
-			continue
-		}
-		if list, ok := value.([]any); ok {
-			for _, item := range list {
-				encodedItem, err := formScalar(name, item)
-				if err != nil {
-					return nil, err
-				}
-				values.Add(name, encodedItem)
-			}
-			continue
-		}
-		encodedValue, err := formScalar(name, value)
-		if err != nil {
-			return nil, err
-		}
-		values.Set(name, encodedValue)
-	}
-	return values, nil
+	return value, nil
 }
 
-func formScalar(name string, value any) (string, error) {
+func isNested(value any) bool {
+	switch value.(type) {
+	case map[string]any, []any:
+		return true
+	}
+	return false
+}
+
+func paramText(value any) (string, bool) {
 	switch typed := value.(type) {
 	case string:
-		return typed, nil
+		return typed, true
 	case bool:
-		return strconv.FormatBool(typed), nil
-	case float64:
-		return strconv.FormatFloat(typed, 'f', -1, 64), nil
+		return strconv.FormatBool(typed), true
+	case json.Number:
+		return typed.String(), true
+	}
+	return "", false
+}
+
+// encodeParam adds one JSON value the way Stripe-style APIs read nested values:
+// name[key]=value, name[]=item for lists of scalars, name[0][key]=value for lists
+// of objects. Top-level lists of scalars repeat name unless deepObject or not explode.
+func encodeParam(name string, value any, deepObject, explode bool, out url.Values) {
+	if list, ok := value.([]any); ok && !deepObject && !slices.ContainsFunc(list, isNested) {
+		texts := make([]string, 0, len(list))
+		for _, item := range list {
+			if text, ok := paramText(item); ok {
+				texts = append(texts, text)
+			}
+		}
+		if explode {
+			for _, text := range texts {
+				out.Add(name, text)
+			}
+		} else if len(texts) > 0 {
+			out.Add(name, strings.Join(texts, ","))
+		}
+		return
+	}
+	flattenParam(name, value, out)
+}
+
+func flattenParam(prefix string, value any, out url.Values) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			flattenParam(prefix+"["+key+"]", item, out)
+		}
+	case []any:
+		for index, item := range typed {
+			if isNested(item) {
+				flattenParam(prefix+"["+strconv.Itoa(index)+"]", item, out)
+			} else if text, ok := paramText(item); ok {
+				out.Add(prefix+"[]", text)
+			}
+		}
 	default:
-		return "", fmt.Errorf("@@PACKAGE_NAME@@: cannot encode field %q of type %T as form data", name, value)
+		if text, ok := paramText(value); ok {
+			out.Add(prefix, text)
+		}
 	}
 }
 

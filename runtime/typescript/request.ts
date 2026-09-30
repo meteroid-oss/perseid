@@ -52,6 +52,51 @@ function encodeQueryParamValue(value: ScalarQueryParameter): string {
   return value instanceof Date ? value.toISOString() : String(value);
 }
 
+function isNested(value: unknown): value is object {
+  return typeof value === "object" && value !== null && !(value instanceof Date);
+}
+
+/**
+ * One parameter as query or form pairs, nested values the way Stripe-style APIs read them:
+ * `name[key]=value`, `name[]=item` for lists of scalars and `name[0][key]=value` for lists of
+ * objects. Top-level lists of scalars repeat `name` unless `deepObject` or not `explode`d.
+ */
+function encodeParam(
+  name: string,
+  value: unknown,
+  deepObject: boolean,
+  explode: boolean,
+  out: [string, string][]
+) {
+  if (Array.isArray(value) && !deepObject && !value.some(isNested)) {
+    const texts = value.filter((item) => item != null).map((item) => encodeQueryParamValue(item));
+    if (explode) {
+      texts.forEach((text) => out.push([name, text]));
+    } else if (texts.length > 0) {
+      out.push([name, texts.join(",")]);
+    }
+    return;
+  }
+  flattenParam(name, value, out);
+}
+
+function flattenParam(prefix: string, value: unknown, out: [string, string][]) {
+  if (value === undefined || value === null) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      isNested(item) ? flattenParam(`${prefix}[${index}]`, item, out) : flattenParam(`${prefix}[]`, item, out)
+    );
+  } else if (isNested(value)) {
+    for (const [key, item] of Object.entries(value)) {
+      flattenParam(`${prefix}[${key}]`, item, out);
+    }
+  } else {
+    out.push([prefix, encodeQueryParamValue(value as ScalarQueryParameter)]);
+  }
+}
+
 /** @internal */
 export class @@CLIENT_NAME@@Request {
   private body?: BodyInit;
@@ -98,6 +143,11 @@ export class @@CLIENT_NAME@@Request {
     }
   }
 
+  /** Sends the JSON value of a parameter, objects as `name[key]=value`. */
+  public setStructuredQueryParam(name: string, value: unknown, deepObject: boolean, explode: boolean) {
+    encodeParam(name, value, deepObject, explode, this.queryParams);
+  }
+
   /** Overrides the API-wide security requirement for this operation. */
   public setSecurity(security: Security) {
     this.security = security;
@@ -114,24 +164,23 @@ export class @@CLIENT_NAME@@Request {
     this.headers["content-type"] = "application/json";
   }
 
-  /** Sets an `application/x-www-form-urlencoded` body. */
-  public setFormBody(value: Record<string, unknown>) {
-    const params = new URLSearchParams();
+  /**
+   * Sets an `application/x-www-form-urlencoded` body, given the properties whose lists are
+   * sent as `name[]=item` (`deepObject`) or comma-separated (`explode: false`).
+   */
+  public setFormBody(value: Record<string, unknown>, deepObject: string[] = [], unexploded: string[] = []) {
+    const pairs: [string, string][] = [];
     for (const [name, item] of Object.entries(value)) {
-      for (const inner of Array.isArray(item) ? item : [item]) {
-        if (inner !== undefined && inner !== null) {
-          params.append(name, String(inner));
-        }
-      }
+      encodeParam(name, item, deepObject.includes(name), !unexploded.includes(name), pairs);
     }
-    this.body = params.toString();
+    this.body = new URLSearchParams(pairs).toString();
     this.headers["content-type"] = "application/x-www-form-urlencoded";
   }
 
-  /** Sets a raw `application/octet-stream` body. */
-  public setUploadBody(value: UploadBody) {
+  /** Sets a raw body, `application/octet-stream` unless the operation declares another type. */
+  public setUploadBody(value: UploadBody, contentType = "application/octet-stream") {
     this.body = value as BodyInit;
-    this.headers["content-type"] = "application/octet-stream";
+    this.headers["content-type"] = contentType;
     this.oneShot = typeof ReadableStream !== "undefined" && value instanceof ReadableStream;
   }
 

@@ -7,6 +7,7 @@ use std::{
 use aide::openapi;
 use anyhow::{Context as _, bail, ensure};
 use indexmap::IndexMap;
+use itertools::Itertools as _;
 use schemars::schema::{
     InstanceType, ObjectValidation, Schema, SchemaObject, SingleOrVec, SubschemaValidation,
 };
@@ -70,7 +71,21 @@ pub(crate) fn from_referenced_components(
                 );
                 types.insert(schema_name.to_owned(), ty);
             }
-            Err(e) => errors.push(format!("schema `{schema_name}`: {e:#}")),
+            // A schema no SDK can model is still a valid JSON value.
+            Err(e) => {
+                tracing::warn!("{e:#}, so the schema is typed as an untyped JSON value");
+                types.insert(
+                    schema_name.to_owned(),
+                    Type {
+                        name: schema_name.to_owned(),
+                        description: None,
+                        deprecated: false,
+                        data: TypeData::Alias {
+                            target: Box::new(FieldType::JsonObject),
+                        },
+                    },
+                );
+            }
         }
     };
 
@@ -145,6 +160,66 @@ pub(crate) fn untag_unions_with_non_object_variants(types: &mut Types) {
                 target: Box::new(FieldType::JsonObject),
             };
         }
+    }
+}
+
+/// Types string enums whose values would share an identifier, such as `bps` and `Bps`, as
+/// strings: no SDK could name both members.
+pub(crate) fn untype_clashing_enums(types: &mut Types) {
+    let mut untyped = false;
+    for (name, ty) in types.iter_mut() {
+        let TypeData::StringEnum { values } = &ty.data else {
+            continue;
+        };
+        let owner = format!("schema `{name}`");
+        let clash = ["pascal", "shouty", "snake"]
+            .into_iter()
+            .find_map(|case| crate::template::ident::idents(values, case, None, &owner).err());
+        if let Some(error) = clash {
+            let _span = tracing::warn_span!("schema", name = %name).entered();
+            let detail = error.detail().unwrap_or_default();
+            let detail = detail.split(": ").nth(1).unwrap_or(detail);
+            tracing::warn!(
+                "{}, so the enum is typed as a string",
+                detail.split(',').next().unwrap_or(detail)
+            );
+            ty.data = TypeData::StringAlias;
+            untyped = true;
+        }
+    }
+    if untyped {
+        resolve_schema_refs(types);
+    }
+}
+
+/// Makes `readOnly` fields optional in the schemas sent in requests, and `writeOnly` ones in
+/// the schemas received in responses, so that callers need not invent the server's values.
+pub(crate) fn relax_access_modes<'a>(
+    types: &mut Types,
+    requests: impl IntoIterator<Item = &'a str>,
+    responses: impl IntoIterator<Item = &'a str>,
+) {
+    let reachable = |types: &Types, roots: Vec<String>| {
+        let mut seen = BTreeSet::new();
+        let mut stack = roots;
+        while let Some(name) = stack.pop() {
+            if let Some(ty) = types.get(&name)
+                && seen.insert(name)
+            {
+                stack.extend(ty.referenced_components().into_iter().map(str::to_owned));
+            }
+        }
+        seen
+    };
+    let requests = reachable(types, requests.into_iter().map(str::to_owned).collect());
+    let responses = reachable(types, responses.into_iter().map(str::to_owned).collect());
+    for (name, ty) in types.iter_mut() {
+        let (sent, received) = (requests.contains(name), responses.contains(name));
+        ty.data.for_each_field(|field| {
+            if (field.read_only && sent) || (field.write_only && received) {
+                field.required = false;
+            }
+        });
     }
 }
 
@@ -424,6 +499,7 @@ fn resolve_alias_targets(types: &Types) -> anyhow::Result<BTreeMap<String, Field
 pub(crate) fn promote_inline_enums(
     types: &mut Types,
     resources: &mut Resources,
+    reserved: &BTreeSet<String>,
 ) -> anyhow::Result<()> {
     // Snapshot existing top-level string enums keyed by their value set, so we
     // can reuse them instead of generating duplicates (e.g. the subscription
@@ -437,6 +513,7 @@ pub(crate) fn promote_inline_enums(
             })
             .collect(),
         type_names: types.keys().map(|n| n.to_upper_camel_case()).collect(),
+        reserved: reserved.clone(),
     };
 
     let mut new_types: BTreeMap<String, Type> = BTreeMap::new();
@@ -529,6 +606,8 @@ struct ExistingTypes {
     /// String enums by their values, reused instead of promoting a copy.
     by_values: BTreeMap<Vec<String>, String>,
     type_names: BTreeSet<String>,
+    /// Names the SDK already uses, suffixed with `Model` as schemas named so are.
+    reserved: BTreeSet<String>,
 }
 
 fn promote_field_type(
@@ -547,10 +626,13 @@ fn promote_field_type(
                 };
                 return Ok(());
             }
-            let base = match title.take() {
+            let mut base = match title.take() {
                 Some(t) => t.to_upper_camel_case(),
                 None => base_name.to_upper_camel_case(),
             };
+            if existing.reserved.contains(&base) {
+                base.push_str("Model");
+            }
             let data = TypeData::StringEnum { values };
             let mut name = base.clone();
             for n in 2.. {
@@ -877,6 +959,26 @@ pub(crate) enum TypeData {
 }
 
 impl TypeData {
+    fn for_each_field(&mut self, mut visit: impl FnMut(&mut Field)) {
+        match self {
+            Self::Struct { fields } => fields.iter_mut().for_each(visit),
+            Self::StructEnum { fields, repr, .. } => {
+                fields.iter_mut().for_each(&mut visit);
+                let (StructEnumRepr::AdjacentlyTagged { variants, .. }
+                | StructEnumRepr::InternallyTagged { variants }) = repr;
+                for variant in variants {
+                    if let EnumVariantType::Struct { fields } = &mut variant.content {
+                        fields.iter_mut().for_each(&mut visit);
+                    }
+                }
+            }
+            Self::Alias { .. }
+            | Self::StringEnum { .. }
+            | Self::IntegerEnum { .. }
+            | Self::StringAlias => {}
+        }
+    }
+
     fn for_each_field_type(&mut self, mut visit: impl FnMut(&mut FieldType)) {
         match self {
             Self::Alias { target } => visit(target),
@@ -1098,7 +1200,10 @@ impl TypeData {
                     serde_json::Value::String(s) => Ok(s),
                     _ => bail!("enum value {} is not a string", i + 1),
                 })
-                .collect::<anyhow::Result<_>>()?,
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .unique()
+                .collect(),
         })
     }
 
@@ -2334,12 +2439,67 @@ mod tests {
     }
 
     #[test]
+    fn enums_whose_values_clash_are_strings_and_duplicates_are_dropped() {
+        let mut types = types_from(json!({
+            "Unit": {"type": "string", "enum": ["bps", "Bps"]},
+            "Zone": {"type": "string", "enum": ["Etc/GMT-0", "Etc/GMT0"]},
+            "Operator": {"type": "string", "enum": ["lt", "gt", "lt"]},
+            "Reading": {"type": "object", "properties": {"unit": {"$ref": "#/components/schemas/Unit"}}}
+        }));
+        untype_clashing_enums(&mut types);
+        assert_eq!(types["Unit"].data, TypeData::StringAlias);
+        assert_eq!(types["Zone"].data, TypeData::StringAlias);
+        assert_eq!(
+            types["Operator"].data,
+            TypeData::StringEnum {
+                values: vec!["lt".into(), "gt".into()]
+            }
+        );
+        let FieldType::SchemaRef { inner, .. } = field_type(&types, "Reading", "unit") else {
+            panic!("a reference")
+        };
+        assert_eq!(
+            inner.as_ref().map(|t| &t.data),
+            Some(&TypeData::StringAlias)
+        );
+    }
+
+    #[test]
+    fn read_only_fields_are_optional_in_requests_and_write_only_ones_in_responses() {
+        let mut types = types_from(json!({
+            "Account": {"type": "object", "required": ["id", "password", "owner"], "properties": {
+                "id": {"type": "string", "readOnly": true},
+                "password": {"type": "string", "writeOnly": true},
+                "owner": {"$ref": "#/components/schemas/Owner"}
+            }},
+            "Owner": {"type": "object", "required": ["id"], "properties": {
+                "id": {"type": "string", "readOnly": true}
+            }},
+            "Receipt": {"type": "object", "required": ["id"], "properties": {
+                "id": {"type": "string", "readOnly": true}
+            }}
+        }));
+        relax_access_modes(&mut types, ["Account"], ["Account", "Receipt"]);
+        let required = |types: &Types, ty: &str, name: &str| {
+            let TypeData::Struct { fields } = &types[ty].data else {
+                panic!("a struct")
+            };
+            fields.iter().find(|f| f.name == name).unwrap().required
+        };
+        assert!(!required(&types, "Account", "id"));
+        assert!(!required(&types, "Account", "password"));
+        assert!(required(&types, "Account", "owner"));
+        assert!(!required(&types, "Owner", "id"));
+        assert!(required(&types, "Receipt", "id"));
+    }
+
+    #[test]
     fn promoted_enums_avoid_names_that_differ_only_in_case() {
         let mut types = types_from(json!({
             "thing_kind": {"type": "string"},
             "Thing": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["a", "b"]}}}
         }));
-        promote_inline_enums(&mut types, &mut Resources::new()).unwrap();
+        promote_inline_enums(&mut types, &mut Resources::new(), &BTreeSet::new()).unwrap();
         assert_eq!(
             field_type(&types, "Thing", "kind"),
             &FieldType::SchemaRef {

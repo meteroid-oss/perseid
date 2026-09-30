@@ -30,13 +30,34 @@ namespace {{ sdk.package_name }}.Models;
 {% endif -%}
 {% endfor -%}
 {% set generic = namespace(types=[]) -%}
+{#- `List<X>` and `X?` would take the context names of models named `ListX` and `NullableX`. -#}
+{% set names = namespace(models=[], structs=[]) -%}
+{% for _, type in api.types | items if type.kind not in ["string_alias", "alias"] -%}
+{% set names.models = names.models + [type.name | to_upper_camel_case] -%}
+{% if type.kind in ["string_enum", "integer_enum"] -%}
+{% set names.structs = names.structs + [type.name | to_upper_camel_case] -%}
+{% endif -%}
+{% endfor -%}
+{% for name in names.models -%}
+{% if name is startingwith("List") and name[4:] in names.models -%}
+{% set ty = "List<" ~ name[4:] ~ ">" -%}
+{% set generic.types = generic.types + [ty] -%}
+[JsonSerializable(typeof({{ ty }}), TypeInfoPropertyName = "{{ m.type_info(ty) }}")]
+{% elif name is startingwith("Nullable") and name[8:] in names.structs -%}
+[JsonSerializable(typeof({{ name[8:] }}?), TypeInfoPropertyName = "Json{{ name }}")]
+{% endif -%}
+{% endfor -%}
 {% for resource in api.resources -%}
 {% for op in resource.operations -%}
 {% set op_types = namespace(list=[m.body_type(op), m.response_type(op)]) -%}
 {% for field in op.multipart_fields if not field.is_file -%}
 {% set op_types.list = op_types.list + [field.type.to_csharp()] -%}
 {% endfor -%}
-{% for ty in op_types.list if "<" in ty and ty not in generic.types -%}
+{% for p in op.query_params if p.structured -%}
+{% set op_types.list = op_types.list + [p.type.to_csharp()] -%}
+{% endfor -%}
+{% set scalars = ["string", "bool", "int", "long", "short", "ushort", "ulong", "float", "double", "decimal"] -%}
+{% for ty in op_types.list if ("<" in ty or ty in scalars) and ty not in generic.types -%}
 {% set generic.types = generic.types + [ty] -%}
 [JsonSerializable(typeof({{ ty }}), TypeInfoPropertyName = "{{ m.type_info(ty) }}")]
 {% endfor -%}

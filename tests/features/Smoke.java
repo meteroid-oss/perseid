@@ -4,6 +4,15 @@ import com.features.Paginator;
 import com.features.api.Streaming;
 import com.features.api.StreamingStreamEventsOptions;
 import com.features.api.WidgetsListWidgetEventsOptions;
+import com.features.api.WireBetaSearchOptions;
+import com.features.api.WireSearchOptions;
+import com.features.models.Charge;
+import com.features.models.ChargeItemsItem;
+import com.features.models.ChargeShipping;
+import com.features.models.ChargeShippingAddress;
+import com.features.models.Filter;
+import com.features.models.FilterAmount;
+import com.features.models.SearchRange;
 import com.features.models.Event;
 import com.features.models.Gadget;
 import com.features.models.Health;
@@ -85,12 +94,44 @@ public class Smoke {
         Health meta = new Health();
         meta.setStatus("ok");
         body.setMeta(meta);
+        body.setTags(List.of("a", "b"));
         expect(
                 client.getStreaming().uploadFile(body).getStatus(),
-                "count=::2;file=a.txt:text/plain:hello;meta=:application/json:{\"status\":\"ok\"};name=::doc");
+                "count=::2;file=a.txt:text/plain:hello;meta=:application/json:{\"status\":\"ok\"};name=::doc;tags=::a;tags=::b");
         expect(client.getStreaming().uploadContent("f1", Upload.of(bytes("raw"))).getStatus(), "application/octet-stream:raw");
         Upload streamed = Upload.of(new ByteArrayInputStream(bytes("streamed")), -1);
         expect(client.getStreaming().uploadContent("f1", streamed).getStatus(), "application/octet-stream:streamed");
+
+        WireSearchOptions search =
+                new WireSearchOptions()
+                        .filter(new Filter().status("open").amount(new FilterAmount().gte(5L)))
+                        .expand(List.of("a", "b"))
+                        .metadata(Map.of("k", "v"))
+                        .ids(List.of("x", "y"))
+                        .tags(List.of("t1", "t2"))
+                        .range(new SearchRange().gte(1L).lt(9L));
+        expect(
+                client.getWire().search(search).getStatus(),
+                "expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y"
+                        + "&metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2");
+        Charge charge =
+                new Charge()
+                        .amount(100L)
+                        .capture(true)
+                        .metadata(Map.of("order", "7"))
+                        .items(List.of(new ChargeItemsItem().price("p1").quantity(2L), new ChargeItemsItem().price("p2")))
+                        .expand(List.of("customer"))
+                        .statuses(List.of("a", "b"))
+                        .codes(List.of("c1", "c2"))
+                        .shipping(new ChargeShipping().address(new ChargeShippingAddress().line1("1 Main").city("Paris")));
+        expect(
+                client.getWire().createCharge(charge).getStatus(),
+                "application/x-www-form-urlencoded|amount=100&capture=true&codes=c1,c2&expand[]=customer"
+                        + "&items[0][price]=p1&items[0][quantity]=2&items[1][price]=p2&metadata[order]=7"
+                        + "&shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b");
+        WireBetaSearchOptions beta = new WireBetaSearchOptions().limit(2).features("x,y");
+        expect(client.getWire().betaSearch(beta).getStatus(), "beta=true&limit=2|features=x,y");
+        expect(client.getWire().putImage("42", Upload.of(bytes("png"))).getStatus(), "42:image/png:png");
         System.out.println("java smoke test passed");
     }
 }

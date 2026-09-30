@@ -31,7 +31,14 @@ import httpx
 
 from .._version import __version__
 from ..errors import ApiException, NetworkException, ResponseDecodeError
-from ..serialization import UNSET, Unset, format_datetime, format_decimal, from_json_value
+from ..serialization import (
+    UNSET,
+    Unset,
+    format_datetime,
+    format_decimal,
+    from_json_value,
+    to_json_value,
+)
 from ._auth import (
     Security,
     SecurityScheme,
@@ -61,6 +68,7 @@ __all__ = [
     "DEFAULT_TIMEOUT",
     "decode_response",
     "default_retry_schedule",
+    "serialize_form_body",
     "serialize_query_params",
 ]
 
@@ -72,7 +80,7 @@ _MAX_RETRY_AFTER = 60.0
 _REPLAYABLE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 _UNSENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
-QueryValue = str | list[str]
+QueryParams = list[tuple[str, str]]
 _T = t.TypeVar("_T")
 
 
@@ -93,22 +101,83 @@ def _serialize_scalar(value: t.Any) -> str:
 def serialize_query_params(
     params: t.Mapping[str, t.Any],
     comma_joined: t.Collection[str] = (),
-) -> dict[str, QueryValue]:
+    structured: t.Collection[str] = (),
+    deep_object: t.Collection[str] = (),
+) -> QueryParams:
     """Render query parameters, dropping the ones left unset.
 
     List values are exploded into repeated parameters (OpenAPI ``explode=true``)
-    unless their name is listed in ``comma_joined``.
+    unless their name is listed in ``comma_joined``. ``structured`` ones are sent
+    from their JSON value, objects as ``name[key]=value``, and ``deep_object``
+    lists as ``name[]=item``.
     """
-    out: dict[str, QueryValue] = {}
+    out: QueryParams = []
     for key, value in params.items():
         if value is None or value is UNSET:
             continue
-        if isinstance(value, (list, tuple, set, frozenset)):
+        if key in structured:
+            encode_param(
+                key, to_json_value(value), key in deep_object, key not in comma_joined, out
+            )
+        elif isinstance(value, (list, tuple, set, frozenset)):
             items = [_serialize_scalar(v) for v in value]
-            out[key] = ",".join(items) if key in comma_joined else items
+            if key in comma_joined:
+                out.append((key, ",".join(items)))
+            else:
+                out.extend((key, item) for item in items)
         else:
-            out[key] = _serialize_scalar(value)
+            out.append((key, _serialize_scalar(value)))
     return out
+
+
+def serialize_form_body(
+    body: t.Mapping[str, t.Any] | None,
+    deep_object: t.Collection[str] = (),
+    unexploded: t.Collection[str] = (),
+) -> QueryParams | None:
+    """The pairs of an ``application/x-www-form-urlencoded`` body, nested values as in queries."""
+    if body is None:
+        return None
+    out: QueryParams = []
+    for key, value in body.items():
+        encode_param(key, value, key in deep_object, key not in unexploded, out)
+    return out
+
+
+def _nested(value: t.Any) -> bool:
+    return isinstance(value, (dict, list))
+
+
+def encode_param(
+    name: str, value: t.Any, deep_object: bool, explode: bool, out: QueryParams
+) -> None:
+    """One JSON value as pairs, the way Stripe-style APIs read nested values.
+
+    Objects are sent as ``name[key]=value``, lists of scalars in them as
+    ``name[]=item`` and lists of objects as ``name[0][key]=value``. A top-level
+    list of scalars repeats ``name`` unless ``deep_object`` or not ``explode``.
+    """
+    if isinstance(value, list) and not deep_object and not any(map(_nested, value)):
+        items = [_serialize_scalar(v) for v in value if v is not None]
+        if explode:
+            out.extend((name, item) for item in items)
+        elif items:
+            out.append((name, ",".join(items)))
+        return
+    _flatten_param(name, value, out)
+
+
+def _flatten_param(prefix: str, value: t.Any, out: QueryParams) -> None:
+    if value is None:
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _flatten_param(f"{prefix}[{key}]", item, out)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _flatten_param(f"{prefix}[{index}]" if _nested(item) else f"{prefix}[]", item, out)
+    else:
+        out.append((prefix, _serialize_scalar(value)))
 
 
 def default_retry_schedule(num_retries: int) -> list[float]:
@@ -210,13 +279,14 @@ class ApiBase:
         method: str,
         path: str,
         path_params: t.Mapping[str, str] | None = None,
-        query_params: t.Mapping[str, QueryValue] | None = None,
+        query_params: QueryParams | None = None,
         header_params: t.Mapping[str, str | None] | None = None,
         json_body: t.Any = None,
-        form_body: t.Mapping[str, t.Any] | None = None,
+        form_body: QueryParams | None = None,
         extra_headers: t.Mapping[str, str] | None = None,
         timeout: float | None | Unset = UNSET,
         upload_body: UploadContent | None = None,
+        upload_content_type: str = "application/octet-stream",
         multipart: t.Sequence[tuple[str, t.Any, bool]] | None = None,
         security: Security | None = None,
     ) -> dict[str, t.Any]:
@@ -245,15 +315,21 @@ class ApiBase:
             # `httpx` client. `None` disables it.
             "timeout": self._cfg.timeout if timeout is UNSET else timeout,
         }
-        if query_params:
-            kwargs["params"] = dict(query_params)
+        # `httpx` replaces the query of the URL by `params`, so a path's own query goes first.
+        path, _, own_query = path.partition("?")
+        kwargs["url"] = f"{self._cfg.base_path}{path}"
+        params = urllib.parse.parse_qsl(own_query, keep_blank_values=True)
+        params.extend(query_params or [])
+        if params:
+            kwargs["params"] = params
         if json_body is not None:
             kwargs["json"] = json_body
         elif form_body is not None:
-            kwargs["data"] = dict(form_body)
+            kwargs["content"] = urllib.parse.urlencode(form_body)
+            headers["content-type"] = "application/x-www-form-urlencoded"
         elif upload_body is not None:
             kwargs["content"] = upload_body
-            headers["content-type"] = "application/octet-stream"
+            headers["content-type"] = upload_content_type
         elif multipart is not None:
             kwargs["files"] = multipart_files(multipart)
         kwargs["auth_schemes"] = chosen_schemes(

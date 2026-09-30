@@ -73,14 +73,19 @@ export class {{ resource_type_name }} {
 
             {% if op.request_body_schema_name is defined -%}
                 {% set body_arg = op.request_body_schema_name | ident("camel", "typescript") -%}
-                {% if body_arg in ["request", "options", "requestOptions"] %}{% set body_arg = "body" %}{% endif -%}
+                {% if body_arg in ["request", "options", "requestOptions"] or body_arg in (op.path_params | map("ident", "camel", "typescript") | list) %}{% set body_arg = "body" %}{% endif -%}
                 {{ body_arg }}: {{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}[]{% endif %},
             {% elif op.request_body_json_type is defined -%}
                 body: {{ m.js_type(op.request_body_json_type) }},
-            {% elif op.request_body_kind == "binary" -%}
-                body{% if op.request_body_optional %}?{% endif %}: UploadBody,
-            {% elif op.request_body_kind == "multipart" -%}
-                body{% if op.request_body_optional %}?{% endif %}: {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body,
+            {% elif op.request_body_kind in ["binary", "multipart"] -%}
+                {% set body_ty = "UploadBody" if op.request_body_kind == "binary" else resource_type_name ~ (op.name | to_upper_camel_case) ~ "Body" -%}
+                {% if not op.request_body_optional -%}
+                body: {{ body_ty }},
+                {% elif op | has_required_query_or_header_params -%}
+                body: {{ body_ty }} | undefined,
+                {% else -%}
+                body?: {{ body_ty }},
+                {% endif -%}
             {% endif -%}
 
             {% if op | has_query_or_header_params -%}
@@ -99,7 +104,14 @@ export class {{ resource_type_name }} {
 
             {% for p in op.query_params -%}
                 {% set accessor %}options{% if not p.required %}?{% endif %}.{{ p.name | ident("camel") }}{% endset -%}
-                {% if (p.type.is_list() or p.type.is_set()) and p.explode | default(true) -%}
+                {% if p.structured -%}
+                    {
+                        const value = {{ accessor }};
+                        if (value != null) {
+                            request.setStructuredQueryParam({{ p.name | tojson }}, {{ m.to_json("value", p.type) }}, {{ p.deep_object | lower }}, {{ p.explode | lower }});
+                        }
+                    }
+                {% elif (p.type.is_list() or p.type.is_set()) and p.explode | default(true) -%}
                     request.setExplodedQueryParam({{ p.name | tojson }}, {{ accessor }});
                 {% else -%}
                     request.setQueryParam({{ p.name | tojson }}, {{ accessor }});
@@ -113,7 +125,7 @@ export class {{ resource_type_name }} {
             {% if op.request_body_schema_name is defined -%}
                 {% set serializer = (op.request_body_schema_name | to_upper_camel_case) ~ "Serializer" -%}
                 {% if op.request_body_is_form | default(false) -%}
-                request.setFormBody({{ serializer }}.serialize({{ body_arg }}));
+                request.setFormBody({{ serializer }}.serialize({{ body_arg }}){% if op.form_deep_object or op.form_unexploded %}, {{ op.form_deep_object | default([]) | tojson }}, {{ op.form_unexploded | default([]) | tojson }}{% endif %});
                 {% elif op.request_body_is_list -%}
                 request.setBody({{ body_arg }}.map((item) => {{ serializer }}.serialize(item)));
                 {% else -%}
@@ -124,7 +136,7 @@ export class {{ resource_type_name }} {
             {% endif -%}
 
             {% if op.request_body_kind == "binary" -%}
-                {% if op.request_body_optional %}if (body !== undefined) {% endif %}request.setUploadBody(body);
+                {% if op.request_body_optional %}if (body !== undefined) {% endif %}request.setUploadBody(body{% if op.request_body_content_type is defined %}, {{ op.request_body_content_type | tojson }}{% endif %});
             {% elif op.request_body_kind == "multipart" -%}
                 {% if op.request_body_optional %}if (body !== undefined) { {% endif %}
                 const form = new MultipartBody();

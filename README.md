@@ -268,6 +268,28 @@ Java a `Paginator<Customer>` from `listCustomersIter()` that is `Iterable` and h
 `text/event-stream` responses return an event stream (`for await`, `for`, `Next()`, `Iterable`,
 `next().await`, `await foreach`), `multipart/form-data` bodies a typed `...Body` with `Upload` files, and
 `application/octet-stream` bodies accept bytes or streams. Streamed uploads are not retried.
+Bodies of any other media type (`image/png`, `text/plain`...) are sent as given, with their media
+type, and list fields of multipart bodies as one part per item.
+
+## Query parameters and form bodies
+
+Lists repeat their parameter (`?tag=a&tag=b`), or are comma-separated with `explode: false`.
+Objects, lists of objects and untyped JSON values are sent the way Stripe-style APIs read them,
+for query parameters and `application/x-www-form-urlencoded` bodies alike:
+
+```
+filter[status]=open&filter[amount][gte]=5     # objects, nested as deep as they go
+items[0][price]=p1&items[0][quantity]=2       # lists of objects
+filter[tags][]=a&filter[tags][]=b             # lists inside objects
+expand[]=a&expand[]=b                         # lists with `style: deepObject`
+```
+
+Form body properties follow their `encoding` (`style`, `explode`). Paths with a query of their
+own, such as `/responses?beta=true`, keep it. Header and path parameters are strings: unions of
+scalars are accepted, and a list or `content` header is sent as the caller writes it.
+
+A required `readOnly` property is optional in the models sent in requests, and a required
+`writeOnly` one in the models received in responses.
 
 ## From your API repository to SDK pull requests
 
@@ -351,14 +373,18 @@ Early, and honest about it:
   (`nullable`, boolean `exclusiveMinimum`/`exclusiveMaximum`). Swagger 2.0 is rejected: convert
   it first, for example with `npx swagger2openapi`.
 - Proven on [Meteroid's API](https://github.com/meteroid-oss/meteroid-clients) and our test
-  specs. SDKs generated from the GitHub, OpenAI, Twilio and Stripe specs compile in Rust,
-  TypeScript, Python, Go and Java once a few operations are excluded. `$ref` parameters, bodies
-  and responses, inline objects, `allOf` compositions, list bodies and `application/*+json` are
-  read as is; inline objects become named types.
-- Unsupported constructs make generation fail instead of being skipped, each listed with its
-  operation id and path or its schema: `exclude = ["<operation id>"]` skips an operation, and an
-  issue with the spec attached is the fastest way to get one supported. Unions without a
-  discriminator are typed as untyped JSON, with a warning. A variant missing from the
+  specs. SDKs generated from the Stripe, GitHub, OpenAI, Twilio, DigitalOcean, Linode and
+  Petstore specs compile in every language, with Stripe's multipart file upload and OpenAI's
+  WebRTC call left out. `$ref` parameters, bodies and responses, inline objects, `allOf`
+  compositions, list bodies and `application/*+json` are read as is; inline objects become named
+  types. A JSON response that may also be an event stream gets a `..._stream` twin method.
+- Unsupported operations, and fields whose names would clash, make generation fail instead of
+  being skipped, each listed with its operation id and path or its schema:
+  `exclude = ["<operation id>"]` skips an operation, and an issue with the spec attached is the
+  fastest way to get one supported. Other schemas degrade with a warning
+  instead: unions without a discriminator and schemas no SDK can model are typed as untyped
+  JSON, enums whose values would share a name as strings, and schemas named like a type the SDK
+  already uses (`Upload`, `Options`...) get a `Model` suffix. A variant missing from the
   discriminator `mapping` is tagged with the `const` or `enum` of its discriminator property,
   falling back to its schema name.
 - Not there yet: a built-in OAuth2 token exchange (bring a token provider). C# dates are

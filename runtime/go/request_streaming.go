@@ -181,9 +181,9 @@ type multipartField struct {
 	file  *Upload
 }
 
-// SetUploadBody sends r as a raw application/octet-stream body.
-func (r *request) SetUploadBody(body io.Reader) {
-	r.contentType = "application/octet-stream"
+// SetUploadBody sends body as is, with the operation's media type.
+func (r *request) SetUploadBody(body io.Reader, contentType string) {
+	r.contentType = contentType
 	r.newBody = rewinder(body)
 	_, seekable := body.(io.Seeker)
 	r.oneShot = !seekable
@@ -272,6 +272,18 @@ func writeMultipartField(form *multipart.Writer, field multipartField) error {
 	encoded, err := json.Marshal(field.value)
 	if err != nil || string(encoded) == "null" {
 		return err
+	}
+	if encoded[0] == '[' {
+		var items []json.RawMessage
+		if err := json.Unmarshal(encoded, &items); err != nil {
+			return err
+		}
+		for _, item := range items {
+			if err := writeMultipartField(form, multipartField{name: field.name, value: item}); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": field.name}))
 	var text string

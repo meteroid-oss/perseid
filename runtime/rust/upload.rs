@@ -152,8 +152,15 @@ impl Multipart {
         }
     }
 
+    /// Adds a field: scalars as text, objects as JSON, lists as one part per item.
     pub fn field(mut self, name: &str, value: impl serde::Serialize) -> Result<Self, Error> {
         let value = serde_json::to_value(value).map_err(request_error)?;
+        if let serde_json::Value::Array(items) = value {
+            for item in items {
+                self = self.field(name, item)?;
+            }
+            return Ok(self);
+        }
         let content_type = if value.is_object() || value.is_array() {
             "Content-Type: application/json\r\n"
         } else {

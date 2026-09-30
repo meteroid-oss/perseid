@@ -138,7 +138,12 @@ export class MultipartBody {
   private readonly parts: BlobPart[] = [];
 
   /** Adds a field: strings and numbers as text, objects and arrays as JSON. */
+  /** Adds a field: scalars as text, objects as JSON, lists as one part per item. */
   public field(name: string, value: unknown): this {
+    if (Array.isArray(value)) {
+      value.forEach((item) => this.field(name, item));
+      return this;
+    }
     const json = typeof value === "object" && value !== null;
     this.parts.push(
       `--${this.boundary}\r\nContent-Disposition: form-data; name="${quoted(name)}"\r\n` +

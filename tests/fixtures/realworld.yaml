@@ -1,0 +1,384 @@
+# Constructs of published specs (Stripe, GitHub, OpenAI, DigitalOcean, Linode) that once failed
+# generation or compilation. Every SDK must generate and build from it.
+openapi: 3.0.3
+info:
+  title: Real World
+  version: '1.0'
+servers:
+  - url: https://api.realworld.example.com
+paths:
+  /v1/customers:
+    get:
+      operationId: GetCustomers
+      tags: [customers]
+      parameters:
+        - name: created
+          in: query
+          style: deepObject
+          explode: true
+          schema:
+            anyOf:
+              - type: object
+                properties:
+                  gt: { type: integer }
+                  lte: { type: integer }
+              - type: integer
+        - name: expand
+          in: query
+          style: deepObject
+          explode: true
+          schema: { type: array, items: { type: string, maxLength: 5000 } }
+        - name: metadata
+          in: query
+          schema: { $ref: '#/components/schemas/Metadata' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Customer' }
+    post:
+      operationId: PostCustomers
+      tags: [customers]
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            encoding:
+              address: { explode: true, style: deepObject }
+              expand: { explode: true, style: deepObject }
+              metadata: { explode: true, style: deepObject }
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                address:
+                  anyOf:
+                    - type: object
+                      properties:
+                        city: { type: string, maxLength: 5000 }
+                        line1: { type: string, maxLength: 5000 }
+                    - type: string
+                      enum: ['']
+                expand: { type: array, items: { type: string } }
+                metadata:
+                  anyOf:
+                    - type: object
+                      additionalProperties: { type: string }
+                    - type: string
+                      enum: ['']
+                tax_ids:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, value]
+                    properties:
+                      type: { type: string, enum: [eu_vat, us_ein] }
+                      value: { type: string }
+                timezone: { $ref: '#/components/schemas/Timezone' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+  /v1/customers/{customer}:
+    put:
+      operationId: PutCustomer
+      tags: [customers]
+      parameters:
+        - { name: customer, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Customer' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Customer' }
+  /advisories:
+    get:
+      operationId: security-advisories/list-global-advisories
+      tags: [security-advisories]
+      parameters:
+        - name: cwes
+          in: query
+          schema:
+            oneOf:
+              - type: string
+              - type: array
+                items: { type: string }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Upload' }
+  /markdown/raw:
+    post:
+      operationId: markdown/render-raw
+      tags: [markdown]
+      requestBody:
+        content:
+          text/plain:
+            schema: { type: string }
+          text/x-markdown:
+            schema: { type: string }
+      responses:
+        '200':
+          description: ok
+          content:
+            text/html:
+              schema: { type: string }
+  /responses?beta=true:
+    post:
+      operationId: beta_createResponse
+      tags: [responses]
+      parameters:
+        - name: openai-beta
+          in: header
+          required: true
+          schema:
+            type: array
+            items: { type: string, enum: [responses=v1] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/Options'
+              required: [model]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/List' }
+  /v2/account/keys/{ssh_key_identifier}:
+    get:
+      operationId: sshKeys_get
+      tags: [ssh keys]
+      parameters:
+        - name: ssh_key_identifier
+          in: path
+          required: true
+          schema:
+            anyOf:
+              - { type: integer }
+              - { type: string }
+        - name: X-Filter
+          in: header
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: string }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentMethod' }
+    put:
+      operationId: sshKeys_update
+      tags: [ssh keys]
+      parameters:
+        - name: ssh_key_identifier
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - required: [purpose]
+                  type: object
+                - oneOf:
+                    - type: object
+                      properties:
+                        purpose: { type: string, enum: [public] }
+                    - type: object
+                      properties:
+                        purpose: { type: string, enum: [vpc] }
+                        subnet_id: { type: integer }
+      responses:
+        '204':
+          description: updated
+  /chat/completions:
+    post:
+      operationId: createChatCompletion
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model]
+              properties:
+                model: { type: string }
+                stream: { type: boolean }
+      responses:
+        '200':
+          description: JSON, or server-sent events with `stream`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/List' }
+            text/event-stream:
+              schema: { type: string }
+  /audio/transcriptions:
+    post:
+      operationId: createTranscription
+      tags: [audio]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                timestamp_granularities:
+                  type: array
+                  items: { type: string, enum: [word, segment] }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/List' }
+  /user/login:
+    get:
+      operationId: loginUser
+      tags: [user]
+      responses:
+        '200':
+          description: a session token, as a JSON string
+          content:
+            application/json:
+              schema: { type: string }
+            application/xml:
+              schema: { type: string }
+  /monitoring/alerts:
+    get:
+      operationId: monitoring_list_alert_policy
+      tags: [monitoring]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListAlertPolicy' }
+  /issues/{issue}:
+    get:
+      operationId: issues/get
+      tags: [issues]
+      parameters:
+        - { name: issue, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Issue' }
+  /thumbnail:
+    put:
+      operationId: put-client-thumbnail
+      tags: [clients]
+      requestBody:
+        required: true
+        content:
+          image/png:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: ok
+components:
+  schemas:
+    Metadata:
+      type: object
+      additionalProperties: { type: string }
+    Timezone:
+      type: string
+      enum: [Etc/GMT, Etc/GMT-0, Etc/GMT0, UTC]
+    Customer:
+      type: object
+      required: [id, object, email, password]
+      properties:
+        id: { type: string, readOnly: true }
+        object: { type: string, enum: [customer] }
+        email: { type: string }
+        password: { type: string, writeOnly: true }
+        balance:
+          type: integer
+          minimum: 0
+          maximum: 18446744073709552000
+        unit: { type: string, enum: [bps, Bps, lt, lt] }
+    Upload:
+      type: object
+      required: [bytes]
+      properties:
+        bytes: { type: integer }
+    Options:
+      type: object
+      properties:
+        model: { type: string }
+        input: { type: string }
+    List:
+      type: object
+      properties:
+        object: { type: string }
+    AlertPolicy:
+      type: object
+      properties:
+        uuid: { type: string }
+    ListAlertPolicy:
+      type: object
+      properties:
+        policies:
+          type: array
+          items: { $ref: '#/components/schemas/AlertPolicy' }
+    StateReason:
+      type: string
+      enum: [completed, not_planned]
+    NullableStateReason:
+      type: string
+      enum: [completed, reopened]
+      nullable: true
+    Issue:
+      type: object
+      properties:
+        state_reason:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/StateReason'
+        previous_reason: { $ref: '#/components/schemas/NullableStateReason' }
+    PaymentMethod:
+      type: object
+      properties:
+        type: { type: string }
+        data:
+          discriminator: { propertyName: type }
+          oneOf:
+            - type: object
+              title: Credit card
+              properties:
+                last_four: { type: string }
+            - type: object
+              title: Paypal
+              properties:
+                email: { type: string }

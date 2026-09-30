@@ -5,6 +5,7 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.SerializerProvider;
@@ -17,7 +18,12 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.AbstractMap;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -55,6 +61,69 @@ public final class Utils {
     public static void addExplodedQueryParameter(HttpUrl.Builder url, String name, Iterable<?> values) {
         for (Object item : values) {
             url.addQueryParameter(name, serializeQueryParam(item));
+        }
+    }
+
+    /**
+     * Append the JSON value of {@code value}: objects as {@code name[key]=value}, lists as
+     * repeated {@code name=item} ({@code name[]=item} with {@code deepObject}, {@code name=a,b}
+     * without {@code explode}).
+     */
+    public static void addStructuredQueryParameter(
+            HttpUrl.Builder url, String name, Object value, boolean deepObject, boolean explode) {
+        List<Map.Entry<String, String>> pairs = new ArrayList<>();
+        encodeParam(name, MAPPER.valueToTree(value), deepObject, explode, pairs);
+        pairs.forEach(pair -> url.addQueryParameter(pair.getKey(), pair.getValue()));
+    }
+
+    /**
+     * One JSON value as query or form pairs, nested values the way Stripe-style APIs read them:
+     * {@code name[key]=value}, {@code name[]=item} for lists of scalars and {@code
+     * name[0][key]=value} for lists of objects. Top-level lists of scalars repeat {@code name}
+     * unless {@code deepObject} or not {@code explode}.
+     */
+    public static void encodeParam(
+            String name,
+            JsonNode value,
+            boolean deepObject,
+            boolean explode,
+            List<Map.Entry<String, String>> out) {
+        boolean nested = false;
+        for (JsonNode item : value) {
+            nested |= item.isContainerNode();
+        }
+        if (value.isArray() && !deepObject && !nested) {
+            List<String> texts = new ArrayList<>();
+            for (JsonNode item : value) {
+                if (!item.isNull()) {
+                    texts.add(item.asText());
+                }
+            }
+            if (explode) {
+                texts.forEach(text -> out.add(new AbstractMap.SimpleEntry<>(name, text)));
+            } else if (!texts.isEmpty()) {
+                out.add(new AbstractMap.SimpleEntry<>(name, String.join(",", texts)));
+            }
+            return;
+        }
+        flattenParam(name, value, out);
+    }
+
+    private static void flattenParam(
+            String prefix, JsonNode value, List<Map.Entry<String, String>> out) {
+        if (value.isObject()) {
+            Iterator<Map.Entry<String, JsonNode>> fields = value.fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                flattenParam(prefix + "[" + field.getKey() + "]", field.getValue(), out);
+            }
+        } else if (value.isArray()) {
+            for (int index = 0; index < value.size(); index++) {
+                JsonNode item = value.get(index);
+                flattenParam(prefix + (item.isContainerNode() ? "[" + index + "]" : "[]"), item, out);
+            }
+        } else if (!value.isNull() && !value.isMissingNode()) {
+            out.add(new AbstractMap.SimpleEntry<>(prefix, value.asText()));
         }
     }
 

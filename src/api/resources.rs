@@ -59,9 +59,11 @@ pub(crate) fn from_openapi(
                 specified_operations,
             ) {
                 Ok(Some((res_path, op))) => {
-                    get_or_insert_resource(&mut resources, res_path)
-                        .operations
-                        .push(op);
+                    let operations =
+                        &mut get_or_insert_resource(&mut resources, res_path).operations;
+                    let stream = op.event_stream_variant();
+                    operations.push(op);
+                    operations.extend(stream);
                 }
                 Ok(None) => {}
                 Err(e) => errors.push(format!(
@@ -112,15 +114,18 @@ fn resolve_schema_refs_in_resource(resource: &mut Resource, string_alias_names: 
     }
 }
 
-/// Query parameters whose values are objects, which form-style query strings cannot carry.
-pub(crate) fn object_query_params(resources: &Resources, types: &Types) -> Vec<String> {
-    fn is_object(ty: &FieldType, types: &Types, depth: usize) -> bool {
+/// Marks the query parameters whose values are objects, lists of objects or untyped JSON, which
+/// SDKs encode from their JSON value, `filter[name]=x` style.
+pub(crate) fn mark_structured_query_params(resources: &mut Resources, types: &Types) {
+    fn is_structured(ty: &FieldType, types: &Types, depth: usize) -> bool {
         match ty {
             FieldType::JsonObject | FieldType::Map { .. } => true,
-            FieldType::List { inner } | FieldType::Set { inner } => is_object(inner, types, depth),
+            FieldType::List { inner } | FieldType::Set { inner } => {
+                is_structured(inner, types, depth)
+            }
             FieldType::SchemaRef { name, .. } => match types.get(name).map(|t| &t.data) {
                 Some(TypeData::Alias { target }) if depth < 16 => {
-                    is_object(target, types, depth + 1)
+                    is_structured(target, types, depth + 1)
                 }
                 Some(TypeData::Struct { .. } | TypeData::StructEnum { .. }) => true,
                 _ => false,
@@ -128,33 +133,64 @@ pub(crate) fn object_query_params(resources: &Resources, types: &Types) -> Vec<S
             _ => false,
         }
     }
-    let mut errors = Vec::new();
+    let mut stack: Vec<&mut Resource> = resources.values_mut().collect();
+    while let Some(resource) = stack.pop() {
+        for op in &mut resource.operations {
+            for param in &mut op.query_params {
+                param.structured |= is_structured(&param.r#type, types, 0);
+            }
+        }
+        stack.extend(resource.subresources.values_mut());
+    }
+}
+
+/// The schemas sent in requests and those received in responses, before following references.
+pub(crate) fn request_and_response_roots(
+    resources: &Resources,
+) -> (BTreeSet<&str>, BTreeSet<&str>) {
+    let mut requests = BTreeSet::new();
+    let mut responses = BTreeSet::new();
     let mut stack: Vec<&Resource> = resources.values().collect();
     while let Some(resource) = stack.pop() {
         stack.extend(resource.subresources.values());
         for op in &resource.operations {
-            for param in op
-                .query_params
-                .iter()
-                .filter(|p| is_object(&p.r#type, types, 0))
-            {
-                errors.push(format!(
-                    "operation `{}` ({} {}): query parameter `{}`: object values are not supported",
-                    op.id,
-                    op.method.to_uppercase(),
-                    op.path,
-                    param.name
-                ));
-            }
+            requests.extend(op.request_body_schema_name.as_deref());
+            requests.extend(
+                op.request_body_json_type
+                    .iter()
+                    .filter_map(FieldType::referenced_schema),
+            );
+            requests.extend(
+                op.multipart_fields
+                    .iter()
+                    .filter_map(|f| f.field.r#type.referenced_schema()),
+            );
+            requests.extend(
+                op.query_params
+                    .iter()
+                    .filter_map(|p| p.r#type.referenced_schema()),
+            );
+            responses.extend(op.response_body_schema_name.as_deref());
+            responses.extend(
+                op.response_body_json_type
+                    .iter()
+                    .filter_map(FieldType::referenced_schema),
+            );
+            responses.extend(op.error_response_schema_names.iter().map(String::as_str));
         }
     }
-    errors
+    (requests, responses)
 }
 
 /// A `pet` resource and a `Pet` schema would both be `Pet` in most SDKs: the resource becomes
-/// `pet_api`.
-pub(crate) fn rename_resources_named_like_types(resources: &mut Resources, types: &Types) {
-    let type_names: BTreeSet<String> = types.keys().map(|n| n.to_upper_camel_case()).collect();
+/// `pet_api`, as do resources named like a type the SDK already uses.
+pub(crate) fn rename_resources_named_like_types(
+    resources: &mut Resources,
+    types: &Types,
+    reserved: &BTreeSet<String>,
+) {
+    let mut type_names: BTreeSet<String> = types.keys().map(|n| n.to_upper_camel_case()).collect();
+    type_names.extend(reserved.iter().cloned());
     let clashing: Vec<String> = resources
         .keys()
         .filter(|name| type_names.contains(&name.to_upper_camel_case()))
@@ -369,8 +405,15 @@ fn multipart_fields(
         .into_iter()
         .map(|(name, mut schema)| {
             let mut resolved = resolve_multipart_schema(schema.clone(), schemas)?;
-            if resolved.array.is_some() {
-                bail!("multipart array fields require an explicit encoding implementation");
+            if let Some(items) = resolved.array.as_ref().and_then(|a| a.items.as_ref()) {
+                let SingleOrVec::Single(item) = items else {
+                    bail!("multipart tuple fields are not supported");
+                };
+                let item = resolve_multipart_schema((**item).clone(), schemas)?;
+                ensure!(
+                    item.format.as_deref() != Some("binary"),
+                    "multipart fields of several files are not supported"
+                );
             }
             let is_file = resolved.format.as_deref() == Some("binary");
             if is_file {
@@ -425,6 +468,15 @@ pub(crate) struct Operation {
     request_body_is_form: bool,
     #[serde(default)]
     request_body_kind: RequestBodyKind,
+    /// Properties of a form body encoded `style: deepObject`: lists as `name[]=a&name[]=b`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    form_deep_object: Vec<String>,
+    /// Properties of a form body whose lists are comma-separated (`explode: false`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    form_unexploded: Vec<String>,
+    /// Media type of a binary body other than `application/octet-stream`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request_body_content_type: Option<String>,
     #[serde(default)]
     pub(crate) multipart_fields: Vec<MultipartField>,
     /// True if the request body is a JSON array of `request_body_schema_name`.
@@ -472,6 +524,9 @@ pub(crate) struct Operation {
     pagination: Option<Pagination>,
     #[serde(skip)]
     x_pagination: Option<serde_json::Value>,
+    /// Whether the JSON response may be an event stream instead, which a `_stream` twin reads.
+    #[serde(skip)]
+    json_or_event_stream: bool,
 }
 
 impl Operation {
@@ -506,7 +561,7 @@ impl Operation {
             Some(tag) => tag.clone(),
             None => resource_from_path(path),
         };
-        let res_path = vec![tag.to_snake_case()];
+        let res_path = vec![resource_name(&tag)];
         // `repos/get-content` style ids already carry their resource.
         let op_name = op_id.rsplit('/').next().unwrap_or(&op_id).to_owned();
 
@@ -524,7 +579,7 @@ impl Operation {
                     parameter_data,
                     style: openapi::PathStyle::Simple,
                 } => {
-                    enforce_string_parameter(&parameter_data)
+                    enforce_string_parameter(&parameter_data, false)
                         .with_context(|| format!("path parameter `{name}`"))?;
                     path_params.push(parameter_data.name);
                 }
@@ -532,7 +587,7 @@ impl Operation {
                     parameter_data,
                     style: openapi::HeaderStyle::Simple,
                 } => {
-                    enforce_string_parameter(&parameter_data)
+                    enforce_string_parameter(&parameter_data, true)
                         .with_context(|| format!("header parameter `{name}`"))?;
                     header_params.push(HeaderParam {
                         name: parameter_data.name,
@@ -541,11 +596,23 @@ impl Operation {
                 }
                 openapi::Parameter::Query {
                     parameter_data,
-                    style: openapi::QueryStyle::Form,
+                    style,
                     ..
                 } => {
-                    let r#type = FieldType::from_openapi(parameter_data.format)
-                        .with_context(|| format!("query parameter `{name}`"))?;
+                    let deep_object = match style {
+                        openapi::QueryStyle::Form => false,
+                        openapi::QueryStyle::DeepObject => true,
+                        style => {
+                            let style = serde_json::to_value(style).unwrap_or_default();
+                            bail!("query parameter `{name}`: style {style} is not supported")
+                        }
+                    };
+                    // A `content` parameter is serialized by the caller, as a string.
+                    let r#type = match parameter_data.format {
+                        openapi::ParameterSchemaOrContent::Content(_) => FieldType::String,
+                        format => FieldType::from_openapi(format)
+                            .with_context(|| format!("query parameter `{name}`"))?,
+                    };
                     // `style: form` explodes arrays (`?tags=a&tags=b`) unless `explode: false`.
                     let explode = parameter_data.explode.unwrap_or(true);
 
@@ -555,11 +622,9 @@ impl Operation {
                         required: parameter_data.required,
                         r#type,
                         explode,
+                        deep_object,
+                        structured: deep_object,
                     });
-                }
-                openapi::Parameter::Query { style, .. } => {
-                    let style = serde_json::to_value(style).unwrap_or_default();
-                    bail!("query parameter `{name}`: style {style} is not supported")
                 }
                 openapi::Parameter::Path { style, .. } => {
                     let style = serde_json::to_value(style).unwrap_or_default();
@@ -606,6 +671,9 @@ impl Operation {
             request_body_optional,
             request_body_is_form: request.kind == RequestBodyKind::Form,
             request_body_kind: request.kind,
+            request_body_content_type: request.content_type,
+            form_deep_object: request.form_deep_object,
+            form_unexploded: request.form_unexploded,
             multipart_fields: request.multipart_fields,
             response_body_schema_name: response.schema_name,
             response_body_is_list: response.is_list,
@@ -613,12 +681,28 @@ impl Operation {
             response_is_binary: response.kind == ResponseKind::Binary,
             response_is_text: response.kind == ResponseKind::Text,
             response_is_event_stream: response.kind == ResponseKind::EventStream,
+            json_or_event_stream: response.also_event_stream,
             error_response_schema_names,
             security: None,
             pagination: None,
             x_pagination,
         };
         Ok(Some((res_path, op)))
+    }
+
+    /// The `{name}_stream` twin of an operation answering JSON or an event stream, for the
+    /// requests that ask for the stream (such as OpenAI's `stream: true`).
+    fn event_stream_variant(&self) -> Option<Self> {
+        self.json_or_event_stream.then(|| Self {
+            name: format!("{}_stream", self.name),
+            response_body_schema_name: None,
+            response_body_is_list: false,
+            response_body_json_type: None,
+            response_is_event_stream: true,
+            json_or_event_stream: false,
+            x_pagination: Some(serde_json::Value::Bool(false)),
+            ..self.clone()
+        })
     }
 
     /// Replaces alias bodies, which only Rust declares, by their target.
@@ -723,6 +807,25 @@ impl Operation {
     }
 }
 
+/// A tag as a resource name, which every SDK can use as an identifier: `1-Click Apps` becomes
+/// `one_click_apps`.
+fn resource_name(tag: &str) -> String {
+    const DIGITS: [&str; 10] = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    ];
+    let name = tag.to_snake_case();
+    let digits = name.bytes().take_while(u8::is_ascii_digit).count();
+    let spelled = name
+        .bytes()
+        .take(digits)
+        .map(|d| DIGITS[usize::from(d - b'0')]);
+    match (digits, name[digits..].trim_start_matches('_')) {
+        (0, _) => name,
+        (_, "") => spelled.collect::<Vec<_>>().join("_"),
+        (_, rest) => format!("{}_{rest}", spelled.collect::<Vec<_>>().join("_")),
+    }
+}
+
 /// The resource of an untagged operation: `/api/v2/things/{id}` belongs to `things`.
 fn resource_from_path(path: &str) -> String {
     let is_version = |s: &str| {
@@ -741,6 +844,9 @@ fn resource_from_path(path: &str) -> String {
 #[derive(Debug, Default)]
 struct RequestBody {
     kind: RequestBodyKind,
+    content_type: Option<String>,
+    form_deep_object: Vec<String>,
+    form_unexploded: Vec<String>,
     schema_name: Option<String>,
     is_list: bool,
     json_type: Option<FieldType>,
@@ -753,7 +859,6 @@ impl RequestBody {
         mut body: openapi::RequestBody,
         schemas: &IndexMap<String, openapi::SchemaObject>,
     ) -> anyhow::Result<Self> {
-        let content_types = body.content.keys().join("`, `");
         let (kind, media) = if let Some(media) = body.content.swap_remove("application/json") {
             (RequestBodyKind::Json, media)
         } else if let Some(media) = body
@@ -772,18 +877,32 @@ impl RequestBody {
                 multipart_fields: multipart_fields(schema.json_schema, schemas)?,
                 ..Self::default()
             });
-        } else if body
-            .content
-            .swap_remove("application/octet-stream")
-            .is_some()
-        {
+        } else if let Some(content_type) = body.content.keys().next() {
+            // Any other media type is sent as the bytes the caller provides.
+            let content_type = match content_type.as_str() {
+                "*/*" | "application/octet-stream" => None,
+                _ if body.content.contains_key("application/octet-stream") => None,
+                other => Some(other.to_owned()),
+            };
             return Ok(Self {
                 kind: RequestBodyKind::Binary,
+                content_type,
                 ..Self::default()
             });
         } else {
-            bail!("content type `{content_types}` is not supported");
+            bail!("request bodies need a content type");
         };
+        let mut form_deep_object = Vec::new();
+        let mut form_unexploded = Vec::new();
+        for (name, encoding) in &media.encoding {
+            match encoding.style {
+                Some(openapi::QueryStyle::DeepObject) => form_deep_object.push(name.clone()),
+                Some(openapi::QueryStyle::Form) | None if !encoding.explode => {
+                    form_unexploded.push(name.clone())
+                }
+                _ => {}
+            }
+        }
         let Some(schema) = media.schema else {
             ensure!(kind == RequestBodyKind::Json, "a form body needs a schema");
             return Ok(Self {
@@ -828,6 +947,8 @@ impl RequestBody {
             kind,
             schema_name: Some(name),
             all_optional,
+            form_deep_object,
+            form_unexploded,
             ..Self::default()
         })
     }
@@ -865,69 +986,68 @@ fn instance_type_name(t: &InstanceType) -> &'static str {
     }
 }
 
-fn enforce_string_parameter(parameter_data: &openapi::ParameterData) -> anyhow::Result<()> {
-    let openapi::ParameterSchemaOrContent::Schema(s) = &parameter_data.format else {
-        bail!("found unexpected 'content' data format");
+/// Path and header parameters are sent as text: scalars, unions of them and, in headers, lists
+/// (comma-separated by the caller) or `content` values (serialized by the caller).
+fn enforce_string_parameter(
+    parameter_data: &openapi::ParameterData,
+    is_header: bool,
+) -> anyhow::Result<()> {
+    let s = match &parameter_data.format {
+        openapi::ParameterSchemaOrContent::Schema(s) => s,
+        openapi::ParameterSchemaOrContent::Content(_) if is_header => return Ok(()),
+        openapi::ParameterSchemaOrContent::Content(_) => {
+            bail!("found unexpected 'content' data format")
+        }
     };
     let Schema::Object(obj) = &s.json_schema else {
         bail!("found unexpected `true` schema");
     };
-
-    // Check for direct string type
-    if matches!(obj.instance_type, Some(schemars::schema::SingleOrVec::Single(ref t)) if matches!(**t, InstanceType::String | InstanceType::Integer | InstanceType::Number | InstanceType::Boolean))
-    {
+    if is_text(obj, is_header, 0) {
         return Ok(());
     }
-
-    // Handle OpenAPI 3.1 type arrays like ["string", "null"]
-    if let Some(schemars::schema::SingleOrVec::Vec(types)) = &obj.instance_type {
-        let has_string = types.contains(&InstanceType::String);
-        let all_string_or_null = types
-            .iter()
-            .all(|t| *t == InstanceType::String || *t == InstanceType::Null);
-        if has_string && all_string_or_null {
-            return Ok(());
-        }
-    }
-
-    // Handle oneOf patterns like: oneOf: [{type: null}, {$ref: ...}] or oneOf: [{type: null}, {type: string}]
-    if let Some(ref subschemas) = obj.subschemas
-        && let Some(ref one_of) = subschemas.one_of
-        && one_of.len() == 2
-    {
-        for schema in one_of {
-            if let Schema::Object(inner_obj) = schema {
-                // Check if this is a null type - skip it
-                let is_null = match &inner_obj.instance_type {
-                    Some(schemars::schema::SingleOrVec::Single(t)) => **t == InstanceType::Null,
-                    _ => false,
-                };
-                if is_null {
-                    continue;
-                }
-
-                // Check if this is a string type
-                if inner_obj.instance_type == Some(InstanceType::String.into()) {
-                    return Ok(());
-                }
-
-                // Check if this is a $ref (path params with refs are typically string IDs)
-                if inner_obj.reference.is_some() {
-                    return Ok(());
-                }
-            }
-        }
-    }
-
-    // If instance_type is None but there's a $ref, accept it (typically string IDs)
-    if obj.instance_type.is_none() && obj.reference.is_some() {
-        return Ok(());
-    }
-
     bail!(
         "only scalar values are supported, not {}",
         describe_schema(obj)
     );
+}
+
+fn is_text(obj: &SchemaObject, allow_list: bool, depth: usize) -> bool {
+    let scalar = |t: &InstanceType| {
+        matches!(
+            t,
+            InstanceType::String
+                | InstanceType::Integer
+                | InstanceType::Number
+                | InstanceType::Boolean
+                | InstanceType::Null
+        )
+    };
+    let variants = obj
+        .subschemas
+        .as_ref()
+        .and_then(|s| s.one_of.as_ref().or(s.any_of.as_ref()));
+    match (&obj.instance_type, variants) {
+        (Some(SingleOrVec::Single(t)), _) if **t == InstanceType::Array => {
+            allow_list
+                && depth == 0
+                && match obj.array.as_ref().and_then(|a| a.items.as_ref()) {
+                    Some(SingleOrVec::Single(item)) => match &**item {
+                        Schema::Object(item) => is_text(item, false, depth + 1),
+                        Schema::Bool(_) => false,
+                    },
+                    _ => false,
+                }
+        }
+        (Some(SingleOrVec::Single(t)), _) => scalar(t),
+        (Some(SingleOrVec::Vec(types)), _) => types.iter().all(scalar),
+        (None, Some(variants)) if depth < 8 => variants.iter().all(|v| match v {
+            Schema::Object(v) => is_text(v, allow_list, depth + 1),
+            Schema::Bool(_) => false,
+        }),
+        (None, _) => {
+            obj.reference.is_some() || obj.enum_values.is_some() || obj.const_value.is_some()
+        }
+    }
 }
 
 /// Response body type for code generation.
@@ -947,6 +1067,8 @@ struct ResponseBody {
     schema_name: Option<String>,
     is_list: bool,
     json_type: Option<FieldType>,
+    /// A JSON body that may also come as `text/event-stream`, depending on the request.
+    also_event_stream: bool,
 }
 
 /// Picks the body the SDK decodes on success: the lowest 2xx status with content, or `default`
@@ -1028,7 +1150,8 @@ impl ResponseBody {
         if content.is_empty() {
             return Ok(Self::default());
         }
-        if content.contains_key("text/event-stream") {
+        let also_event_stream = content.contains_key("text/event-stream");
+        if also_event_stream && !content.contains_key("application/json") {
             return Ok(kind(ResponseKind::EventStream));
         }
         if let Some(json) = content.get("application/json") {
@@ -1044,6 +1167,7 @@ impl ResponseBody {
                     schema_name: Some(schema_name),
                     is_list,
                     json_type: None,
+                    also_event_stream,
                 });
             }
             let json_type = FieldType::from_schema_object(obj.clone())?;
@@ -1055,6 +1179,7 @@ impl ResponseBody {
             return Ok(Self {
                 kind: ResponseKind::Json,
                 json_type: Some(json_type),
+                also_event_stream,
                 ..Self::default()
             });
         }
@@ -1115,6 +1240,12 @@ pub(crate) struct QueryParam {
     /// per OpenAPI's `style: form` default.
     #[serde(default = "default_explode")]
     pub(crate) explode: bool,
+    /// `style: deepObject`: lists are sent as `name[]=a&name[]=b`.
+    #[serde(default)]
+    deep_object: bool,
+    /// Sent from its JSON value: objects as `name[key]=value`, nested as deep as they go.
+    #[serde(default)]
+    pub(crate) structured: bool,
 }
 
 fn default_explode() -> bool {
@@ -1137,15 +1268,19 @@ mod streaming_tests {
     }
 
     #[test]
-    fn multipart_rejects_array_encodings_instead_of_emitting_json_files() {
+    fn multipart_lists_of_values_are_fields_but_lists_of_files_are_rejected() {
         let schema = serde_json::from_value(json!({"type":"object", "properties":{"files":{"type":"array","items":{"type":"string","format":"binary"}}}})).unwrap();
         assert!(
             multipart_fields(schema, &IndexMap::new())
                 .err()
                 .unwrap()
                 .to_string()
-                .contains("array fields")
+                .contains("several files")
         );
+        let schema = serde_json::from_value(json!({"type":"object", "properties":{"tags":{"type":"array","items":{"type":"string"}}}})).unwrap();
+        let fields = multipart_fields(schema, &IndexMap::new()).unwrap();
+        assert!(!fields[0].is_file);
+        assert!(matches!(fields[0].field.r#type, FieldType::List { .. }));
     }
 
     #[test]
@@ -1250,6 +1385,38 @@ mod tests {
     }
 
     #[test]
+    fn json_or_event_stream_responses_are_json_with_a_stream_twin() {
+        let content =
+            json!({ "application/json": { "schema": widget() }, "text/event-stream": {} });
+        let (body, _) =
+            responses(json!({ "200": { "description": "", "content": content } })).unwrap();
+        assert_eq!(body.kind, ResponseKind::Json);
+        assert!(body.also_event_stream);
+        let op = serde_json::from_value(json!({ "operationId": "chat", "responses": {
+            "200": { "description": "", "content": content } } }))
+        .unwrap();
+        let schemas = schemas(json!({ "Widget": { "type": "object", "properties": {} } }));
+        let (_, op) = Operation::from_openapi(
+            "/chat",
+            "post",
+            op,
+            &schemas,
+            IncludeMode::OnlyPublic,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap()
+        .unwrap();
+        let stream = op.event_stream_variant().unwrap();
+        assert_eq!(
+            (stream.name.as_str(), stream.id.as_str()),
+            ("chat_stream", "chat")
+        );
+        assert!(stream.response_is_event_stream && stream.response_body_schema_name.is_none());
+        assert_eq!(op.response_body_schema_name.as_deref(), Some("Widget"));
+    }
+
+    #[test]
     fn non_json_responses_are_text_or_binary() {
         let content =
             |media: &str| json!({ "200": { "description": "", "content": { media: {} } } });
@@ -1283,8 +1450,43 @@ mod tests {
         let labels = json!({ "type": "array", "items": { "type": "string" } });
         let body = request(json!({ "application/json": { "schema": labels } })).unwrap();
         assert!(matches!(body.json_type, Some(FieldType::List { .. })));
-        let error = request(json!({ "text/plain": { "schema": { "type": "string" } } }));
-        assert!(error.unwrap_err().to_string().contains("`text/plain`"));
+        let text = request(json!({ "text/plain": { "schema": { "type": "string" } } })).unwrap();
+        assert_eq!(
+            (text.kind, text.content_type.as_deref()),
+            (RequestBodyKind::Binary, Some("text/plain"))
+        );
+        let raw = request(json!({ "application/octet-stream": {}, "image/png": {} })).unwrap();
+        assert_eq!(
+            (raw.kind, raw.content_type),
+            (RequestBodyKind::Binary, None)
+        );
+    }
+
+    #[test]
+    fn form_encodings_list_deep_objects_and_unexploded_properties() {
+        let encoding = json!({
+            "expand": { "style": "deepObject", "explode": true },
+            "codes": { "style": "form", "explode": false },
+            "tags": { "style": "form", "explode": true }
+        });
+        let body = request(json!({ "application/x-www-form-urlencoded": {
+            "schema": widget(), "encoding": encoding
+        } }))
+        .unwrap();
+        assert_eq!(body.kind, RequestBodyKind::Form);
+        assert_eq!(body.form_deep_object, ["expand"]);
+        assert_eq!(body.form_unexploded, ["codes"]);
+    }
+
+    #[test]
+    fn tags_starting_with_digits_are_spelled_out() {
+        assert_eq!(
+            resource_name("1-Click Applications"),
+            "one_click_applications"
+        );
+        assert_eq!(resource_name("2FA"), "two_fa");
+        assert_eq!(resource_name("42"), "four_two");
+        assert_eq!(resource_name("Pets"), "pets");
     }
 
     #[test]
@@ -1334,7 +1536,7 @@ mod tests {
     fn unsupported_parameters_are_errors_naming_the_parameter() {
         let op = serde_json::from_value(json!({
             "operationId": "op",
-            "parameters": [{ "name": "ids", "in": "header", "schema": { "type": "array", "items": { "type": "string" } } }]
+            "parameters": [{ "name": "ids", "in": "path", "required": true, "schema": { "type": "array", "items": { "type": "string" } } }]
         }))
         .unwrap();
         let error = Operation::from_openapi(
@@ -1350,7 +1552,51 @@ mod tests {
         .unwrap();
         assert_eq!(
             format!("{error:#}"),
-            "header parameter `ids`: only scalar values are supported, not type `array`"
+            "path parameter `ids`: only scalar values are supported, not type `array`"
         );
+    }
+
+    fn parameter(param: Value) -> anyhow::Result<Operation> {
+        let op = json!({ "operationId": "op", "parameters": [param] });
+        let (_, op) = Operation::from_openapi(
+            "/x/{id}",
+            "get",
+            serde_json::from_value(op).unwrap(),
+            &IndexMap::new(),
+            IncludeMode::OnlyPublic,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )?
+        .unwrap();
+        Ok(op)
+    }
+
+    #[test]
+    fn unions_of_scalars_lists_and_content_are_text_parameters() {
+        let id = json!({ "name": "id", "in": "path", "required": true,
+            "schema": { "anyOf": [{ "type": "integer" }, { "type": "string" }] } });
+        assert_eq!(parameter(id).unwrap().path_params, ["id"]);
+        let list = json!({ "name": "beta", "in": "header",
+            "schema": { "type": "array", "items": { "type": "string" } } });
+        assert_eq!(parameter(list).unwrap().header_params[0].name, "beta");
+        let filter = json!({ "name": "X-Filter", "in": "header",
+            "content": { "application/json": { "schema": { "type": "object" } } } });
+        assert_eq!(parameter(filter).unwrap().header_params[0].name, "X-Filter");
+        let nested = json!({ "name": "rows", "in": "header", "schema": { "type": "array",
+            "items": { "type": "array", "items": { "type": "string" } } } });
+        assert!(parameter(nested).is_err());
+    }
+
+    #[test]
+    fn deep_object_query_parameters_are_structured() {
+        let expand = json!({ "name": "expand", "in": "query", "style": "deepObject",
+            "schema": { "type": "array", "items": { "type": "string" } } });
+        let op = parameter(expand).unwrap();
+        let param = &op.query_params[0];
+        assert!(param.deep_object && param.structured && param.explode);
+        let pipes = json!({ "name": "ids", "in": "query", "style": "pipeDelimited",
+            "schema": { "type": "array", "items": { "type": "string" } } });
+        let error = format!("{:#}", parameter(pipes).err().unwrap());
+        assert!(error.contains("pipeDelimited"), "{error}");
     }
 }

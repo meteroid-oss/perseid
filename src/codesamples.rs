@@ -210,6 +210,7 @@ pub async fn generate_codesamples(
             excluded: excluded_operation_ids,
             specified: BTreeSet::new(),
             pagination: Vec::new(),
+            reserved: BTreeSet::new(),
         },
     )?;
 

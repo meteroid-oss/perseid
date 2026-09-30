@@ -37,6 +37,7 @@ jobs:
           - tests/fixtures/petstore.yaml
           - tests/fixtures/features.yaml
           - tests/fixtures/torture.yaml
+          - tests/fixtures/realworld.yaml
           - https://raw.githubusercontent.com/meteroid-oss/meteroid-clients/main/spec/openapi.json
     steps:
       - uses: actions/checkout@v4

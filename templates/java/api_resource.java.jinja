@@ -101,6 +101,9 @@ public class {{ resource_type_name }} {
         {% set req_body_type = op.request_body_schema_name | to_upper_camel_case -%}
         {% if op.request_body_is_list %}{% set req_body_type = "List<" ~ req_body_type ~ ">" %}{% endif -%}
         {% set req_body_field_name = op.request_body_schema_name | ident("camel", "java") -%}
+        {% if req_body_field_name in ["options", "url", "headers", "client"] or req_body_field_name in (op.path_params | map("ident", "camel", "java") | list) -%}
+            {% set req_body_field_name = "body" -%}
+        {% endif -%}
     {% elif op.request_body_json_type is defined -%}
         {% set req_body_type = op.request_body_json_type.to_java() -%}
         {% set req_body_field_name = "body" -%}
@@ -163,7 +166,8 @@ public class {{ resource_type_name }} {
     {{ all_args | strip_trailing_comma }}
     ) {{ throws }}  {
         {% set ns = namespace(literal=[], calls=[], expr="") -%}
-        {% for segment in (op.path | split("/") | list)[1:] -%}
+        {% set path_and_query = op.path | split("?") | list -%}
+        {% for segment in (path_and_query[0] | split("/") | list)[1:] -%}
             {% if "{" in segment -%}
                 {% if ns.literal | length > 0 -%}
                     {% set ns.calls = ns.calls + [".addPathSegments(" ~ (ns.literal | join("/") | tojson) ~ ")"] -%}
@@ -183,6 +187,9 @@ public class {{ resource_type_name }} {
         {% if ns.literal | length > 0 -%}
             {% set ns.calls = ns.calls + [".addPathSegments(" ~ (ns.literal | join("/") | tojson) ~ ")"] -%}
         {% endif -%}
+        {% if path_and_query | length > 1 -%}
+            {% set ns.calls = ns.calls + [".encodedQuery(" ~ (path_and_query[1:] | join("?") | tojson) ~ ")"] -%}
+        {% endif -%}
         {% set has_query = op.query_params | length > 0 -%}
         {% if not has_query -%}
         HttpUrl url = client.newUrlBuilder(){{ ns.calls | join("") }}.build();
@@ -193,7 +200,9 @@ public class {{ resource_type_name }} {
         {% set getter = "options.get" ~ query_fields[loop.index0] ~ ("_" if query_fields[loop.index0] == "Class" else "") ~ "()" -%}
         {% set explode = p.explode | default(true) -%}
         if ({{ getter }} != null) {
-            {% if (p.type.is_list() or p.type.is_set()) and explode -%}
+            {% if p.structured -%}
+            Utils.addStructuredQueryParameter(url, {{ p.name | tojson }}, {{ getter }}, {{ p.deep_object | lower }}, {{ explode | lower }});
+            {% elif (p.type.is_list() or p.type.is_set()) and explode -%}
             Utils.addExplodedQueryParameter(url, {{ p.name | tojson }}, {{ getter }});
             {% elif p.type.is_string() -%}
             url.addQueryParameter({{ p.name | tojson }}, {{ getter }});
@@ -221,7 +230,7 @@ public class {{ resource_type_name }} {
         {{ http_client }}.executeEventStream({{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }}, {{ headers_arg }});
         {% elif op.request_body_kind in ["binary", "multipart"] -%}
         {% if op.request_body_kind == "binary" -%}
-        {% set body_expr = 'body.toRequestBody("application/octet-stream")' -%}
+        {% set body_expr = "body.toRequestBody(" ~ (op.request_body_content_type | default("application/octet-stream") | tojson) ~ ")" -%}
         {% else -%}
         {% set body_expr -%}
             new Multipart()
@@ -240,8 +249,13 @@ public class {{ resource_type_name }} {
         {% elif op.response_is_binary -%}
         {{ http_client }}.executeBinaryRequest({{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }}, {{ headers_arg }}, {{ body_arg }});
         {% else -%}
+        {% if op.request_body_is_form -%}
+        {% set form_lists %}, List.of({% for n in op.form_deep_object | default([]) %}{{ n | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}), List.of({% for n in op.form_unexploded | default([]) %}{{ n | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}){% endset -%}
+        {% else -%}
+        {% set form_lists = "" -%}
+        {% endif -%}
         {{ http_client }}.{{ "executeFormRequest" if op.request_body_is_form else "executeRequest" }}(
-            {{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }}, {{ headers_arg }}, {{ body_arg }}, {{ res_java_type or "Void.class" }});
+            {{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }}, {{ headers_arg }}, {{ body_arg }}, {{ res_java_type or "Void.class" }}{{ form_lists }});
         {% endif -%}
     }
     {% if op.pagination is defined -%}

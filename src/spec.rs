@@ -42,6 +42,8 @@ pub struct Filters {
     pub excluded: BTreeSet<String>,
     pub specified: BTreeSet<String>,
     pub pagination: Vec<crate::config::Pagination>,
+    /// Type names the SDK's runtime or language already uses, which schemas are renamed from.
+    pub reserved: BTreeSet<String>,
 }
 
 /// Reads an OpenAPI document (JSON or YAML) from a path or an http(s) URL, as JSON text, upgraded to 3.1 when it is 3.0.
@@ -58,7 +60,9 @@ pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
     let mut value: Value = if text.trim_start().starts_with('{') {
         serde_json::from_str(&text).map_err(anyhow::Error::from)
     } else {
-        serde_norway::from_str(&text).map_err(anyhow::Error::from)
+        serde_norway::from_str::<yaml::Json>(&text)
+            .map(|json| json.0)
+            .map_err(anyhow::Error::from)
     }
     .with_context(|| format!("parsing {location}"))?;
     upgrade::to_3_1(&mut value).with_context(|| location.to_owned())?;
@@ -68,6 +72,7 @@ pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
 pub(crate) fn api(spec: &str, filters: &Filters) -> Result<Api> {
     let mut doc: Value = serde_json::from_str(spec).context("the spec is not valid JSON")?;
     normalize::normalize(&mut doc)?;
+    normalize::rename_reserved_schemas(&mut doc, &filters.reserved);
     let raw = doc;
     // `OpenApi` borrows its version string, so it cannot deserialize from a `Value`.
     let doc = serde_json::to_string(&raw)?;
@@ -235,6 +240,124 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Report {
             } else {
                 *held_back += 1;
             }
+        }
+    }
+}
+
+/// YAML read as JSON, with integers beyond 64 bits as floats and scalar keys as strings.
+mod yaml {
+    use std::fmt;
+
+    use serde::de::{Deserialize, Deserializer, Error, MapAccess, SeqAccess, Visitor};
+    use serde_json::{Map, Number, Value};
+
+    pub(super) struct Json(pub Value);
+
+    struct Key(String);
+
+    impl<'de> Deserialize<'de> for Json {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            deserializer.deserialize_any(JsonVisitor).map(Json)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Key {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            match deserializer.deserialize_any(JsonVisitor)? {
+                Value::String(key) => Ok(Key(key)),
+                Value::Null => Ok(Key("null".into())),
+                key @ (Value::Bool(_) | Value::Number(_)) => Ok(Key(key.to_string())),
+                _ => Err(D::Error::custom("mapping keys must be scalars")),
+            }
+        }
+    }
+
+    struct JsonVisitor;
+
+    fn float<E: Error>(value: f64) -> Result<Value, E> {
+        Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| E::custom("numbers must be finite"))
+    }
+
+    impl<'de> Visitor<'de> for JsonVisitor {
+        type Value = Value;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a YAML value")
+        }
+
+        fn visit_bool<E: Error>(self, v: bool) -> Result<Value, E> {
+            Ok(Value::Bool(v))
+        }
+
+        fn visit_i64<E: Error>(self, v: i64) -> Result<Value, E> {
+            Ok(v.into())
+        }
+
+        fn visit_u64<E: Error>(self, v: u64) -> Result<Value, E> {
+            Ok(v.into())
+        }
+
+        fn visit_i128<E: Error>(self, v: i128) -> Result<Value, E> {
+            i64::try_from(v).map_or_else(|_| float(v as f64), |v| Ok(v.into()))
+        }
+
+        fn visit_u128<E: Error>(self, v: u128) -> Result<Value, E> {
+            u64::try_from(v).map_or_else(|_| float(v as f64), |v| Ok(v.into()))
+        }
+
+        fn visit_f64<E: Error>(self, v: f64) -> Result<Value, E> {
+            float(v)
+        }
+
+        fn visit_str<E: Error>(self, v: &str) -> Result<Value, E> {
+            Ok(Value::String(v.to_owned()))
+        }
+
+        fn visit_string<E: Error>(self, v: String) -> Result<Value, E> {
+            Ok(Value::String(v))
+        }
+
+        fn visit_unit<E: Error>(self) -> Result<Value, E> {
+            Ok(Value::Null)
+        }
+
+        fn visit_none<E: Error>(self) -> Result<Value, E> {
+            Ok(Value::Null)
+        }
+
+        fn visit_some<D: Deserializer<'de>>(self, d: D) -> Result<Value, D::Error> {
+            Json::deserialize(d).map(|json| json.0)
+        }
+
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Value, A::Error> {
+            let mut items = Vec::new();
+            while let Some(Json(item)) = seq.next_element()? {
+                items.push(item);
+            }
+            Ok(Value::Array(items))
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Value, A::Error> {
+            let mut object = Map::new();
+            while let Some((Key(key), Json(value))) = map.next_entry()? {
+                object.insert(key, value);
+            }
+            Ok(Value::Object(object))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn big_integers_become_floats_and_keys_strings() {
+            let json: super::Json =
+                serde_norway::from_str("max: 18446744073709552000\n200: ok\nsmall: -3\n").unwrap();
+            assert_eq!(
+                json.0,
+                serde_json::json!({"max": 18446744073709552000.0, "200": "ok", "small": -3})
+            );
         }
     }
 }

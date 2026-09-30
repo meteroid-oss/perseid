@@ -15,7 +15,8 @@
 {% if "decimal" in ty -%}
 [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString | JsonNumberHandling.WriteAsString)]
 {% endif -%}
-{% if field.deprecated %}[Obsolete]
+{#- C# rejects `[Obsolete]` on required members. #}
+{% if field.deprecated and (patch or not field.required) %}[Obsolete]
 {% endif -%}
 {% if patch -%}
 public MaybeUnset<{{ ty }}> {{ m.member(field.name, owner) }} { get; set; }

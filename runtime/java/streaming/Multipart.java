@@ -15,13 +15,17 @@ import okhttp3.RequestBody;
 public final class Multipart {
     private final MultipartBody.Builder builder = new MultipartBody.Builder().setType(MultipartBody.FORM);
 
-    /** Adds a field: scalars as text, objects and arrays as JSON. */
+    /** Adds a field: scalars as text, objects as JSON, lists as one part per item. */
     public Multipart field(String name, Object value) {
         if (value == null) {
             return this;
         }
         JsonNode node = Utils.getObjectMapper().valueToTree(value);
-        if (node.isContainerNode()) {
+        if (node.isArray()) {
+            node.forEach(item -> field(name, item));
+        } else if (node.isNull()) {
+            return this;
+        } else if (node.isContainerNode()) {
             builder.addPart(
                     Headers.of("Content-Disposition", "form-data; name=\"" + name + "\""),
                     RequestBody.create(

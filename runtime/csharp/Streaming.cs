@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
@@ -209,14 +210,12 @@ public sealed class Upload
 
     public static implicit operator Upload(Stream stream) => FromStream(stream);
 
-    internal HttpContent CreateContent()
+    internal HttpContent CreateContent(string defaultType = "application/octet-stream")
     {
         HttpContent content = _bytes is not null
             ? new ByteArrayContent(_bytes)
             : new StreamContent(_stream!);
-        content.Headers.ContentType = MediaTypeHeaderValue.Parse(
-            ContentType ?? "application/octet-stream"
-        );
+        content.Headers.ContentType = MediaTypeHeaderValue.Parse(ContentType ?? defaultType);
         return content;
     }
 }
@@ -228,7 +227,8 @@ internal sealed class MultipartBody
 
     public bool IsOneShot => _parts.Exists(p => p.File?.IsStream == true);
 
-    /// <summary>Adds a field: strings, numbers and enums as text, objects and lists as JSON.</summary>
+    /// <summary>Adds a field: strings, numbers and enums as text, objects as JSON, lists as one
+    /// part per item.</summary>
     public void Field(string name, object value, JsonSerializerOptions options)
     {
         var text = value switch
@@ -248,19 +248,40 @@ internal sealed class MultipartBody
             );
             using var json = JsonDocument.Parse(bytes);
             var root = json.RootElement;
-            if (root.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+            List<JsonElement> items = root.ValueKind is JsonValueKind.Array
+                ? root.EnumerateArray().ToList()
+                : [root];
+            foreach (var item in items)
             {
-                _parts.Add((name, () => Json(bytes), null));
-                return;
+                AddJsonPart(name, item);
             }
-            text = root.ValueKind == JsonValueKind.String ? root.GetString()! : root.GetRawText();
+            return;
         }
         var utf8 = Encoding.UTF8.GetBytes(text);
         _parts.Add((name, () => new ByteArrayContent(utf8), null));
     }
 
+    private void AddJsonPart(string name, JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Null:
+                return;
+            case JsonValueKind.Object or JsonValueKind.Array:
+                var json = Encoding.UTF8.GetBytes(value.GetRawText());
+                _parts.Add((name, () => Json(json), null));
+                return;
+            default:
+                var text = Encoding.UTF8.GetBytes(
+                    value.ValueKind == JsonValueKind.String ? value.GetString()! : value.GetRawText()
+                );
+                _parts.Add((name, () => new ByteArrayContent(text), null));
+                return;
+        }
+    }
+
     public void File(string name, Upload upload) =>
-        _parts.Add((name, upload.CreateContent, upload));
+        _parts.Add((name, () => upload.CreateContent(), upload));
 
     public HttpContent CreateContent()
     {

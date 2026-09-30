@@ -4,7 +4,16 @@ import os
 
 from features import Features, FeaturesAsync
 from features.api import FeaturesOptions, StreamingUploadFileBody, Upload
-from features.models import Health
+from features.models import (
+    Charge,
+    ChargeItemsItem,
+    ChargeShipping,
+    ChargeShippingAddress,
+    Filter,
+    FilterAmount,
+    Health,
+    SearchRange,
+)
 
 URL = os.environ["FEATURES_URL"]
 
@@ -39,13 +48,49 @@ assert [(e.event, e.data, e.id, e.retry) for e in events] == [
     ("message", '{"n": 3}', "3", 1500),
 ], events
 body = StreamingUploadFileBody(
-    file=Upload(b"hello", "a.txt", "text/plain"), name="doc", count=2, meta=Health(status="ok")
+    file=Upload(b"hello", "a.txt", "text/plain"),
+    name="doc",
+    count=2,
+    meta=Health(status="ok"),
+    tags=["a", "b"],
 )
 assert client.streaming.upload_file(body).status == (
-    'count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status": "ok"};name=::doc'
+    'count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status": "ok"}'
+    ";name=::doc;tags=::a;tags=::b"
 )
 assert client.streaming.upload_content("f1", b"raw").status == "application/octet-stream:raw"
 assert client.streaming.upload_content("f1", io.BytesIO(b"io")).status == "application/octet-stream:io"
+
+searched = client.wire.search(
+    filter=Filter(status="open", amount=FilterAmount(gte=5)),
+    expand=["a", "b"],
+    metadata={"k": "v"},
+    ids=["x", "y"],
+    tags=["t1", "t2"],
+    range=SearchRange(gte=1, lt=9),
+)
+assert searched.status == (
+    "expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y"
+    "&metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2"
+), searched
+charge = Charge(
+    amount=100,
+    capture=True,
+    metadata={"order": "7"},
+    items=[ChargeItemsItem(price="p1", quantity=2), ChargeItemsItem(price="p2")],
+    expand=["customer"],
+    statuses=["a", "b"],
+    codes=["c1", "c2"],
+    shipping=ChargeShipping(address=ChargeShippingAddress(line1="1 Main", city="Paris")),
+)
+assert client.wire.create_charge(charge).status == (
+    "application/x-www-form-urlencoded|amount=100&capture=true&codes=c1,c2&expand[]=customer"
+    "&items[0][price]=p1&items[0][quantity]=2&items[1][price]=p2&metadata[order]=7"
+    "&shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b"
+)
+assert client.wire.create_charge().status == "|"
+assert client.wire.beta_search(limit=2, features="x,y").status == "beta=true&limit=2|features=x,y"
+assert client.wire.put_image("42", b"png").status == "42:image/png:png"
 
 
 async def main():

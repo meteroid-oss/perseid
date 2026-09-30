@@ -47,10 +47,11 @@ async function main() {
     name: "doc",
     count: 2,
     meta: { status: "ok" },
+    tags: ["a", "b"],
   });
   assert.equal(
     uploaded.status,
-    'count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc'
+    'count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc;tags=::a;tags=::b'
   );
   const content = await client.streaming.uploadContent("f1", new Blob(["raw bytes"]));
   assert.equal(content.status, "application/octet-stream:raw bytes");
@@ -64,6 +65,41 @@ async function main() {
     (await client.streaming.uploadContent("f1", streamed)).status,
     "application/octet-stream:streamed"
   );
+  const searched = await client.wire.search({
+    filter: { status: "open", amount: { gte: 5 } },
+    expand: ["a", "b"],
+    metadata: { k: "v" },
+    ids: ["x", "y"],
+    tags: ["t1", "t2"],
+    range: { gte: 1, lt: 9 },
+  });
+  assert.equal(
+    searched.status,
+    "expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y" +
+      "&metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2"
+  );
+  const charged = await client.wire.createCharge({
+    amount: 100,
+    capture: true,
+    metadata: { order: "7" },
+    items: [{ price: "p1", quantity: 2 }, { price: "p2" }],
+    expand: ["customer"],
+    statuses: ["a", "b"],
+    codes: ["c1", "c2"],
+    shipping: { address: { line1: "1 Main", city: "Paris" } },
+  });
+  assert.equal(
+    charged.status,
+    "application/x-www-form-urlencoded|amount=100&capture=true&codes=c1,c2&expand[]=customer" +
+      "&items[0][price]=p1&items[0][quantity]=2&items[1][price]=p2&metadata[order]=7" +
+      "&shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b"
+  );
+  assert.equal(
+    (await client.wire.betaSearch({ limit: 2, features: "x,y" })).status,
+    "beta=true&limit=2|features=x,y"
+  );
+  const image = await client.wire.putImage("42", new TextEncoder().encode("png"));
+  assert.equal(image.status, "42:image/png:png");
   console.log("typescript smoke test passed");
 }
 

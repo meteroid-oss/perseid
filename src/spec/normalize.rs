@@ -94,7 +94,10 @@ fn normalize_operation(
     if let Some(body) = op.remove("requestBody") {
         let mut body = resolve(root, body).context("request body")?;
         normalize_content(&mut body);
-        op.insert("requestBody".into(), body);
+        explode_form_encodings(&mut body);
+        if !is_empty_form(&body, root) {
+            op.insert("requestBody".into(), body);
+        }
     }
     if let Some(Value::Object(responses)) = op.get_mut("responses") {
         for (status, response) in responses.iter_mut() {
@@ -104,6 +107,134 @@ fn normalize_operation(
         }
     }
     Ok(())
+}
+
+/// Renames the schemas whose type name the SDK already uses, `Upload` becoming `UploadModel`.
+pub(super) fn rename_reserved_schemas(doc: &mut Value, reserved: &BTreeSet<String>) {
+    let Some(Value::Object(schemas)) = doc.pointer("/components/schemas") else {
+        return;
+    };
+    let mut taken: BTreeSet<String> = schemas.keys().map(|n| n.to_upper_camel_case()).collect();
+    let mut renames = BTreeMap::new();
+    for name in schemas.keys() {
+        if !reserved.contains(&name.to_upper_camel_case()) {
+            continue;
+        }
+        let base = format!("{}Model", name.to_upper_camel_case());
+        let mut candidate = base.clone();
+        for n in 2.. {
+            if taken.insert(candidate.clone()) {
+                break;
+            }
+            candidate = format!("{base}{n}");
+        }
+        renames.insert(name.clone(), candidate);
+    }
+    if renames.is_empty() {
+        return;
+    }
+    if let Some(Value::Object(schemas)) = doc.pointer_mut("/components/schemas") {
+        let renamed = std::mem::take(schemas)
+            .into_iter()
+            .map(|(name, schema)| (renames.get(&name).cloned().unwrap_or(name), schema))
+            .collect();
+        *schemas = renamed;
+    }
+    rename_references(doc, &renames);
+}
+
+fn rename_references(value: &mut Value, renames: &BTreeMap<String, String>) {
+    match value {
+        Value::String(s) => {
+            if let Some(new) = s.strip_prefix(SCHEMA_PREFIX).and_then(|n| renames.get(n)) {
+                *s = format!("{SCHEMA_PREFIX}{new}");
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|v| rename_references(v, renames)),
+        Value::Object(map) => {
+            if let Some(Value::Object(mapping)) = map
+                .get_mut("discriminator")
+                .and_then(|d| d.get_mut("mapping"))
+            {
+                for target in mapping.values_mut() {
+                    if let Some(new) = target.as_str().and_then(|t| renames.get(t)) {
+                        *target = new.clone().into();
+                    }
+                }
+            }
+            map.values_mut().for_each(|v| rename_references(v, renames));
+        }
+        _ => {}
+    }
+}
+
+/// A form body allowing no property at all, which Stripe declares on its GET operations: it is
+/// always empty, so the SDK has nothing to offer.
+fn is_empty_form(body: &Value, root: &Value) -> bool {
+    let Some(Value::Object(content)) = body.get("content") else {
+        return false;
+    };
+    let Some(media) = content.get("application/x-www-form-urlencoded") else {
+        return false;
+    };
+    let schema = resolve(root, media.get("schema").cloned().unwrap_or_default());
+    content.len() == 1
+        && schema.is_ok_and(|schema| {
+            schema.get("additionalProperties") == Some(&Value::Bool(false))
+                && schema
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .is_none_or(Map::is_empty)
+        })
+}
+
+/// Spells out the `explode` of form body encodings, which defaults to true for `style: form`.
+fn explode_form_encodings(body: &mut Value) {
+    let encodings = body.pointer_mut("/content/application~1x-www-form-urlencoded/encoding");
+    let Some(Value::Object(encodings)) = encodings else {
+        return;
+    };
+    for encoding in encodings.values_mut().filter_map(Value::as_object_mut) {
+        let form = encoding.get("style").is_none_or(|s| s == "form");
+        encoding.entry("explode").or_insert(form.into());
+    }
+}
+
+/// `{allOf: [{$ref: X}], required: [...]}` only tightens `X`, which SDKs type as `X` itself.
+fn collapse_refinement(schema: &mut Value) {
+    const REFINEMENTS: [&str; 8] = [
+        "allOf",
+        "required",
+        "type",
+        "description",
+        "title",
+        "example",
+        "examples",
+        "deprecated",
+    ];
+    let Some(map) = schema.as_object() else {
+        return;
+    };
+    let Some([part]) = map
+        .get("allOf")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+    else {
+        return;
+    };
+    let refines = map
+        .keys()
+        .all(|k| REFINEMENTS.contains(&k.as_str()) || k.starts_with("x-"));
+    if !refines || part.get("$ref").is_none() || map.get("type").is_some_and(|t| t != "object") {
+        return;
+    }
+    let mut collapsed = part.clone();
+    if let (Some(description), Some(collapsed)) =
+        (map.get("description"), collapsed.as_object_mut())
+    {
+        collapsed.insert("description".into(), description.clone());
+    }
+    *schema = collapsed;
 }
 
 /// `GET /things/{id}/parts` becomes `get_things_by_id_parts`.
@@ -280,6 +411,14 @@ impl Promoter {
 
     fn operation(&mut self, op: &mut Value) {
         let id = op["operationId"].as_str().unwrap_or_default().to_owned();
+        if let Some(Value::Array(params)) = op.get_mut("parameters") {
+            for param in params.iter_mut().filter(|p| p["in"] == "query") {
+                let name = format!("{id}_{}", param["name"].as_str().unwrap_or_default());
+                if let Some(schema) = param.get_mut("schema") {
+                    self.inline(schema, name);
+                }
+            }
+        }
         for media in ["application/json", "application/x-www-form-urlencoded"] {
             if let Some(schema) = op.pointer_mut(&format!(
                 "/requestBody/content/{}/schema",
@@ -514,7 +653,8 @@ impl Promoter {
         if let [index] = substantive_parts(schema)[..]
             && !has_properties(schema)
         {
-            return self.inline(&mut schema["allOf"][index], name);
+            self.inline(&mut schema["allOf"][index], name);
+            return collapse_refinement(schema);
         }
         if !is_structured(schema) {
             return self.children(schema, &name);
@@ -846,6 +986,94 @@ mod tests {
 
     fn op(responses: Value) -> Value {
         json!({ "operationId": "op", "responses": responses })
+    }
+
+    #[test]
+    fn form_bodies_allowing_no_property_are_dropped() {
+        let empty = json!({ "type": "object", "properties": {}, "additionalProperties": false });
+        let doc = normalized(json!({
+            "paths": { "/v1/customers": { "get": {
+                "operationId": "GetCustomers",
+                "requestBody": { "content": { "application/x-www-form-urlencoded": {
+                    "schema": empty } } },
+                "responses": {}
+            } } }
+        }));
+        assert!(
+            doc["paths"]["/v1/customers"]["get"]
+                .get("requestBody")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn refinements_of_a_reference_are_the_reference() {
+        let refined = json!({ "type": "object", "description": "New app.",
+            "allOf": [{ "$ref": "#/components/schemas/App" }], "required": ["name"] });
+        let doc = normalized(json!({
+            "paths": { "/apps": { "post": {
+                "operationId": "create",
+                "requestBody": { "content": { "application/json": { "schema": refined } } },
+                "responses": {}
+            } } },
+            "components": { "schemas": { "App": {
+                "type": "object", "properties": { "name": { "type": "string" } } } } }
+        }));
+        assert_eq!(
+            doc.pointer("/paths/~1apps/post/requestBody/content/application~1json/schema"),
+            Some(&json!({ "$ref": "#/components/schemas/App", "description": "New app." }))
+        );
+    }
+
+    #[test]
+    fn inline_query_objects_are_named_and_form_encodings_explode_by_default() {
+        let range = json!({ "type": "object", "properties": { "gt": { "type": "integer" } } });
+        let doc = normalized(json!({
+            "paths": { "/logs": { "post": {
+                "operationId": "list_logs",
+                "parameters": [{ "name": "effective_at", "in": "query", "schema": range }],
+                "requestBody": { "content": { "application/x-www-form-urlencoded": {
+                    "schema": { "type": "object", "properties": { "a": { "type": "string" } } },
+                    "encoding": { "a": { "style": "form" }, "b": { "style": "deepObject" } }
+                } } },
+                "responses": {}
+            } } }
+        }));
+        let op = &doc["paths"]["/logs"]["post"];
+        assert_eq!(
+            op["parameters"][0]["schema"],
+            json!({ "$ref": "#/components/schemas/ListLogsEffectiveAt" })
+        );
+        let encoding =
+            &op["requestBody"]["content"]["application/x-www-form-urlencoded"]["encoding"];
+        assert_eq!(encoding["a"]["explode"], true);
+        assert_eq!(encoding["b"]["explode"], false);
+    }
+
+    #[test]
+    fn reserved_schema_names_are_renamed_with_their_references() {
+        let mut doc = json!({
+            "paths": { "/uploads": { "get": { "operationId": "op", "responses": { "200": {
+                "description": "", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/upload" } } } } } } } },
+            "components": { "schemas": {
+                "upload": { "type": "object" },
+                "UploadModel": { "type": "object" },
+                "Event": { "oneOf": [{ "$ref": "#/components/schemas/upload" }],
+                    "discriminator": { "propertyName": "type", "mapping": { "u": "upload" } } }
+            } }
+        });
+        rename_reserved_schemas(&mut doc, &BTreeSet::from(["Upload".to_owned()]));
+        let schemas = doc["components"]["schemas"].as_object().unwrap();
+        assert!(schemas.contains_key("UploadModel2") && !schemas.contains_key("upload"));
+        assert_eq!(
+            doc.pointer("/paths/~1uploads/get/responses/200/content/application~1json/schema/$ref"),
+            Some(&json!("#/components/schemas/UploadModel2"))
+        );
+        assert_eq!(
+            schemas["Event"]["discriminator"]["mapping"]["u"],
+            json!("UploadModel2")
+        );
     }
 
     #[test]

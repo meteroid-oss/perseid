@@ -81,10 +81,11 @@ var uploaded = await client.Streaming.UploadFileAsync(
         Name = "doc",
         Count = 2,
         Meta = new Health { Status = "ok" },
+        Tags = ["a", "b"],
     }
 );
 Equal(
-    "count=::2;file=a.txt:text/plain:hello;meta=:application/json:{\"status\":\"ok\"};name=::doc",
+    "count=::2;file=a.txt:text/plain:hello;meta=:application/json:{\"status\":\"ok\"};name=::doc;tags=::a;tags=::b",
     uploaded.Status
 );
 Equal(
@@ -95,5 +96,52 @@ using var streamed = new MemoryStream(Encoding.UTF8.GetBytes("streamed"));
 Equal(
     "application/octet-stream:streamed",
     (await client.Streaming.UploadContentAsync("f1", streamed)).Status
+);
+
+var searched = await client.Wire.SearchAsync(
+    new()
+    {
+        Filter = new Filter { Status = "open", Amount = new FilterAmount { Gte = 5 } },
+        Expand = ["a", "b"],
+        Metadata = new() { ["k"] = "v" },
+        Ids = new System.Text.Json.Nodes.JsonArray("x", "y"),
+        Tags = ["t1", "t2"],
+        Range = new SearchRange { Gte = 1, Lt = 9 },
+    }
+);
+Equal(
+    "expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y"
+        + "&metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2",
+    searched.Status
+);
+var charged = await client.Wire.CreateChargeAsync(
+    new Charge
+    {
+        Amount = 100,
+        Capture = true,
+        Metadata = new() { ["order"] = "7" },
+        Items = [new ChargeItemsItem { Price = "p1", Quantity = 2 }, new ChargeItemsItem { Price = "p2" }],
+        Expand = ["customer"],
+        Statuses = ["a", "b"],
+        Codes = ["c1", "c2"],
+        Shipping = new ChargeShipping
+        {
+            Address = new ChargeShippingAddress { Line1 = "1 Main", City = "Paris" },
+        },
+    }
+);
+Equal(
+    "application/x-www-form-urlencoded|amount=100&capture=true&codes=c1,c2&expand[]=customer"
+        + "&items[0][price]=p1&items[0][quantity]=2&items[1][price]=p2&metadata[order]=7"
+        + "&shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b",
+    charged.Status
+);
+Equal(
+    "beta=true&limit=2|features=x,y",
+    (await client.Wire.BetaSearchAsync(new() { Limit = 2, Features = "x,y" })).Status
+);
+Equal(
+    "42:image/png:png",
+    (await client.Wire.PutImageAsync("42", Encoding.UTF8.GetBytes("png"))).Status
 );
 Console.WriteLine("csharp smoke test passed");

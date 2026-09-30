@@ -70,5 +70,7 @@
 {# The `JsonContext` property of a body type: its name, or a flattened name for generics. -#}
 {% macro type_info(type) -%}
 {% set type = type | replace("Models.", "") -%}
-{% if "<" in type %}Json{{ type | to_upper_camel_case }}{% else %}{{ type }}{% endif %}
+{% set clr = {"string": "String", "bool": "Boolean", "int": "Int32", "long": "Int64", "short": "Int16",
+    "ushort": "UInt16", "ulong": "UInt64", "float": "Single", "double": "Double", "decimal": "Decimal"} -%}
+{% if "<" in type %}Json{{ type | to_upper_camel_case }}{% else %}{{ clr[type] | default(type) }}{% endif %}
 {%- endmacro %}

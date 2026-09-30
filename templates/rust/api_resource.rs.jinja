@@ -54,6 +54,10 @@ impl<'a> {{ resource_type_name }}<'a> {
 
     {% for op in resource.operations %}
     {% set has_params = op | has_query_or_header_params -%}
+    {% if op.request_body_schema_name is defined -%}
+    {% set body_ident = op.request_body_schema_name | to_rust_ident -%}
+    {% if body_ident in ["options", "cfg", "make_form", "form"] or body_ident in (op.path_params | map("to_rust_ident") | list) %}{% set body_ident = "body" %}{% endif -%}
+    {% endif -%}
     {% if op.description is defined -%}
         {{ op.description | to_doc_comment(style="rust") }}
     {% endif -%}
@@ -76,7 +80,7 @@ impl<'a> {{ resource_type_name }}<'a> {
 
         {# body parameter struct -#}
         {% if op.request_body_schema_name is defined -%}
-            {{ op.request_body_schema_name | to_rust_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},
+            {{ body_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},
         {% elif op.request_body_json_type is defined -%}
             body: {% if op.request_body_optional %}Option<{% endif %}{{ rust_type(op.request_body_json_type) }}{% if op.request_body_optional %}>{% endif %},
         {% endif -%}
@@ -137,6 +141,9 @@ impl<'a> {{ resource_type_name }}<'a> {
                entirely when the codegen binary predates the `explode` IR field. -#}
             {% set explode = p.explode | default(true) -%}
             {% set is_exploded_list = (p.type.is_list() or p.type.is_set()) and explode -%}
+            {% if p.structured -%}
+                .with_structured_query_param("{{ p.name }}", {% if p.required %}Some({{ p.name | to_rust_ident }}){% else %}{{ p.name | to_rust_ident }}{% endif %}, {{ p.deep_object | lower }}, {{ explode | lower }})
+            {% else -%}
             {% if p.required and is_exploded_list -%}
                 .with_exploded_query_param
             {%- elif p.required -%}
@@ -147,6 +154,7 @@ impl<'a> {{ resource_type_name }}<'a> {
                 .with_optional_query_param
             {%- endif -%}
             ("{{ p.name }}", {{ p.name | to_rust_ident }})
+            {% endif -%}
         {% endfor -%}
 
         {% for p in op.header_params -%}
@@ -154,15 +162,15 @@ impl<'a> {{ resource_type_name }}<'a> {
         {% endfor -%}
 
         {% if op.request_body_kind == "binary" -%}
-            .with_upload_body({% if op.request_body_optional %}body{% else %}Some(body){% endif %})
+            .with_upload_body({% if op.request_body_optional %}body{% else %}Some(body){% endif %}, {{ op.request_body_content_type | default("application/octet-stream") | tojson }})
         {% elif op.request_body_kind == "multipart" -%}
             .with_multipart_body(form)
         {% endif -%}
         {% if op.request_body_schema_name is defined -%}
             {% if op.request_body_is_form -%}
-            .with_form_body_param({{ op.request_body_schema_name | to_rust_ident }})
+            .with_form_body_param({{ body_ident }}, &[{% for n in op.form_deep_object | default([]) %}{{ n | tojson }}, {% endfor %}], &[{% for n in op.form_unexploded | default([]) %}{{ n | tojson }}, {% endfor %}])
             {% else -%}
-            .{% if op.request_body_optional %}with_optional_body_param{% else %}with_body_param{% endif %}({{ op.request_body_schema_name | to_rust_ident }})
+            .{% if op.request_body_optional %}with_optional_body_param{% else %}with_body_param{% endif %}({{ body_ident }})
             {% endif -%}
         {% elif op.request_body_json_type is defined -%}
             .{% if op.request_body_optional %}with_optional_body_param{% else %}with_body_param{% endif %}(body)
@@ -195,7 +203,7 @@ impl<'a> {{ resource_type_name }}<'a> {
             {{ p | to_rust_ident }}: String,
         {% endfor -%}
         {% if op.request_body_schema_name is defined -%}
-            {{ op.request_body_schema_name | to_rust_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},
+            {{ body_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},
         {% elif op.request_body_json_type is defined -%}
             body: {% if op.request_body_optional %}Option<{% endif %}{{ rust_type(op.request_body_json_type) }}{% if op.request_body_optional %}>{% endif %},
         {% endif -%}
@@ -230,7 +238,7 @@ impl<'a> {{ resource_type_name }}<'a> {
                 let {{ p | to_rust_ident }} = {{ p | to_rust_ident }}.clone();
                 {% endfor -%}
                 {% if op.request_body_schema_name is defined -%}
-                let {{ op.request_body_schema_name | to_rust_ident }} = {{ op.request_body_schema_name | to_rust_ident }}.clone();
+                let {{ body_ident }} = {{ body_ident }}.clone();
                 {% elif op.request_body_json_type is defined -%}
                 let body = body.clone();
                 {% endif -%}
@@ -242,7 +250,7 @@ impl<'a> {{ resource_type_name }}<'a> {
                     let page = Self::new(cfg)
                         .{{ op.name | to_rust_ident }}(
                             {% for p in op.path_params %}{{ p | to_rust_ident }}, {% endfor %}
-                            {% if op.request_body_schema_name is defined %}{{ op.request_body_schema_name | to_rust_ident }}, {% elif op.request_body_json_type is defined %}body, {% endif %}
+                            {% if op.request_body_schema_name is defined %}{{ body_ident }}, {% elif op.request_body_json_type is defined %}body, {% endif %}
                             {% if has_required_params %}options{% else %}Some(options){% endif %},
                         )
                         .await?;

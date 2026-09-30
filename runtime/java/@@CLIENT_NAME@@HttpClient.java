@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -160,22 +161,49 @@ public class @@CLIENT_NAME@@HttpClient {
         return readJson(send(method, url, headers, body), responseType);
     }
 
-    /** Execute a request with an {@code application/x-www-form-urlencoded} body. */
+    /**
+     * Execute a request with an {@code application/x-www-form-urlencoded} body, given the
+     * properties whose lists are sent as {@code name[]=item} ({@code deepObject}) or
+     * comma-separated ({@code explode: false}).
+     */
     public <Req, Res> Res executeFormRequest(
-            String method, HttpUrl url, Headers headers, Req reqBody, Class<Res> responseClass)
+            String method,
+            HttpUrl url,
+            Headers headers,
+            Req reqBody,
+            Class<Res> responseClass,
+            Collection<String> deepObject,
+            Collection<String> unexploded)
             throws ApiException, IOException {
-        return executeFormRequest(method, url, headers, reqBody, responseType(responseClass));
+        return executeFormRequest(
+                method, url, headers, reqBody, responseType(responseClass), deepObject, unexploded);
     }
 
     public <Req, Res> Res executeFormRequest(
-            String method, HttpUrl url, Headers headers, Req reqBody, JavaType responseType)
+            String method,
+            HttpUrl url,
+            Headers headers,
+            Req reqBody,
+            JavaType responseType,
+            Collection<String> deepObject,
+            Collection<String> unexploded)
             throws ApiException, IOException {
         RequestBody body = null;
         if (reqBody != null) {
-            Map<String, Object> fields =
-                    objectMapper.convertValue(reqBody, new TypeReference<Map<String, Object>>() {});
+            List<Map.Entry<String, String>> pairs = new ArrayList<>();
+            objectMapper
+                    .valueToTree(reqBody)
+                    .fields()
+                    .forEachRemaining(
+                            field ->
+                                    Utils.encodeParam(
+                                            field.getKey(),
+                                            field.getValue(),
+                                            deepObject.contains(field.getKey()),
+                                            !unexploded.contains(field.getKey()),
+                                            pairs));
             FormBody.Builder form = new FormBody.Builder();
-            fields.forEach((name, value) -> addFormField(form, name, value));
+            pairs.forEach(pair -> form.add(pair.getKey(), pair.getValue()));
             body = form.build();
         }
         return readJson(send(method, url, headers, body), responseType);
@@ -233,14 +261,6 @@ public class @@CLIENT_NAME@@HttpClient {
             throw new IOException("expected a text/event-stream response, got " + contentType);
         }
         return new EventStream(response);
-    }
-
-    private static void addFormField(FormBody.Builder form, String name, Object value) {
-        if (value instanceof Collection) {
-            ((Collection<?>) value).forEach(item -> addFormField(form, name, item));
-        } else if (value != null) {
-            form.add(name, String.valueOf(value));
-        }
     }
 
     private JavaType responseType(Class<?> responseClass) {
