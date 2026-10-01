@@ -125,7 +125,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     }
     let package = metadata(&doc);
     if !package.is_empty() {
-        toml += &format!("\n[package]\n{package}");
+        toml += &format!("\n[metadata]\n{package}");
     }
     fsx::write(&path, toml.as_bytes())?;
     println!("+ {}", config::FILE);
