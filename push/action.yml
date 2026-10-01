@@ -33,7 +33,7 @@ runs:
         PERSEID_VERSION: ${{ inputs.version }}
         PERSEID_INSTALL: ${{ runner.temp }}/perseid
       run: |
-        export PERSEID_VERSION="${PERSEID_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_ACTION_PATH/../Cargo.toml" | head -1)}"
+        export PERSEID_VERSION="${PERSEID_VERSION:-$(jq -r '."."' "$GITHUB_ACTION_PATH/../.release-please-manifest.json")}"
         sh "$GITHUB_ACTION_PATH/../install.sh"
 
     - name: Push the spec
