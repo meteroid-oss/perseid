@@ -132,6 +132,7 @@ enum Command {
     /// In the repository holding the spec: push it to the SDKs repository on each release or change.
     Connect {
         /// The SDKs repository, `owner/name`, holding perseid.toml.
+        #[arg(value_name = "OWNER/SDKS_REPO")]
         hub: String,
         /// The OpenAPI document, relative to this repository (default: detected).
         #[arg(long)]
@@ -171,11 +172,24 @@ enum Command {
     Status,
     /// Copy the built-in templates and runtime of a language into `.perseid/` to customize them.
     Eject {
+        /// The language whose templates and runtime to copy.
         #[arg(value_parser = LANGUAGES)]
         language: String,
+        /// Only these files, as `--list` prints them (default: every file).
+        files: Vec<String>,
+        /// List the files, without copying any.
+        #[arg(long)]
+        list: bool,
     },
-    /// Print the API model templates receive, as JSON.
-    Inspect,
+    /// Print the API model templates receive, as JSON: for `language`, with its own `exclude`,
+    /// `methods` and reserved names applied.
+    Inspect {
+        #[arg(value_parser = LANGUAGES)]
+        language: Option<String>,
+        /// OpenAPI document to read, path or URL, over `spec` of perseid.toml.
+        #[arg(long)]
+        spec: Option<String>,
+    },
     /// The pinned formatters the SDKs need, and oasdiff sizing their releases.
     Tools {
         #[command(subcommand)]
@@ -221,6 +235,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<ExitCode> {
     let cwd = std::env::current_dir()?;
+    let config_path = Config::locate(&cli.config);
     match cli.command {
         Command::Init {
             sdks,
@@ -240,7 +255,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             init::run(init, &root)?;
         }
         Command::SetupGithub { no_app, apply } => {
-            return perseid::github::setup_github(&cli.config, &apply.options(), !no_app);
+            return perseid::github::setup_github(&config_path, &apply.options(), !no_app);
         }
         Command::Connect {
             hub,
@@ -267,7 +282,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let push = perseid::github::PushSpec { spec, to, private };
             return perseid::github::push_spec(&cwd, push);
         }
-        Command::Status => return perseid::github::status(&cli.config),
+        Command::Status => return perseid::github::status(&config_path),
         Command::Generate {
             languages,
             spec,
@@ -281,7 +296,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             dispatch,
             no_format,
         } => {
-            let (config, root) = Config::load(&cli.config)?;
+            let (config, root) = Config::load(&config_path)?;
             let location = spec.unwrap_or_else(|| config.spec.clone());
             let spec = generate::load_spec(&config, &root, Some(&location))?;
             let options = Options {
@@ -382,10 +397,20 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 deliver(&dirs, &files, &spec, &changes, &request)?;
             }
         }
-        Command::Eject { language } => {
-            let (config, root) = Config::load(&cli.config)?;
+        Command::Eject {
+            language,
+            files,
+            list,
+        } => {
+            let (config, root) = Config::load(&config_path)?;
+            if list {
+                for path in perseid::assets::ejectable(&language) {
+                    println!("{path}");
+                }
+                return Ok(ExitCode::SUCCESS);
+            }
             let dir = config.overrides_dir(&root);
-            for path in perseid::assets::eject(&language, &dir)? {
+            for path in perseid::assets::eject(&language, &files, &dir)? {
                 println!("+ {}", path.strip_prefix(&root).unwrap_or(&path).display());
             }
             println!(
@@ -393,11 +418,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
             );
         }
         Command::Schema => print!("{}", config::json_schema()),
-        Command::Tools { command } => tools_command(&cli.config, &cwd, command)?,
-        Command::Inspect => {
-            let (config, root) = Config::load(&cli.config)?;
-            let spec = generate::load_spec(&config, &root, None)?;
-            println!("{}", perseid::inspect(&spec, &config)?);
+        Command::Tools { command } => tools_command(&config_path, &cwd, command)?,
+        Command::Inspect { language, spec } => {
+            let (config, root) = Config::load(&config_path)?;
+            let spec = generate::load_spec(&config, &root, spec.as_deref())?;
+            let filters = match language {
+                Some(language) => {
+                    let sdk = config.sdks(&[language])?.remove(0);
+                    config.filters_for(&sdk)
+                }
+                None => config.filters(),
+            };
+            println!("{}", perseid::inspect(&spec, &filters)?);
         }
     }
     Ok(ExitCode::SUCCESS)

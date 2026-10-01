@@ -23,10 +23,7 @@ pub use crate::{
     postprocessing::CodegenLanguage,
 };
 
-/// The API model templates receive, as pretty JSON.
-pub fn inspect(spec: &str, config: &config::Config) -> anyhow::Result<String> {
-    Ok(serde_json::to_string_pretty(&spec::api(
-        spec,
-        &config.filters(),
-    )?)?)
+/// The API model templates receive under `filters`, as pretty JSON.
+pub fn inspect(spec: &str, filters: &spec::Filters) -> anyhow::Result<String> {
+    Ok(serde_json::to_string_pretty(&spec::api(spec, filters)?)?)
 }

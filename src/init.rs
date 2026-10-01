@@ -26,7 +26,7 @@ pub struct Init {
     pub base_url: Option<String>,
 }
 
-const FLAGS: &str = "--sdks <rust,typescript,python,go,java,csharp> (required), --repo <owner/name-{lang}>, --spec <path|url>, --name <Name>";
+const FLAGS: &str = "--sdks <rust,typescript,python,go,java,csharp> (required), --repo <owner/name-{lang}|owner/name>, --spec <path|url>, --name <Name>, --base-url <url>";
 
 /// Writes perseid.toml, asking what the flags and the spec here don't tell.
 pub fn run(init: Init, root: &Path) -> Result<()> {
@@ -63,7 +63,15 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         Source::File(file) => root.join(file).is_file(),
     });
     let doc: Value = match (&spec, readable) {
-        (Some(spec), true) => serde_json::from_str(&spec::read(spec, root)?)?,
+        (Some(spec), true) => match read_spec(spec, root) {
+            Ok(doc) => doc,
+            Err(error) => {
+                println!(
+                    "! {spec} can't be read, so nothing is taken from it: {error:#}. Fix it, then `perseid generate` checks it"
+                );
+                json!({})
+            }
+        },
         _ => json!({}),
     };
     let here = crate::github::origin_repo(root);
@@ -102,12 +110,12 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             "`--repo {repo}` must read owner/name, or owner/name-{{lang}} for a repository per SDK"
         );
     }
-    let base_url = init.base_url.clone().or_else(|| {
-        doc["servers"][0]["url"]
-            .as_str()
-            .filter(|u| u.starts_with("http"))
-            .map(|u| u.trim_end_matches('/').to_owned())
-    });
+    let base_url = init.base_url.clone().or_else(|| server_url(&doc));
+    if base_url.is_none() && readable {
+        println!(
+            "! the spec has no absolute server URL: the SDKs default to http://localhost until you set `base_url`"
+        );
+    }
     let quote = |v: &str| toml::Value::String(v.to_owned()).to_string();
     let spec_path = spec.clone().unwrap_or_else(|| "openapi.json".into());
     let mut toml = format!(
@@ -126,6 +134,14 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     let package = metadata(&doc);
     if !package.is_empty() {
         toml += &format!("\n[metadata]\n{package}");
+    }
+    if let Some(package) = sdks
+        .iter()
+        .any(|s| s == "java")
+        .then(|| java_package(&doc, &name))
+        .flatten()
+    {
+        toml += &format!("\n[java]\npackage = {}\n", quote(&package));
     }
     fsx::write(&path, toml.as_bytes())?;
     println!("+ {}", config::FILE);
@@ -263,15 +279,21 @@ fn ask_layout(sdks: &[String], name: &str, here: Option<&str>) -> Result<Option<
     let owner = here.and_then(|r| r.split('/').next()).unwrap_or("acme");
     let pattern = format!("{owner}/{}-{{lang}}", name.to_kebab_case());
     let repos: Vec<String> = sdks.iter().map(|s| pattern.replace("{lang}", s)).collect();
+    let shared = format!("{owner}/{}-sdks", name.to_kebab_case());
     let choices = [
         format!("Here, a folder each: {}", folders(sdks)),
         format!("A repository each: {}", repos.join(", ")),
+        format!("One other repository, a folder each: {shared}"),
     ];
     match crate::prompt::pick_one("Where do the SDKs live?", &choices, 0)? {
         0 => Ok(None),
-        _ => Ok(Some(crate::prompt::text(
+        1 => Ok(Some(crate::prompt::text(
             "Repository of each SDK",
             &pattern,
+        )?)),
+        _ => Ok(Some(crate::prompt::text(
+            "Repository of the SDKs",
+            &shared,
         )?)),
     }
 }
@@ -417,6 +439,52 @@ fn metadata(doc: &Value) -> String {
     out
 }
 
+fn read_spec(spec: &str, root: &Path) -> Result<Value> {
+    let doc: Value = serde_json::from_str(&spec::read(spec, root)?)?;
+    ensure!(
+        doc.get("swagger").is_none(),
+        "Swagger 2.0 isn't supported, convert it with `npx swagger2openapi`"
+    );
+    Ok(doc)
+}
+
+/// The first absolute server URL, its `{variables}` set to their defaults.
+fn server_url(doc: &Value) -> Option<String> {
+    let server = &doc["servers"][0];
+    let mut url = server["url"].as_str()?.to_owned();
+    if let Some(variables) = server["variables"].as_object() {
+        for (name, variable) in variables {
+            if let Some(default) = variable["default"].as_str() {
+                url = url.replace(&format!("{{{name}}}"), default);
+            }
+        }
+    }
+    (url.starts_with("http") && !url.contains('{')).then(|| url.trim_end_matches('/').to_owned())
+}
+
+/// A Java package Maven Central can verify: the reversed domain of the API's homepage, then the
+/// client name, as `com.acme.petstore` for `https://www.acme.com`.
+fn java_package(doc: &Value, name: &str) -> Option<String> {
+    let url = doc["info"]["contact"]["url"]
+        .as_str()
+        .or(doc["externalDocs"]["url"].as_str())?;
+    let host = url.split("://").nth(1)?.split(['/', ':']).next()?;
+    let labels: Vec<&str> = host
+        .split('.')
+        .filter(|l| !l.is_empty())
+        .skip_while(|l| matches!(*l, "www" | "api" | "docs" | "developer" | "developers"))
+        .collect();
+    if labels.len() < 2 || labels.iter().any(|l| l.parse::<u8>().is_ok()) {
+        return None;
+    }
+    let mut parts: Vec<String> = labels.iter().rev().map(|l| l.replace('-', "_")).collect();
+    parts.push(
+        name.to_lowercase()
+            .replace(|c: char| !c.is_ascii_alphanumeric(), ""),
+    );
+    Some(parts.join("."))
+}
+
 /// The SPDX identifier of a license name such as `Apache 2.0`.
 fn spdx(name: &str) -> Option<String> {
     let known = [
@@ -503,6 +571,33 @@ mod tests {
         );
         assert_eq!(url("http://proxy@127.0.0.1:8080/git/acme/sdk"), None);
         assert_eq!(url("/tmp/origin.git"), None);
+    }
+
+    #[test]
+    fn server_variables_take_their_defaults() {
+        let doc = serde_json::json!({ "servers": [{
+            "url": "https://{region}.acme.com/{version}/",
+            "variables": { "region": { "default": "eu" }, "version": { "default": "v2" } }
+        }]});
+        assert_eq!(server_url(&doc).as_deref(), Some("https://eu.acme.com/v2"));
+        let relative = serde_json::json!({ "servers": [{ "url": "/v1" }] });
+        assert_eq!(server_url(&relative), None);
+    }
+
+    #[test]
+    fn java_packages_follow_the_homepage_domain() {
+        let doc = |url: &str| serde_json::json!({ "info": { "contact": { "url": url } } });
+        let package = |url: &str| java_package(&doc(url), "PetStore");
+        assert_eq!(
+            package("https://www.acme.com/about").as_deref(),
+            Some("com.acme.petstore")
+        );
+        assert_eq!(
+            package("https://api.pets.co.uk").as_deref(),
+            Some("uk.co.pets.petstore")
+        );
+        assert_eq!(package("http://localhost:8080"), None);
+        assert_eq!(package("http://127.0.0.1"), None);
     }
 
     #[test]

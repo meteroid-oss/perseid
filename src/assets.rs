@@ -35,10 +35,38 @@ pub fn materialize(language: &str, overrides: Option<&Path>, dir: &Path) -> Resu
 }
 
 /// Copies the built-in templates and runtime of `language` into `dir` for customization.
-pub fn eject(language: &str, dir: &Path) -> Result<Vec<PathBuf>> {
+/// The templates and runtime files of `language`, as `eject` names them.
+pub fn ejectable(language: &str) -> Vec<String> {
+    let mut files = Vec::new();
+    for kind in ["templates", "runtime"] {
+        files
+            .extend(under(&format!("{kind}/{language}")).map(|(path, _)| format!("{kind}/{path}")));
+    }
+    files
+}
+
+/// Copies the templates and runtime files of `language` named in `only` (all without), skipping
+/// those already there.
+pub fn eject(language: &str, only: &[String], dir: &Path) -> Result<Vec<PathBuf>> {
+    let unknown: Vec<&String> = only
+        .iter()
+        .filter(|o| !ejectable(language).contains(o))
+        .collect();
+    anyhow::ensure!(
+        unknown.is_empty(),
+        "no {} to eject for {language}: `perseid eject {language} --list` lists them",
+        unknown
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let mut written = Vec::new();
     for kind in ["templates", "runtime"] {
         for (path, content) in under(&format!("{kind}/{language}")) {
+            if !only.is_empty() && !only.contains(&format!("{kind}/{path}")) {
+                continue;
+            }
             let target = dir.join(kind).join(language).join(path);
             if !target.exists() {
                 crate::fsx::write(&target, content)?;
