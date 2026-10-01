@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail, ensure};
 
 pub const BRANCH: &str = "perseid/update";
 
-/// Marks pull requests whose release PR the scaffolded sdk-release.yml auto-merges.
+/// Marks pull requests whose release PR `meteroid-oss/perseid/release` auto-merges.
 pub const AUTO_RELEASE: &str = "perseid:auto-release";
 
 /// Semver bump requested from release tooling through the conventional-commit type of the PR.
@@ -408,12 +408,9 @@ mod tests {
     use super::{AUTO_RELEASE, Bump, SOURCE, origin, repo_of};
 
     #[test]
-    fn the_release_workflow_reads_the_auto_release_label() {
-        let workflow = include_str!("../scaffold/release/.github/workflows/sdk-release.yml");
-        assert!(
-            workflow.contains(&format!(" {AUTO_RELEASE} ")),
-            "{workflow}"
-        );
+    fn the_release_action_reads_the_auto_release_label() {
+        let action = include_str!("../release/action.yml");
+        assert!(action.contains(&format!(" {AUTO_RELEASE} ")), "{action}");
         assert_eq!(
             repo_of("https://github.com/acme/api-go/pull/12").as_deref(),
             Some("acme/api-go")

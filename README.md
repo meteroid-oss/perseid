@@ -73,8 +73,9 @@ It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients),
 Action, pinned to the release line of the perseid that wrote it (`@v0.6` for 0.6.x), on every spec
 change (pushed by `perseid connect` on each release of your API, or each change), and
 `sdk-release.yml`, at the root of each repository holding SDKs, releases them from its default
-branch. Run `init` again to refresh them, and `perseid status` tells how the automation fares, from
-either repository. The Action is a thin wrapper: `perseid tools install` fetches the pinned
+branch through the `meteroid-oss/perseid/release` and `publish` Actions. Run `init` again to
+refresh them, and `perseid status` tells how the automation fares, from either repository. The
+Action is a thin wrapper: `perseid tools install` fetches the pinned
 formatters and oasdiff, then `perseid generate --pr` sizes the release from the spec diff, opens the
 pull requests and, with `--auto-merge`, queues them for merging, so any CI runs the same. To set it
 up by hand, or on self-hosted runners and other CIs with the `ghcr.io/meteroid-oss/perseid` image,

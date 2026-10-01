@@ -319,10 +319,11 @@ repository variable lists workflow files and no other token is configured.
 Pull requests and merges made with either token start workflows like a person's would, so SDK CI,
 auto-merge and releases work without dispatching.
 
-**Releases**: the scaffolded `sdk-release.yml` mints the same way when the `SDK_APP_ID` variable
-and `SDK_APP_PRIVATE_KEY` secret are set, scoped to its own repository, and otherwise uses the
-`RELEASE_TOKEN` secret (a fine-grained personal access token) or the default token. With the
-default token, release PRs get no CI unless dispatched, and auto-merged release PRs publish nothing.
+**Releases**: the scaffolded `sdk-release.yml` mints the same way, through
+`meteroid-oss/perseid/release`, when the `SDK_APP_ID` variable and `SDK_APP_PRIVATE_KEY` secret are
+set, scoped to its own repository, and otherwise uses the `RELEASE_TOKEN` secret (a fine-grained
+personal access token) or the default token. With the default token, release PRs get no CI unless
+dispatched, and auto-merged release PRs publish nothing.
 
 **Repository settings**: "Allow GitHub Actions to create and approve pull requests" (Settings,
 Actions, General) is needed only when perseid or release-please run with the default token. It
@@ -361,13 +362,33 @@ and `.github/workflows/sdk-release.yml` to the root of each repository holding S
 at the root, where GitHub and release-please read them, and the release-please packages are named
 by their path from the root (`api/typescript`).
 
-`sdk-release.yml` runs release-please on pushes to the repository's default branch, never in forks.
-`perseid init` rewrites it when it differs from what it writes: delete its first line,
-``# Written by `perseid init` ``, to keep your own version (init then only warns). Registries
-trust its file name and its `release` environment, so keep both. Running it by hand publishes one
-package again, from the selected tag or branch: its `path` input must name a package of
-`release-please-config.json` (`.` for the root). The publish job installs npm dependencies without
+`sdk-release.yml` holds two jobs, skipped in forks:
+
+- `release` runs the `meteroid-oss/perseid/release` Action on pushes to the repository's default
+  branch, which runs release-please and outputs the paths of the packages it released;
+- `publish` runs `meteroid-oss/perseid/publish` once per released path, in the `release`
+  environment, the only job with an OIDC token (`id-token: write`). Registries trust this file name
+  and this environment, so keep both, and keep this job in `sdk-release.yml`.
+
+Running it by hand publishes one package again, from the selected tag or branch: its `path` input
+must name a package of `release-please-config.json` (`.` for the root). `perseid init` rewrites the
+file when it differs from what it writes: delete its first line, ``# Written by `perseid init` ``,
+to keep your own version (init then only warns). The publish job installs npm dependencies without
 running their scripts, which would otherwise see its OIDC token.
+
+`meteroid-oss/perseid/release` takes:
+
+| Input | `sdk-release.yml` passes | Use |
+|---|---|---|
+| `app-id`, `app-private-key` | `SDK_APP_ID` variable, `SDK_APP_PRIVATE_KEY` secret | GitHub App whose token, minted on each run for this repository with Contents and Pull requests write, runs release-please |
+| `release-token` | `RELEASE_TOKEN` secret | token for release-please without an App, such as a fine-grained personal access token |
+| `token` | | otherwise, default `GITHUB_TOKEN` |
+| `ci-workflows` | `SDK_CI_WORKFLOWS` variable | workflow files dispatched on the release PR branch when it is pushed with the default token, which starts no workflow |
+| `path` | the `path` of a manual run | package to publish again instead of running release-please |
+
+It enables auto-merge (squash) on the release PR when the pushed commit came from a pull request
+labeled `perseid:auto-release`, and outputs `paths` (JSON array of the released package paths),
+`tags` (their release tags, by path) and `releases` (release-please's outputs, as JSON).
 
 Releases go as follows:
 

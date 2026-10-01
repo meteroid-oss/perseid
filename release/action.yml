@@ -1,0 +1,113 @@
+name: Perseid release
+description: Run release-please on the SDKs of a repository, then name the released packages to publish
+branding:
+  icon: tag
+  color: purple
+
+inputs:
+  token:
+    description: GitHub token for release-please, unused with `app-id` or `release-token`
+    default: ${{ github.token }}
+  release-token:
+    description: Token for release-please instead of `token`, such as a fine-grained personal access token
+    default: ''
+  app-id:
+    description: >-
+      ID of a GitHub App installed on this repository: the Action mints a token of it for
+      release-please, with contents and pull-requests write on this repository only
+    default: ''
+  app-private-key:
+    description: Private key of the `app-id` App
+    default: ''
+  ci-workflows:
+    description: >-
+      Workflow files (space or newline separated) to dispatch on the release PR branch when the
+      token is the default GITHUB_TOKEN, whose pushes start no workflow. The job needs `actions: write`
+    default: ''
+  path:
+    description: >-
+      A package of release-please-config.json to publish again, from the current tag or branch,
+      instead of running release-please
+    default: ''
+
+outputs:
+  paths:
+    description: JSON array of the paths of the released packages
+    value: ${{ steps.released.outputs.paths }}
+  releases:
+    description: release-please outputs, as a JSON object
+    value: ${{ steps.released.outputs.releases }}
+  tags:
+    description: JSON object of the release tag of each released path
+    value: ${{ steps.released.outputs.tags }}
+
+runs:
+  using: composite
+  steps:
+    # App installation tokens expire after an hour, so they are minted on each run.
+    - id: app
+      if: inputs.path == '' && inputs.app-id != ''
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
+        permission-contents: write
+        permission-pull-requests: write
+
+    - id: please
+      if: inputs.path == ''
+      uses: googleapis/release-please-action@v5
+      with:
+        token: ${{ steps.app.outputs.token || inputs.release-token || inputs.token }}
+
+    - if: steps.please.outputs.pr && inputs.ci-workflows != '' && (steps.app.outputs.token || inputs.release-token || inputs.token) == github.token
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR: ${{ steps.please.outputs.pr }}
+        WORKFLOWS: ${{ inputs.ci-workflows }}
+      run: |
+        branch=$(jq -r .headBranchName <<< "$PR")
+        for workflow in $WORKFLOWS; do
+          gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$branch"
+        done
+
+    # The pushed commit came from a pull request labeled by `perseid generate --auto-merge`. A merge
+    # made with the default token triggers no publish.
+    - if: steps.please.outputs.pr
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.release-token || inputs.token }}
+        PR: ${{ steps.please.outputs.pr }}
+      run: |
+        labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[].labels[].name] | join(" ")')
+        case " $labels " in
+          *" perseid:auto-release "*) gh pr merge "$(jq -r .number <<< "$PR")" --auto --squash --repo "$GITHUB_REPOSITORY" ;;
+        esac
+
+    - id: released
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SDK_PATH: ${{ inputs.path }}
+        TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        RELEASES: ${{ toJSON(steps.please.outputs) }}
+      run: |
+        if [ -n "$SDK_PATH" ]; then
+          config=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/release-please-config.json?ref=$GITHUB_SHA")
+          if ! jq -e --arg path "$SDK_PATH" '.packages | has($path)' <<< "$config" > /dev/null; then
+            echo "::error::$SDK_PATH isn't a package of release-please-config.json: $(jq -r '.packages | keys | join(", ")' <<< "$config")"
+            exit 1
+          fi
+          tags=$(jq -cn --arg path "$SDK_PATH" --arg tag "$TAG" '{($path): $tag}')
+        else
+          tags=$(jq -c '. as $r | .paths_released // "[]" | fromjson
+            | map({key: ., value: ($r[if . == "." then "tag_name" else "\(.)--tag_name" end] // "")}) | from_entries' <<< "$RELEASES")
+        fi
+        {
+          echo "paths=$(jq -c keys_unsorted <<< "$tags")"
+          echo "releases=$(jq -c . <<< "$RELEASES")"
+          echo "tags=$tags"
+        } >> "$GITHUB_OUTPUT"

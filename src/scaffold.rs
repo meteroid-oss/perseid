@@ -124,13 +124,13 @@ pub fn release_workflow(branch: &str) -> Vec<u8> {
     let (_, template) = assets::under("scaffold/release")
         .find(|(path, _)| *path == RELEASE_WORKFLOW)
         .expect("the embedded release workflow");
-    String::from_utf8_lossy(template)
-        .replace("\"@@BRANCH@@\"", &Value::from(branch).to_string())
-        .replace(
-            "meteroid-oss/perseid/publish@v0",
-            &crate::github::uses("publish"),
-        )
-        .into_bytes()
+    let mut workflow = String::from_utf8_lossy(template)
+        .replace("\"@@BRANCH@@\"", &Value::from(branch).to_string());
+    for action in ["release", "publish"] {
+        let pinned = crate::github::uses(action);
+        workflow = workflow.replace(&format!("meteroid-oss/perseid/{action}@v0"), &pinned);
+    }
+    workflow.into_bytes()
 }
 
 /// The release workflow, and the release-please files `read` lacks or holds without some of
@@ -392,6 +392,11 @@ mod tests {
         );
         let workflow = String::from_utf8_lossy(&files[RELEASE_WORKFLOW]);
         assert!(workflow.contains("branches: [\"main\"]\n"), "{workflow}");
+        for action in ["release", "publish"] {
+            let step = format!("uses: {}\n", crate::github::uses(action));
+            assert!(workflow.contains(&step), "{workflow}");
+        }
+        assert!(!workflow.contains("@v0\n"), "{workflow}");
 
         let root = "name = \"Petstore\"\nsdks = [\"go\"]\nrepo = \"acme/petstore-{lang}\"\n";
         let config: Config = toml::from_str(root).unwrap();
