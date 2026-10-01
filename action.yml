@@ -12,12 +12,15 @@ inputs:
     description: Perseid version (default, the one matching this action's ref)
     default: ''
   token:
-    description: GitHub token, needs contents and pull-requests write on every target repository. Unused with `app-id`
-    default: ${{ github.token }}
+    description: >-
+      GitHub token opening the pull requests, with Contents, Pull requests and Workflows write on
+      every target repository, such as the PERSEID_TOKEN secret. Unused with `app-id`
+    default: ''
+
   app-id:
     description: >-
       ID of a GitHub App installed on the repository holding perseid.toml and the SDK repositories:
-      the Action mints a token of it for them, with contents and pull-requests write
+      the Action mints a token of it for them, with contents, pull-requests and workflows write
     default: ''
   app-private-key:
     description: Private key of the `app-id` App
@@ -46,7 +49,7 @@ inputs:
   ci-workflows:
     description: >-
       Workflow files (space or newline separated) to dispatch on `perseid/update` once its pull
-      request is opened or updated in this repository, when `token` is the default GITHUB_TOKEN,
+      request is opened or updated in this repository, when `token` is the workflow's own `github.token`,
       whose pushes start no workflow. The job needs `actions: write`
     default: ''
 
