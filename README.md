@@ -41,7 +41,7 @@ To see the SDKs before pushing anything:
 npx perseid generate --out /tmp/sdks   # every SDK in /tmp/sdks/<language>
 ```
 
-perseid also installs with `curl -fsSL https://raw.githubusercontent.com/meteroid-oss/perseid/main/install.sh | sh`
+perseid also installs with `curl -fsSL https://sh.meteroid.com/perseid | sh`
 or runs as the `ghcr.io/meteroid-oss/perseid` image. Linux and macOS, x64 and arm64.
 
 ## What your users get
