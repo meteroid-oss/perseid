@@ -25,7 +25,7 @@ npx perseid connect acme/acme-sdks   # pushes the spec on each release or change
 | `init` | the SDKs repository | writes `perseid.toml`, nothing else: the spec found there, the SDKs you pick, where they live |
 | `generate` | the SDKs repository | writes the SDKs from `spec` (or `--spec <path\|url>`), starting each from its package skeleton: here, in a checkout of its `repo` under `.perseid/repos`, or all under `--out <dir>` |
 | `setup` | the SDKs repository | plans, then sets up GitHub: SDK repositories, the App, `sdks.yml`, release files |
-| `connect <owner/sdks-repo>` | the repository holding the spec | a deploy key and `perseid-push.yml`, pushing the spec to the SDKs repository |
+| `connect <owner/sdks-repo>` | the repository holding the spec | a deploy key on GitHub, and `perseid-push.yml` for you to commit, pushing the spec to the SDKs repository |
 
 With the spec and the SDKs in one repository, `connect` isn't needed. Merge the pull requests, and
 every spec change (or every release of your API) lands as SDK pull requests, then releases. See
@@ -68,9 +68,11 @@ It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients),
 
 ## In your CI
 
-`perseid setup` writes the workflow for you: it runs the `meteroid-oss/perseid@v0` Action
+`perseid setup` writes the workflows for you: `sdks.yml` runs the `meteroid-oss/perseid@v0` Action
 on every spec change (pushed by `perseid connect` on each release of your API, or each change),
-and `perseid status` tells how it fares, from either repository. To set it up by hand, or on self-hosted runners and other CIs with the
+and `sdk-release.yml`, at the root of each repository holding SDKs, releases them from its default
+branch. Setup rewrites both when they drift, and `perseid status` tells how the automation fares,
+from either repository. To set it up by hand, or on self-hosted runners and other CIs with the
 `ghcr.io/meteroid-oss/perseid` image, see [CI and releases](docs/ci.md).
 
 ## Docs

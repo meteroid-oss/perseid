@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use perseid::{
     config::{self, Config, LANGUAGES},
     generate::{self, Options},
-    github::PushOn,
+    github::{Auth, PushOn},
     init,
     pr::{self, Bump},
     scaffold,
@@ -85,7 +85,8 @@ enum Command {
         /// repository.
         #[arg(long, conflicts_with = "pr")]
         out: Option<PathBuf>,
-        /// Commit the result to the `perseid/update` branch and open a pull request (needs `gh`).
+        /// Commit the generated files on top of the upstream branch to `perseid/update`, in a
+        /// temporary worktree, and open a pull request (needs `gh`).
         #[arg(long)]
         pr: bool,
         /// Release size the pull request asks for, as its conventional-commit type.
@@ -119,11 +120,27 @@ enum Command {
         /// Tags pushing the spec with `--on tag`, as a GitHub Actions glob (default: `v*`).
         #[arg(long)]
         tags: Option<String>,
+        /// How the workflow authenticates to the SDKs repository (default: a deploy key).
+        #[arg(long, value_enum)]
+        auth: Option<Auth>,
         /// Leave this repository's name out of what the SDKs repository records.
         #[arg(long)]
         private: bool,
         #[command(flatten)]
         apply: Apply,
+    },
+    /// Commit the spec to the SDKs repository, unless it holds a newer one: what perseid-push.yml
+    /// runs, authenticating with the deploy key in `PERSEID_SDKS_DEPLOY_KEY` when set.
+    #[command(hide = true)]
+    PushSpec {
+        /// The OpenAPI document, relative to this directory.
+        spec: String,
+        /// The SDKs repository, `owner/name`.
+        #[arg(long)]
+        to: String,
+        /// Leave this repository's name out of what the SDKs repository records.
+        #[arg(long)]
+        private: bool,
     },
     /// Check the GitHub setup without changing it: pending changes, last spec, pull requests, runs.
     Status,
@@ -176,6 +193,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             build,
             on,
             tags,
+            auth,
             private,
             apply,
         } => {
@@ -185,9 +203,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 build,
                 on,
                 tags,
+                auth,
                 private,
             };
             return perseid::github::connect(&cwd, connect, &apply.options());
+        }
+        Command::PushSpec { spec, to, private } => {
+            let push = perseid::github::PushSpec { spec, to, private };
+            return perseid::github::push_spec(&cwd, push);
         }
         Command::Status => return perseid::github::status(&cli.config),
         Command::Generate {
@@ -208,6 +231,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             let sdks = config.sdks(&languages)?;
             let out = out.map(|out| cwd.join(out));
+            let mut files = vec![];
             let mut checkouts = BTreeSet::new();
             let mut dirs = Vec::new();
             for sdk in &sdks {
@@ -233,7 +257,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             if !check {
                 for (sdk, dir) in sdks.iter().zip(&dirs) {
-                    scaffold::bootstrap(&config, sdk, dir)?;
+                    files.extend(scaffold::bootstrap(&config, sdk, dir)?);
                 }
             }
             let results: Vec<_> = std::thread::scope(|scope| {
@@ -274,7 +298,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 let notes = notes
                     .map(|path| std::fs::read_to_string(&path).context("reading --notes"))
                     .transpose()?;
-                deliver(&config, &root, &dirs, &spec, &changes, bump, notes)?;
+                let origin = pr::origin(&config, &root, &spec);
+                if let config::Source::File(file) = config.source() {
+                    files.push(root.join(file));
+                }
+                deliver(&dirs, &files, &spec, &changes, bump, notes, origin)?;
             }
         }
         Command::Eject { language } => {
@@ -306,36 +334,44 @@ fn shown(dir: &Path, cwd: &Path) -> String {
     }
 }
 
+/// SDK directories and other files (spec, skeleton) to commit, relative to their repository.
+#[derive(Default)]
+struct Delivery {
+    dirs: Vec<String>,
+    files: Vec<String>,
+}
+
 fn deliver(
-    config: &Config,
-    root: &std::path::Path,
     dirs: &[PathBuf],
+    files: &[PathBuf],
     spec: &str,
     changes: &BTreeMap<String, Vec<generate::Change>>,
     bump: Bump,
     notes: Option<String>,
+    origin: Option<String>,
 ) -> Result<()> {
-    let origin = pr::origin(config, root, spec);
     let spec: serde_json::Value = serde_json::from_str(spec)?;
-    let mut repos: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+    let mut repos: BTreeMap<PathBuf, Delivery> = BTreeMap::new();
     for dir in dirs {
         let top = pr::toplevel(dir)?;
         let path = std::path::absolute(dir)?;
         let relative = path
             .strip_prefix(&top)
-            .context("SDK outside its repository")?;
-        repos
-            .entry(top)
-            .or_default()
-            .push(relative.to_str().unwrap_or(".").to_owned());
+            .context("SDK outside its repository")?
+            .to_str()
+            .filter(|p| !p.is_empty())
+            .unwrap_or(".");
+        repos.entry(top).or_default().dirs.push(relative.to_owned());
     }
-    if let Ok(top) = pr::toplevel(root)
-        && let Some(paths) = repos.get_mut(&top)
-        && let config::Source::File(file) = config.source()
-        && let Ok(spec_path) = std::path::absolute(root.join(file))
-        && let Ok(relative) = spec_path.strip_prefix(&top)
-    {
-        paths.push(relative.to_string_lossy().into_owned());
+    for file in files {
+        if let Ok(path) = std::path::absolute(file)
+            && let Some(parent) = path.parent()
+            && let Ok(top) = pr::toplevel(parent)
+            && let Some(delivery) = repos.get_mut(&top)
+            && let Ok(relative) = path.strip_prefix(&top)
+        {
+            delivery.files.push(relative.to_string_lossy().into_owned());
+        }
     }
     let subject = format!(
         "update SDKs to {} {}",
@@ -350,12 +386,15 @@ fn deliver(
     if let Some(notes) = notes {
         body += &format!("\n\n{}", notes.trim());
     }
-    for (repo, mut paths) in repos {
-        paths
-            .iter_mut()
-            .filter(|p| p.is_empty())
-            .for_each(|p| *p = ".".into());
-        match pr::open(&repo, &paths, bump, subject.trim(), &body)? {
+    for (repo, delivery) in repos {
+        match pr::open(
+            &repo,
+            &delivery.dirs,
+            &delivery.files,
+            bump,
+            subject.trim(),
+            &body,
+        )? {
             Some(url) => println!("{url}"),
             None => println!("{}: nothing to update", repo.display()),
         }

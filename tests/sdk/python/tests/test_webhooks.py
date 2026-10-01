@@ -9,13 +9,15 @@ from petstore.webhooks import (
 
 SECRET = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw"
 PAYLOAD = '{"test": 2432232314}'
+# One instant for the whole run, so a signature and its timestamp never straddle a second.
+NOW = int(time.time())
 
 
 def headers(prefix, signature, timestamp=None):
     return {
         f"{prefix}-id": "msg_1",
         f"{prefix}-signature": signature,
-        f"{prefix}-timestamp": str(int(time.time()) if timestamp is None else timestamp),
+        f"{prefix}-timestamp": str(NOW if timestamp is None else timestamp),
     }
 
 
@@ -28,13 +30,13 @@ class WebhookTest(unittest.TestCase):
         self.assertEqual(signature, "v1,g0hM9SsE+OTPJTGt/tmIKtSyZlE3uFJELVlNIOLJ1OE=")
 
     def test_verifies_both_header_families(self):
-        signature = self.webhook.sign("msg_1", int(time.time()), PAYLOAD)
+        signature = self.webhook.sign("msg_1", NOW, PAYLOAD)
         for prefix in ("webhook", "svix"):
             self.webhook.verify(PAYLOAD, headers(prefix, signature))
             self.webhook.verify(PAYLOAD.encode(), headers(prefix.title(), signature))
 
     def test_rejects_bad_requests(self):
-        now = int(time.time())
+        now = NOW
         good = self.webhook.sign("msg_1", now, PAYLOAD)
         old = self.webhook.sign("msg_1", now - 3600, PAYLOAD)
         future = self.webhook.sign("msg_1", now + 3600, PAYLOAD)
@@ -50,7 +52,7 @@ class WebhookTest(unittest.TestCase):
                 self.webhook.verify(payload, request_headers)
 
     def test_standard_headers_win_and_rotated_signatures_are_accepted(self):
-        good = self.webhook.sign("msg_1", int(time.time()), PAYLOAD)
+        good = self.webhook.sign("msg_1", NOW, PAYLOAD)
         mixed = {**headers("svix", good), **headers("webhook", "v1,AAAA")}
         with self.assertRaises(WebhookVerificationError):
             self.webhook.verify(PAYLOAD, mixed)

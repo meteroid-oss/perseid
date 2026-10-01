@@ -23,8 +23,11 @@ class WebhookTest {
         return headers;
     }
 
+    // One instant for the whole run, so a signature and its timestamp never straddle a second.
+    private static final long NOW = Instant.now().getEpochSecond();
+
     private static String now() {
-        return String.valueOf(Instant.now().getEpochSecond());
+        return String.valueOf(NOW);
     }
 
     private static void assertRejected(Webhook webhook, String payload, Map<String, List<String>> headers, String message) {
@@ -43,7 +46,7 @@ class WebhookTest {
     @Test
     void verifiesBothHeaderFamilies() {
         Webhook webhook = new Webhook(SECRET);
-        String signature = webhook.sign("msg_1", Instant.now().getEpochSecond(), PAYLOAD);
+        String signature = webhook.sign("msg_1", NOW, PAYLOAD);
         for (String prefix : List.of("webhook", "svix", "Webhook")) {
             assertDoesNotThrow(() -> webhook.verify(PAYLOAD, headers(prefix, signature, now())));
         }
@@ -52,7 +55,7 @@ class WebhookTest {
     @Test
     void rejectsBadRequests() {
         Webhook webhook = new Webhook(SECRET);
-        long now = Instant.now().getEpochSecond();
+        long now = NOW;
         String good = webhook.sign("msg_1", now, PAYLOAD);
         assertRejected(webhook, "tampered", headers("webhook", good, now()), "No matching signature found");
         assertRejected(webhook, PAYLOAD, Map.of(), "Missing required headers");
@@ -66,7 +69,7 @@ class WebhookTest {
     @Test
     void standardHeadersWinAndRotatedSignaturesAreAccepted() {
         Webhook webhook = new Webhook(SECRET);
-        String good = webhook.sign("msg_1", Instant.now().getEpochSecond(), PAYLOAD);
+        String good = webhook.sign("msg_1", NOW, PAYLOAD);
         Map<String, List<String>> mixed = headers("svix", good, now());
         mixed.putAll(headers("webhook", "v1,AAAA", now()));
         assertRejected(webhook, PAYLOAD, mixed, "No matching signature found");

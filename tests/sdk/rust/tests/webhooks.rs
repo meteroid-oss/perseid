@@ -1,15 +1,21 @@
 use http1::{HeaderMap, HeaderName, HeaderValue};
 use petstore::webhooks::{Webhook, WebhookError};
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SECRET: &str = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
 const PAYLOAD: &[u8] = br#"{"test": 2432232314}"#;
 
-fn now() -> i64 {
+/// One instant for the whole run, so a signature and its timestamp never straddle a second.
+static NOW: LazyLock<i64> = LazyLock::new(|| {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
+});
+
+fn now() -> i64 {
+    *NOW
 }
 
 fn headers(prefix: &str, signature: &str, timestamp: i64) -> HeaderMap {

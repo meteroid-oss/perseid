@@ -158,8 +158,6 @@ runs:
         DISPATCH: ${{ inputs.token == github.token && inputs.ci-workflows || '' }}
       run: |
         gh auth setup-git
-        git config user.name >/dev/null || git config --global user.name 'github-actions[bot]'
-        git config user.email >/dev/null || git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
         perseid $COMMAND ${BUMP:+--bump "$BUMP"} ${NOTES:+--notes "$NOTES"} | tee "$RUNNER_TEMP/perseid.out"
         if [ "$AUTO_MERGE" = true ]; then
           { grep -E '^https://' "$RUNNER_TEMP/perseid.out" || true; } | while read -r url; do

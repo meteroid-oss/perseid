@@ -1,0 +1,48 @@
+name: Perseid push spec
+description: Push an OpenAPI spec to the repository holding the perseid.toml of its SDKs, unless it holds a newer one
+branding:
+  icon: send
+  color: purple
+
+inputs:
+  spec:
+    description: OpenAPI document, relative to the repository root
+    required: true
+  to:
+    description: SDKs repository, owner/name
+    required: true
+  deploy-key:
+    description: Private half of a deploy key that can write to `to`
+    default: ''
+  token:
+    description: Token that can write to `to`, instead of `deploy-key`
+    default: 
+  private:
+    description: Leave this repository's name out of what the SDKs repository records
+    default: 'false'
+  version:
+    description: Perseid version (default, the one matching this action's ref)
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Install perseid
+      shell: bash
+      env:
+        PERSEID_VERSION: ${{ inputs.version }}
+        PERSEID_INSTALL: ${{ runner.temp }}/perseid
+      run: |
+        export PERSEID_VERSION="${PERSEID_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_ACTION_PATH/../Cargo.toml" | head -1)}"
+        sh "$GITHUB_ACTION_PATH/../install.sh"
+
+    - name: Push the spec
+      shell: bash
+      env:
+        SPEC: ${{ inputs.spec }}
+        TO: ${{ inputs.to }}
+        PRIVATE: ${{ inputs.private }}
+        PERSEID_SDKS_DEPLOY_KEY: ${{ inputs.deploy-key }}
+        PERSEID_SDKS_TOKEN: ${{ inputs.token }}
+      run: |
+        "$RUNNER_TEMP/perseid/perseid" push-spec "$SPEC" --to "$TO" $([ "$PRIVATE" = true ] && echo --private)
