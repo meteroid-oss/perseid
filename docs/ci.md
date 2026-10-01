@@ -178,10 +178,13 @@ commit, and the tag as `ref`, unless:
 
 - the SDKs repository has no `perseid.toml` yet: run `perseid init` there and push it, then run the
   workflow again;
-- the synced commit isn't an ancestor of the pushed one: an older or diverged commit never
-  overwrites a newer spec, so releases and tags must be cut from the default branch's history
-  (to resync after rewriting history, remove `sha` from `.perseid/source.json`);
+- the pushed commit is older than the synced one: an older spec never overwrites a newer one;
 - the spec didn't change.
+
+When the pushed commit and the synced one have diverged (a release cut off the default branch's
+history, or history rewritten), the run fails rather than skipping every later push: remove `sha`
+from the SDKs repository's `.perseid/source.json` to accept the pushed spec. A `.perseid/source.json`
+naming another repository, after the spec moved, is replaced.
 
 Runs share the `perseid-push` concurrency group without cancelling a running push, so pushes happen
 one at a time and in order. The deploy key reaches the SDKs repository only, and nothing on the SDKs

@@ -74,13 +74,30 @@ pub fn push_spec(cwd: &Path, push: PushSpec) -> Result<ExitCode> {
     let destination = join(dir, file);
     let source = join(dir, link::SOURCE);
 
-    if let Some(synced) = link::source(&sdks.join(dir)).and_then(|s| s.sha)
-        && !descends(cwd, &synced, &sha)?
-    {
-        notice(&format!(
-            "{to} has the spec of {synced}, which {sha} doesn't descend from: skipped"
-        ));
-        return Ok(ExitCode::SUCCESS);
+    let here = env("GITHUB_REPOSITORY");
+    let synced = link::source(&sdks.join(dir))
+        .filter(|s| match (&s.repo, &here) {
+            (Some(recorded), Some(here)) => recorded.eq_ignore_ascii_case(here),
+            _ => true,
+        })
+        .and_then(|s| s.sha);
+    if let Some(synced) = synced {
+        match lineage(cwd, &synced, &sha)? {
+            Lineage::Descends => {}
+            Lineage::Older => {
+                notice(&format!(
+                    "{to} has the spec of {}, newer than {}: skipped",
+                    short(&synced),
+                    short(&sha)
+                ));
+                return Ok(ExitCode::SUCCESS);
+            }
+            Lineage::Diverged => bail!(
+                "{to} has the spec of {}, which {} doesn't descend from (a release cut off the default branch, or rewritten history): to push this spec anyway, remove `sha` from {source} in {to}",
+                short(&synced),
+                short(&sha)
+            ),
+        }
     }
     if std::fs::read(sdks.join(&destination)).ok().as_deref() == Some(content.as_slice()) {
         println!("{to} already has this spec");
@@ -89,7 +106,7 @@ pub fn push_spec(cwd: &Path, push: PushSpec) -> Result<ExitCode> {
 
     let tag = env("GITHUB_REF").and_then(|r| r.strip_prefix("refs/tags/").map(str::to_owned));
     let repo = env("GITHUB_REPOSITORY").filter(|_| !private);
-    let mut at = sha.get(..7).unwrap_or(&sha).to_owned();
+    let mut at = short(&sha).to_owned();
     if let Some(tag) = &tag {
         at = format!("{tag} ({at})");
     }
@@ -203,17 +220,34 @@ fn find_config(sdks: &Path) -> Result<Option<String>> {
     }
 }
 
-/// Whether `sha` descends from `synced`, fetching the history a shallow checkout lacks.
-fn descends(cwd: &Path, synced: &str, sha: &str) -> Result<bool> {
+enum Lineage {
+    Descends,
+    Older,
+    Diverged,
+}
+
+/// How `sha` relates to `synced`, fetching the history a shallow checkout lacks.
+fn lineage(cwd: &Path, synced: &str, sha: &str) -> Result<Lineage> {
     if git(cwd, &["rev-parse", "--is-shallow-repository"])? == "true" {
         git(cwd, &["fetch", "--quiet", "--unshallow"])?;
     }
-    let status = Command::new("git")
-        .args(["merge-base", "--is-ancestor", synced, sha])
-        .current_dir(cwd)
-        .stderr(Stdio::null())
-        .status()?;
-    Ok(status.success())
+    let ancestor = |a: &str, b: &str| {
+        Command::new("git")
+            .args(["merge-base", "--is-ancestor", a, b])
+            .current_dir(cwd)
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    };
+    Ok(match (ancestor(synced, sha), ancestor(sha, synced)) {
+        (true, _) => Lineage::Descends,
+        (false, true) => Lineage::Older,
+        (false, false) => Lineage::Diverged,
+    })
+}
+
+fn short(sha: &str) -> &str {
+    sha.get(..7).unwrap_or(sha)
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String> {

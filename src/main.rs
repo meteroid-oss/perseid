@@ -122,6 +122,7 @@ enum Command {
     },
     /// Commit the spec to the SDKs repository, unless it holds a newer one: what perseid-push.yml
     /// runs, authenticating with the deploy key in `PERSEID_SDKS_DEPLOY_KEY` when set.
+    #[command(hide = true)]
     PushSpec {
         /// The OpenAPI document, relative to this directory.
         spec: String,

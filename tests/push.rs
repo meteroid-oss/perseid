@@ -121,6 +121,25 @@ fn push_at(repos: &Repos, sha: &str, tag: &str) -> String {
 /// Runs `perseid push-spec` at `sha`, `private` leaving out the name of the repository it runs
 /// in, authenticating with the `credential` variable.
 fn push_with(repos: &Repos, sha: &str, tag: &str, private: bool, credential: &str) -> String {
+    let (success, out) = run_push(repos, sha, tag, private, credential);
+    assert!(success, "{out}");
+    out
+}
+
+/// Runs `perseid push-spec` at `sha` expecting it to fail, returning its output.
+fn push_failing(repos: &Repos, sha: &str, tag: &str) -> String {
+    let (success, out) = run_push(repos, sha, tag, false, "PERSEID_SDKS_DEPLOY_KEY");
+    assert!(!success, "{out}");
+    out
+}
+
+fn run_push(
+    repos: &Repos,
+    sha: &str,
+    tag: &str,
+    private: bool,
+    credential: &str,
+) -> (bool, String) {
     git(&repos.api, &["checkout", "--quiet", sha]);
     let url = format!("file://{}", repos.sdks.display());
     let mut command = Command::new(env!("CARGO_BIN_EXE_perseid"));
@@ -154,8 +173,7 @@ fn push_with(repos: &Repos, sha: &str, tag: &str, private: bool, credential: &st
     let output = command.output().unwrap();
     let out = String::from_utf8_lossy(&output.stdout).to_string()
         + &String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "{out}");
-    out
+    (output.status.success(), out)
 }
 
 fn sdks_head(repos: &Repos) -> String {
@@ -167,7 +185,7 @@ fn sdks_file(repos: &Repos, path: &str) -> String {
 }
 
 #[test]
-fn newer_specs_are_pushed_and_older_or_diverged_ones_skipped() {
+fn newer_specs_are_pushed_older_ones_skipped_and_diverged_ones_fail() {
     let (repos, shas) = repos();
     let [a, b, c, d, e] = shas.as_slice() else {
         unreachable!()
@@ -178,13 +196,18 @@ fn newer_specs_are_pushed_and_older_or_diverged_ones_skipped() {
     let out = push(&repos, a);
     assert!(
         out.contains(&format!(
-            "has the spec of {b}, which {a} doesn't descend from: skipped"
+            "::notice::acme/api-sdks has the spec of {}, newer than {}: skipped",
+            &b[..7],
+            &a[..7]
         )),
         "{out}"
     );
-    let out = push(&repos, e);
+    let out = push_failing(&repos, e, "");
     assert!(
-        out.contains("doesn't descend from: skipped"),
+        out.contains(&format!(
+            "which {} doesn't descend from (a release cut off the default branch, or rewritten history): to push this spec anyway, remove `sha` from .perseid/source.json in acme/api-sdks",
+            &e[..7]
+        )),
         "diverged: {out}"
     );
     let out = push(&repos, c);
@@ -354,10 +377,10 @@ fn releases_push_their_tag_and_record_it() {
     let message = git(&repos.sdks, &["log", "-1", "--format=%s", "main"]);
     assert_eq!(message, format!("spec: {at}"));
 
-    let out = push_at(&repos, e, "v0.9.0-fork");
+    let out = push_failing(&repos, e, "v0.9.0-fork");
     assert!(
-        out.contains("doesn't descend from: skipped"),
-        "tags off the default branch's history are skipped: {out}"
+        out.contains("doesn't descend from"),
+        "tags off the default branch's history fail: {out}"
     );
 }
 
@@ -417,6 +440,31 @@ fn runs_without_a_credential_say_which_is_missing() {
     let err = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success());
     assert!(err.contains("no credential for acme/api-sdks"), "{err}");
+}
+
+#[test]
+fn specs_recorded_from_another_repository_are_replaced() {
+    let (repos, shas) = repos();
+    seed(&repos, Some(&shas[1]));
+    let work = repos.sdks.with_extension("moved");
+    git(
+        repos.sdks.parent().unwrap(),
+        &[
+            "clone",
+            "--quiet",
+            repos.sdks.to_str().unwrap(),
+            work.to_str().unwrap(),
+        ],
+    );
+    let moved = "{\n  \"repo\": \"acme/old-api\",\n  \"sha\": \"0123456789abcdef\"\n}\n";
+    commit(
+        &work,
+        &[(".perseid/source.json", moved)],
+        "spec from another repository",
+    );
+    git(&work, &["push", "--quiet", "origin", "HEAD:main"]);
+    let out = push(&repos, &shas[4]);
+    assert!(out.contains("Pushed the spec of acme/api@"), "{out}");
 }
 
 #[test]
