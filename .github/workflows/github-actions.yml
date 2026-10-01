@@ -135,6 +135,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: |
           docker build -t perseid .
-          docker run --rm -v "$PWD/tests/fixtures:/work" perseid init --spec petstore.yaml
+          docker run --rm -v "$PWD/tests/fixtures:/work" perseid init --spec petstore.yaml --sdks rust,typescript,python,go,java,csharp
           docker run --rm -v "$PWD/tests/fixtures:/work" perseid generate
           docker run --rm -v "$PWD/tests/fixtures:/work" perseid generate --check
