@@ -418,7 +418,7 @@ fn specs_are_pushed_on_changes_releases_or_tags() {
         assert!(workflow["on"].get("workflow_dispatch").is_some());
         let steps = workflow["jobs"]["push"]["steps"].as_array().unwrap();
         let step = steps.last().unwrap();
-        assert_eq!(step["uses"], "meteroid-oss/perseid/push@v0");
+        assert_eq!(step["uses"], perseid::github::uses("push").as_str());
         assert_eq!(step["with"]["to"], "acme/api-sdks");
     }
 }

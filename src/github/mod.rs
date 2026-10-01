@@ -216,6 +216,20 @@ pub struct Workflow<'a> {
     pub requires: Option<&'a str>,
 }
 
+/// `meteroid-oss/perseid`, or its `action` folder, at the tag of this binary's release line:
+/// `v0.6` for 0.6.x, since minor releases may break before 1.0, then `v1` for 1.x.
+pub fn uses(action: &str) -> String {
+    let tag = match env!("CARGO_PKG_VERSION").split('.').collect::<Vec<_>>()[..] {
+        ["0", minor, ..] => format!("v0.{minor}"),
+        [major, ..] => format!("v{major}"),
+        [] => "v0".to_owned(),
+    };
+    match action {
+        "" => format!("meteroid-oss/perseid@{tag}"),
+        action => format!("meteroid-oss/perseid/{action}@{tag}"),
+    }
+}
+
 pub fn workflow(w: &Workflow) -> String {
     let paths = serde_json::to_string(w.paths).unwrap_or_default();
     let schedule = match w.daily {
@@ -225,7 +239,7 @@ pub fn workflow(w: &Workflow) -> String {
         }
         None => String::new(),
     };
-    let action = "meteroid-oss/perseid@v0";
+    let action = uses("");
     let step = match w.requires {
         Some(file) => format!("      - if: hashFiles('{file}') != ''\n        uses: {action}\n"),
         None => format!("      - uses: {action}\n"),
@@ -438,6 +452,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn workflows_pin_the_release_line_of_this_binary() {
+        let version = env!("CARGO_PKG_VERSION");
+        let line = match version.strip_prefix("0.") {
+            Some(rest) => format!("v0.{}", rest.split('.').next().unwrap()),
+            None => format!("v{}", version.split('.').next().unwrap()),
+        };
+        assert_eq!(uses(""), format!("meteroid-oss/perseid@{line}"));
+        assert_eq!(uses("push"), format!("meteroid-oss/perseid/push@{line}"));
+    }
+
+    #[test]
     fn the_workflow_runs_in_the_config_directory() {
         let paths = ["api/openapi.json".to_owned(), "api/perseid.toml".to_owned()];
         let yaml = workflow(&Workflow {
@@ -453,14 +478,15 @@ mod tests {
         );
         assert!(!yaml.contains("schedule"), "{yaml}");
         assert!(
-            yaml.ends_with(
-                "      - uses: meteroid-oss/perseid@v0
+            yaml.ends_with(&format!(
+                "      - uses: {}
         with:
-          app-id: ${{ vars.SDK_APP_ID }}
-          app-private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
+          app-id: ${{{{ vars.SDK_APP_ID }}}}
+          app-private-key: ${{{{ secrets.SDK_APP_PRIVATE_KEY }}}}
           working-directory: api
-"
-            ),
+",
+                uses("")
+            )),
             "{yaml}"
         );
         assert_eq!(join("", "./openapi.json"), "openapi.json");
@@ -484,7 +510,10 @@ mod tests {
             "{yaml}"
         );
         assert!(
-            yaml.contains("      - if: hashFiles('openapi.json') != ''\n        uses: meteroid-oss/perseid@v0\n        with:\n"),
+            yaml.contains(&format!(
+                "      - if: hashFiles('openapi.json') != ''\n        uses: {}\n        with:\n",
+                uses("")
+            )),
             "{yaml}"
         );
         assert!(

@@ -166,7 +166,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+      # Generated workflows pin vX.Y before 1.0 (minor releases may break), vX after.
       - run: |
-          major="${TAG%%.*}"
-          git tag -f "$major" "$(git rev-parse HEAD)"
-          git push -f origin "refs/tags/$major"
+          for tag in "${TAG%%.*}" "${TAG%.*}"; do
+            git tag -f "$tag" "$(git rev-parse HEAD)"
+            git push -f origin "refs/tags/$tag"
+          done

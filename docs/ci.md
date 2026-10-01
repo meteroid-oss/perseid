@@ -69,7 +69,9 @@ their description names the URL and a digest of what it served.
 
 ## GitHub Action
 
-`perseid setup` writes `.github/workflows/sdks.yml`, the same with or without a GitHub App:
+`perseid setup` writes `.github/workflows/sdks.yml`, the same with or without a GitHub App. It
+pins the release line, `@v0.6`: before 1.0 a minor release may break, and `perseid setup` writes
+the line of the perseid that wrote the workflow, updating it when you run setup with a newer one.
 
 ```yaml
 name: SDKs
@@ -92,7 +94,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - if: hashFiles('openapi.json') != ''
-        uses: meteroid-oss/perseid@v0
+        uses: meteroid-oss/perseid@v0.6
         with:
           app-id: ${{ vars.SDK_APP_ID }}
           app-private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
@@ -304,7 +306,7 @@ repository variable lists workflow files and no other token is configured.
      write only; without an `app-id`, it uses `token`:
 
 ```yaml
-      - uses: meteroid-oss/perseid@v0
+      - uses: meteroid-oss/perseid@v0.6
         with:
           app-id: ${{ vars.SDK_APP_ID }}
           app-private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}

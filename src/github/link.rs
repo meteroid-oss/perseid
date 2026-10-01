@@ -209,9 +209,6 @@ pub fn pushed(yaml: &str) -> Option<Pushed> {
     })
 }
 
-/// The action running `perseid push-spec`.
-pub const ACTION: &str = "meteroid-oss/perseid/push@v0";
-
 /// The workflow pushing the spec to the SDKs repository, one run at a time.
 pub fn push_workflow(push: &Push) -> String {
     let build = push.build.map_or_else(String::new, |command| {
@@ -299,13 +296,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-{build}{app}      - uses: {ACTION}
+{build}{app}      - uses: {action}
         with:
           spec: {spec:?}
           to: {hub}
           {credential}{private}
 "#,
         spec = push.spec,
+        action = super::uses("push"),
     )
 }
 
@@ -337,7 +335,7 @@ mod tests {
         );
         let parsed: Value = serde_norway::from_str(&yaml).unwrap();
         let steps = &parsed["jobs"]["push"]["steps"];
-        assert_eq!(steps[2]["uses"], ACTION);
+        assert_eq!(steps[2]["uses"], super::super::uses("push"));
         assert_eq!(steps[2]["with"]["spec"], "api/openapi.json");
         assert_eq!(steps[2]["with"]["to"], "acme/api-sdks");
         assert_eq!(
