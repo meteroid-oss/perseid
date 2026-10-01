@@ -77,7 +77,7 @@ See [repository layouts](ci.md#repository-layouts) for the trade-offs.
 | Key | |
 |---|---|
 | `repo` | Default repository of every SDK: `"acme/api-{lang}"` gives each its own (`{lang}` is the language, as `sdks` names it), `"acme/api-sdks"` holds them all, each in a folder named after its language. Without it, SDKs live next to `perseid.toml` |
-| `release` | `false` leaves out the release-please files and the `sdk-release.yml` workflow `perseid setup` adds to each repository holding SDKs |
+| `release` | `false` leaves out the release-please files and the `sdk-release.yml` workflow `perseid init` and `perseid setup-github` add to each repository holding SDKs |
 
 ## SDK defaults
 

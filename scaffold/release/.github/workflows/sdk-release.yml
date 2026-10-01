@@ -1,4 +1,4 @@
-# Written by `perseid setup`, which rewrites it when it differs: delete this line to keep your edits.
+# Written by `perseid init`, which rewrites it when it differs: delete this line to keep your edits.
 # release-please turns conventional commits under each SDK into a release PR; merging it tags the
 # bumped SDKs and publishes them to their registries.
 name: SDK Release

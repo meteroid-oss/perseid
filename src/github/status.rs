@@ -1,4 +1,5 @@
-//! `perseid status`: the plan `perseid setup` would apply, and how the automation fares.
+//! `perseid status`: what `perseid init` and `perseid setup-github` would change, and how the
+//! automation fares. Exits 1 on errors, 2 when something waits on you, 0 otherwise.
 
 use std::{
     collections::BTreeSet,
@@ -25,6 +26,7 @@ use crate::config::{Config, Source};
 struct Report {
     ui: Ui,
     failed: bool,
+    pending: bool,
 }
 
 impl Report {
@@ -34,12 +36,12 @@ impl Report {
         self.failed = true;
     }
 
-    /// The steps of `plan` left to apply, as a failure.
+    /// The steps of `plan` left to apply.
     fn pending(&mut self, plan: &Plan, run: &str) {
         match plan.pending() {
             0 => self.ui.ok("In sync"),
             n => {
-                self.ui.fail(&format!(
+                self.ui.warn(&format!(
                     "{n} change{} pending:",
                     if n == 1 { "" } else { "s" }
                 ));
@@ -48,12 +50,13 @@ impl Report {
                     println!("    {mark} {}", step.text);
                 }
                 self.ui.say(&format!("run `{run}`"));
-                self.failed = true;
+                self.pending = true;
             }
         }
         for warning in &plan.warnings {
             self.ui.warn(warning);
         }
+        self.pending |= plan.unpushed;
     }
 }
 
@@ -72,7 +75,11 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
         dry_run: true,
         browser: false,
     });
-    let mut report = Report { ui, failed: false };
+    let mut report = Report {
+        ui,
+        failed: false,
+        pending: false,
+    };
     if !config_path.exists() {
         let dir = std::path::absolute(config_path)?
             .parent()
@@ -102,6 +109,7 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
             let cx = plan::Session {
                 api,
                 login,
+                app: true,
                 collisions: false,
             };
             Some(plan::plan(&cx, config_path))
@@ -128,13 +136,13 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
         Some(Err(error)) => {
             report.fail(
                 &format!("{error:#}"),
-                "fix what it says, then run `perseid setup`",
+                "fix what it says, then run `perseid setup-github`",
             );
             return Ok(exit(&report));
         }
         None => return Ok(exit(&report)),
     };
-    report.pending(&plan, "perseid setup");
+    report.pending(&plan, "perseid setup-github");
     if let Source::File(_) = config.source() {
         last_spec(&mut report, api, &plan, plan.awaits_spec)?;
     }
@@ -143,9 +151,10 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
 }
 
 fn exit(report: &Report) -> ExitCode {
-    match report.failed {
-        true => ExitCode::FAILURE,
-        false => ExitCode::SUCCESS,
+    match (report.failed, report.pending) {
+        (true, _) => ExitCode::FAILURE,
+        (false, true) => ExitCode::from(2),
+        (false, false) => ExitCode::SUCCESS,
     }
 }
 
@@ -193,6 +202,7 @@ fn pushing(report: &mut Report, top: &Path, pushed: link::Pushed) -> Result<()> 
     let cx = plan::Session {
         api: &api,
         login: &login,
+        app: true,
         collisions: false,
     };
     let hub = pushed.hub.clone();
@@ -232,10 +242,12 @@ fn local(report: &mut Report, config: &Config, root: &Path) {
     let workflow = layout::SDKS_WORKFLOW;
     match top.join(workflow).exists() {
         true => report.ui.ok(&format!("{workflow} is here")),
-        false => report.fail(
-            &format!("{workflow} is missing"),
-            "run `perseid setup`, or merge and pull its perseid/setup pull request",
-        ),
+        false => {
+            report.ui.warn(&format!(
+                "{workflow} isn't here: run `perseid init`, then commit and push"
+            ));
+            report.pending = true;
+        }
     }
     if let Source::File(file) = config.source()
         && !root.join(file).exists()
@@ -394,7 +406,7 @@ fn installation(report: &mut Report, api: &GitHub, hub: &str) -> Result<()> {
         )),
         None => report.fail(
             &format!("The App {id} isn't installed on {owner}"),
-            "install it from its settings page, or run `perseid setup`",
+            "install it from its settings page, or run `perseid setup-github`",
         ),
     }
     Ok(())

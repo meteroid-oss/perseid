@@ -1,11 +1,13 @@
-//! `perseid setup` and `perseid status`: the GitHub side of the layout perseid.toml declares,
-//! planned then applied from the terminal with the user's own GitHub credentials.
+//! `perseid setup-github` and `perseid status`: the GitHub side of the layout perseid.toml
+//! declares, planned then applied from the terminal with the user's own GitHub credentials, once
+//! they agree. Files go through the user's own commits: `perseid init` writes them.
 
 mod api;
 mod app;
 mod auth;
 mod bootstrap;
 mod connect;
+mod files;
 mod layout;
 mod link;
 mod plan;
@@ -22,15 +24,17 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 pub use connect::{Connect, connect};
+pub use files::{Written, write as write_files};
 pub use layout::origin_repo;
 pub use link::{Auth, Push, PushOn, push_workflow};
 pub use push::{PushSpec, push_spec};
 pub use status::status;
 
-use crate::config::{Config, Sdk, Source};
+use crate::config::{Config, Source};
 use api::GitHub;
 
 pub const SETUP_BRANCH: &str = "perseid/setup";
+const SDKS_WORKFLOW_NAME: &str = "sdks.yml";
 
 pub struct Options {
     pub yes: bool,
@@ -126,46 +130,51 @@ impl Ui {
     }
 }
 
-/// `perseid setup`: plans what GitHub lacks for perseid.toml to hold, then applies it once
-/// confirmed. With `--dry-run`, exits 2 when changes are pending.
-pub fn setup(config_path: &Path, options: &Options) -> Result<ExitCode> {
+/// `perseid setup-github`: plans what GitHub lacks for perseid.toml to hold, then applies it
+/// once agreed. With `--dry-run`, exits 2 when changes are pending.
+pub fn setup_github(config_path: &Path, options: &Options, app: bool) -> Result<ExitCode> {
     let ui = Ui::new(options);
+    let (_, root) = Config::load(config_path)?;
+    layout::required_origin_repo(&root, "the repository holding perseid.toml")?;
     let (token, source) = auth::token(&ui)?;
     let api = GitHub::new(Some(token));
-    let login = auth::whoami(&api, source)?;
+    let login = auth::whoami(&api, source, true)?;
     ui.ok(&format!("Signed in to GitHub as {login} ({source})"));
     let cx = plan::Session {
         api: &api,
         login: &login,
+        app,
         collisions: true,
     };
-    let plan = plan::plan(&cx, config_path)?;
+    let mut plan = plan::plan(&cx, config_path)?;
     println!("\n{}\n", plan.diagram);
     plan.print();
     let pending = plan.pending();
     if pending == 0 {
         println!();
-        ui.ok("In sync: nothing to change");
-        if plan.awaits_spec {
-            connect_hint(&plan);
-        }
+        ui.ok("In sync on GitHub: nothing to change");
+        next_steps(&plan, &[], &ui)?;
         return Ok(ExitCode::SUCCESS);
     }
     if options.dry_run {
         return Ok(ExitCode::from(2));
     }
     let question = match pending {
-        1 => "Apply this change?".to_owned(),
-        n => format!("Apply these {n} changes?"),
+        1 => "Apply this change on GitHub?".to_owned(),
+        n => format!("Apply these {n} changes on GitHub?"),
     };
     if !ui.confirm(&question, true)? {
-        bail!("nothing changed");
+        println!();
+        ui.say("Nothing changed on GitHub. To do it yourself:");
+        for manual in plan.manual() {
+            ui.info(&manual);
+        }
+        return Ok(ExitCode::SUCCESS);
     }
     println!();
-    let mut plan = plan;
     let pulls = plan::apply(&api, &mut plan, &ui)?;
     println!("\n✓ {}", plan.diagram);
-    checklist(&plan, &pulls, &ui)?;
+    next_steps(&plan, &pulls, &ui)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -289,7 +298,7 @@ pub fn workflow(w: &Workflow) -> String {
         ),
     };
     format!(
-        r#"# Written by `perseid setup`: regenerates the SDKs when the spec changes and {header}
+        r#"# Written by `perseid init`: regenerates the SDKs when the spec changes and {header}
 name: SDKs
 
 on:
@@ -355,71 +364,7 @@ fn join(dir: &str, path: &str) -> String {
     }
 }
 
-/// The new files of this checkout a setup commits: spec, release files, SDKs generated here.
-fn local_files(top: &Path, dir: &str, config: &Config, sdks: &[Sdk]) -> Result<Vec<String>> {
-    let mut specs = Vec::new();
-    if config.release != Some(false) && sdks.iter().any(|s| s.local) {
-        specs.extend(
-            [
-                "release-please-config.json",
-                ".release-please-manifest.json",
-                crate::scaffold::RELEASE_WORKFLOW,
-            ]
-            .map(str::to_owned),
-        );
-    }
-    if let Source::File(file) = config.source() {
-        specs.push(join(dir, file));
-    }
-    specs.extend(sdks.iter().filter(|s| s.local).map(|s| join(dir, &s.path)));
-    let mut args = vec![
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-        "--",
-    ];
-    args.extend(specs.iter().map(String::as_str));
-    let status = git(top, &args)?;
-    let mut files = Vec::new();
-    for entry in status.split(|b| *b == 0).filter(|e| e.len() > 3) {
-        if entry.starts_with(b"??") || entry.starts_with(b"A") {
-            files.push(String::from_utf8_lossy(&entry[3..]).into_owned());
-        }
-    }
-    files.sort();
-    files.dedup();
-    Ok(files)
-}
-
-fn executable(path: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path).is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
-    }
-    #[cfg(not(unix))]
-    {
-        path.file_name().is_some_and(|n| n == "gradlew")
-    }
-}
-
-/// Stages the committed local files, so pulling the merged commit doesn't trip over them.
-fn stage(top: &Path, paths: &[String]) -> Result<()> {
-    let mut args = vec!["add", "--"];
-    args.extend(paths.iter().map(String::as_str));
-    git(top, &args)?;
-    Ok(())
-}
-
-fn connect_hint(plan: &plan::Plan) {
-    println!(
-        "\nNext: in the repository that holds your OpenAPI spec, run `npx perseid connect {}`",
-        plan.hub
-    );
-}
-
-fn checklist(plan: &plan::Plan, pulls: &[String], ui: &Ui) -> Result<()> {
+fn next_steps(plan: &plan::Plan, pulls: &[String], ui: &Ui) -> Result<()> {
     let (config, hub) = (plan.config(), plan.hub.as_str());
     println!("\nNext steps");
     let mut step = 0;
@@ -427,15 +372,13 @@ fn checklist(plan: &plan::Plan, pulls: &[String], ui: &Ui) -> Result<()> {
         step += 1;
         ui.info(&format!("{step}. {text}"));
     };
-    match pulls {
-        [] => {}
-        [one] => item(format!(
-            "Merge {one}, then `git pull`: perseid staged the files it adds here"
-        )),
-        [first, rest @ ..] => item(format!(
-            "Merge {first} first, then {}, and `git pull`",
-            rest.join(", ")
-        )),
+    if plan.unpushed {
+        item(format!(
+            "Commit and push the files `perseid init` wrote here: {SDKS_WORKFLOW_NAME} runs once it is on the default branch of {hub}"
+        ));
+    }
+    for pull in pulls {
+        item(format!("Merge {pull}: it adds the release files there"));
     }
     for sdk in config.sdks(&[])? {
         let repo = sdk.remote().unwrap_or(hub);

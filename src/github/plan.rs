@@ -1,41 +1,28 @@
-//! What `perseid setup` changes on GitHub for perseid.toml to hold, computed without writing,
-//! then applied.
+//! What `perseid setup-github` changes on GitHub for perseid.toml to hold, computed without
+//! writing, then applied.
 
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Result, bail};
 use heck::ToKebabCase;
 use serde_json::{Value, json};
 
 use super::{
-    AppToken, SETUP_BRANCH, Ui, Workflow,
+    SETUP_BRANCH, Ui,
     api::GitHub,
     app,
     bootstrap::{self, File, Outcome},
-    git, join,
+    files, git, join,
     layout::{self, SDKS_WORKFLOW},
-    link, relative, secrets, toplevel, workflow,
+    link, relative, secrets, toplevel,
 };
 use crate::{
-    config::{self, Config, Source},
+    config::{Config, Source},
     scaffold::RELEASE_WORKFLOW,
 };
-
-const OWNED: &str = "# Written by `perseid";
-
-/// Whether perseid wrote the workflow `remote` holds, or there is none: setup rewrites it then.
-fn owned(remote: Option<&[u8]>) -> bool {
-    remote.is_none_or(|r| r.starts_with(OWNED.as_bytes()))
-}
-
-fn own_release_workflow(repo: &str, branch: &str) -> String {
-    format!(
-        "{repo} keeps its own {RELEASE_WORKFLOW}: check it runs release-please on `{branch}` and publishes from the `release` environment"
-    )
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
@@ -80,8 +67,6 @@ pub(super) struct Commit {
     pub message: &'static str,
     /// Opens a pull request saying this, instead of committing to `base`.
     pub pull_request: Option<String>,
-    /// The checkout of `repo` here: files it lacks are written, and all staged once committed.
-    pub local: Option<PathBuf>,
 }
 
 pub(super) struct AppPlan {
@@ -94,25 +79,15 @@ pub(super) struct AppPlan {
     joining: Vec<String>,
 }
 
-/// How the SDKs repository learns that the spec changed.
-enum Trigger {
-    /// Changes to the spec file of this repository, committed here or pushed by `perseid connect`.
-    File(String),
-    /// A URL, polled daily.
-    Schedule,
-}
-
 /// A repository running sdks.yml: where perseid runs and opens SDK pull requests from.
 struct Hub {
     repo: String,
     info: Option<Value>,
     config: Config,
-    toml: String,
     /// perseid.toml's directory, relative to the repository root.
     dir: String,
     /// The checkout's top and perseid.toml's directory.
     local: (PathBuf, PathBuf),
-    trigger: Trigger,
 }
 
 pub struct Plan {
@@ -127,6 +102,8 @@ pub struct Plan {
     pub app: bool,
     /// The spec isn't in the hub yet: `perseid connect` pushes it there.
     pub awaits_spec: bool,
+    /// Files perseid keeps here are out of date or not pushed yet.
+    pub unpushed: bool,
     hub_config: Option<Config>,
 }
 
@@ -149,6 +126,32 @@ impl Plan {
         }
     }
 
+    /// How to make the pending changes by hand.
+    pub fn manual(&self) -> Vec<String> {
+        self.steps
+            .iter()
+            .filter(|s| s.mark != Mark::Keep)
+            .filter_map(|s| match s.action.as_ref()? {
+                Action::CreateRepo {
+                    repo, visibility, ..
+                } => Some(format!("gh repo create {repo} --{visibility}")),
+                Action::Commit(commit) => {
+                    let paths: Vec<String> = commit.files.iter().map(|f| f.path.clone()).collect();
+                    Some(format!("{}: commit {}", commit.repo, names(&paths)))
+                }
+                Action::AllowPullRequests(repo) => Some(format!(
+                    "{repo}: Settings, Actions, General, check \"Allow GitHub Actions to create and approve pull requests\""
+                )),
+                Action::App(app) => Some(format!(
+                    "create a GitHub App with Contents and Pull requests read and write, install it on {}, and set its ID as the SDK_APP_ID variable and a private key as the SDK_APP_PRIVATE_KEY secret of each (https://github.com/meteroid-oss/perseid/blob/main/docs/ci.md#tokens)",
+                    app.repos.join(", ")
+                )),
+                Action::Write { file, .. } => Some(format!("write {}", file.path)),
+                Action::DeployKey { .. } => None,
+            })
+            .collect()
+    }
+
     pub fn config(&self) -> &Config {
         self.hub_config.as_ref().expect("a planned hub")
     }
@@ -163,6 +166,7 @@ impl Plan {
             targets: Vec::new(),
             app: false,
             awaits_spec: false,
+            unpushed: false,
             hub_config: None,
         }
     }
@@ -175,6 +179,8 @@ impl Plan {
 pub struct Session<'a> {
     pub api: &'a GitHub,
     pub login: &'a str,
+    /// Plans a GitHub App even when every SDK lives here, so CI runs on SDK pull requests.
+    pub app: bool,
     /// Renders the SDKs to warn about files perseid would overwrite: slow, so `setup` only.
     pub collisions: bool,
 }
@@ -188,31 +194,27 @@ fn default_branch(info: &Option<Value>) -> String {
 pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
     let api = cx.api;
     let (config, root) = Config::load(config_path)?;
-    let text = std::fs::read_to_string(config_path)?;
     let here = layout::required_origin_repo(&root, "the repository holding perseid.toml")?;
     let top = toplevel(&root)?;
     let dir = relative(&root, &top)?;
     let here_info = api.get(&format!("/repos/{here}"))?;
     let mut plan = Plan::new();
     unused_folders(&mut plan, &config, &root)?;
-    let (trigger, source) = match config.source() {
-        Source::Url(url) => (Trigger::Schedule, Some(url.to_owned())),
+    let source = match config.source() {
+        Source::Url(url) => Some(url.to_owned()),
         Source::File(file) => {
             let spec = join(&dir, file);
             let tracked = git(&top, &["ls-files", "--error-unmatch", "--", &spec]).is_ok();
             plan.awaits_spec = !tracked && !root.join(file).exists();
-            let pushed = link::source(&root).and_then(|s| s.repo);
-            (Trigger::File(spec), pushed)
+            link::source(&root).and_then(|s| s.repo)
         }
     };
     let hub = Hub {
         repo: here.clone(),
         info: Some(here_info.clone()),
         config,
-        toml: text,
         dir,
         local: (top, root),
-        trigger,
     };
     plan_hub(cx, &mut plan, hub, &here_info)?;
     plan.diagram = layout::diagram(source.as_deref(), &here, &plan.targets);
@@ -377,8 +379,9 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
             if remote.as_deref() == Some(file.content.as_slice()) {
                 continue;
             }
-            if file.path == RELEASE_WORKFLOW && !owned(remote.as_deref()) {
-                plan.warnings.push(own_release_workflow(repo, &base));
+            if file.path == RELEASE_WORKFLOW && !files::owned(remote.as_deref()) {
+                plan.warnings
+                    .push(format!("{repo}: {}", files::kept(RELEASE_WORKFLOW, &base)));
                 continue;
             }
             if remote.is_some() {
@@ -395,24 +398,31 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
             base,
             files,
             message: "ci: release the SDK with release-please",
-            pull_request: None,
-            local: None,
+            pull_request: (!created.contains(repo)).then(|| {
+                format!("`{RELEASE_WORKFLOW}` releases the {} SDK with release-please when its release pull request is merged.", hub.config.name)
+            }),
         };
         plan_commit(cx, plan, commit, &updated)?;
     }
 
-    let default_token = remote.is_empty();
     let hub_base = default_branch(&hub.info);
-    let mut token = None;
-    let installed: Vec<String>;
+    let allowed = match (&hub.info, remote.is_empty()) {
+        (Some(_), true) => api
+            .find(&format!("/repos/{}/actions/permissions/workflow", hub.repo))?
+            .is_some_and(|p| p["can_approve_pull_request_reviews"] == true),
+        _ => false,
+    };
+    let app_set = hub.info.is_some()
+        && secrets::variable(api, &hub.repo, "SDK_APP_ID")
+            .ok()
+            .flatten()
+            .is_some();
+    let default_token = remote.is_empty() && !app_set && (!cx.app || allowed);
     if default_token {
-        installed = vec![];
-        let allowed = match hub.info {
-            Some(_) => api
-                .find(&format!("/repos/{}/actions/permissions/workflow", hub.repo))?
-                .is_some_and(|p| p["can_approve_pull_request_reviews"] == true),
-            None => false,
-        };
+        plan.warnings.push(format!(
+            "SDK pull requests opened with the default token run no CI: `perseid setup-github` without --no-app sets up a GitHub App for {}",
+            hub.repo
+        ));
         match allowed {
             true => plan.add(
                 Mark::Keep,
@@ -429,149 +439,54 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
         plan.app = true;
         let mut configured = vec![hub.repo.clone()];
         configured.extend(remote.iter().cloned());
-        installed = configured
+        let installed: Vec<String> = configured
             .iter()
             .filter(|r| same(owner_of(r), &owner))
             .cloned()
             .collect();
         let who = account(&owner)?;
         let name = hub.config.name.to_kebab_case();
-        plan_app(
-            cx,
-            plan,
-            &hub.repo,
-            configured,
-            installed.clone(),
-            who,
-            name,
-        )?;
+        plan_app(cx, plan, &hub.repo, configured, installed, who, name)?;
     }
-    let names_installed: Vec<String> = installed
-        .iter()
-        .map(|r| r.rsplit('/').next().unwrap_or(r).to_owned())
-        .collect();
-    if !default_token {
-        token = Some(names_installed);
+    let expected = super::files::expected(&hub.config, &hub.local.1)?;
+    if expected.branch != hub_base {
+        plan.warnings.push(format!(
+            "the workflows here run on `{}`, but the default branch of {} is `{hub_base}`: run `perseid init` once `origin/HEAD` points to it (`git remote set-head origin --auto`)",
+            expected.branch, hub.repo
+        ));
     }
-
-    let dir = hub.dir.as_str();
-    let triggers = match &hub.trigger {
-        Trigger::File(spec) => vec![
-            spec.clone(),
-            join(dir, config::FILE),
-            SDKS_WORKFLOW.to_owned(),
-        ],
-        Trigger::Schedule => vec![join(dir, config::FILE)],
-    };
-    let yaml = workflow(&Workflow {
-        branch: &hub_base,
-        paths: &triggers,
-        app: token.as_ref().map(|repositories| AppToken {
-            owner: (!same(&owner, &hub_owner)).then_some(owner.as_str()),
-            repositories,
-        }),
-        dir,
-        daily: matches!(hub.trigger, Trigger::Schedule).then_some(hub.repo.as_str()),
-        requires: match &hub.trigger {
-            Trigger::File(spec) => Some(spec.as_str()),
-            Trigger::Schedule => None,
-        },
-    });
-    let read_remote = |path: &str| -> Result<Option<Vec<u8>>> {
-        match hub.info {
-            Some(_) => api.raw(&hub.repo, &hub_base, path),
-            None => Ok(None),
-        }
-    };
-    let mut candidates = vec![
-        File {
-            path: SDKS_WORKFLOW.into(),
-            content: yaml.into_bytes(),
-            executable: false,
-        },
-        File {
-            path: join(dir, config::FILE),
-            content: hub.toml.clone().into_bytes(),
-            executable: false,
-        },
-    ];
-    let top = &hub.local.0;
-    if release {
-        let read = |path: &str| Ok(std::fs::read_to_string(top.join(path)).ok());
-        let local: Vec<&crate::config::Sdk> = sdks.iter().filter(|s| s.local).collect();
-        let scaffold =
-            crate::scaffold::release_scaffold(&hub.config, &local, dir, &hub_base, read)?;
-        for (path, content) in scaffold {
-            candidates.push(File {
-                path,
-                content,
-                executable: false,
-            });
-        }
-    }
-    for path in super::local_files(top, dir, &hub.config, &sdks)? {
-        if candidates.iter().any(|c| c.path == path) {
+    let (mut stale, mut unpushed) = (Vec::new(), Vec::new());
+    for (path, content) in &expected.files {
+        let here = std::fs::read(expected.top.join(path)).ok();
+        let workflow = path == SDKS_WORKFLOW || path == RELEASE_WORKFLOW;
+        if workflow && !files::owned(here.as_deref()) {
+            plan.warnings.push(files::kept(path, &hub_base));
             continue;
         }
-        let absolute = top.join(&path);
-        candidates.push(File {
-            content: std::fs::read(&absolute).with_context(|| format!("reading {path}"))?,
-            executable: super::executable(&absolute),
-            path,
-        });
+        if here.as_deref() != Some(content.as_slice()) {
+            stale.push(path.clone());
+        } else if hub.info.is_some()
+            && api.raw(&hub.repo, &hub_base, path)?.as_deref() != here.as_deref()
+        {
+            unpushed.push(path.clone());
+        }
     }
-    let mut pending = Vec::new();
-    let mut updated = Vec::new();
-    for file in candidates {
-        let remote = read_remote(&file.path)?;
-        if remote.as_deref() == Some(file.content.as_slice()) {
-            continue;
-        }
-        if file.path == SDKS_WORKFLOW && !owned(remote.as_deref()) {
-            plan.warnings.push(format!(
-                "{} keeps its own {SDKS_WORKFLOW}: check it runs {} on {}",
-                hub.repo,
-                super::uses(""),
-                triggers.join(", ")
-            ));
-            continue;
-        }
-        if file.path == RELEASE_WORKFLOW && !owned(remote.as_deref()) {
-            plan.warnings
-                .push(own_release_workflow(&hub.repo, &hub_base));
-            continue;
-        }
-        if remote.is_some() {
-            updated.push(file.path.clone());
-        }
-        pending.push(file);
+    if !stale.is_empty() {
+        plan.warnings.push(format!(
+            "{} {} out of date here: run `perseid init`, then commit and push",
+            names(&stale),
+            if stale.len() == 1 { "is" } else { "are" }
+        ));
     }
-    let direct = match &hub.info {
-        None => true,
-        Some(_) => bootstrap::head(api, &hub.repo, &hub_base)?.is_none(),
-    };
-    let summary = match &hub.trigger {
-        Trigger::File(spec) => format!(
-            "when {spec} changes on `{hub_base}`, `{SDKS_WORKFLOW}` regenerates the SDKs and opens their pull requests."
-        ),
-        Trigger::Schedule => format!(
-            "every day, `{SDKS_WORKFLOW}` fetches the spec, regenerates the SDKs and opens pull requests when it changed."
-        ),
-    };
-    let local = Some(hub.local.0.clone());
-    plan_commit(
-        cx,
-        plan,
-        Commit {
-            repo: hub.repo.clone(),
-            base: hub_base,
-            files: pending,
-            message: "ci: generate the SDKs with perseid",
-            pull_request: (!direct).then_some(summary),
-            local,
-        },
-        &updated,
-    )?;
+    if !unpushed.is_empty() {
+        plan.warnings.push(format!(
+            "{} {} not on `{hub_base}` of {} yet: commit and push",
+            names(&unpushed),
+            if unpushed.len() == 1 { "is" } else { "are" },
+            hub.repo
+        ));
+    }
+    plan.unpushed = !stale.is_empty() || !unpushed.is_empty();
     if cx.collisions {
         collisions(cx, plan, &hub.config, &hub.repo, &hub.local.1)?;
     }
@@ -846,16 +761,7 @@ fn apply_commit(api: &GitHub, commit: Commit, ui: &Ui) -> Result<Option<String>>
         files,
         message,
         pull_request,
-        local,
     } = commit;
-    if let Some(top) = &local {
-        for file in &files {
-            let target = top.join(&file.path);
-            if std::fs::read(&target).ok().as_deref() != Some(file.content.as_slice()) {
-                crate::fsx::write(&target, &file.content)?;
-            }
-        }
-    }
     let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
     let branch = match pull_request {
         Some(_) => SETUP_BRANCH,
@@ -879,11 +785,6 @@ fn apply_commit(api: &GitHub, commit: Commit, ui: &Ui) -> Result<Option<String>>
             Some(url)
         }
     };
-    if let Some(top) = &local
-        && url.is_some()
-    {
-        super::stage(top, &paths)?;
-    }
     Ok(url)
 }
 

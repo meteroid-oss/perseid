@@ -51,7 +51,8 @@ impl Apply {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Write perseid.toml, in the repository that will hold the SDKs: which SDKs, where they live.
+    /// Write perseid.toml (which SDKs, where they live) and the workflows regenerating and releasing
+    /// them, in the repository that will hold the SDKs. Run again to refresh the workflows.
     Init {
         /// SDKs to generate, comma-separated (asked when omitted).
         #[arg(long, value_delimiter = ',', value_parser = LANGUAGES)]
@@ -99,8 +100,13 @@ enum Command {
         #[arg(long)]
         no_format: bool,
     },
-    /// Set up GitHub for the SDKs perseid.toml describes: repositories, the App, workflows, releases.
-    Setup {
+    /// Set up what GitHub needs and files can't hold: SDK repositories and the GitHub App, once
+    /// you agree. `perseid init` writes the workflows, which you commit.
+    SetupGithub {
+        /// With every SDK here, open their pull requests with the default token instead of an App:
+        /// no credentials, but no CI runs on those pull requests.
+        #[arg(long)]
+        no_app: bool,
         #[command(flatten)]
         apply: Apply,
     },
@@ -186,7 +192,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             init::run(init, &root)?;
         }
-        Command::Setup { apply } => return perseid::github::setup(&cli.config, &apply.options()),
+        Command::SetupGithub { no_app, apply } => {
+            return perseid::github::setup_github(&cli.config, &apply.options(), !no_app);
+        }
         Command::Connect {
             hub,
             spec,

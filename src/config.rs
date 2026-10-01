@@ -37,7 +37,7 @@ pub struct Config {
     /// language: `typescript`, `python`…), `owner/name` holds them all in folders named after
     /// their language. Without it, the SDKs live next to perseid.toml.
     pub repo: Option<String>,
-    /// `false` leaves out the release-please files and the release workflow `perseid setup` adds.
+    /// `false` leaves out the release-please files and the release workflow `perseid init` writes.
     pub release: Option<bool>,
     /// Package metadata written into the manifests `perseid generate` creates.
     #[serde(default)]

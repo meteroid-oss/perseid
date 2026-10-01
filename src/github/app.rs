@@ -231,7 +231,7 @@ pub fn install(app: &App, owner: &Owner, repos: &[String], ui: &Ui) -> Result<()
         }
         if Instant::now() > deadline {
             bail!(
-                "the App isn't installed on {} yet: install it from {url}, then run `perseid setup` again",
+                "the App isn't installed on {} yet: install it from {url}, then run `perseid setup-github` again",
                 missing.join(", ")
             );
         }

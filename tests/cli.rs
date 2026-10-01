@@ -52,7 +52,7 @@ fn init_derives_names_from_the_spec() {
 }
 
 #[test]
-fn init_writes_perseid_toml_only_and_asks_for_the_sdks() {
+fn init_writes_perseid_toml_and_the_workflows_and_asks_for_the_sdks() {
     let dir = tempfile::tempdir().unwrap();
     let nested = dir.path().join("spec/api/v1");
     fs::create_dir_all(&nested).unwrap();
@@ -80,7 +80,13 @@ fn init_writes_perseid_toml_only_and_asks_for_the_sdks() {
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .collect();
     entries.sort();
-    assert_eq!(entries, ["notes.yaml", "perseid.toml", "spec"]);
+    assert_eq!(entries, [".github", "notes.yaml", "perseid.toml", "spec"]);
+    assert!(
+        out.contains("+ .github/workflows/sdks.yml")
+            && out.contains("Packages: npm petstore, Go github.com/acme/petstore-go"),
+        "{out}"
+    );
+    assert!(!dir.path().join("release-please-config.json").exists());
     let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
     assert!(
         config.contains("spec = \"spec/api/v1/openapi.yaml\"\nname = \"Petstore\"\nsdks = [\"typescript\", \"go\"]\nrepo = \"acme/petstore-{lang}\"\n"),
@@ -88,6 +94,22 @@ fn init_writes_perseid_toml_only_and_asks_for_the_sdks() {
     );
     let (ok, out) = perseid(dir.path(), &["init", "--sdks", "go"]);
     assert!(!ok && out.contains("perseid.toml already exists"), "{out}");
+    let (ok, out) = perseid(dir.path(), &["init"]);
+    assert!(
+        ok && out.contains("the workflows match perseid.toml"),
+        "{out}"
+    );
+    let workflow = dir.path().join(".github/workflows/sdks.yml");
+    fs::write(&workflow, "# Written by `perseid init`: stale\n").unwrap();
+    let (ok, out) = perseid(dir.path(), &["init"]);
+    assert!(ok && out.contains("~ .github/workflows/sdks.yml"), "{out}");
+    fs::write(&workflow, "name: mine\n").unwrap();
+    let (ok, out) = perseid(dir.path(), &["init"]);
+    assert!(
+        ok && out.contains("! .github/workflows/sdks.yml is yours"),
+        "{out}"
+    );
+    assert_eq!(fs::read_to_string(&workflow).unwrap(), "name: mine\n");
 }
 
 #[test]
@@ -710,7 +732,7 @@ fn out_previews_sdks_whose_repository_doesnt_exist_yet() {
     assert!(!ok);
     assert!(
         out.contains(
-            "file:///nonexistent/acme/petstore-go doesn't exist yet: `perseid setup` creates it; \
+            "file:///nonexistent/acme/petstore-go doesn't exist yet: `perseid setup-github` creates it; \
              preview with `perseid generate --out <dir>`"
         ),
         "{out}"

@@ -169,7 +169,7 @@ pub fn checkout(repo: &str, root: &Path, discard: bool) -> Result<PathBuf> {
             let missing = ["not found", "does not appear to be a git repository"];
             ensure!(
                 !missing.iter().any(|m| message.contains(m)),
-                "{repo} doesn't exist yet: `perseid setup` creates it; preview with \
+                "{repo} doesn't exist yet: `perseid setup-github` creates it; preview with \
                  `perseid generate --out <dir>`"
             );
             return Err(error);
