@@ -82,7 +82,7 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
 
     let (token, source) = auth::token(&ui)?;
     let api = GitHub::new(Some(token));
-    let login = auth::whoami(&api, source, false)?;
+    let login = auth::whoami(&api)?;
     ui.ok(&format!("Signed in to GitHub as {login} ({source})"));
     let on = match (connect.on, &existing) {
         (Some(on), _) => on,
@@ -337,7 +337,6 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
                 file: File {
                     path: link::WORKFLOW.into(),
                     content: yaml.clone().into_bytes(),
-                    executable: false,
                 },
             }),
         ),

@@ -12,7 +12,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 
 use crate::github::{
-    Options, Ui,
+    Options, TOKEN, Ui,
     api::{GitHub, check, expiration_epoch},
     auth,
 };
@@ -215,7 +215,7 @@ pub fn checkout(repo: &str, root: &Path, discard: bool) -> Result<PathBuf> {
             let missing = ["not found", "does not appear to be a git repository"];
             ensure!(
                 !missing.iter().any(|m| message.contains(m)),
-                "{repo} doesn't exist yet: `perseid setup-github` creates it; preview with \
+                "{repo} doesn't exist yet: create it on GitHub, or preview with \
                  `perseid generate --out <dir>`"
             );
             return Err(error);
@@ -332,8 +332,8 @@ impl Client {
         }
         let day = date.split_whitespace().next().unwrap_or(&date);
         warn(&format!(
-            "the GitHub token expires on {day}: renew the PERSEID_TOKEN secret, or use a GitHub \
-             App (`perseid app`)"
+            "the GitHub token expires on {day}: renew the {TOKEN} secret, or use a GitHub App \
+             (`perseid app`)"
         ));
     }
 }
@@ -346,7 +346,7 @@ fn token() -> Result<String> {
     let env = |name: &str| std::env::var(name).unwrap_or_default();
     ensure!(
         env("GITHUB_ACTIONS") != "true",
-        "no token to open the SDK pull requests: add the PERSEID_TOKEN secret (a fine-grained \
+        "no token to open the SDK pull requests: add the {TOKEN} secret (a fine-grained \
          token with Contents, Pull requests and Workflows read and write on the SDK \
          repositories), or run `perseid app`"
     );

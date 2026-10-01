@@ -99,6 +99,7 @@ runs:
         repositories: ${{ steps.setup.outputs.repositories }}
         permission-contents: write
         permission-pull-requests: write
+        permission-workflows: write
 
     - name: Run perseid
       shell: bash

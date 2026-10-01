@@ -15,7 +15,7 @@ One static binary, running in your CI: an open-source and headless alternative t
 npx perseid init          # perseid.toml and the workflows, written here for you to commit
 npx perseid generate --out preview  # optional local preview, in preview/<lang>
 git add -A && git commit -m "ci: generate the SDKs with perseid" && git push
-npx perseid setup-github  # what files can't hold: SDK repositories, the App, once you agree
+gh secret set PERSEID_TOKEN  # a fine-grained token opening the SDK pull requests (or `npx perseid app`)
 
 # spec in another repository (even private)? run there:
 npx perseid connect acme/acme-sdks   # pushes the spec on each release or change
@@ -25,7 +25,7 @@ npx perseid connect acme/acme-sdks   # pushes the spec on each release or change
 |---|---|---|
 | `init` | the SDKs repository | writes `perseid.toml` (the spec found there, the SDKs you pick, where they live) and the workflows regenerating and releasing them, for you to commit; run it again to refresh them. Nothing leaves your clone |
 | `generate` | the SDKs repository | writes the SDKs from `spec` (or `--spec <path\|url>`), starting each from its package skeleton: here, in a checkout of its `repo` under `.perseid/repos`, or all under `--out <dir>` |
-| `setup-github` | the SDKs repository | lists what GitHub needs and files can't hold (SDK repositories and their release files, the GitHub App opening SDK pull requests), then sets it up once you agree; declining prints how to do it yourself |
+| `app` | the SDKs repository | optional: creates or reuses a GitHub App opening the SDK pull requests, instead of the expiring `PERSEID_TOKEN` secret, once you agree; declining prints how to do it yourself |
 | `connect <owner/sdks-repo>` | the repository holding the spec | a deploy key on GitHub, and `perseid-push.yml` for you to commit, pushing the spec to the SDKs repository |
 
 With the spec and the SDKs in one repository, `connect` isn't needed. Once the workflows are on the

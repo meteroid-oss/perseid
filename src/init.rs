@@ -2,6 +2,7 @@
 //! workflows regenerating and releasing the SDKs. Nothing leaves this checkout.
 
 use std::{
+    collections::BTreeSet,
     io::IsTerminal,
     path::Path,
     process::{Command, Stdio},
@@ -221,8 +222,25 @@ fn next_steps(config: &Config, root: &Path) {
             Some(_) => "`perseid generate --spec <path|url>` previews the SDKs meanwhile".to_owned(),
             None => "`perseid generate` previews the SDKs (`--out <dir>` for those living in other repositories)".to_owned(),
         },
-        "`perseid setup-github` creates what GitHub needs and files can't hold (SDK repositories, the GitHub App opening the SDK pull requests), once you agree".to_owned(),
     ];
+    let sdks = config.sdks(&[]).unwrap_or_default();
+    let remote: BTreeSet<&str> = sdks.iter().filter_map(|s| s.remote()).collect();
+    if !remote.is_empty() {
+        let create: Vec<String> = remote
+            .iter()
+            .map(|r| format!("`gh repo create {r}`"))
+            .collect();
+        steps.push(format!(
+            "Create the SDK repositories: {}. sdks.yml opens their first pull request",
+            create.join(", ")
+        ));
+    }
+    let repos: Vec<&str> = std::iter::once(hub).chain(remote.iter().copied()).collect();
+    steps.push(format!(
+        "Add the {} secret to {}: a fine-grained token (https://github.com/settings/personal-access-tokens/new) with Contents, Pull requests and Workflows read and write. Or `perseid app` sets up a GitHub App, which doesn't expire",
+        crate::github::TOKEN,
+        repos.join(", ")
+    ));
     if spec.is_some() {
         steps.push(format!(
             "In the repository holding the spec: `npx perseid connect {hub}`. It writes a workflow there and, once you agree, a deploy key letting that repository push its spec here, and nothing else"
@@ -230,6 +248,12 @@ fn next_steps(config: &Config, root: &Path) {
     }
     for (i, step) in steps.iter().enumerate() {
         println!("  {}. {step}", i + 1);
+    }
+    if config.release != Some(false) {
+        println!("\nTo publish, once per registry:");
+        for step in crate::github::publishing(config, hub).unwrap_or_default() {
+            println!("  - {step}");
+        }
     }
 }
 
