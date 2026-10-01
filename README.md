@@ -10,14 +10,15 @@ One static binary, running in your CI: an open-source and headless alternative t
 
 ## Get started
 
-In the repository holding your `openapi.json`:
+In the repository that holds your spec, or in the one that will hold your SDKs and receive the spec:
 
 ```sh
-npx perseid init    # writes perseid.toml: where the SDKs live, next to the API or in their own repositories
-npx perseid setup   # plans, then sets up GitHub: repositories, keys, workflows, a pull request to merge
+npx perseid init    # writes perseid.toml: where the spec comes from, where the SDKs live
+npx perseid setup   # plans, then sets up GitHub: repositories, keys, workflows, pull requests to merge
 ```
 
-Merge the pull request, and every spec change lands as SDK pull requests, then releases.
+Merge the pull requests, and every spec change (or every release of your API) lands as SDK pull
+requests, then releases. See [repository layouts](docs/ci.md#repository-layouts) to pick one.
 
 Just trying it? `npx perseid init && npx perseid generate` writes the SDKs locally. Also installable
 with `curl -fsSL https://sh.meteroid.com/perseid | sh` or as the `ghcr.io/meteroid-oss/perseid`
