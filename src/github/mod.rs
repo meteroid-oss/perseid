@@ -1,6 +1,6 @@
-//! `perseid setup-github` and `perseid status`: the GitHub side of the layout perseid.toml
-//! declares, planned then applied from the terminal with the user's own GitHub credentials, once
-//! they agree. Files go through the user's own commits: `perseid init` writes them.
+//! `perseid app`, `perseid connect` and `perseid status`: the GitHub side of the layout
+//! perseid.toml declares, planned then applied with the user's own GitHub credentials, once they
+//! agree. Files go through the user's own commits: `perseid init` writes them.
 
 mod api;
 mod app;
@@ -24,17 +24,15 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 pub use connect::{Connect, connect};
-pub use files::{Written, write as write_files};
+pub use files::{Written, write as write_files, write_release_files};
 pub use layout::origin_repo;
 pub use link::{Auth, Push, PushOn, push_workflow};
+pub use plan::TOKEN;
 pub use push::{PushSpec, push_spec};
 pub use status::status;
 
-use crate::config::{Config, Source};
+use crate::config::Config;
 use api::GitHub;
-
-pub const SETUP_BRANCH: &str = "perseid/setup";
-const SDKS_WORKFLOW_NAME: &str = "sdks.yml";
 
 pub struct Options {
     pub yes: bool,
@@ -130,40 +128,34 @@ impl Ui {
     }
 }
 
-/// `perseid setup-github`: plans what GitHub lacks for perseid.toml to hold, then applies it
-/// once agreed. With `--dry-run`, exits 2 when changes are pending.
-pub fn setup_github(config_path: &Path, options: &Options, app: bool) -> Result<ExitCode> {
+/// `perseid app`: creates or reuses the GitHub App opening the SDK pull requests, installs it on
+/// the repositories perseid.toml names and stores its credentials there, once agreed.
+pub fn app(config_path: &Path, options: &Options) -> Result<ExitCode> {
     let ui = Ui::new(options);
     let (_, root) = Config::load(config_path)?;
     layout::required_origin_repo(&root, "the repository holding perseid.toml")?;
     let (token, source) = auth::token(&ui)?;
     let api = GitHub::new(Some(token));
-    let login = auth::whoami(&api, source, true)?;
+    let login = auth::whoami(&api)?;
     ui.ok(&format!("Signed in to GitHub as {login} ({source})"));
     let cx = plan::Session {
         api: &api,
         login: &login,
-        app,
-        collisions: true,
+        app: true,
+        collisions: false,
     };
     let mut plan = plan::plan(&cx, config_path)?;
     println!("\n{}\n", plan.diagram);
     plan.print();
-    let pending = plan.pending();
-    if pending == 0 {
+    if plan.pending() == 0 {
         println!();
-        ui.ok("In sync on GitHub: nothing to change");
-        next_steps(&plan, &[], &ui)?;
+        ui.ok("The App is set up: nothing to change");
         return Ok(ExitCode::SUCCESS);
     }
     if options.dry_run {
         return Ok(ExitCode::from(2));
     }
-    let question = match pending {
-        1 => "Apply this change on GitHub?".to_owned(),
-        n => format!("Apply these {n} changes on GitHub?"),
-    };
-    if !ui.confirm(&question, true)? {
+    if !ui.confirm("Set up the GitHub App?", true)? {
         println!();
         ui.say("Nothing changed on GitHub. To do it yourself:");
         for manual in plan.manual() {
@@ -172,9 +164,9 @@ pub fn setup_github(config_path: &Path, options: &Options, app: bool) -> Result<
         return Ok(ExitCode::SUCCESS);
     }
     println!();
-    let pulls = plan::apply(&api, &mut plan, &ui)?;
-    println!("\n✓ {}", plan.diagram);
-    next_steps(&plan, &pulls, &ui)?;
+    plan::apply(&api, &mut plan, &ui)?;
+    println!();
+    ui.ok("sdks.yml and sdk-release.yml now open their pull requests as the App");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -259,8 +251,7 @@ pub fn workflow(w: &Workflow) -> String {
     };
     format!(
         r#"# Written by `perseid init`: regenerates the SDKs when the spec changes and opens their pull
-# requests, with a token of the GitHub App set as SDK_APP_ID and SDK_APP_PRIVATE_KEY, or else the
-# default token.
+# requests as the GitHub App set up by `perseid app`, or with the PERSEID_TOKEN secret.
 name: SDKs
 
 on:
@@ -270,8 +261,7 @@ on:
 {schedule}  workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 concurrency: sdks
 
@@ -281,6 +271,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 {step}        with:
+          token: ${{{{ secrets.PERSEID_TOKEN }}}}
           app-id: ${{{{ vars.SDK_APP_ID }}}}
           app-private-key: ${{{{ secrets.SDK_APP_PRIVATE_KEY }}}}
 {dir}"#,
@@ -328,28 +319,15 @@ fn join(dir: &str, path: &str) -> String {
     }
 }
 
-fn next_steps(plan: &plan::Plan, pulls: &[String], ui: &Ui) -> Result<()> {
-    let (config, hub) = (plan.config(), plan.hub.as_str());
-    println!("\nNext steps");
-    let mut step = 0;
-    let mut item = |text: String| {
-        step += 1;
-        ui.info(&format!("{step}. {text}"));
-    };
-    if plan.unpushed {
-        item(format!(
-            "Commit and push the files `perseid init` wrote here: {SDKS_WORKFLOW_NAME} runs once it is on the default branch of {hub}"
-        ));
-    }
-    for pull in pulls {
-        item(format!("Merge {pull}: it adds the release files there"));
-    }
+/// What each registry needs before the first release of the SDKs in `config`, held in `hub`.
+pub fn publishing(config: &Config, hub: &str) -> Result<Vec<String>> {
+    let mut steps = Vec::new();
     for sdk in config.sdks(&[])? {
         let repo = sdk.remote().unwrap_or(hub);
         let context = config.context(&sdk, Path::new("/nonexistent"));
         let text = |key: &str| context[key].as_str().unwrap_or_default().to_owned();
         let publisher = format!("repository {repo}, workflow sdk-release.yml, environment release");
-        item(match sdk.language {
+        steps.push(match sdk.language {
             "typescript" => {
                 let name = text("npm_package");
                 format!(
@@ -376,18 +354,7 @@ fn next_steps(plan: &plan::Plan, pulls: &[String], ui: &Ui) -> Result<()> {
             _ => format!("Go: nothing to set up, {repo} tags publish through the module proxy"),
         });
     }
-    item(match (config.source(), plan.awaits_spec) {
-        (Source::Url(_), _) => {
-            "Nothing else: perseid checks the spec every day, or when you run sdks.yml".to_owned()
-        }
-        (_, true) => format!(
-            "In the repository that holds your OpenAPI spec, run `npx perseid connect {hub}`: it pushes the spec here, which opens the SDK pull requests"
-        ),
-        (Source::File(file), false) => {
-            format!("Change {file}: perseid opens the SDK pull requests")
-        }
-    });
-    Ok(())
+    Ok(steps)
 }
 
 #[cfg(test)]
@@ -424,6 +391,7 @@ mod tests {
             yaml.ends_with(&format!(
                 "      - uses: {}
         with:
+          token: ${{{{ secrets.PERSEID_TOKEN }}}}
           app-id: ${{{{ vars.SDK_APP_ID }}}}
           app-private-key: ${{{{ secrets.SDK_APP_PRIVATE_KEY }}}}
           working-directory: api
@@ -447,9 +415,7 @@ mod tests {
         });
         assert!(yaml.contains("  schedule:\n    - cron: '"), "{yaml}");
         assert!(
-            yaml.contains(
-                "permissions:\n  contents: write\n  pull-requests: write\n\nconcurrency: sdks\n"
-            ),
+            yaml.contains("permissions:\n  contents: read\n\nconcurrency: sdks\n"),
             "{yaml}"
         );
         assert!(

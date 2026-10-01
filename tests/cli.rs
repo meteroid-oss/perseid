@@ -947,9 +947,10 @@ fn empty_sdk_repositories_get_a_skeleton() {
     let checkout = dir.path().join(&relative);
     assert!(checkout.join("go.mod").exists());
     assert!(checkout.join("client.go").exists());
+    assert!(checkout.join("release-please-config.json").exists());
     assert!(
-        !checkout.join("release-please-config.json").exists(),
-        "`perseid setup` adds the release files"
+        checkout.join(".github/workflows/sdk-release.yml").exists(),
+        "the SDK pull request carries its release workflow"
     );
 
     let (ok, out) = perseid(dir.path(), &["generate", "go", "--no-format"]);
@@ -1003,7 +1004,7 @@ fn out_previews_sdks_whose_repository_doesnt_exist_yet() {
     assert!(!ok);
     assert!(
         out.contains(
-            "file:///nonexistent/acme/petstore-go doesn't exist yet: `perseid setup-github` creates it; \
+            "file:///nonexistent/acme/petstore-go doesn't exist yet: create it on GitHub, or \
              preview with `perseid generate --out <dir>`"
         ),
         "{out}"

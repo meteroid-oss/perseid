@@ -52,6 +52,7 @@ pub fn create(owner: &Owner, spec: &str, name: &str, ui: &Ui) -> Result<App> {
         "default_permissions": {
             "contents": "write",
             "pull_requests": "write",
+            "workflows": "write",
             "metadata": "read",
         },
     });
@@ -231,7 +232,7 @@ pub fn install(app: &App, owner: &Owner, repos: &[String], ui: &Ui) -> Result<()
         }
         if Instant::now() > deadline {
             bail!(
-                "the App isn't installed on {} yet: install it from {url}, then run `perseid setup-github` again",
+                "the App isn't installed on {} yet: install it from {url}, then run `perseid app` again",
                 missing.join(", ")
             );
         }

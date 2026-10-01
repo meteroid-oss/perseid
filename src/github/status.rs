@@ -1,4 +1,4 @@
-//! `perseid status`: what `perseid init` and `perseid setup-github` would change, and how the
+//! `perseid status`: what `perseid init` and `perseid app` would change, and how the
 //! automation fares. Exits 1 on errors, 2 when something waits on you, 0 otherwise.
 
 use std::{
@@ -56,7 +56,7 @@ impl Report {
         for warning in &plan.warnings {
             self.ui.warn(warning);
         }
-        self.pending |= plan.unpushed;
+        self.pending |= plan.attention;
     }
 }
 
@@ -109,8 +109,8 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
             let cx = plan::Session {
                 api,
                 login,
-                app: true,
-                collisions: false,
+                app: false,
+                collisions: true,
             };
             Some(plan::plan(&cx, config_path))
         }
@@ -136,13 +136,13 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
         Some(Err(error)) => {
             report.fail(
                 &format!("{error:#}"),
-                "fix what it says, then run `perseid setup-github`",
+                "fix what it says, then run `perseid status` again",
             );
             return Ok(exit(&report));
         }
         None => return Ok(exit(&report)),
     };
-    report.pending(&plan, "perseid setup-github");
+    report.pending(&plan, "perseid app");
     if let Source::File(_) = config.source() {
         last_spec(&mut report, api, &plan, plan.awaits_spec)?;
     }
@@ -202,7 +202,7 @@ fn pushing(report: &mut Report, top: &Path, pushed: link::Pushed) -> Result<()> 
     let cx = plan::Session {
         api: &api,
         login: &login,
-        app: true,
+        app: false,
         collisions: false,
     };
     let hub = pushed.hub.clone();
@@ -406,7 +406,7 @@ fn installation(report: &mut Report, api: &GitHub, hub: &str) -> Result<()> {
         )),
         None => report.fail(
             &format!("The App {id} isn't installed on {owner}"),
-            "install it from its settings page, or run `perseid setup-github`",
+            "install it from its settings page, or run `perseid app`",
         ),
     }
     Ok(())

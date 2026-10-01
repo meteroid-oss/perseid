@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -119,13 +119,9 @@ enum Command {
         #[arg(long)]
         no_format: bool,
     },
-    /// Set up what GitHub needs and files can't hold: SDK repositories and the GitHub App, once
-    /// you agree. `perseid init` writes the workflows, which you commit.
-    SetupGithub {
-        /// With every SDK here, open their pull requests with the default token instead of an App:
-        /// no credentials, but no CI runs on those pull requests.
-        #[arg(long)]
-        no_app: bool,
+    /// Create or reuse the GitHub App that opens the SDK pull requests, install it and store its
+    /// credentials, once you agree: an alternative to the expiring `PERSEID_TOKEN` secret.
+    App {
         #[command(flatten)]
         apply: Apply,
     },
@@ -254,9 +250,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             init::run(init, &root)?;
         }
-        Command::SetupGithub { no_app, apply } => {
-            return perseid::github::setup_github(&config_path, &apply.options(), !no_app);
-        }
+        Command::App { apply } => return perseid::github::app(&config_path, &apply.options()),
         Command::Connect {
             hub,
             spec,
@@ -306,7 +300,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let sdks = config.sdks(&languages)?;
             let out = out.map(|out| cwd.join(out));
             let mut files = vec![];
-            let mut checkouts = BTreeSet::new();
+            let mut checkouts = BTreeMap::new();
             let mut dirs = Vec::new();
             for sdk in &sdks {
                 dirs.push(match (&out, sdk.remote()) {
@@ -314,7 +308,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     (Some(out), _) => out.join(&sdk.path),
                     (None, Some(repo)) => {
                         let checkout = pr::checkout(repo, &root, pr)?;
-                        checkouts.insert(checkout.clone());
+                        checkouts.insert(repo.to_owned(), checkout.clone());
                         checkout.join(&sdk.path)
                     }
                     (None, None) => root.join(&sdk.path),
@@ -333,6 +327,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 for (sdk, dir) in sdks.iter().zip(&dirs) {
                     files.extend(scaffold::bootstrap(&config, sdk, dir)?);
                 }
+                for (repo, checkout) in checkouts.iter().filter(|_| config.release != Some(false)) {
+                    let held: Vec<&config::Sdk> =
+                        sdks.iter().filter(|s| s.remote() == Some(repo)).collect();
+                    files.extend(perseid::github::write_release_files(
+                        &config, &held, checkout,
+                    )?);
+                }
             }
             let results: Vec<_> = std::thread::scope(|scope| {
                 let handles: Vec<_> = sdks
@@ -348,7 +349,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     .collect()
             });
             if !check {
-                checkouts.iter().try_for_each(|c| pr::record(c))?;
+                checkouts.values().try_for_each(|c| pr::record(c))?;
             }
             let mut changes = BTreeMap::new();
             for (sdk, result) in sdks.iter().zip(results) {

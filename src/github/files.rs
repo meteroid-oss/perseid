@@ -94,6 +94,32 @@ pub fn write(config: &Config, root: &Path) -> Result<Vec<Written>> {
     Ok(written)
 }
 
+/// Writes the release files of `sdks` into `top`, a checkout of the repository holding them, so
+/// the SDK pull request carries them: the paths written. A release workflow the user wrote stays.
+pub fn write_release_files(
+    config: &Config,
+    sdks: &[&config::Sdk],
+    top: &Path,
+) -> Result<Vec<PathBuf>> {
+    let branch = default_branch(top);
+    let read = |path: &str| Ok(std::fs::read_to_string(top.join(path)).ok());
+    let mut written = Vec::new();
+    for (path, content) in crate::scaffold::release_scaffold(config, sdks, "", &branch, read)? {
+        let target = top.join(&path);
+        let current = std::fs::read(&target).ok();
+        if current.as_deref() == Some(content.as_slice()) {
+            continue;
+        }
+        if path == RELEASE_WORKFLOW && !owned(current.as_deref()) {
+            println!("! {}: {}", top.display(), kept(&path, &branch));
+            continue;
+        }
+        crate::fsx::write(&target, &content)?;
+        written.push(target);
+    }
+    Ok(written)
+}
+
 pub(super) fn kept(path: &str, branch: &str) -> String {
     match path == RELEASE_WORKFLOW {
         true => format!(

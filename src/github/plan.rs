@@ -1,5 +1,5 @@
-//! What `perseid setup-github` changes on GitHub for perseid.toml to hold, computed without
-//! writing, then applied.
+//! What `perseid app` and `perseid connect` change on GitHub for perseid.toml to hold, computed
+//! without writing, then applied.
 
 use std::{
     collections::BTreeSet,
@@ -8,13 +8,13 @@ use std::{
 
 use anyhow::{Result, bail};
 use heck::ToKebabCase;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::{
-    SETUP_BRANCH, Ui,
+    Ui,
     api::GitHub,
     app,
-    bootstrap::{self, File, Outcome},
+    bootstrap::{self, File},
     files, git, join,
     layout::{self, SDKS_WORKFLOW},
     link, relative, secrets, toplevel,
@@ -38,14 +38,6 @@ pub struct Step {
 }
 
 pub(super) enum Action {
-    CreateRepo {
-        repo: String,
-        organization: bool,
-        visibility: String,
-        description: String,
-    },
-    Commit(Commit),
-    AllowPullRequests(String),
     App(Box<AppPlan>),
     /// Writes `file` in the checkout at `top`, leaving the commit to the user.
     Write {
@@ -58,15 +50,6 @@ pub(super) enum Action {
         /// Whether `perseid connect` can register it on `sdks_repo`, and the key it replaces.
         register: (bool, Option<u64>),
     },
-}
-
-pub(super) struct Commit {
-    pub repo: String,
-    pub base: String,
-    pub files: Vec<File>,
-    pub message: &'static str,
-    /// Opens a pull request saying this, instead of committing to `base`.
-    pub pull_request: Option<String>,
 }
 
 pub(super) struct AppPlan {
@@ -102,8 +85,9 @@ pub struct Plan {
     pub app: bool,
     /// The spec isn't in the hub yet: `perseid connect` pushes it there.
     pub awaits_spec: bool,
-    /// Files perseid keeps here are out of date or not pushed yet.
-    pub unpushed: bool,
+    /// Something waits on the user outside the plan: files to refresh or push, a repository or a
+    /// secret to add.
+    pub attention: bool,
     hub_config: Option<Config>,
 }
 
@@ -132,18 +116,8 @@ impl Plan {
             .iter()
             .filter(|s| s.mark != Mark::Keep)
             .filter_map(|s| match s.action.as_ref()? {
-                Action::CreateRepo {
-                    repo, visibility, ..
-                } => Some(format!("gh repo create {repo} --{visibility}")),
-                Action::Commit(commit) => {
-                    let paths: Vec<String> = commit.files.iter().map(|f| f.path.clone()).collect();
-                    Some(format!("{}: commit {}", commit.repo, names(&paths)))
-                }
-                Action::AllowPullRequests(repo) => Some(format!(
-                    "{repo}: Settings, Actions, General, check \"Allow GitHub Actions to create and approve pull requests\""
-                )),
                 Action::App(app) => Some(format!(
-                    "create a GitHub App with Contents and Pull requests read and write, install it on {}, and set its ID as the SDK_APP_ID variable and a private key as the SDK_APP_PRIVATE_KEY secret of each (https://github.com/meteroid-oss/perseid/blob/main/docs/ci.md#tokens)",
+                    "create a GitHub App with Contents, Pull requests and Workflows read and write, install it on {}, and set its ID as the SDK_APP_ID variable and a private key as the SDK_APP_PRIVATE_KEY secret of each (https://github.com/meteroid-oss/perseid/blob/main/docs/ci.md#tokens)",
                     app.repos.join(", ")
                 )),
                 Action::Write { file, .. } => Some(format!("write {}", file.path)),
@@ -166,7 +140,7 @@ impl Plan {
             targets: Vec::new(),
             app: false,
             awaits_spec: false,
-            unpushed: false,
+            attention: false,
             hub_config: None,
         }
     }
@@ -176,10 +150,13 @@ impl Plan {
     }
 }
 
+/// The secret holding the token sdks.yml and sdk-release.yml open pull requests with.
+pub const TOKEN: &str = "PERSEID_TOKEN";
+
 pub struct Session<'a> {
     pub api: &'a GitHub,
     pub login: &'a str,
-    /// Plans a GitHub App even when every SDK lives here, so CI runs on SDK pull requests.
+    /// Plans a GitHub App, instead of checking the `PERSEID_TOKEN` secret.
     pub app: bool,
     /// Renders the SDKs to warn about files perseid would overwrite: slow, so `setup` only.
     pub collisions: bool,
@@ -294,7 +271,7 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
         .map_or(hub_owner.clone(), |r| owner_of(r).to_owned());
     if let Some(other) = remote.iter().find(|r| !same(owner_of(r), &owner)) {
         bail!(
-            "{other} isn't owned by {owner}: the App's token covers the repositories of one account"
+            "{other} isn't owned by {owner}: one token covers the repositories of a single account"
         );
     }
     if !same(&owner, &hub_owner) && local_sdks {
@@ -303,150 +280,68 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
             hub.repo
         );
     }
-    let visibility = visibility(here_info);
-    let description = format!("{} API SDK, generated by perseid", hub.config.name);
-    let mut created = BTreeSet::new();
-    let mut accounts = std::collections::BTreeMap::new();
-    let mut account = |login: &str| -> Result<app::Owner> {
-        if let Some((l, o)) = accounts.get(login) {
-            return Ok(app::Owner {
-                login: String::clone(l),
-                organization: *o,
-            });
-        }
-        let owner = app::owner(api, login)?;
-        if !owner.organization && !same(&owner.login, cx.login) {
-            bail!(
-                "{} is another user's account: GitHub only lets {} create repositories and Apps for itself or its organizations",
-                owner.login,
-                cx.login
-            );
-        }
-        accounts.insert(login.to_owned(), (owner.login.clone(), owner.organization));
-        Ok(owner)
-    };
-    let mut existing = Vec::new();
-    for (repo, info) in std::iter::once((hub.repo.clone(), hub.info.clone())).chain(
-        remote
-            .iter()
-            .map(|r| Ok((r.clone(), api.find(&format!("/repos/{r}"))?)))
-            .collect::<Result<Vec<_>>>()?,
-    ) {
-        match info {
-            Some(_) if repo != hub.repo => existing.push(repo),
-            Some(_) => {}
-            None => {
-                let who = account(owner_of(&repo))?;
-                plan.add(
-                    Mark::Add,
-                    format!("create {repo} ({visibility})"),
-                    Some(Action::CreateRepo {
-                        repo: repo.clone(),
-                        organization: who.organization,
-                        visibility: visibility.clone(),
-                        description: description.clone(),
-                    }),
-                );
-                created.insert(repo);
-            }
+    let mut absent = Vec::new();
+    let mut repos = vec![hub.repo.clone()];
+    for repo in &remote {
+        match api.find(&format!("/repos/{repo}"))? {
+            Some(_) => repos.push(repo.clone()),
+            None => absent.push(format!(
+                "`gh repo create {repo} --{}`",
+                visibility(here_info)
+            )),
         }
     }
-    if !existing.is_empty() {
-        plan.add(
-            Mark::Keep,
-            format!(
-                "{}: existing, files added only where missing",
-                existing.join(", ")
-            ),
-            None,
-        );
+    if !absent.is_empty() {
+        plan.warnings.push(format!(
+            "create the SDK repositories perseid.toml names: {}. sdks.yml then opens their first pull request, with the SDK and its release workflow",
+            absent.join(", ")
+        ));
+        plan.attention = true;
     }
-    let release = hub.config.release != Some(false);
-    for repo in remote.iter().filter(|_| release) {
-        let held: Vec<&crate::config::Sdk> =
-            sdks.iter().filter(|s| s.remote() == Some(repo)).collect();
-        let base = match created.contains(repo) {
-            true => "main".to_owned(),
-            false => default_branch(&api.find(&format!("/repos/{repo}"))?),
-        };
-        let mut files = Vec::new();
-        let mut updated = Vec::new();
-        for file in bootstrap::release_files(api, &hub.config, repo, &base, &held)? {
-            let remote = match created.contains(repo) {
-                true => None,
-                false => api.raw(repo, &base, &file.path)?,
-            };
-            if remote.as_deref() == Some(file.content.as_slice()) {
-                continue;
-            }
-            if file.path == RELEASE_WORKFLOW && !files::owned(remote.as_deref()) {
-                plan.warnings
-                    .push(format!("{repo}: {}", files::kept(RELEASE_WORKFLOW, &base)));
-                continue;
-            }
-            if remote.is_some() {
-                updated.push(file.path.clone());
-            }
-            files.push(file);
-        }
-        if files.is_empty() {
-            plan.add(Mark::Keep, format!("{repo}: release files in place"), None);
-            continue;
-        }
-        let commit = Commit {
-            repo: repo.clone(),
-            base,
-            files,
-            message: "ci: release the SDK with release-please",
-            pull_request: (!created.contains(repo)).then(|| {
-                format!("`{RELEASE_WORKFLOW}` releases the {} SDK with release-please when its release pull request is merged.", hub.config.name)
-            }),
-        };
-        plan_commit(cx, plan, commit, &updated)?;
-    }
-
     let hub_base = default_branch(&hub.info);
-    let allowed = match (&hub.info, remote.is_empty()) {
-        (Some(_), true) => api
-            .find(&format!("/repos/{}/actions/permissions/workflow", hub.repo))?
-            .is_some_and(|p| p["can_approve_pull_request_reviews"] == true),
-        _ => false,
-    };
     let app_set = hub.info.is_some()
         && secrets::variable(api, &hub.repo, "SDK_APP_ID")
             .ok()
             .flatten()
             .is_some();
-    let default_token = remote.is_empty() && !app_set && (!cx.app || allowed);
-    if default_token {
-        plan.warnings.push(format!(
-            "SDK pull requests opened with the default token run no CI: `perseid setup-github` without --no-app sets up a GitHub App for {}",
-            hub.repo
-        ));
-        match allowed {
-            true => plan.add(
-                Mark::Keep,
-                format!("{}: GitHub Actions may open pull requests", hub.repo),
-                None,
-            ),
-            false => plan.add(
-                Mark::Change,
-                format!("{}: let GitHub Actions open pull requests", hub.repo),
-                Some(Action::AllowPullRequests(hub.repo.clone())),
-            ),
-        }
-    } else {
+    if cx.app || app_set {
         plan.app = true;
-        let mut configured = vec![hub.repo.clone()];
-        configured.extend(remote.iter().cloned());
-        let installed: Vec<String> = configured
+        let installed: Vec<String> = repos
             .iter()
             .filter(|r| same(owner_of(r), &owner))
             .cloned()
             .collect();
-        let who = account(&owner)?;
+        let who = app::owner(api, &owner)?;
+        if !who.organization && !same(&who.login, cx.login) {
+            bail!(
+                "{} is another user's account: GitHub only lets {} create Apps for itself or its organizations",
+                who.login,
+                cx.login
+            );
+        }
         let name = hub.config.name.to_kebab_case();
-        plan_app(cx, plan, &hub.repo, configured, installed, who, name)?;
+        plan_app(cx, plan, &hub.repo, repos, installed, who, name)?;
+    } else {
+        let missing: Vec<&String> = repos
+            .iter()
+            .filter(|r| !secrets::has_secret(api, r, TOKEN).unwrap_or(false))
+            .collect();
+        match missing.as_slice() {
+            [] => plan.add(
+                Mark::Keep,
+                format!("{}: {TOKEN} set", repos.join(", ")),
+                None,
+            ),
+            missing => {
+                let list: Vec<&str> = missing.iter().map(|r| r.as_str()).collect();
+                plan.warnings.push(format!(
+                    "add the {TOKEN} secret to {}: a fine-grained token at https://github.com/settings/personal-access-tokens/new for {} with Contents, Pull requests and Workflows read and write. It expires: `perseid app` sets up a GitHub App instead",
+                    list.join(", "),
+                    repos.join(", ")
+                ));
+                plan.attention = true;
+            }
+        }
     }
     let expected = super::files::expected(&hub.config, &hub.local.1)?;
     if expected.branch != hub_base {
@@ -486,71 +381,13 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
             hub.repo
         ));
     }
-    plan.unpushed = !stale.is_empty() || !unpushed.is_empty();
+    plan.attention |= !stale.is_empty() || !unpushed.is_empty();
     if cx.collisions {
         collisions(cx, plan, &hub.config, &hub.repo, &hub.local.1)?;
     }
     plan.hub_dir = hub.dir.clone();
     plan.hub = hub.repo;
     plan.hub_config = Some(hub.config);
-    Ok(())
-}
-
-/// Adds the step committing `commit.files`, unless its pull request already holds them.
-pub(super) fn plan_commit(
-    cx: &Session,
-    plan: &mut Plan,
-    commit: Commit,
-    updated: &[String],
-) -> Result<()> {
-    let repo = commit.repo.clone();
-    if commit.files.is_empty() {
-        plan.add(
-            Mark::Keep,
-            format!("{repo}: workflow and files in place"),
-            None,
-        );
-        return Ok(());
-    }
-    let paths: Vec<String> = commit.files.iter().map(|f| f.path.clone()).collect();
-    let mark = match updated.len() == paths.len() {
-        true => Mark::Change,
-        false => Mark::Add,
-    };
-    let what = match updated.is_empty() {
-        true => names(&paths),
-        false => format!("{} (updating {})", names(&paths), names(updated)),
-    };
-    if commit.pull_request.is_none() {
-        plan.add(
-            mark,
-            format!("{repo}: commit {what}"),
-            Some(Action::Commit(commit)),
-        );
-        return Ok(());
-    }
-    if let Some(url) = bootstrap::open_pull(cx.api, &repo, SETUP_BRANCH)? {
-        let mut held = true;
-        for file in &commit.files {
-            held &= cx.api.raw(&repo, SETUP_BRANCH, &file.path)?.as_deref()
-                == Some(file.content.as_slice());
-        }
-        if held {
-            plan.add(Mark::Keep, format!("{repo}: {url} holds {what}"), None);
-            return Ok(());
-        }
-        plan.add(
-            Mark::Change,
-            format!("{repo}: update {url} with {what}"),
-            Some(Action::Commit(commit)),
-        );
-        return Ok(());
-    }
-    plan.add(
-        mark,
-        format!("{repo}: pull request with {what}"),
-        Some(Action::Commit(commit)),
-    );
     Ok(())
 }
 
@@ -684,61 +521,19 @@ fn collisions(
                 taken.join(", "),
                 sdk.language
             ));
+            plan.attention = true;
         }
     }
     Ok(())
 }
 
-/// Applies the plan, returning the pull requests left to merge, the SDKs repository's first.
-pub fn apply(api: &GitHub, plan: &mut Plan, ui: &Ui) -> Result<Vec<String>> {
-    let mut pulls = Vec::new();
+/// Applies the plan's actions.
+pub fn apply(api: &GitHub, plan: &mut Plan, ui: &Ui) -> Result<()> {
     for step in std::mem::take(&mut plan.steps) {
         let Some(action) = step.action else {
             continue;
         };
         match action {
-            Action::CreateRepo {
-                repo,
-                organization,
-                visibility,
-                description,
-            } => {
-                let (owner, name) = repo.split_once('/').unwrap_or_default();
-                let mut body = json!({
-                    "name": name,
-                    "description": description,
-                    "private": visibility != "public",
-                    "has_wiki": false,
-                });
-                let path = match organization {
-                    true => {
-                        body["visibility"] = visibility.into();
-                        format!("/orgs/{owner}/repos")
-                    }
-                    false => "/user/repos".to_owned(),
-                };
-                api.post(&path, body)?;
-                ui.ok(&format!("Created {repo}"));
-            }
-            Action::Commit(commit) => {
-                if let Some(url) = apply_commit(api, commit, ui)? {
-                    pulls.push(url);
-                }
-            }
-            Action::AllowPullRequests(repo) => {
-                let path = format!("/repos/{repo}/actions/permissions/workflow");
-                let current = api.find(&path)?.unwrap_or_default();
-                let body = json!({
-                    "default_workflow_permissions": current["default_workflow_permissions"].as_str().unwrap_or("read"),
-                    "can_approve_pull_request_reviews": true,
-                });
-                match api.send("PUT", &path, Some(&body))?.status {
-                    200..=299 => ui.ok(&format!("GitHub Actions may open pull requests in {repo}")),
-                    _ => ui.warn(&format!(
-                        "Allow GitHub Actions to create pull requests in {repo} (Settings, Actions, General): its organization may forbid it"
-                    )),
-                }
-            }
             Action::App(app) => apply_app(api, *app, ui)?,
             Action::Write { top, file } => {
                 crate::fsx::write(&top.join(&file.path), &file.content)?;
@@ -751,41 +546,7 @@ pub fn apply(api: &GitHub, plan: &mut Plan, ui: &Ui) -> Result<Vec<String>> {
             } => link::add_deploy_key(api, &api_repo, &sdks_repo, register, ui)?,
         }
     }
-    Ok(pulls)
-}
-
-fn apply_commit(api: &GitHub, commit: Commit, ui: &Ui) -> Result<Option<String>> {
-    let Commit {
-        repo,
-        base,
-        files,
-        message,
-        pull_request,
-    } = commit;
-    let paths: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
-    let branch = match pull_request {
-        Some(_) => SETUP_BRANCH,
-        None => base.as_str(),
-    };
-    let outcome = bootstrap::commit(api, &repo, &base, branch, &files, message)?;
-    let url = match (outcome, pull_request) {
-        (Outcome::Unchanged, _) => None,
-        (Outcome::Committed, None) => {
-            ui.ok(&format!("{repo}: committed {}", names(&paths)));
-            None
-        }
-        (Outcome::Committed, Some(summary)) => {
-            let list: Vec<String> = paths.iter().map(|p| format!("- `{p}`")).collect();
-            let body = format!("Set up by perseid: {summary}\n\n{}", list.join("\n"));
-            let (url, opened) = bootstrap::pull_request(api, &repo, &base, branch, message, &body)?;
-            match opened {
-                true => ui.ok(&format!("Opened {url} with {}", names(&paths))),
-                false => ui.ok(&format!("Updated {url} with {}", names(&paths))),
-            }
-            Some(url)
-        }
-    };
-    Ok(url)
+    Ok(())
 }
 
 fn apply_app(api: &GitHub, plan: AppPlan, ui: &Ui) -> Result<()> {

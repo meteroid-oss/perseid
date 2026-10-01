@@ -35,8 +35,6 @@ fn agent() -> Agent {
 pub struct Reply {
     pub status: u16,
     pub body: Value,
-    /// Scopes of a classic token, absent for other tokens.
-    pub scopes: Option<String>,
 }
 
 /// A GitHub REST client authenticated with a user token, an App JWT, or nothing.
@@ -56,35 +54,23 @@ impl GitHub {
     }
 
     pub fn send(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Reply> {
-        let (status, text, scopes) =
-            self.exchange(method, path, body, "application/vnd.github+json")?;
+        let (status, text) = self.exchange(method, path, body, "application/vnd.github+json")?;
         Ok(Reply {
             status,
             body: serde_json::from_str(&text).unwrap_or(Value::Null),
-            scopes,
         })
     }
 
     /// The raw bytes of a file of a repository, `None` when it or the repository is missing.
     pub fn raw(&self, repo: &str, branch: &str, path: &str) -> Result<Option<Vec<u8>>> {
         let url = format!("/repos/{repo}/contents/{path}?ref={branch}");
-        let (status, text, scopes) =
-            self.exchange("GET", &url, None, "application/vnd.github.raw")?;
+        let (status, text) = self.exchange("GET", &url, None, "application/vnd.github.raw")?;
         match status {
             404 | 409 => Ok(None),
             200 => Ok(Some(text.into_bytes())),
             _ => {
                 let body = serde_json::from_str(&text).unwrap_or(Value::Null);
-                check(
-                    "GET",
-                    &url,
-                    Reply {
-                        status,
-                        body,
-                        scopes,
-                    },
-                )
-                .map(|_| None)
+                check("GET", &url, Reply { status, body }).map(|_| None)
             }
         }
     }
@@ -95,7 +81,7 @@ impl GitHub {
         path: &str,
         body: Option<&Value>,
         accept: &str,
-    ) -> Result<(u16, String, Option<String>)> {
+    ) -> Result<(u16, String)> {
         let url = format!("{}{path}", self.base);
         let mut request = http::Request::builder()
             .method(method)
@@ -114,17 +100,12 @@ impl GitHub {
             ),
         };
         let mut response = response.with_context(|| format!("reaching GitHub ({method} {url})"))?;
-        let scopes = response
-            .headers()
-            .get("x-oauth-scopes")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
         let text = response
             .body_mut()
             .with_config()
             .limit(100 * 1024 * 1024)
             .read_to_string()?;
-        Ok((response.status().as_u16(), text, scopes))
+        Ok((response.status().as_u16(), text))
     }
 
     pub fn get(&self, path: &str) -> Result<Value> {
