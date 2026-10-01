@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use perseid::{
     config::{self, Config, LANGUAGES},
     generate::{self, Options},
-    github::PushOn,
+    github::{Auth, PushOn},
     init,
     pr::{self, Bump},
     scaffold,
@@ -111,6 +111,9 @@ enum Command {
         /// Tags pushing the spec with `--on tag`, as a GitHub Actions glob (default: `v*`).
         #[arg(long)]
         tags: Option<String>,
+        /// How the workflow authenticates to the SDKs repository (default: a deploy key).
+        #[arg(long, value_enum)]
+        auth: Option<Auth>,
         /// Leave this repository's name out of what the SDKs repository records.
         #[arg(long)]
         private: bool,
@@ -180,6 +183,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             build,
             on,
             tags,
+            auth,
             private,
             apply,
         } => {
@@ -189,6 +193,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 build,
                 on,
                 tags,
+                auth,
                 private,
             };
             return perseid::github::connect(&cwd, connect, &apply.options());

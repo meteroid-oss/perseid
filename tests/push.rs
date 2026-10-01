@@ -7,7 +7,7 @@ use std::{
     process::Command,
 };
 
-use perseid::github::{Push, PushOn, push_workflow};
+use perseid::github::{Auth, Push, PushOn, push_workflow};
 use serde_json::Value;
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -115,12 +115,12 @@ fn push(repos: &Repos, sha: &str) -> String {
 
 /// Runs the push step at `sha`, triggered by the release or tag `tag` when not empty.
 fn push_at(repos: &Repos, sha: &str, tag: &str) -> String {
-    push_with(repos, sha, tag, false)
+    push_with(repos, sha, tag, false, "PERSEID_SDKS_DEPLOY_KEY")
 }
 
 /// Runs `perseid push-spec` at `sha`, `private` leaving out the name of the repository it runs
-/// in.
-fn push_with(repos: &Repos, sha: &str, tag: &str, private: bool) -> String {
+/// in, authenticating with the `credential` variable.
+fn push_with(repos: &Repos, sha: &str, tag: &str, private: bool, credential: &str) -> String {
     git(&repos.api, &["checkout", "--quiet", sha]);
     let url = format!("file://{}", repos.sdks.display());
     let mut command = Command::new(env!("CARGO_BIN_EXE_perseid"));
@@ -131,12 +131,14 @@ fn push_with(repos: &Repos, sha: &str, tag: &str, private: bool) -> String {
         .env("GITHUB_REPOSITORY", "acme/api")
         .env("GITHUB_ACTIONS", "true")
         .env(
-            "PERSEID_SDKS_DEPLOY_KEY",
+            credential,
             "unused: the clone URL is rewritten to a local path",
         )
-        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_COUNT", "2")
         .env("GIT_CONFIG_KEY_0", format!("url.{url}.insteadOf"))
         .env("GIT_CONFIG_VALUE_0", "git@github.com:acme/api-sdks.git")
+        .env("GIT_CONFIG_KEY_1", format!("url.{url}.insteadOf"))
+        .env("GIT_CONFIG_VALUE_1", "https://github.com/acme/api-sdks.git")
         .env_remove("GITHUB_EVENT_PATH")
         .env_remove("GIT_AUTHOR_NAME")
         .env_remove("GIT_AUTHOR_EMAIL")
@@ -266,7 +268,7 @@ fn specs_reach_a_perseid_toml_in_a_folder() {
 fn private_sources_leave_their_name_out() {
     let (repos, shas) = repos();
     seed(&repos, None);
-    let out = push_with(&repos, &shas[3], "v1.0.0", true);
+    let out = push_with(&repos, &shas[3], "v1.0.0", true, "PERSEID_SDKS_DEPLOY_KEY");
     let at = format!("v1.0.0 ({})", &shas[3][..7]);
     assert!(out.contains(&format!("Pushed the spec of {at}")), "{out}");
     let source: Value = serde_json::from_str(&sdks_file(&repos, ".perseid/source.json")).unwrap();
@@ -312,6 +314,7 @@ fn generated_specs_are_written_before_being_pushed() {
         spec: "api/openapi.json",
         build: Some("cargo run --bin openapi > api/openapi.json"),
         hub: "acme/api-sdks",
+        auth: Auth::DeployKey,
         private: false,
     });
     fs::write(
@@ -359,7 +362,7 @@ fn releases_push_their_tag_and_record_it() {
 }
 
 /// The workflow of each `--on`, also written for actionlint.
-fn workflow(on: PushOn, name: &str) -> Value {
+fn workflow(on: PushOn, auth: Auth, name: &str) -> Value {
     let yaml = push_workflow(&Push {
         branch: "main",
         on,
@@ -367,6 +370,7 @@ fn workflow(on: PushOn, name: &str) -> Value {
         spec: "openapi.json",
         build: None,
         hub: "acme/api-sdks",
+        auth,
         private: false,
     });
     fs::write(Path::new(env!("CARGO_TARGET_TMPDIR")).join(name), &yaml).unwrap();
@@ -375,24 +379,33 @@ fn workflow(on: PushOn, name: &str) -> Value {
 
 #[test]
 fn specs_are_pushed_on_changes_releases_or_tags() {
-    let change = workflow(PushOn::Change, "perseid-push-change.yml");
+    let change = workflow(PushOn::Change, Auth::DeployKey, "perseid-push-change.yml");
     assert_eq!(change["on"]["push"]["branches"][0], "main");
     assert_eq!(change["on"]["push"]["paths"][0], "openapi.json");
 
-    let release = workflow(PushOn::Release, "perseid-push-release.yml");
+    let release = workflow(PushOn::Release, Auth::Token, "perseid-push-release.yml");
     assert_eq!(release["on"]["release"]["types"][0], "published");
     assert!(release["on"].get("push").is_none());
 
-    let tag = workflow(PushOn::Tag, "perseid-push-tag.yml");
+    let tag = workflow(PushOn::Tag, Auth::App, "perseid-push-tag.yml");
     assert_eq!(tag["on"]["push"]["tags"][0], "api-v*");
     assert!(tag["on"]["push"].get("paths").is_none());
 
     for workflow in [&change, &release, &tag] {
         assert!(workflow["on"].get("workflow_dispatch").is_some());
-        let step = &workflow["jobs"]["push"]["steps"][1];
+        let steps = workflow["jobs"]["push"]["steps"].as_array().unwrap();
+        let step = steps.last().unwrap();
         assert_eq!(step["uses"], "meteroid-oss/perseid/push@v0");
         assert_eq!(step["with"]["to"], "acme/api-sdks");
     }
+}
+
+#[test]
+fn tokens_push_over_https() {
+    let (repos, shas) = repos();
+    seed(&repos, None);
+    let out = push_with(&repos, &shas[3], "", false, "PERSEID_SDKS_TOKEN");
+    assert!(out.contains("Pushed the spec of acme/api@"), "{out}");
 }
 
 #[test]

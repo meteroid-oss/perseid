@@ -1198,6 +1198,74 @@ fn connect_pushes_releases_to_an_orchestrator_of_one_repository_per_language() {
 }
 
 #[test]
+fn connect_declined_writes_the_workflow_only_and_says_how_to_add_the_key() {
+    let server = Arc::new(Mutex::new(GitHub::with_spec_repo()));
+    let port = serve(server.clone());
+    set_up_sdks_repository(&server, port, &["init", "--sdks", "go"]);
+    let (dir, bin) = api_checkout(true);
+    let before = server.lock().unwrap().calls.len();
+    let connect = ["connect", "acme/petstore-sdks", "--on", "change"];
+    let (code, out) = perseid(dir.path(), bin.path(), port, &connect, "n\n", &TOKEN);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(server.lock().unwrap().writes(before), Vec::<&String>::new());
+    for line in [
+        "its private half the PERSEID_SDKS_DEPLOY_KEY secret of acme/petstore.\nNothing is saved on this machine.",
+        "Nothing changed on GitHub. To add the deploy key yourself:",
+        "gh repo deploy-key add perseid_key.pub -R acme/petstore-sdks --allow-write",
+        "gh secret set PERSEID_SDKS_DEPLOY_KEY -R acme/petstore < perseid_key",
+    ] {
+        assert!(out.contains(line), "{line}\n{out}");
+    }
+    assert!(
+        dir.path()
+            .join(".github/workflows/perseid-push.yml")
+            .exists()
+    );
+}
+
+#[test]
+fn connect_with_a_token_changes_nothing_on_github() {
+    let server = Arc::new(Mutex::new(GitHub::with_spec_repo()));
+    let port = serve(server.clone());
+    set_up_sdks_repository(&server, port, &["init", "--sdks", "go"]);
+    let (dir, bin) = api_checkout(true);
+    let before = server.lock().unwrap().calls.len();
+    let connect = [
+        "connect",
+        "acme/petstore-sdks",
+        "--on",
+        "change",
+        "--auth",
+        "token",
+    ];
+    let (code, out) = perseid(dir.path(), bin.path(), port, &connect, "", &TOKEN);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(server.lock().unwrap().writes(before), Vec::<&String>::new());
+    assert!(
+        out.contains("! acme/petstore needs PERSEID_SDKS_TOKEN, a fine-grained token with Contents read and write on acme/petstore-sdks: `gh secret set PERSEID_SDKS_TOKEN -R acme/petstore`"),
+        "{out}"
+    );
+    assert!(!out.contains("deploy key"), "{out}");
+    let push = fs::read_to_string(dir.path().join(".github/workflows/perseid-push.yml")).unwrap();
+    keep("perseid-push-token-connect.yml", &push);
+    assert!(
+        push.contains("          token: ${{ secrets.PERSEID_SDKS_TOKEN }}\n"),
+        "{push}"
+    );
+
+    let (code, out) = perseid(
+        dir.path(),
+        bin.path(),
+        port,
+        &["connect", "acme/petstore-sdks"],
+        "",
+        &TOKEN,
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("In sync"), "--auth is kept: {out}");
+}
+
+#[test]
 fn connect_without_admin_rights_on_the_sdks_repository_says_what_an_admin_does() {
     let server = Arc::new(Mutex::new(GitHub::with_spec_repo()));
     let port = serve(server.clone());

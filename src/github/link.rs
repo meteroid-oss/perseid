@@ -12,6 +12,9 @@ use ssh_key::{Algorithm, LineEnding, PrivateKey};
 use super::{Ui, api::GitHub, secrets};
 
 pub const SECRET: &str = "PERSEID_SDKS_DEPLOY_KEY";
+pub const TOKEN_SECRET: &str = "PERSEID_SDKS_TOKEN";
+pub const APP_ID: &str = "SDK_APP_ID";
+pub const APP_KEY: &str = "SDK_APP_PRIVATE_KEY";
 pub const WORKFLOW: &str = ".github/workflows/perseid-push.yml";
 pub use crate::pr::SOURCE;
 
@@ -51,6 +54,18 @@ impl PushOn {
             Self::Tag => "tag",
         }
     }
+}
+
+/// How perseid-push.yml authenticates to the SDKs repository.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum Auth {
+    /// A deploy key that can write to the SDKs repository only, which `connect` adds.
+    #[default]
+    DeployKey,
+    /// A personal access token in the PERSEID_SDKS_TOKEN secret, which you add.
+    Token,
+    /// A GitHub App installed on the SDKs repository, set as SDK_APP_ID and SDK_APP_PRIVATE_KEY.
+    App,
 }
 
 /// The title naming the deploy key an API repository pushes with.
@@ -133,6 +148,7 @@ pub struct Push<'a> {
     /// Run from the repository's root to write the spec, when it isn't committed.
     pub build: Option<&'a str>,
     pub hub: &'a str,
+    pub auth: Auth,
     /// Leaves this repository's name out of `.perseid/source.json` and commit messages.
     pub private: bool,
 }
@@ -145,6 +161,7 @@ pub struct Pushed {
     pub tags: Option<String>,
     pub spec: String,
     pub build: Option<String>,
+    pub auth: Auth,
     pub private: bool,
 }
 
@@ -174,12 +191,21 @@ pub fn pushed(yaml: &str) -> Option<Pushed> {
             .as_str()
             .is_some_and(|u| u.starts_with("meteroid-oss/perseid/push@"))
     });
-    let (spec, private) = match action {
-        Some(step) => (&step["with"]["spec"], step["with"]["private"] == true),
+    let (spec, auth, private) = match action {
+        Some(step) => {
+            let with = &step["with"];
+            let auth = match with["token"].as_str() {
+                None => Auth::DeployKey,
+                Some(token) if token.contains("steps.app") => Auth::App,
+                Some(_) => Auth::Token,
+            };
+            (&with["spec"], auth, with["private"] == true)
+        }
         // Written before `perseid push-spec`, running its shell inline.
         None => {
             let env = &step("Push the spec to the SDKs repository")?["env"];
-            (&env["SPEC"], env["SOURCE_REPOSITORY"].as_str() == Some(""))
+            let private = env["SOURCE_REPOSITORY"].as_str() == Some("");
+            (&env["SPEC"], Auth::DeployKey, private)
         }
     };
     Some(Pushed {
@@ -188,6 +214,7 @@ pub fn pushed(yaml: &str) -> Option<Pushed> {
         tags,
         spec: spec.as_str()?.to_owned(),
         build,
+        auth,
         private,
     })
 }
@@ -237,10 +264,35 @@ pub fn push_workflow(push: &Push) -> String {
         true => "\n          private: true",
         false => "",
     };
+    let hub = push.hub;
+    let (who, app, credential) = match push.auth {
+        Auth::DeployKey => (
+            format!("{SECRET} is the private half of a deploy key that can write to {hub} only."),
+            String::new(),
+            format!("deploy-key: ${{{{ secrets.{SECRET} }}}}"),
+        ),
+        Auth::Token => (
+            format!("{TOKEN_SECRET} is a personal access token that can write to {hub}."),
+            String::new(),
+            format!("token: ${{{{ secrets.{TOKEN_SECRET} }}}}"),
+        ),
+        Auth::App => {
+            let (owner, name) = hub.split_once('/').unwrap_or((hub, hub));
+            (
+                format!(
+                    "It pushes as the GitHub App set as {APP_ID} and {APP_KEY}, installed on {hub}."
+                ),
+                format!(
+                    "      - id: app\n        uses: actions/create-github-app-token@v2\n        with:\n          app-id: ${{{{ vars.{APP_ID} }}}}\n          private-key: ${{{{ secrets.{APP_KEY} }}}}\n          owner: {owner}\n          repositories: {name}\n"
+                ),
+                "token: ${{ steps.app.outputs.token }}".to_owned(),
+            )
+        }
+    };
     format!(
         r#"# Written by `perseid connect {hub}`: pushes the spec to {hub} {when},
 # which regenerates the SDKs. Run that command again to change these settings.
-# {SECRET} is the private half of a deploy key that can write to {hub} only.
+# {who}
 name: Spec
 
 on:
@@ -257,13 +309,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-{build}      - uses: {ACTION}
+{build}{app}      - uses: {ACTION}
         with:
           spec: {spec:?}
           to: {hub}
-          deploy-key: ${{{{ secrets.{SECRET} }}}}{private}
+          {credential}{private}
 "#,
-        hub = push.hub,
         spec = push.spec,
     )
 }
@@ -272,7 +323,7 @@ jobs:
 mod tests {
     use super::*;
 
-    fn push(on: PushOn, build: Option<&str>, private: bool) -> Push<'_> {
+    fn push(on: PushOn, build: Option<&str>, auth: Auth, private: bool) -> Push<'_> {
         Push {
             branch: "main",
             on,
@@ -280,6 +331,7 @@ mod tests {
             spec: "api/openapi.json",
             build,
             hub: "acme/api-sdks",
+            auth,
             private,
         }
     }
@@ -287,7 +339,7 @@ mod tests {
     #[test]
     fn generated_specs_are_pushed_on_every_commit() {
         let command = "cargo run --bin openapi > api/openapi.json";
-        let yaml = push_workflow(&push(PushOn::Change, Some(command), false));
+        let yaml = push_workflow(&push(PushOn::Change, Some(command), Auth::DeployKey, false));
         assert!(!yaml.contains("paths:"), "{yaml}");
         assert!(
             yaml.contains("        run: |\n          cargo run --bin openapi > api/openapi.json\n"),
@@ -306,12 +358,12 @@ mod tests {
 
     #[test]
     fn workflows_read_back_as_their_settings() {
-        for (on, build, private) in [
-            (PushOn::Change, None, false),
-            (PushOn::Release, Some("make spec"), true),
-            (PushOn::Tag, None, false),
+        for (on, build, auth, private) in [
+            (PushOn::Change, None, Auth::DeployKey, false),
+            (PushOn::Release, Some("make spec"), Auth::Token, true),
+            (PushOn::Tag, None, Auth::App, false),
         ] {
-            let read = pushed(&push_workflow(&push(on, build, private))).unwrap();
+            let read = pushed(&push_workflow(&push(on, build, auth, private))).unwrap();
             assert_eq!(
                 read,
                 Pushed {
@@ -320,11 +372,24 @@ mod tests {
                     tags: (on == PushOn::Tag).then(|| "api-v*".into()),
                     spec: "api/openapi.json".into(),
                     build: build.map(str::to_owned),
+                    auth,
                     private,
                 }
             );
         }
         assert_eq!(pushed("name: Spec\n"), None);
+    }
+
+    #[test]
+    fn apps_mint_a_token_for_the_sdks_repository_only() {
+        let yaml = push_workflow(&push(PushOn::Change, None, Auth::App, false));
+        let parsed: Value = serde_norway::from_str(&yaml).unwrap();
+        let steps = &parsed["jobs"]["push"]["steps"];
+        assert_eq!(steps[1]["uses"], "actions/create-github-app-token@v2");
+        assert_eq!(steps[1]["with"]["owner"], "acme");
+        assert_eq!(steps[1]["with"]["repositories"], "api-sdks");
+        assert_eq!(steps[2]["with"]["token"], "${{ steps.app.outputs.token }}");
+        assert!(steps[2]["with"].get("deploy-key").is_none(), "{yaml}");
     }
 
     #[test]

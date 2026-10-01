@@ -13,7 +13,10 @@ inputs:
     required: true
   deploy-key:
     description: Private half of a deploy key that can write to `to`
-    required: true
+    default: ''
+  token:
+    description: Token that can write to `to`, instead of `deploy-key`
+    default: 
   private:
     description: Leave this repository's name out of what the SDKs repository records
     default: 'false'
@@ -40,5 +43,6 @@ runs:
         TO: ${{ inputs.to }}
         PRIVATE: ${{ inputs.private }}
         PERSEID_SDKS_DEPLOY_KEY: ${{ inputs.deploy-key }}
+        PERSEID_SDKS_TOKEN: ${{ inputs.token }}
       run: |
         "$RUNNER_TEMP/perseid/perseid" push-spec "$SPEC" --to "$TO" $([ "$PRIVATE" = true ] && echo --private)

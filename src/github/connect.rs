@@ -16,7 +16,7 @@ use super::{
     auth,
     bootstrap::{self, File},
     git, join, layout,
-    link::{self, Push, PushOn, Pushed},
+    link::{self, Auth, Push, PushOn, Pushed},
     plan::{self, Action, Mark, Plan, Session},
     secrets, toplevel,
 };
@@ -28,6 +28,7 @@ pub struct Connect {
     pub build: Option<String>,
     pub on: Option<PushOn>,
     pub tags: Option<String>,
+    pub auth: Option<Auth>,
     pub private: bool,
 }
 
@@ -108,6 +109,10 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
             tags,
             spec,
             build,
+            auth: connect
+                .auth
+                .or(existing.as_ref().map(|p| p.auth))
+                .unwrap_or_default(),
             private: connect.private || existing.as_ref().is_some_and(|p| p.private),
         },
     };
@@ -117,10 +122,20 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
         collisions: false,
     };
     let mut plan = plan_connect(&cx, &settings)?;
+    let Pushed { hub, on, .. } = &settings.pushed;
+    let here = &settings.here;
     println!("\n{}\n", plan.diagram);
+    let on_github = |s: &plan::Step| matches!(s.action, Some(Action::DeployKey { .. }));
+    let remote = plan.steps.iter().any(on_github);
+    if remote {
+        ui.say(&format!(
+            "perseid-push.yml pushes the spec with a deploy key: an SSH key pair made in memory, its public\nhalf added to {hub} (write access to it only), its private half the {} secret of {here}.\nNothing is saved on this machine. `--auth token` or `--auth app` use a token or a GitHub App instead.",
+            link::SECRET
+        ));
+        println!();
+    }
     plan.print();
-    let pending = plan.pending();
-    if pending == 0 {
+    if plan.pending() == 0 {
         println!();
         ui.ok("In sync: nothing to change");
         return Ok(ExitCode::SUCCESS);
@@ -128,17 +143,26 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
     if options.dry_run {
         return Ok(ExitCode::from(2));
     }
-    let question = match pending {
-        1 => "Apply this change?".to_owned(),
-        n => format!("Apply these {n} changes?"),
-    };
-    if !ui.confirm(&question, true)? {
-        bail!("nothing changed");
+    let consent = !remote || ui.confirm("Add the deploy key and its secret on GitHub?", true)?;
+    if !consent {
+        plan.steps.retain(|s| !on_github(s));
     }
     println!();
     plan::apply(&api, &mut plan, &ui)?;
-    println!("\n✓ {}", plan.diagram);
-    let Pushed { hub, on, .. } = &settings.pushed;
+    if !consent {
+        let title = link::key_title(here);
+        ui.say("Nothing changed on GitHub. To add the deploy key yourself:");
+        ui.info(&format!(
+            "ssh-keygen -t ed25519 -N '' -C '{title}' -f perseid_key"
+        ));
+        ui.info(&format!(
+            "gh repo deploy-key add perseid_key.pub -R {hub} --allow-write -t '{title}'"
+        ));
+        ui.info(&format!(
+            "gh secret set {} -R {here} < perseid_key && rm perseid_key perseid_key.pub",
+            link::SECRET
+        ));
+    }
     println!("\nNext steps");
     ui.info(&format!(
         "1. Review {}, then commit and push it to the default branch",
@@ -242,8 +266,8 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
     let hub = pushed.hub.as_str();
     let here_info = api.get(&format!("/repos/{here}"))?;
     ensure!(
-        admin(&here_info),
-        "{} isn't an admin of {here}, which gets the {} secret: ask an admin of {here} to run `npx perseid connect {hub}` there",
+        pushed.auth != Auth::DeployKey || admin(&here_info),
+        "{} isn't an admin of {here}, which gets the {} secret: ask an admin of {here} to run `npx perseid connect {hub}` there, or pass --auth token|app",
         cx.login,
         link::SECRET
     );
@@ -276,44 +300,9 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
         ));
     }
 
-    let secret = secrets::has_secret(api, here, link::SECRET)?;
-    let text = format!(
-        "{hub}: write deploy key for {here}, its private half the {} secret of {here}",
-        link::SECRET
-    );
-    let action = |stale, register| {
-        Some(Action::DeployKey {
-            api_repo: here.clone(),
-            sdks_repo: hub.to_owned(),
-            register: (register, stale),
-        })
-    };
-    match admin(&hub_info) {
-        true => match (link::deploy_key(api, hub, here)?, secret) {
-            (Some((_, true)), true) => plan.add(Mark::Keep, text, None),
-            (Some((id, _)), _) => plan.add(Mark::Change, text, action(Some(id), true)),
-            (None, _) => plan.add(Mark::Add, text, action(None, true)),
-        },
-        false if secret => {
-            plan.add(
-                Mark::Keep,
-                format!("{here}: {} secret set", link::SECRET),
-                None,
-            );
-            plan.warnings.push(format!(
-                "{} can't see the deploy keys of {hub}: check with one of its admins that the key titled \"{}\" can write",
-                cx.login,
-                link::key_title(here)
-            ));
-        }
-        false => plan.add(
-            Mark::Add,
-            format!(
-                "{here}: deploy key in the {} secret, whose public half an admin of {hub} adds",
-                link::SECRET
-            ),
-            action(None, false),
-        ),
+    match pushed.auth {
+        Auth::DeployKey => plan_deploy_key(cx, &mut plan, here, hub, admin(&hub_info))?,
+        auth => plan_credentials(api, &mut plan, here, hub, auth),
     }
 
     let here_base = bootstrap::default_branch(&here_info);
@@ -324,6 +313,7 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
         spec: &pushed.spec,
         build: pushed.build.as_deref(),
         hub,
+        auth: pushed.auth,
         private: pushed.private,
     });
     let local = std::fs::read(top.join(link::WORKFLOW)).ok();
@@ -356,4 +346,93 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
         ));
     }
     Ok(plan)
+}
+
+fn plan_deploy_key(
+    cx: &Session,
+    plan: &mut Plan,
+    here: &String,
+    hub: &str,
+    hub_admin: bool,
+) -> Result<()> {
+    let api = cx.api;
+    let secret = secrets::has_secret(api, here, link::SECRET)?;
+    let text = format!(
+        "{hub}: write deploy key for {here}, its private half the {} secret of {here}",
+        link::SECRET
+    );
+    let action = |stale, register| {
+        Some(Action::DeployKey {
+            api_repo: here.clone(),
+            sdks_repo: hub.to_owned(),
+            register: (register, stale),
+        })
+    };
+    match hub_admin {
+        true => match (link::deploy_key(api, hub, here)?, secret) {
+            (Some((_, true)), true) => plan.add(Mark::Keep, text, None),
+            (Some((id, _)), _) => plan.add(Mark::Change, text, action(Some(id), true)),
+            (None, _) => plan.add(Mark::Add, text, action(None, true)),
+        },
+        false if secret => {
+            plan.add(
+                Mark::Keep,
+                format!("{here}: {} secret set", link::SECRET),
+                None,
+            );
+            plan.warnings.push(format!(
+                "{} can't see the deploy keys of {hub}: check with one of its admins that the key titled \"{}\" can write",
+                cx.login,
+                link::key_title(here)
+            ));
+        }
+        false => plan.add(
+            Mark::Add,
+            format!(
+                "{here}: deploy key in the {} secret, whose public half an admin of {hub} adds",
+                link::SECRET
+            ),
+            action(None, false),
+        ),
+    }
+    Ok(())
+}
+
+/// The token or App credentials `auth` reads, which the user adds: checked, never written.
+fn plan_credentials(api: &GitHub, plan: &mut Plan, here: &str, hub: &str, auth: Auth) {
+    let needed = match auth {
+        Auth::Token => vec![(
+            link::TOKEN_SECRET,
+            format!(
+                "a fine-grained token with Contents read and write on {hub}: `gh secret set {} -R {here}`",
+                link::TOKEN_SECRET
+            ),
+        )],
+        _ => vec![
+            (
+                link::APP_ID,
+                format!(
+                    "the ID of a GitHub App installed on {hub}, with Contents read and write: `gh variable set {} -R {here} --body <id>`",
+                    link::APP_ID
+                ),
+            ),
+            (
+                link::APP_KEY,
+                format!(
+                    "a private key of that App: `gh secret set {} -R {here} < <app>.private-key.pem`",
+                    link::APP_KEY
+                ),
+            ),
+        ],
+    };
+    for (name, what) in needed {
+        let set = match name == link::APP_ID {
+            true => secrets::variable(api, here, name).is_ok_and(|v| v.is_some()),
+            false => secrets::has_secret(api, here, name).unwrap_or(false),
+        };
+        match set {
+            true => plan.add(Mark::Keep, format!("{here}: {name} set"), None),
+            false => plan.warnings.push(format!("{here} needs {name}, {what}")),
+        }
+    }
 }
