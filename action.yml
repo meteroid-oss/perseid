@@ -1,5 +1,5 @@
 name: Perseid OpenAPI SDK Generator
-description: Generate idiomatic Rust, TypeScript, Python, Go and Java SDKs from OpenAPI and open pull requests. No cloud, no subscription.
+description: Generate idiomatic Rust, TypeScript, Python, Go, Java and C# SDKs from OpenAPI and open pull requests. No cloud, no subscription.
 branding:
   icon: package
   color: purple
@@ -12,8 +12,16 @@ inputs:
     description: Perseid version (default, the one matching this action's ref)
     default: ''
   token:
-    description: GitHub token, needs contents and pull-requests write on every target repository
+    description: GitHub token, needs contents and pull-requests write on every target repository. Unused with `app-id`
     default: ${{ github.token }}
+  app-id:
+    description: >-
+      ID of a GitHub App installed on the repository holding perseid.toml and the SDK repositories:
+      the Action mints a token of it for them, with contents and pull-requests write
+    default: ''
+  app-private-key:
+    description: Private key of the `app-id` App
+    default: ''
   working-directory:
     description: Directory containing perseid.toml
     default: .
@@ -54,12 +62,10 @@ runs:
         PERSEID_INSTALL: ${{ runner.temp }}/perseid
       run: |
         # The binary matching this action's own code, whether it's used @v0, @v0.2.1 or @<sha>.
-        export PERSEID_VERSION="${PERSEID_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_ACTION_PATH/Cargo.toml" | head -1)}"
+        export PERSEID_VERSION="${PERSEID_VERSION:-$(jq -r '."."' "$GITHUB_ACTION_PATH/.release-please-manifest.json")}"
         sh "$GITHUB_ACTION_PATH/install.sh"
         echo "$PERSEID_INSTALL" >> "$GITHUB_PATH"
-        languages=$(awk '/^sdks *=/ { f = 1 } f { print } f && /]/ { exit }' perseid.toml |
-          grep -oE '"(rust|typescript|python|go|java|csharp)"' | tr -d '"' | sort -u | tr '\n' ' ')
-        echo "languages=$languages" >> "$GITHUB_OUTPUT"
+        "$PERSEID_INSTALL/perseid" tools list --github-output
 
     - if: contains(steps.setup.outputs.languages, 'rust')
       uses: dtolnay/rust-toolchain@stable
@@ -77,99 +83,37 @@ runs:
       with:
         dotnet-version: '8.0.x'
 
-    - name: Install formatters
-      shell: bash
-      env:
-        LANGUAGES: ${{ steps.setup.outputs.languages }}
-        BIN: ${{ runner.temp }}/perseid
-      run: |
-        arch=$([ "$(uname -m)" = x86_64 ] && echo x64 || echo arm64)
-        fetch() { curl -fsSL --retry 3 -o "$1" "$2"; }
-        case " $LANGUAGES " in *" typescript "*)
-          fetch "$BIN/biome" "https://github.com/biomejs/biome/releases/download/%40biomejs%2Fbiome%402.1.4/biome-linux-$arch"
-          chmod +x "$BIN/biome" ;;
-        esac
-        case " $LANGUAGES " in *" python "*)
-          triple=$([ "$arch" = x64 ] && echo x86_64 || echo aarch64)-unknown-linux-gnu
-          fetch ruff.tar.gz "https://github.com/astral-sh/ruff/releases/download/0.14.10/ruff-$triple.tar.gz"
-          tar -xzf ruff.tar.gz --strip-components 1 -C "$BIN" "ruff-$triple/ruff" && rm ruff.tar.gz ;;
-        esac
-        case " $LANGUAGES " in *" java "*)
-          gjf=https://github.com/google/google-java-format/releases/download/v1.25.2
-          if [ "$arch" = x64 ]; then
-            fetch "$BIN/google-java-format" "$gjf/google-java-format_linux-x86-64"
-          else
-            fetch "$BIN/google-java-format.jar" "$gjf/google-java-format-1.25.2-all-deps.jar"
-            printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$BIN/google-java-format.jar" > "$BIN/google-java-format"
-          fi
-          chmod +x "$BIN/google-java-format" ;;
-        esac
-        case " $LANGUAGES " in *" csharp "*)
-          dotnet tool install csharpier --version 1.3.0 --tool-path "$BIN" ;;
-        esac
-
-    - name: Size the release
-      id: bump
-      if: contains(format(' {0} ', inputs.command), ' --pr ')
+    - name: Install formatters and oasdiff
       shell: bash
       working-directory: ${{ inputs.working-directory }}
-      env:
-        BUMP: ${{ inputs.bump }}
-        BASE: ${{ inputs.base-spec }}
-        BEFORE: ${{ github.event.before }}
-        RELAX: ${{ inputs.relax-enum-additions }}
-        BIN: ${{ runner.temp }}/perseid
-      run: |
-        if [ "$BUMP" != auto ]; then echo "bump=$BUMP" >> "$GITHUB_OUTPUT"; exit 0; fi
-        spec=$(sed -n 's/^spec *= *"\(.*\)".*/\1/p' perseid.toml | head -1)
-        spec=${spec:-openapi.json}
-        if [ -z "$BASE" ] && [ -f "$spec" ] && [ -n "${BEFORE//0/}" ] &&
-          git fetch --quiet --depth 1 origin "$BEFORE" && git show "$BEFORE:./$spec" > "$RUNNER_TEMP/base-spec"; then
-          BASE=$RUNNER_TEMP/base-spec
-        fi
-        if [ -z "$BASE" ]; then
-          echo "::notice::no previous spec to compare with, asking for a minor release"
-          echo "bump=minor" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-        arch=$([ "$(uname -m)" = x86_64 ] && echo amd64 || echo arm64)
-        curl -fsSL --retry 3 "https://github.com/oasdiff/oasdiff/releases/download/v1.32.1/oasdiff_1.32.1_linux_$arch.tar.gz" | tar -xz -C "$BIN" oasdiff
-        levels=()
-        if [ "$RELAX" = true ]; then
-          echo 'response-property-enum-value-added info' > "$RUNNER_TEMP/oasdiff-levels"
-          levels=(--severity-levels "$RUNNER_TEMP/oasdiff-levels")
-        fi
-        if ! oasdiff breaking --fail-on ERR "${levels[@]}" "$BASE" "$spec" > /dev/null; then level=major
-        elif ! oasdiff changelog --fail-on INFO "${levels[@]}" "$BASE" "$spec" > /dev/null; then level=minor
-        else level="patch"; fi
-        echo "bump=$level" >> "$GITHUB_OUTPUT"
-        { echo "### API changes"; echo; oasdiff changelog -f markdown "${levels[@]}" "$BASE" "$spec"; } | head -c 50000 > "$RUNNER_TEMP/api-changes.md"
-        echo "notes=$RUNNER_TEMP/api-changes.md" >> "$GITHUB_OUTPUT"
+      run: perseid tools install
+
+    # App installation tokens expire after an hour, so they are minted on each run.
+    - id: app
+      if: inputs.app-id != ''
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ steps.setup.outputs.owner }}
+        repositories: ${{ steps.setup.outputs.repositories }}
+        permission-contents: write
+        permission-pull-requests: write
 
     - name: Run perseid
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        GH_TOKEN: ${{ inputs.token }}
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.token }}
         COMMAND: ${{ inputs.command }}
-        BUMP: ${{ steps.bump.outputs.bump }}
-        NOTES: ${{ steps.bump.outputs.notes }}
-        AUTO_MERGE: ${{ inputs.auto-merge }}
-        DISPATCH: ${{ inputs.token == github.token && inputs.ci-workflows || '' }}
+        GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+        PERSEID_BUMP: ${{ inputs.bump }}
+        PERSEID_BASE_SPEC: ${{ inputs.base-spec }}
+        PERSEID_RELAX_ENUM_ADDITIONS: ${{ inputs.relax-enum-additions }}
+        PERSEID_AUTO_MERGE: ${{ inputs.auto-merge }}
+        PERSEID_DISPATCH: ${{ steps.app.outputs.token == '' && inputs.token == github.token && inputs.ci-workflows || '' }}
       run: |
+        # perseid reads these as flags, which can't be empty.
+        for name in "${!PERSEID_@}"; do [ -n "${!name}" ] || unset "$name"; done
         gh auth setup-git
-        perseid $COMMAND ${BUMP:+--bump "$BUMP"} ${NOTES:+--notes "$NOTES"} | tee "$RUNNER_TEMP/perseid.out"
-        if [ "$AUTO_MERGE" = true ]; then
-          { grep -E '^https://' "$RUNNER_TEMP/perseid.out" || true; } | while read -r url; do
-            repo=$(echo "$url" | cut -d/ -f4-5)
-            gh label create perseid:auto-release --repo "$repo" --force --color 6f42c1 \
-              --description "Auto-merge the release PR this change leads to"
-            gh pr edit "$url" --add-label perseid:auto-release
-            gh pr merge "$url" --auto --squash
-          done
-        fi
-        if [ -n "$DISPATCH" ] && grep -q "^$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pull/" "$RUNNER_TEMP/perseid.out"; then
-          for workflow in $DISPATCH; do
-            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref perseid/update
-          done
-        fi
+        perseid $COMMAND
