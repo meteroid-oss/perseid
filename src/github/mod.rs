@@ -204,19 +204,10 @@ fn credentials(api: &GitHub, app: &app::App, hub: &str, repos: &[String], ui: &U
     Ok(())
 }
 
-/// The GitHub App token of a workflow: the account and repositories it covers.
-pub struct AppToken<'a> {
-    /// Another account than the workflow repository's.
-    pub owner: Option<&'a str>,
-    pub repositories: &'a [String],
-}
-
 /// sdks.yml, regenerating the SDKs when the spec changes on `branch`.
 pub struct Workflow<'a> {
     pub branch: &'a str,
     pub paths: &'a [String],
-    /// The App's token, or the default token when every SDK lives in the workflow's repository.
-    pub app: Option<AppToken<'a>>,
     /// perseid.toml's directory.
     pub dir: &'a str,
     /// Also runs daily, at a minute derived from this, for specs fetched from a URL.
@@ -234,49 +225,19 @@ pub fn workflow(w: &Workflow) -> String {
         }
         None => String::new(),
     };
-    let mut with = String::new();
-    if w.app.is_some() {
-        with += "          token: ${{ steps.app.outputs.token }}\n";
-    }
-    if !w.dir.is_empty() {
-        with += &format!("          working-directory: {}\n", w.dir);
-    }
-    let condition = match w.requires {
-        Some(file) => format!(
-            "      - if: hashFiles('{file}') != ''\n        uses: meteroid-oss/perseid@v0\n"
-        ),
-        None => "      - uses: meteroid-oss/perseid@v0\n".to_owned(),
+    let action = "meteroid-oss/perseid@v0";
+    let step = match w.requires {
+        Some(file) => format!("      - if: hashFiles('{file}') != ''\n        uses: {action}\n"),
+        None => format!("      - uses: {action}\n"),
     };
-    let perseid = match with.is_empty() {
-        true => condition,
-        false => format!("{condition}        with:\n{with}"),
-    };
-    let (header, permissions, app) = match &w.app {
-        Some(app) => (
-            "opens\n# their pull requests with a token of the GitHub App set as SDK_APP_ID and SDK_APP_PRIVATE_KEY.",
-            "contents: read",
-            format!(
-                r#"      # App installation tokens expire after an hour, so they are minted on each run.
-      - id: app
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{{{ vars.SDK_APP_ID }}}}
-          private-key: ${{{{ secrets.SDK_APP_PRIVATE_KEY }}}}
-          owner: {}
-          repositories: {}
-"#,
-                app.owner.unwrap_or("${{ github.repository_owner }}"),
-                app.repositories.join(","),
-            ),
-        ),
-        None => (
-            "opens\n# their pull requests in this repository with the default token.",
-            "contents: write\n  pull-requests: write",
-            String::new(),
-        ),
+    let dir = match w.dir {
+        "" => String::new(),
+        dir => format!("          working-directory: {dir}\n"),
     };
     format!(
-        r#"# Written by `perseid setup`: regenerates the SDKs when the spec changes and {header}
+        r#"# Written by `perseid setup`: regenerates the SDKs when the spec changes and opens their pull
+# requests, with a token of the GitHub App set as SDK_APP_ID and SDK_APP_PRIVATE_KEY, or else the
+# default token.
 name: SDKs
 
 on:
@@ -286,18 +247,20 @@ on:
 {schedule}  workflow_dispatch:
 
 permissions:
-  {permissions}
+  contents: write
+  pull-requests: write
 
-concurrency:
-  group: sdks
-  cancel-in-progress: false
+concurrency: sdks
 
 jobs:
   sdks:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
-{app}{perseid}"#,
+{step}        with:
+          app-id: ${{{{ vars.SDK_APP_ID }}}}
+          app-private-key: ${{{{ secrets.SDK_APP_PRIVATE_KEY }}}}
+{dir}"#,
         branch = w.branch,
     )
 }
@@ -477,14 +440,9 @@ mod tests {
     #[test]
     fn the_workflow_runs_in_the_config_directory() {
         let paths = ["api/openapi.json".to_owned(), "api/perseid.toml".to_owned()];
-        let repositories = ["api".to_owned(), "acme-node".to_owned()];
         let yaml = workflow(&Workflow {
             branch: "main",
             paths: &paths,
-            app: Some(AppToken {
-                owner: None,
-                repositories: &repositories,
-            }),
             dir: "api",
             daily: None,
             requires: None,
@@ -493,37 +451,46 @@ mod tests {
             yaml.contains("paths: [\"api/openapi.json\",\"api/perseid.toml\"]"),
             "{yaml}"
         );
-        assert!(yaml.contains("repositories: api,acme-node\n"), "{yaml}");
+        assert!(!yaml.contains("schedule"), "{yaml}");
         assert!(
-            yaml.contains("owner: ${{ github.repository_owner }}\n"),
-            "{yaml}"
-        );
-        assert!(
-            yaml.ends_with("          working-directory: api\n"),
+            yaml.ends_with(
+                "      - uses: meteroid-oss/perseid@v0
+        with:
+          app-id: ${{ vars.SDK_APP_ID }}
+          app-private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
+          working-directory: api
+"
+            ),
             "{yaml}"
         );
         assert_eq!(join("", "./openapi.json"), "openapi.json");
     }
 
     #[test]
-    fn url_specs_are_fetched_daily_with_the_default_token() {
+    fn url_specs_are_fetched_daily() {
         let paths = ["perseid.toml".to_owned()];
         let yaml = workflow(&Workflow {
             branch: "main",
             paths: &paths,
-            app: None,
             dir: "",
             daily: Some("acme/api-sdks"),
             requires: Some("openapi.json"),
         });
         assert!(yaml.contains("  schedule:\n    - cron: '"), "{yaml}");
         assert!(
-            yaml.contains("contents: write\n  pull-requests: write\n"),
+            yaml.contains(
+                "permissions:\n  contents: write\n  pull-requests: write\n\nconcurrency: sdks\n"
+            ),
             "{yaml}"
         );
         assert!(
-            yaml.ends_with("      - if: hashFiles('openapi.json') != ''\n        uses: meteroid-oss/perseid@v0\n"),
+            yaml.contains("      - if: hashFiles('openapi.json') != ''\n        uses: meteroid-oss/perseid@v0\n        with:\n"),
             "{yaml}"
         );
+        assert!(
+            yaml.ends_with("app-private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}\n"),
+            "{yaml}"
+        );
+        assert!(!yaml.contains("create-github-app-token"), "{yaml}");
     }
 }

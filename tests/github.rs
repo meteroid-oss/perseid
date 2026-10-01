@@ -811,9 +811,9 @@ fn setup_orchestrates_one_repository_per_language() {
         "{workflow}"
     );
     assert!(
-        workflow
-            .contains("repositories: petstore,petstore-go,petstore-python,petstore-typescript\n"),
-        "{workflow}"
+        workflow.contains("app-id: ${{ vars.SDK_APP_ID }}\n")
+            && !workflow.contains("create-github-app-token"),
+        "the action mints the App token: {workflow}"
     );
     assert_eq!(files["perseid.toml"], config);
     assert_eq!(files["openapi.yaml"], SPEC);
@@ -963,7 +963,8 @@ fn connect_pushes_the_spec_to_a_repository_holding_every_sdk() {
             "{workflow}"
         );
         assert!(
-            workflow.contains("pull-requests: write") && !workflow.contains("SDK_APP_ID"),
+            workflow.contains("pull-requests: write")
+                && workflow.contains("app-private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}\n"),
             "{workflow}"
         );
         assert!(!files.contains_key("typescript/package.json"), "{files:?}");
@@ -1133,7 +1134,7 @@ fn connect_pushes_releases_to_an_orchestrator_of_one_repository_per_language() {
         let workflow = &files[".github/workflows/sdks.yml"];
         keep("sdks-repo-split-sdks.yml", workflow);
         assert!(
-            workflow.contains("repositories: petstore-sdks,petstore-python,petstore-typescript\n"),
+            workflow.contains("app-id: ${{ vars.SDK_APP_ID }}\n") && !workflow.contains("owner:"),
             "{workflow}"
         );
         assert!(

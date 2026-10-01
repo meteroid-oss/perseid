@@ -11,7 +11,7 @@ use heck::ToKebabCase;
 use serde_json::{Value, json};
 
 use super::{
-    AppToken, SETUP_BRANCH, Ui, Workflow,
+    SETUP_BRANCH, Ui, Workflow,
     api::GitHub,
     app,
     bootstrap::{self, File, Outcome},
@@ -403,10 +403,7 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
 
     let default_token = remote.is_empty();
     let hub_base = default_branch(&hub.info);
-    let mut token = None;
-    let installed: Vec<String>;
     if default_token {
-        installed = vec![];
         let allowed = match hub.info {
             Some(_) => api
                 .find(&format!("/repos/{}/actions/permissions/workflow", hub.repo))?
@@ -429,29 +426,14 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
         plan.app = true;
         let mut configured = vec![hub.repo.clone()];
         configured.extend(remote.iter().cloned());
-        installed = configured
+        let installed = configured
             .iter()
             .filter(|r| same(owner_of(r), &owner))
             .cloned()
             .collect();
         let who = account(&owner)?;
         let name = hub.config.name.to_kebab_case();
-        plan_app(
-            cx,
-            plan,
-            &hub.repo,
-            configured,
-            installed.clone(),
-            who,
-            name,
-        )?;
-    }
-    let names_installed: Vec<String> = installed
-        .iter()
-        .map(|r| r.rsplit('/').next().unwrap_or(r).to_owned())
-        .collect();
-    if !default_token {
-        token = Some(names_installed);
+        plan_app(cx, plan, &hub.repo, configured, installed, who, name)?;
     }
 
     let dir = hub.dir.as_str();
@@ -466,10 +448,6 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
     let yaml = workflow(&Workflow {
         branch: &hub_base,
         paths: &triggers,
-        app: token.as_ref().map(|repositories| AppToken {
-            owner: (!same(&owner, &hub_owner)).then_some(owner.as_str()),
-            repositories,
-        }),
         dir,
         daily: matches!(hub.trigger, Trigger::Schedule).then_some(hub.repo.as_str()),
         requires: match &hub.trigger {
