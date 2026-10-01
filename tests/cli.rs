@@ -1248,9 +1248,9 @@ fn init_names_methods_after_their_resource_path() {
     edit_config(dir.path(), |c| {
         c.replacen(
             "[rust]\n",
-            "[rust]\nnames = { GetChargesSearch = \"find\" }\n",
+            "[rust]\nmethods = { GetChargesSearch = \"find\" }\n",
             1,
-        ) + "\n[names]\nPostChargesChargeCapture = \"capture_payment\"\n"
+        ) + "\n[methods]\nPostChargesChargeCapture = \"capture_payment\"\n"
     });
     assert_eq!(
         operation(&inspect(dir.path()), "PostChargesChargeCapture")["name"],
@@ -1419,7 +1419,7 @@ fn init_fills_package_metadata_from_the_spec() {
     );
     let table: toml::Table = config.parse().unwrap();
     assert_eq!(
-        table["package"]["license"].as_str(),
+        table["metadata"]["license"].as_str(),
         Some("MIT"),
         "{config}"
     );

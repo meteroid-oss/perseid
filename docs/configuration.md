@@ -29,14 +29,14 @@ exclude = ["deleteEverything"]      # operation ids left out
 
 overrides = ".perseid"              # ejected templates and runtime
 
-[package]                           # written into the manifests `perseid generate` creates
+[metadata]                          # written into the manifests `perseid generate` creates
 description = "The Acme API client" # "{name} API client" by default
 license = "MIT"                     # SPDX expression
 homepage = "https://acme.com"
 # repository = "https://git.acme.dev/api" # SDKs without `repo`: the `origin` remote by default
 authors = ["Acme <dev@acme.com>"]
 
-[names]                             # method names by operation id
+[methods]                           # method names by operation id
 listWidgetEvents = "events"
 
 [pagination]                        # or [[pagination]] for several rules
@@ -91,7 +91,7 @@ Each is also a key of the [language tables](#language-tables), which override it
 | `untagged_unions` | How unions of objects that no property tells apart decode: `"json"` (default, untyped JSON) or `"best-match"`; see [unions of objects](#unions-of-objects) |
 | `header_prefix` | Prefix of the headers the SDKs send on their own (`acme-idempotency-key`), the kebab-case `name` by default |
 | `user_agent` | Prefix of the `User-Agent` header, the kebab-case `name` by default |
-| `[names]` | Method names by operation id, over the [resource-style names](#method-names) (as does `x-perseid-name` on an operation) |
+| `[methods]` | Method names by operation id, over the [resource-style names](#method-names) (as does `x-perseid-name` on an operation) |
 | `[context]` | Values exposed to templates as `sdk.*` |
 
 ## Operations
@@ -107,7 +107,7 @@ Every operation is generated, except those marked `x-internal: true`.
 
 ## Package metadata
 
-`[package]` holds what the manifests `perseid generate` creates say about the packages. `init`
+`[metadata]` holds what the manifests `perseid generate` creates say about the packages. `init`
 fills it from the spec's `info` (summary or description, license, contact).
 
 Each manifest names the repository its SDK lives in: `https://github.com/{repo}` for an SDK with a
@@ -136,7 +136,7 @@ table for an SDK `sdks` doesn't list fails. Every table takes:
 | `path` | Output directory, relative to the repository the SDK lives in |
 | `repo` | `owner/name` of a GitHub repository to generate into, over the top-level `repo`: checked out under `.perseid/repos`, the SDK at its root, or in a folder named after the language when several SDKs share the repository. The repository holding `perseid.toml` (its `origin`) counts as no `repo`: the SDK is generated here, in a folder named after the language |
 | `package` | Crate, npm package, Python package, Go package, Java package or C# root namespace and NuGet package; derived from `name` by default |
-| `base_url`, `timeout`, `webhooks`, `untagged_unions`, `header_prefix`, `user_agent`, `names`, `context` | Over the [SDK defaults](#sdk-defaults) |
+| `base_url`, `timeout`, `webhooks`, `untagged_unions`, `header_prefix`, `user_agent`, `methods`, `context` | Over the [SDK defaults](#sdk-defaults) |
 | `exclude` | Operation ids left out of this SDK only |
 
 And their own keys:
@@ -146,7 +146,7 @@ And their own keys:
 | `[typescript]` | `exports` | Modules re-exported from the entry point |
 | `[typescript]` | `int64` | TypeScript type of int64 values: `"number"` (default, exact up to 2^53), `"bigint"` or `"string"` |
 | `[python]` | `flat_unions` | `true` types discriminated unions as `Circle \| Square` instead of a wrapper model |
-| `[go]` | `module` | Module path, `github.com/{repo}/{path}` of the repository the SDK lives in by default (the `origin` remote, or `[package] repository`, for an SDK without `repo`); without either, `generate` warns and falls back to the kebab-case `name` |
+| `[go]` | `module` | Module path, `github.com/{repo}/{path}` of the repository the SDK lives in by default (the `origin` remote, or `[metadata] repository`, for an SDK without `repo`); without either, `generate` warns and falls back to the kebab-case `name` |
 
 ## Renamed and removed keys
 
@@ -158,7 +158,7 @@ A key of an earlier version fails with what to write instead:
 | `spec = "github:acme/api/openapi.json"` | `spec = "openapi.json"`, where `perseid connect` pushes it |
 | language tables alone | `sdks = [...]` listing the SDKs, the tables only overriding their settings |
 | `node` and `dotnet` in `repo = "...-{lang}"` | `typescript` and `csharp`, or a `repo` in the language table |
-| `description`, `license`, `homepage`, `repository`, `authors` | the same keys under `[package]` |
+| `description`, `license`, `homepage`, `repository`, `authors` | the same keys under `[metadata]` |
 | `include = "public-and-internal"` | `internal = true` |
 | `include = "only-internal"` | `only = [...]` listing them |
 | `version`, at the top or in a language table | the SDK's own manifest, bumped by release-please |
@@ -168,7 +168,7 @@ A key of an earlier version fails with what to write instead:
 
 Methods are named after the HTTP method and the path within their resource: `list`, `create`,
 `retrieve`, `update`, `delete`, `list_sources`, `capture`. A name two operations of a resource
-would share falls back to the operation id. `[names]` and `x-perseid-name` rename one.
+would share falls back to the operation id. `[methods]` and `x-perseid-name` rename one.
 
 ## Unions of objects
 

@@ -102,7 +102,7 @@ fn name_resource(resource: &mut Resource, names: &BTreeMap<String, String>) -> a
         {
             bail!(
                 "operations `{other}` and `{}` are both named `{}` in resource `{}`: rename one \
-                 in the `[names]` table of perseid.toml",
+                 in the `[methods]` table of perseid.toml",
                 op.id,
                 key(name),
                 resource.name
