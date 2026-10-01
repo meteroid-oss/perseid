@@ -1,0 +1,798 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "perseid.toml",
+  "description": "perseid.toml: where the OpenAPI spec comes from, and the SDKs generated from it.",
+  "type": "object",
+  "required": [
+    "name",
+    "spec"
+  ],
+  "properties": {
+    "base_url": {
+      "description": "API base URL the clients default to.",
+      "type": "string"
+    },
+    "context": {
+      "description": "Values exposed to templates as `sdk.*`.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": true
+    },
+    "csharp": {
+      "description": "The C# SDK, a NuGet package.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/CSharp"
+        }
+      ]
+    },
+    "exclude": {
+      "description": "Operation ids left out of every SDK.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "generate": {
+      "description": "Command writing the spec in the API repository's CI when it isn't committed, run from its root before pushing the spec.",
+      "type": "string"
+    },
+    "go": {
+      "description": "The Go SDK, a module.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Go"
+        }
+      ]
+    },
+    "header_prefix": {
+      "description": "Prefix of the SDK's own headers, such as `{prefix}-idempotency-key`: the kebab-case `name` by default.",
+      "type": "string"
+    },
+    "internal": {
+      "description": "Also generates the operations marked `x-internal: true`.",
+      "default": false,
+      "type": "boolean"
+    },
+    "java": {
+      "description": "The Java SDK, a Maven package.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Java"
+        }
+      ]
+    },
+    "name": {
+      "description": "Client name, in any form (`Acme`, `acme-api`, `Acme API`): the `AcmeApi` client, the `acme_api` and `acme-api` packages.",
+      "type": "string"
+    },
+    "names": {
+      "description": "Method names by operation id, over the resource-style names.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "only": {
+      "description": "Operation ids to generate, leaving out every other operation.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "overrides": {
+      "description": "Directory mirroring `templates/<lang>/…` and `runtime/<lang>/…` to override built-ins: `.perseid` by default.",
+      "type": "string"
+    },
+    "package": {
+      "description": "Package metadata written into the manifests `perseid init` creates.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Package"
+        }
+      ]
+    },
+    "pagination": {
+      "description": "Paginated list operations, detected from their query parameter and response shape.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/OneOrMany"
+        }
+      ]
+    },
+    "push_on": {
+      "description": "When the spec is pushed to the repository generating the SDKs (with `sdks_repo`, or a `github:` spec).",
+      "allOf": [
+        {
+          "$ref": "#/definitions/PushOn"
+        }
+      ]
+    },
+    "push_tags": {
+      "description": "Tags pushing the spec with `push_on = \"tag\"`, as a GitHub Actions glob: `v*` by default.",
+      "type": "string"
+    },
+    "python": {
+      "description": "The Python SDK, a PyPI package.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Python"
+        }
+      ]
+    },
+    "repo": {
+      "description": "Default repository of every SDK: `owner/name-{lang}` gives each its own (`{lang}` is `rust`, `node`, `python`, `go`, `java` or `dotnet`), `owner/name` holds them all in folders named after their language. Without it, the SDKs live next to perseid.toml.",
+      "type": "string"
+    },
+    "rust": {
+      "description": "The Rust SDK, a crate.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Rust"
+        }
+      ]
+    },
+    "sdks_repo": {
+      "description": "`owner/name` of a separate repository this one sends its spec to, which generates the SDKs from its own perseid.toml.",
+      "type": "string"
+    },
+    "spec": {
+      "description": "The OpenAPI document (3.0 or 3.1, JSON or YAML): a path relative to perseid.toml, an http(s) URL, or `github:owner/repo/path` for a spec another repository pushes here.",
+      "type": "string"
+    },
+    "timeout": {
+      "description": "Default request timeout, in seconds: 60 by default.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0.0
+    },
+    "typescript": {
+      "description": "The TypeScript SDK, an npm package.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/TypeScript"
+        }
+      ]
+    },
+    "untagged_unions": {
+      "description": "How unions decode objects that no rule tells apart.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/UntaggedUnions"
+        }
+      ]
+    },
+    "user_agent": {
+      "description": "Prefix of the `User-Agent` header: the kebab-case `name` by default.",
+      "type": "string"
+    },
+    "webhooks": {
+      "description": "Installs the Standard Webhooks signature verifier in every SDK.",
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "CSharp": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "description": "API base URL this client defaults to, over the top-level one.",
+          "type": "string"
+        },
+        "context": {
+          "description": "Values exposed to templates as `sdk.*`, over the top-level `[context]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": true
+        },
+        "exclude": {
+          "description": "Operation ids left out of this SDK only, on top of the top-level `exclude`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "header_prefix": {
+          "description": "Prefix of this SDK's own headers, over the top-level one.",
+          "type": "string"
+        },
+        "names": {
+          "description": "Method names by operation id, over the top-level `[names]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "package": {
+          "description": "Root namespace and NuGet package: `name` by default.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Output directory, relative to the repository the SDK lives in: the language's name, or the root of a repository of its own.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Default request timeout in seconds, over the top-level one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "untagged_unions": {
+          "description": "How unions decode objects that no rule tells apart, over the top-level setting.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UntaggedUnions"
+            }
+          ]
+        },
+        "user_agent": {
+          "description": "Prefix of this SDK's `User-Agent` header, over the top-level one.",
+          "type": "string"
+        },
+        "webhooks": {
+          "description": "Installs the Standard Webhooks signature verifier, over the top-level setting.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Go": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "description": "API base URL this client defaults to, over the top-level one.",
+          "type": "string"
+        },
+        "context": {
+          "description": "Values exposed to templates as `sdk.*`, over the top-level `[context]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": true
+        },
+        "exclude": {
+          "description": "Operation ids left out of this SDK only, on top of the top-level `exclude`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "header_prefix": {
+          "description": "Prefix of this SDK's own headers, over the top-level one.",
+          "type": "string"
+        },
+        "module": {
+          "description": "Module path: `github.com/{repo}/{path}` of the repository the SDK lives in by default.",
+          "default": null,
+          "type": "string"
+        },
+        "names": {
+          "description": "Method names by operation id, over the top-level `[names]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "package": {
+          "description": "Go package name: the snake_case `name` by default.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Output directory, relative to the repository the SDK lives in: the language's name, or the root of a repository of its own.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Default request timeout in seconds, over the top-level one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "untagged_unions": {
+          "description": "How unions decode objects that no rule tells apart, over the top-level setting.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UntaggedUnions"
+            }
+          ]
+        },
+        "user_agent": {
+          "description": "Prefix of this SDK's `User-Agent` header, over the top-level one.",
+          "type": "string"
+        },
+        "webhooks": {
+          "description": "Installs the Standard Webhooks signature verifier, over the top-level setting.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Int64": {
+      "description": "TypeScript type of int64 values.",
+      "oneOf": [
+        {
+          "description": "`number`, exact up to 2^53.",
+          "type": "string",
+          "enum": [
+            "number"
+          ]
+        },
+        {
+          "description": "`bigint`.",
+          "type": "string",
+          "enum": [
+            "bigint"
+          ]
+        },
+        {
+          "description": "`string`.",
+          "type": "string",
+          "enum": [
+            "string"
+          ]
+        }
+      ]
+    },
+    "Java": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "description": "API base URL this client defaults to, over the top-level one.",
+          "type": "string"
+        },
+        "context": {
+          "description": "Values exposed to templates as `sdk.*`, over the top-level `[context]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": true
+        },
+        "exclude": {
+          "description": "Operation ids left out of this SDK only, on top of the top-level `exclude`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "header_prefix": {
+          "description": "Prefix of this SDK's own headers, over the top-level one.",
+          "type": "string"
+        },
+        "names": {
+          "description": "Method names by operation id, over the top-level `[names]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "package": {
+          "description": "Java package: `com.{name}` by default.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Output directory, relative to the repository the SDK lives in: the language's name, or the root of a repository of its own.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Default request timeout in seconds, over the top-level one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "untagged_unions": {
+          "description": "How unions decode objects that no rule tells apart, over the top-level setting.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UntaggedUnions"
+            }
+          ]
+        },
+        "user_agent": {
+          "description": "Prefix of this SDK's `User-Agent` header, over the top-level one.",
+          "type": "string"
+        },
+        "webhooks": {
+          "description": "Installs the Standard Webhooks signature verifier, over the top-level setting.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "OneOrMany": {
+      "description": "One pagination rule, or several.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Pagination"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Pagination"
+          }
+        }
+      ]
+    },
+    "Package": {
+      "description": "Package metadata written into the manifests `perseid init` creates.",
+      "type": "object",
+      "properties": {
+        "authors": {
+          "description": "`Name <email>` of each author.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "description": {
+          "description": "One-line summary: `{name} API client` by default.",
+          "type": "string"
+        },
+        "homepage": {
+          "description": "Project website.",
+          "type": "string"
+        },
+        "license": {
+          "description": "SPDX license expression.",
+          "type": "string"
+        },
+        "repository": {
+          "description": "URL of the source repository.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Pagination": {
+      "description": "How a list operation pages, as `x-pagination` on an operation or `[pagination]` in perseid.toml. Exactly one of `cursor`, `page` or `offset` names the query parameter selecting the page; response values are dotted paths of JSON property names.",
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "description": "Query parameter taking the cursor of the page.",
+          "type": "string"
+        },
+        "first_page": {
+          "description": "Number of the first page, 1 by default.",
+          "type": "integer",
+          "format": "int64"
+        },
+        "has_more": {
+          "description": "Boolean telling whether more pages follow.",
+          "type": "string"
+        },
+        "item_cursor": {
+          "description": "Field of the last item that is the next cursor, e.g. `id` for `starting_after`.",
+          "type": "string"
+        },
+        "items": {
+          "description": "The array of items, `data` by default.",
+          "type": "string"
+        },
+        "next_cursor": {
+          "description": "Cursor of the next page in the response.",
+          "type": "string"
+        },
+        "offset": {
+          "description": "Query parameter taking the index of the first item.",
+          "type": "string"
+        },
+        "operations": {
+          "description": "perseid.toml only: operations this rule must apply to, instead of every matching one.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "page": {
+          "description": "Query parameter taking the page number.",
+          "type": "string"
+        },
+        "total": {
+          "description": "Total number of items, for offset pagination.",
+          "type": "string"
+        },
+        "total_pages": {
+          "description": "Number of pages.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PushOn": {
+      "description": "When the API repository pushes its spec.",
+      "oneOf": [
+        {
+          "description": "Every push to the default branch changing the spec.",
+          "type": "string",
+          "enum": [
+            "change"
+          ]
+        },
+        {
+          "description": "Every published GitHub release, with the spec of its tag.",
+          "type": "string",
+          "enum": [
+            "release"
+          ]
+        },
+        {
+          "description": "Every tag matching `push_tags`.",
+          "type": "string",
+          "enum": [
+            "tag"
+          ]
+        }
+      ]
+    },
+    "Python": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "description": "API base URL this client defaults to, over the top-level one.",
+          "type": "string"
+        },
+        "context": {
+          "description": "Values exposed to templates as `sdk.*`, over the top-level `[context]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": true
+        },
+        "exclude": {
+          "description": "Operation ids left out of this SDK only, on top of the top-level `exclude`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "flat_unions": {
+          "description": "Types a union as `Circle | Square` instead of a wrapper model.",
+          "default": false,
+          "type": "boolean"
+        },
+        "header_prefix": {
+          "description": "Prefix of this SDK's own headers, over the top-level one.",
+          "type": "string"
+        },
+        "names": {
+          "description": "Method names by operation id, over the top-level `[names]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "package": {
+          "description": "Python package name: the snake_case `name` by default.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Output directory, relative to the repository the SDK lives in: the language's name, or the root of a repository of its own.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Default request timeout in seconds, over the top-level one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "untagged_unions": {
+          "description": "How unions decode objects that no rule tells apart, over the top-level setting.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UntaggedUnions"
+            }
+          ]
+        },
+        "user_agent": {
+          "description": "Prefix of this SDK's `User-Agent` header, over the top-level one.",
+          "type": "string"
+        },
+        "webhooks": {
+          "description": "Installs the Standard Webhooks signature verifier, over the top-level setting.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Rust": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "description": "API base URL this client defaults to, over the top-level one.",
+          "type": "string"
+        },
+        "context": {
+          "description": "Values exposed to templates as `sdk.*`, over the top-level `[context]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": true
+        },
+        "exclude": {
+          "description": "Operation ids left out of this SDK only, on top of the top-level `exclude`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "header_prefix": {
+          "description": "Prefix of this SDK's own headers, over the top-level one.",
+          "type": "string"
+        },
+        "names": {
+          "description": "Method names by operation id, over the top-level `[names]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "package": {
+          "description": "Crate name: the snake_case `name` by default.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Output directory, relative to the repository the SDK lives in: the language's name, or the root of a repository of its own.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Default request timeout in seconds, over the top-level one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "untagged_unions": {
+          "description": "How unions decode objects that no rule tells apart, over the top-level setting.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UntaggedUnions"
+            }
+          ]
+        },
+        "user_agent": {
+          "description": "Prefix of this SDK's `User-Agent` header, over the top-level one.",
+          "type": "string"
+        },
+        "webhooks": {
+          "description": "Installs the Standard Webhooks signature verifier, over the top-level setting.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TypeScript": {
+      "type": "object",
+      "properties": {
+        "base_url": {
+          "description": "API base URL this client defaults to, over the top-level one.",
+          "type": "string"
+        },
+        "context": {
+          "description": "Values exposed to templates as `sdk.*`, over the top-level `[context]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": true
+        },
+        "exclude": {
+          "description": "Operation ids left out of this SDK only, on top of the top-level `exclude`.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exports": {
+          "description": "Modules re-exported from the entry point.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "header_prefix": {
+          "description": "Prefix of this SDK's own headers, over the top-level one.",
+          "type": "string"
+        },
+        "int64": {
+          "description": "Type of int64 values.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Int64"
+            }
+          ]
+        },
+        "names": {
+          "description": "Method names by operation id, over the top-level `[names]`.",
+          "default": {},
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "package": {
+          "description": "npm package name: the kebab-case `name` by default.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Output directory, relative to the repository the SDK lives in: the language's name, or the root of a repository of its own.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
+          "type": "string"
+        },
+        "timeout": {
+          "description": "Default request timeout in seconds, over the top-level one.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "untagged_unions": {
+          "description": "How unions decode objects that no rule tells apart, over the top-level setting.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UntaggedUnions"
+            }
+          ]
+        },
+        "user_agent": {
+          "description": "Prefix of this SDK's `User-Agent` header, over the top-level one.",
+          "type": "string"
+        },
+        "webhooks": {
+          "description": "Installs the Standard Webhooks signature verifier, over the top-level setting.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "UntaggedUnions": {
+      "description": "How a union decodes an object when several variants are objects that neither a discriminator nor the constants and required properties they declare tell apart.",
+      "oneOf": [
+        {
+          "description": "Untyped JSON.",
+          "type": "string",
+          "enum": [
+            "json"
+          ]
+        },
+        {
+          "description": "The variant whose required properties are all present and which knows the most properties, the first declared on ties.",
+          "type": "string",
+          "enum": [
+            "best-match"
+          ]
+        }
+      ]
+    }
+  }
+}

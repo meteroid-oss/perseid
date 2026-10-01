@@ -18,7 +18,7 @@ import httpx
 WORK = Path(tempfile.mkdtemp(prefix="perseid-torture-"))
 
 
-def generate(name: str, context: str = "", spec: str | None = None) -> object:
+def generate(name: str, python: str = "", spec: str | None = None) -> object:
     """Generates the fixture, or `spec`, as the `name` package and imports it."""
     fixtures = os.environ.get("FIXTURES")
     assert fixtures, "set FIXTURES to the perseid tests/fixtures directory"
@@ -30,7 +30,7 @@ def generate(name: str, context: str = "", spec: str | None = None) -> object:
         (project / "openapi.yaml").write_text(spec)
     (project / "perseid.toml").write_text(
         f'spec = "openapi.yaml"\nname = "{name.title()}"\n'
-        f'base_url = "https://torture.test/v1"\n[python]\n{context}'
+        f'base_url = "https://torture.test/v1"\n[python]\n{python}'
     )
     for command in (["init"], ["generate"]):
         subprocess.run(["perseid", *command], cwd=project, check=True, capture_output=True)
@@ -102,7 +102,7 @@ components:
 
 torture = generate("torture")
 expandable = generate("expandable", spec=EXPANDABLE_SPEC)
-flat = generate("flat", "[python.context]\nflat_unions = true\n")
+flat = generate("flat", "flat_unions = true\n")
 adjacent = generate("adjacent", spec=ADJACENT_SPEC)
 from torture import Torture, TortureOptions, models  # noqa: E402
 from torture.api import (  # noqa: E402

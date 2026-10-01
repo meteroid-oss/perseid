@@ -82,6 +82,9 @@ enum Command {
     },
     /// Print the API model templates receive, as JSON.
     Inspect,
+    /// Print the JSON Schema of perseid.toml.
+    #[command(hide = true)]
+    Schema,
 }
 
 fn main() -> ExitCode {
@@ -203,6 +206,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 "\nEdit these files, then delete the ones you didn't change so they keep receiving upstream updates."
             );
         }
+        Command::Schema => print!("{}", config::json_schema()),
         Command::Inspect => {
             let (config, root) = Config::load(&cli.config)?;
             let spec = generate::load_spec(&config, &root)?;

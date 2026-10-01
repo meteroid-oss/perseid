@@ -27,13 +27,14 @@ use crate::api::Api;
 mod normalize;
 mod upgrade;
 
-#[derive(Copy, Clone, Default, Debug, serde::Deserialize)]
-#[serde(rename_all = "kebab-case")]
+/// Which operations are generated, before `exclude`.
+#[derive(Copy, Clone, Default, Debug)]
 pub enum IncludeMode {
+    /// Those not marked `x-internal: true`.
     #[default]
     OnlyPublic,
     PublicAndInternal,
-    OnlyInternal,
+    /// Those `only` lists.
     OnlySpecified,
 }
 

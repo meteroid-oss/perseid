@@ -59,12 +59,12 @@ It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients),
 ## In your CI
 
 `perseid setup` writes the workflow for you: it runs the `meteroid-oss/perseid@v0` Action
-on every spec change, and `perseid status` tells how it fares. To set it up by hand, or on self-hosted runners and other CIs with the
+on every spec change (or on each release of your API), and `perseid status` tells how it fares. To set it up by hand, or on self-hosted runners and other CIs with the
 `ghcr.io/meteroid-oss/perseid` image, see [CI and releases](docs/ci.md).
 
 ## Docs
 
-- [Configuration](docs/configuration.md): `perseid.toml`, per-language options
+- [Configuration](docs/configuration.md): `perseid.toml`, per-language options, editor completion
 - [Customizing](docs/customizing.md): handwritten code, middleware, snippets, templates, webhooks
 - [Auth, pagination, streaming and encoding](docs/features.md)
 - [Languages](docs/languages.md): what each SDK looks like

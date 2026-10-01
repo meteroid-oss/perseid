@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
 
 use super::{Ui, api::GitHub, secrets};
+use crate::config::PushOn;
 
 pub const SECRET: &str = "PERSEID_SDKS_DEPLOY_KEY";
 pub const VARIABLE: &str = "PERSEID_SDKS_REPO";
@@ -21,6 +22,9 @@ pub struct Source {
     pub repo: String,
     pub path: String,
     pub sha: Option<String>,
+    /// The release or tag that pushed it.
+    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
 }
 
 impl Source {
@@ -91,6 +95,9 @@ pub fn add_deploy_key(
 /// How perseid-push.yml gets the spec to the SDKs repository.
 pub struct Push<'a> {
     pub branch: &'a str,
+    pub on: PushOn,
+    /// The tags pushing the spec with `PushOn::Tag`.
+    pub tags: &'a str,
     /// The spec, relative to the API repository's root.
     pub spec: &'a str,
     /// Run from the repository's root to write the spec, when it isn't committed.
@@ -127,12 +134,18 @@ if cmp -s "$SPEC" "$sdks/$SNAPSHOT"; then
   exit 0
 fi
 cp "$SPEC" "$sdks/$SNAPSHOT"
-printf '{\n  "repo": "%s",\n  "path": "%s",\n  "sha": "%s"\n}\n' "$GITHUB_REPOSITORY" "$SPEC" "$GITHUB_SHA" > "$source"
+at="${GITHUB_SHA::7}"
+ref=""
+if [ -n "${REF:-}" ]; then
+  at="$REF ($at)"
+  ref=$(printf ',\n  "ref": "%s"' "${REF//\"/}")
+fi
+printf '{\n  "repo": "%s",\n  "path": "%s",\n  "sha": "%s"%s\n}\n' "$GITHUB_REPOSITORY" "$SPEC" "$GITHUB_SHA" "$ref" > "$source"
 git -C "$sdks" add "$SNAPSHOT" "$source"
 git -C "$sdks" -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-  commit --quiet -m "spec: $GITHUB_REPOSITORY@${GITHUB_SHA::7}"
+  commit --quiet -m "spec: $GITHUB_REPOSITORY@$at"
 git -C "$sdks" push --quiet origin HEAD
-echo "Pushed the spec of $GITHUB_SHA to $SDKS_REPO"
+echo "Pushed the spec of $GITHUB_REPOSITORY@$at to $SDKS_REPO"
 "#;
 
 /// The workflow of the API repository pushing its spec to the SDKs repository, one run at a time
@@ -148,32 +161,49 @@ pub fn push_workflow(push: &Push) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let (paths, generate) = match push.generate {
-        None => (
-            format!(
-                "\n    paths: {}",
-                serde_json::to_string(&[push.spec, ".github/workflows/perseid-push.yml"])
-                    .unwrap_or_default()
-            ),
-            String::new(),
+    let generate = push.generate.map_or_else(String::new, |command| {
+        format!(
+            "      # Set up here the toolchain the command needs.\n      - name: Write the spec\n        run: |\n{}\n",
+            indent(command, 10)
+        )
+    });
+    let quoted = format!("'{}'", push.branch.replace('\'', "''"));
+    let tagged = format!("startsWith(github.ref, 'refs/tags/') || github.ref_name == {quoted}");
+    let (when, trigger, guard) = match push.on {
+        PushOn::Change => {
+            let paths = match push.generate {
+                Some(_) => String::new(),
+                None => format!(
+                    "\n    paths: {}",
+                    serde_json::to_string(&[push.spec, ".github/workflows/perseid-push.yml"])
+                        .unwrap_or_default()
+                ),
+            };
+            (
+                "on each change",
+                format!("push:\n    branches: [{:?}]{paths}", push.branch),
+                format!("github.ref_name == {quoted}"),
+            )
+        }
+        PushOn::Release => (
+            "on each published release",
+            "release:\n    types: [published]".to_owned(),
+            tagged,
         ),
-        Some(command) => (
-            String::new(),
-            format!(
-                "      # Set up here the toolchain the command needs.\n      - name: Write the spec\n        run: |\n{}\n",
-                indent(command, 10)
-            ),
+        PushOn::Tag => (
+            "on each matching tag",
+            format!("push:\n    tags: [{:?}]", push.tags),
+            tagged,
         ),
     };
-    let quoted = format!("'{}'", push.branch.replace('\'', "''"));
     format!(
-        r#"# Written by `perseid setup`: pushes the spec to {sdks}, which regenerates the SDKs. The
-# PERSEID_SDKS_DEPLOY_KEY deploy key can write to that repository only.
+        r#"# Written by `perseid setup`: pushes the spec to {sdks} {when},
+# which regenerates the SDKs. The PERSEID_SDKS_DEPLOY_KEY deploy key can write to that
+# repository only.
 name: Spec
 
 on:
-  push:
-    branches: [{branch:?}]{paths}
+  {trigger}
   workflow_dispatch:
 
 permissions:
@@ -186,7 +216,7 @@ concurrency:
 
 jobs:
   push:
-    if: github.ref_name == {branch_literal}
+    if: {guard}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -198,14 +228,13 @@ jobs:
           DEPLOY_KEY: ${{{{ secrets.PERSEID_SDKS_DEPLOY_KEY }}}}
           SPEC: {spec}
           SNAPSHOT: {snapshot}
+          REF: ${{{{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}}}
           KNOWN_HOSTS: |
 {known_hosts}
         run: |
 {script}
 "#,
         sdks = push.sdks_repo,
-        branch = push.branch,
-        branch_literal = quoted,
         spec = push.spec,
         snapshot = push.snapshot,
         known_hosts = indent(KNOWN_HOSTS, 12),
@@ -221,6 +250,8 @@ mod tests {
     fn generated_specs_are_pushed_on_every_commit() {
         let yaml = push_workflow(&Push {
             branch: "main",
+            on: PushOn::Change,
+            tags: "v*",
             spec: "api/openapi.json",
             generate: Some("cargo run --bin openapi > api/openapi.json"),
             sdks_repo: "acme/api-sdks",

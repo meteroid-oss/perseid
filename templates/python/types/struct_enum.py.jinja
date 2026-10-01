@@ -1,13 +1,13 @@
 {% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, module_name, py_ident -%}
 {#- Discriminated unions: a model holding the discriminator and the variant
-    (`Shape(type="circle", content=Circle(...))`), or with `flat_unions` in
-    the `[python.context]` table, the plain union `Circle | Square`. -#}
+    (`Shape(type="circle", content=Circle(...))`), or with `flat_unions`
+    in the `[python]` table, the plain union `Circle | Square`. -#}
 {% if type.variants | has_non_ref_struct_enum_variants -%}
     {{ panic("struct enum `" ~ type.name ~ "` has inline struct variants, which the Python templates do not support yet") }}
 {%- endif -%}
 {% set class_name = type.name | to_upper_camel_case -%}
 {% set refs = type.variants | map(attribute="schema_ref") | list -%}
-{% set flat = sdk.flat_unions is defined and sdk.flat_unions and type.repr == "internally_tagged" and type.fields | length == 0
+{% set flat = sdk.flat_unions and type.repr == "internally_tagged" and type.fields | length == 0
     and refs | select | list | length == refs | length and refs | unique | list | length == refs | length -%}
 
 {% if flat -%}

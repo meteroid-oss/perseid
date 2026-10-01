@@ -67,9 +67,13 @@ pub fn origin(config: &crate::config::Config, root: &Path, spec: &str) -> Option
             let source: serde_json::Value = serde_json::from_str(&text).ok()?;
             let (repo, sha) = (source["repo"].as_str()?, source["sha"].as_str()?);
             let short = sha.get(..7)?;
-            Some(format!(
-                "[{repo}@{short}](https://github.com/{repo}/commit/{sha})"
-            ))
+            let commit = format!("https://github.com/{repo}/commit/{sha}");
+            Some(match source["ref"].as_str() {
+                Some(tag) => format!(
+                    "[{repo}@{tag}](https://github.com/{repo}/releases/tag/{tag}) ([{short}]({commit}))"
+                ),
+                None => format!("[{repo}@{short}]({commit})"),
+            })
         }
         crate::config::Source::Url(url) => {
             let digest = sha2::Sha256::digest(spec.as_bytes());
@@ -217,6 +221,14 @@ mod tests {
             Some("<https://acme.dev/openapi.json> (sha256 `44136fa355b3`)")
         );
         assert_eq!(origin(&config("openapi.json"), dir.path(), "{}"), None);
+        let released = "{ \"repo\": \"acme/api\", \"path\": \"openapi.json\", \"sha\": \"a1b2c3d4e5\", \"ref\": \"v1.4.0\" }";
+        crate::fsx::write(&dir.path().join(SOURCE), released.as_bytes()).unwrap();
+        assert_eq!(
+            origin(&config("github:acme/api/openapi.json"), dir.path(), "{}").as_deref(),
+            Some(
+                "[acme/api@v1.4.0](https://github.com/acme/api/releases/tag/v1.4.0) ([a1b2c3d](https://github.com/acme/api/commit/a1b2c3d4e5))"
+            )
+        );
     }
 
     #[test]

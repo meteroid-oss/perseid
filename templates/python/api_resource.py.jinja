@@ -286,7 +286,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
         return response.content
 {%- elif op.response_is_text %}
         return response.text
-{%- elif return_type != "None" and sdk.flat_unions is defined and sdk.flat_unions %}
+{%- elif return_type != "None" and sdk.flat_unions %}
         {#- A union alias is not a class, so `decode_response` cannot infer its type. #}
         decoded: {{ return_type }} = decode_response(response, {{ return_type }})
         return decoded

@@ -23,7 +23,7 @@ indexmap = "2.7.0"
 itertools = "0.14.0"
 jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
 minijinja = { version = "2.8.0", features = ["loader", "json"] }
-schemars = "0.8.21"
+schemars = { version = "0.8.21", features = ["derive"] }
 serde = { version = "1.0.215", features = ["derive", "rc"] }
 serde_json = { version = "1.0.133", features = ["preserve_order"] }
 serde_norway = "0.9"

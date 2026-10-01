@@ -99,12 +99,19 @@ pub fn draft(init: &Init, root: &Path) -> Result<(String, bool)> {
                 .filter(|u| u.starts_with("http"))
                 .map(|u| u.trim_end_matches('/').to_owned())
         });
-        let mut toml = format!("spec = {spec:?}\nname = {:?}\n", name.to_upper_camel_case());
+        let mut toml = format!(
+            "#:schema {}\nspec = {spec:?}\nname = {:?}\n",
+            config::SCHEMA_URL,
+            name.to_upper_camel_case()
+        );
         if let Some(url) = base_url {
             toml += &format!("base_url = {url:?}\n");
         }
-        toml += &metadata(&doc, root);
         toml += &layouts(&source, &name.to_kebab_case(), root);
+        let package = metadata(&doc, root);
+        if !package.is_empty() {
+            toml += &format!("\n[package]\n{package}");
+        }
         toml
     };
     let existing: toml::Table = toml.parse()?;
@@ -148,8 +155,14 @@ fn layouts(source: &Source, name: &str, root: &Path) -> String {
     ];
     if let Source::File(_) = source {
         lines.push((
-            format!("push_spec = \"{owner}/{name}-sdks\""),
+            format!("sdks_repo = \"{owner}/{name}-sdks\""),
             "or send the spec to a repository that generates the SDKs itself".to_owned(),
+        ));
+    }
+    if !matches!(source, Source::Url(_)) {
+        lines.push((
+            "push_on = \"release\"".to_owned(),
+            "with sdks_repo or a github: spec, push it on each GitHub release".to_owned(),
         ));
     }
     if !matches!(source, Source::Url(_)) {
@@ -182,7 +195,7 @@ pub fn hub_files(
     release: bool,
     read: impl Fn(&str) -> Result<Option<String>>,
 ) -> Result<Vec<(String, Vec<u8>)>> {
-    if config.push_spec.is_some() {
+    if config.sdks_repo.is_some() {
         return Ok(vec![]);
     }
     let sdks = config.sdks(&[])?;
@@ -443,11 +456,12 @@ fn package_metadata(config: &Config, context: &mut Value) {
             .filter(|v| !v.is_empty())
             .map_or(Value::Null, Value::from)
     };
-    let license = text(&config.license);
+    let license = text(&config.package.license);
     let project = config
+        .package
         .homepage
         .clone()
-        .or_else(|| config.repository.clone());
+        .or_else(|| config.package.repository.clone());
     context["license_url"] = license
         .as_str()
         .filter(|l| {
@@ -459,12 +473,13 @@ fn package_metadata(config: &Config, context: &mut Value) {
             format!("https://spdx.org/licenses/{l}.html").into()
         });
     context["license"] = license;
-    context["repository"] = text(&config.repository);
-    context["homepage"] = text(&config.homepage);
+    context["repository"] = text(&config.package.repository);
+    context["homepage"] = text(&config.package.homepage);
     context["project_url"] = text(&project);
     context["description"] =
         manifest_text(context["description"].as_str().unwrap_or_default()).into();
     let authors: Vec<(String, Option<String>)> = config
+        .package
         .authors
         .iter()
         .map(|a| author_parts(a))

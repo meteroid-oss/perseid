@@ -359,9 +359,9 @@ pub fn sdk(
 
 pub fn load_spec(config: &Config, root: &Path) -> Result<String> {
     ensure!(
-        config.push_spec.is_none(),
-        "the SDKs are generated in {}, which receives the spec (`push_spec`)",
-        config.push_spec.as_deref().unwrap_or_default()
+        config.sdks_repo.is_none(),
+        "the SDKs are generated in {}, which receives the spec (`sdks_repo`)",
+        config.sdks_repo.as_deref().unwrap_or_default()
     );
     match config.source() {
         Source::GitHub { repo, path } => {

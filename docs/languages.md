@@ -61,7 +61,7 @@ Node.js imports, so it runs in browsers, Workers and edge runtimes.
 Needs Python 3.10+. Models are keyword-only dataclasses; an optional field that accepts `null`
 defaults to `UNSET`, so `None` sends `null`. Methods take `extra_headers=` and `timeout=`, in sync
 and async clients. Unions are models holding the discriminator and the variant
-(`Shape(content=Circle(radius=1))`, both tags filled in); `flat_unions = true` in `[python.context]`
+(`Shape(content=Circle(radius=1))`, both tags filled in); `flat_unions = true` in `[python]`
 types them as `Circle | Square` instead. Values told apart by their JSON type, such as expandable
 ids, are `str | Customer` (`expandable_id(value)` gives the id either way). A union of objects is annotated `t.Annotated[Customer | DeletedCustomer | UnknownVariant,
 ObjectUnion(...)]`: unmatched objects are an `UnknownVariant`, and `as_variant(value, Customer)`

@@ -1,64 +1,168 @@
 # Configuration
 
-`perseid init` writes a `perseid.toml` next to your spec:
+`perseid init` writes a `perseid.toml` next to your spec. Every key, annotated (only `spec` and
+`name` are required):
 
 ```toml
-spec = "openapi.json"               # or an https:// URL, JSON or YAML
-name = "Acme"                       # Acme client, `acme` packages
-base_url = "https://api.acme.com"
-license = "MIT"                     # package metadata, from the spec and the git remote
-repository = "https://github.com/acme/acme-sdks"
+#:schema https://raw.githubusercontent.com/meteroid-oss/perseid/main/perseid.schema.json
+spec = "openapi.json"               # path, https:// URL, or github:owner/repo/path (JSON or YAML)
+name = "Acme"                       # any case: "acme-api", "Acme API"... gives AcmeApi, acme_api, acme-api
 
-[rust]                              # generated into ./rust
+# Where the SDKs live: here, in a folder per language, unless one of these is set
+repo = "acme/acme-{lang}"           # one repository per SDK ({lang}: rust, node, python, go, java, dotnet),
+                                    # or "acme/acme-sdks": one repository, a folder per SDK
+# sdks_repo = "acme/acme-sdks"      # or send the spec to a repository generating the SDKs itself
+# push_on = "release"               # with sdks_repo or a github: spec: "change" (default), "release" or "tag"
+# push_tags = "v*"                  # with push_on = "tag": the tags pushing the spec
+# generate = "make openapi.json"    # how the API repository's CI writes the spec, if not committed
+
+# Defaults of every SDK, each also settable in a language table
+base_url = "https://api.acme.com"   # first server of the spec by default
+timeout = 60                        # seconds
+webhooks = false                    # install the Standard Webhooks verifier
+untagged_unions = "json"            # or "best-match", see "Unions of objects"
+header_prefix = "acme"              # SDK headers: acme-idempotency-key...; kebab-case name by default
+user_agent = "acme"                 # User-Agent prefix; kebab-case name by default
+
+# Operations
+internal = false                    # true also generates operations marked x-internal: true
+exclude = ["deleteEverything"]      # operation ids left out
+# only = ["listWidgets"]            # or the only operation ids generated
+
+overrides = ".perseid"              # ejected templates and runtime
+
+[package]                           # written into the manifests `perseid init` creates
+description = "The Acme API client" # "{name} API client" by default
+license = "MIT"                     # SPDX expression
+homepage = "https://acme.com"
+repository = "https://github.com/acme/acme-sdks"
+authors = ["Acme <dev@acme.com>"]
+
+[names]                             # method names by operation id
+listWidgetEvents = "events"
+
+[pagination]                        # or [[pagination]] for several rules
+cursor = "starting_after"
+item_cursor = "id"
+
+[context]                           # exposed to templates as sdk.*
+tagline = "widgets as a service"
+
+[rust]                              # generated into ./rust, crate acme
 [typescript]
 package = "@acme/sdk"
+int64 = "bigint"
 [python]
+flat_unions = true
+[go]
+repo = "acme/acme-go"               # lives in its own repository, module github.com/acme/acme-go
 [java]
 package = "com.acme.sdk"
 [csharp]                            # Acme namespace and NuGet package by default
-[go]
-repo = "acme/acme-go"               # lives in its own repository, module github.com/acme/acme-go
 ```
 
-## Top level
+## Editor completion
+
+The first line points editors to [`perseid.schema.json`](../perseid.schema.json), a JSON Schema
+(draft-07) of every key with its description and allowed values. VS Code's Even Better TOML,
+IntelliJ and other [Taplo](https://taplo.tamasfe.dev)-based editors complete and check
+`perseid.toml` with it; `taplo check perseid.toml` does it in CI.
+
+## Spec and name
 
 | Key | |
 |---|---|
-| `spec` | Path or URL of the OpenAPI document (3.0 or 3.1, JSON or YAML), or `github:owner/repo/path` for a spec another repository pushes here (kept as `openapi.json`, or `.yaml` after its extension) |
-| `repo` | Default repository of every SDK: `"acme/api-{lang}"` gives each its own (`{lang}` is `node`, `python`, `go`, `java`, `rust` or `dotnet`), `"acme/api-sdks"` holds them all, each in a folder named after its language. Without it, SDKs live here |
-| `push_spec` | `owner/name` of a separate SDKs repository this repository sends its spec to, which generates the SDKs from its own `perseid.toml`; the SDK tables here only seed that file when `perseid setup` creates it. See [repository layouts](ci.md#repository-layouts) |
+| `spec` | The OpenAPI document (3.0 or 3.1, JSON or YAML): a path relative to `perseid.toml`, an `http(s)` URL, or `github:owner/repo/path` for a spec another repository pushes here (kept as `openapi.json`, or `.yaml` after its extension, with `.perseid/source.json` naming its commit) |
+| `name` | The client name, in any form: `acme-api`, `acme_api` and `Acme API` all give the `AcmeApi` client, the `acme_api` crate and Python package and the `acme-api` npm package. A name already in UpperCamelCase is kept as written (`AcmeAPI`) |
+
+## Where the SDKs live
+
+See [repository layouts](ci.md#repository-layouts) for the trade-offs.
+
+| Key | |
+|---|---|
+| `repo` | Default repository of every SDK: `"acme/api-{lang}"` gives each its own (`{lang}` is `rust`, `node`, `python`, `go`, `java` or `dotnet`), `"acme/api-sdks"` holds them all, each in a folder named after its language. Without it, SDKs live next to `perseid.toml` |
+| `sdks_repo` | `owner/name` of a separate repository this one sends its spec to, which generates the SDKs from its own `perseid.toml`; the SDK tables here only seed that file when `perseid setup` creates it |
+| `push_on` | When the spec is pushed, with `sdks_repo` here or a `github:` spec in the receiving repository: `"change"` (default) on every push to the default branch changing it, `"release"` on every published GitHub release, `"tag"` on every tag matching `push_tags`. See [spec pushes](ci.md#spec-pushes) |
+| `push_tags` | With `push_on = "tag"`: the tags pushing the spec, as a GitHub Actions glob, `"v*"` by default |
 | `generate` | The command writing the spec in the API repository's CI when it isn't committed, run from its root before pushing the spec |
-| `name` | UpperCamelCase client name; package names derive from it |
-| `base_url`, `header_prefix`, `user_agent`, `version` | Defaults for every SDK |
-| `webhooks` | Install the [webhook verifier](customizing.md#webhooks) |
-| `[names]` | Method names by operation id, over the [resource-style names](#method-names) (as does `x-perseid-name` on an operation) |
+
+## SDK defaults
+
+Each is also a key of the [language tables](#language-tables), which override it for one SDK.
+
+| Key | |
+|---|---|
+| `base_url` | The API base URL clients default to: the spec's first server, by `perseid init` |
 | `timeout` | Default request timeout in seconds, 60 by default |
-| `untagged_unions` | How unions of objects that no property tells apart decode: `json` (default, untyped JSON) or `best-match`; see [unions of objects](#unions-of-objects) |
-| `license`, `repository`, `homepage`, `description`, `authors` | Package metadata written into the manifests `perseid init` creates |
-| `include` | `only-public` (default, skips `x-internal: true`), `public-and-internal` or `only-internal` |
-| `exclude`, `only` | Operation ids to leave out, or to keep exclusively |
-| `overrides` | Directory of ejected templates and runtime, `.perseid` by default |
-| `context` | Table exposed to templates as `sdk.*` |
-| `[pagination]` | [Pagination rules](features.md#pagination) |
+| `webhooks` | `true` installs the [webhook verifier](customizing.md#webhooks) |
+| `untagged_unions` | How unions of objects that no property tells apart decode: `"json"` (default, untyped JSON) or `"best-match"`; see [unions of objects](#unions-of-objects) |
+| `header_prefix` | Prefix of the headers the SDKs send on their own (`acme-idempotency-key`), the kebab-case `name` by default |
+| `user_agent` | Prefix of the `User-Agent` header, the kebab-case `name` by default |
+| `[names]` | Method names by operation id, over the [resource-style names](#method-names) (as does `x-perseid-name` on an operation) |
+| `[context]` | Values exposed to templates as `sdk.*` |
+
+## Operations
+
+Every operation is generated, except those marked `x-internal: true`.
+
+| Key | |
+|---|---|
+| `internal` | `true` also generates the `x-internal` operations |
+| `exclude` | Operation ids left out of every SDK; a language table's `exclude` leaves some out of that SDK only |
+| `only` | The operation ids generated, every other one left out (`x-internal` or not) |
+| `[pagination]` | [Pagination rules](features.md#pagination), one table or an array of tables |
+
+## Package metadata
+
+`[package]` holds what the manifests `perseid init` creates say about the packages. `init` fills
+it from the spec's `info` (summary or description, license, contact) and the `origin` git remote.
+
+| Key | |
+|---|---|
+| `description` | One line, `"{name} API client"` by default |
+| `license` | SPDX license expression |
+| `homepage` | Project website |
+| `repository` | URL of the source repository |
+| `authors` | `"Name <email>"` of each author |
+
+Versions aren't configured: each SDK's own manifest (`Cargo.toml`, `package.json`...) holds its
+version, which [release-please](ci.md#releases) bumps.
 
 ## Language tables
 
-Every table takes `path`, `repo`, `package`, `version`, `base_url`, `header_prefix`, `user_agent`,
-`webhooks`, `names`, `timeout`, `untagged_unions`, `exclude` (operation ids left out of that SDK
-only) and a `context` table. A table with
-`repo = "owner/name"` generates into that repository, checked out under `.perseid/repos`, at its
-root, or in a folder named after the language when several SDKs share the repository; `path`
-overrides either. Both override the top-level `repo`.
+`[rust]`, `[typescript]`, `[python]`, `[go]`, `[java]` and `[csharp]` each add an SDK, generated
+into a folder named after the language unless set otherwise. Every table takes:
 
-Language-specific keys:
+| Key | |
+|---|---|
+| `path` | Output directory, relative to the repository the SDK lives in |
+| `repo` | `owner/name` of a GitHub repository to generate into, over the top-level `repo`: checked out under `.perseid/repos`, the SDK at its root, or in a folder named after the language when several SDKs share the repository |
+| `package` | Crate, npm package, Python package, Go package, Java package or C# root namespace and NuGet package; derived from `name` by default |
+| `base_url`, `timeout`, `webhooks`, `untagged_unions`, `header_prefix`, `user_agent`, `names`, `context` | Over the [SDK defaults](#sdk-defaults) |
+| `exclude` | Operation ids left out of this SDK only |
 
-- `[go]`: `module`.
-- `[typescript]`: `exports`, modules re-exported from the entry point; `int64` = `"number"`
-  (default, exact up to 2^53), `"bigint"` or `"string"`.
-- `[python.context]`: `flat_unions = true` types unions as `Circle | Square` instead of a wrapper model.
+And their own keys:
 
-`perseid init` fills the package metadata from the spec's `info` (license, contact,
-description) and the `origin` git remote.
+| Table | Key | |
+|---|---|---|
+| `[typescript]` | `exports` | Modules re-exported from the entry point |
+| `[typescript]` | `int64` | TypeScript type of int64 values: `"number"` (default, exact up to 2^53), `"bigint"` or `"string"` |
+| `[python]` | `flat_unions` | `true` types discriminated unions as `Circle \| Square` instead of a wrapper model |
+| `[go]` | `module` | Module path, `github.com/{repo}/{path}` of the repository the SDK lives in by default |
+
+## Renamed and removed keys
+
+A key of an earlier version fails with what to write instead:
+
+| Before | Now |
+|---|---|
+| `push_spec = "acme/sdks"` | `sdks_repo = "acme/sdks"` |
+| `description`, `license`, `homepage`, `repository`, `authors` | the same keys under `[package]` |
+| `include = "public-and-internal"` | `internal = true` |
+| `include = "only-internal"` | `only = [...]` listing them |
+| `version`, at the top or in a language table | the SDK's own manifest, bumped by release-please |
+| `[python.context] flat_unions = true` | `[python] flat_unions = true` |
 
 ## Method names
 

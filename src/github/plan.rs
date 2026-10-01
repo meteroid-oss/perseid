@@ -16,11 +16,11 @@ use super::{
     app,
     bootstrap::{self, File, Outcome},
     git, join,
-    layout::{self, SDKS_WORKFLOW, set_top},
+    layout::{self, SDKS_WORKFLOW, set_in, set_top},
     link::{self, Push},
     relative, secrets, toplevel, workflow,
 };
-use crate::config::{self, Config, Source};
+use crate::config::{self, Config, PushOn, Source};
 
 pub const PUSH_WORKFLOW: &str = ".github/workflows/perseid-push.yml";
 const OWNED: &str = "# Written by `perseid";
@@ -109,6 +109,7 @@ struct Hub {
 pub struct Link {
     pub api_repo: String,
     pub sdks_repo: String,
+    pub on: PushOn,
 }
 
 pub struct Plan {
@@ -189,7 +190,7 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
         hub_config: toml::from_str(&text)?,
     };
     let spec = config.spec.clone();
-    let hub = match (Source::parse(&spec)?, config.push_spec.clone()) {
+    let hub = match (Source::parse(&spec)?, config.sdks_repo.clone()) {
         (Source::File(file), Some(sdks_repo)) => {
             let spec_path = join(&dir, file);
             let tracked = git(&top, &["ls-files", "--error-unmatch", "--", &spec_path]).is_ok();
@@ -248,6 +249,7 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
             plan.link = Some(Link {
                 api_repo: here.clone(),
                 sdks_repo: sdks_repo.clone(),
+                on: config.push_on.unwrap_or_default(),
             });
             let hub = Hub {
                 repo: sdks_repo.clone(),
@@ -262,6 +264,8 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
             plan_hub(cx, &mut plan, hub, &here_info)?;
             let push = Push {
                 branch: &here_base,
+                on: config.push_on.unwrap_or_default(),
+                tags: config.push_tags(),
                 spec: &spec_path,
                 generate: config.generate.as_deref(),
                 sdks_repo: &sdks_repo,
@@ -312,7 +316,12 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
             plan.link = Some(Link {
                 api_repo: api_repo.clone(),
                 sdks_repo: here.clone(),
+                on: config.push_on.unwrap_or_default(),
             });
+            let (on, tags) = (
+                config.push_on.unwrap_or_default(),
+                config.push_tags().to_owned(),
+            );
             let hub = Hub {
                 repo: here.clone(),
                 info: Some(here_info.clone()),
@@ -327,6 +336,8 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
             plan_hub(cx, &mut plan, hub, &here_info)?;
             let push = Push {
                 branch: &api_base,
+                on,
+                tags: &tags,
                 spec: path,
                 generate: generate.as_deref(),
                 sdks_repo: &here,
@@ -376,7 +387,7 @@ fn unused_folders(plan: &mut Plan, config: &Config, root: &Path) -> Result<()> {
     let unused: Vec<String> = config
         .sdks(&[])?
         .iter()
-        .filter(|s| config.push_spec.is_some() || s.repo.is_some())
+        .filter(|s| config.sdks_repo.is_some() || s.repo.is_some())
         .filter(|s| root.join(s.language).is_dir())
         .map(|s| format!("{}/", s.language))
         .collect();
@@ -429,7 +440,7 @@ fn visibility(info: &Value) -> String {
 fn admin(info: &Value, repo: &str, sdks: &str, login: &str) -> Result<()> {
     if info["permissions"]["admin"] == false {
         bail!(
-            "{login} isn't an admin of {repo}, which must get a secret, a variable and a workflow pushing its spec to {sdks}: ask an admin of {repo} to run `perseid setup` here, or in {repo} with `push_spec = \"{sdks}\"` in its perseid.toml"
+            "{login} isn't an admin of {repo}, which must get a secret, a variable and a workflow pushing its spec to {sdks}: ask an admin of {repo} to run `perseid setup` here, or in {repo} with `sdks_repo = \"{sdks}\"` in its perseid.toml"
         );
     }
     Ok(())
@@ -446,20 +457,22 @@ fn seed(api_toml: &str, spec: &str, sdks_repo: &str) -> String {
             "# Where the SDKs live",
             "# See https://github.com/meteroid-oss",
             "# repo =",
-            "# push_spec =",
+            "# sdks_repo =",
+            "# push_on =",
             "# generate =",
         ]
         .iter()
         .any(|e| line.starts_with(e));
         let blank = line.trim().is_empty() && (out.is_empty() || out.ends_with("\n\n"));
-        if blank || top && (example || ["push_spec", "repository"].contains(&key)) {
+        if blank || top && (example || key == "sdks_repo") {
             continue;
         }
         out += line;
         out.push('\n');
     }
-    let out = set_top(
+    let out = set_in(
         &out,
+        "package",
         "repository",
         &format!("https://github.com/{sdks_repo}"),
     );
@@ -479,6 +492,7 @@ fn seeds(
         repo: repo.to_owned(),
         path: path.to_owned(),
         sha: sha.filter(|_| content.is_some()),
+        tag: None,
     };
     let mut files = vec![File {
         path: join(dir, link::SOURCE),
@@ -1033,8 +1047,13 @@ fn plan_link(
         }
         pending.push(file);
     }
+    let when = match push.on {
+        PushOn::Change => format!("when the spec changes on `{api_base}`"),
+        PushOn::Release => "on each published release".to_owned(),
+        PushOn::Tag => format!("on each tag matching `{}`", push.tags),
+    };
     let summary = format!(
-        "when the spec changes on `{api_base}`, `{PUSH_WORKFLOW}` pushes it to {sdks_repo} with the {} deploy key, which can write to that repository only.",
+        "{when}, `{PUSH_WORKFLOW}` pushes the spec to {sdks_repo} with the {} deploy key, which can write to that repository only.",
         link::SECRET
     );
     plan_commit(

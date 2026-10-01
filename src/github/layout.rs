@@ -55,25 +55,54 @@ pub fn targets(sdks: &[Sdk], hub: &str) -> Vec<String> {
 
 /// Sets a top-level `key` of a TOML document, keeping every other line as written.
 pub fn set_top(toml: &str, key: &str, value: &str) -> String {
+    set_in(toml, "", key, value)
+}
+
+/// Sets `key` of `table` (the top level when empty), adding the table before the others if
+/// missing, and keeping every other line as written.
+pub fn set_in(toml: &str, table: &str, key: &str, value: &str) -> String {
     let line = format!("{key} = {}", toml::Value::String(value.into()));
     let mut lines: Vec<String> = toml.lines().map(str::to_owned).collect();
-    let end = lines
+    let header = |l: &String| l.trim_start().starts_with('[');
+    let first_table = lines.iter().position(header).unwrap_or(lines.len());
+    let start = match table {
+        "" => 0,
+        table => match lines.iter().position(|l| l.trim() == format!("[{table}]")) {
+            Some(at) => at + 1,
+            None => {
+                let new = [format!("[{table}]"), line];
+                match first_table == lines.len() {
+                    true => lines.extend([String::new()].into_iter().chain(new)),
+                    false => {
+                        let new = new.into_iter().chain([String::new()]);
+                        lines.splice(first_table..first_table, new);
+                    }
+                }
+                return joined(toml, &lines);
+            }
+        },
+    };
+    let end = lines[start..]
         .iter()
-        .position(|l| l.trim_start().starts_with('['))
-        .unwrap_or(lines.len());
-    let existing = lines[..end].iter().position(|l| {
+        .position(header)
+        .map_or(lines.len(), |i| start + i);
+    let existing = lines[start..end].iter().position(|l| {
         l.strip_prefix(key)
             .is_some_and(|rest| rest.trim_start().starts_with('='))
     });
     match existing {
-        Some(i) => lines[i] = line,
+        Some(i) => lines[start + i] = line,
         None => {
-            let last = lines[..end]
+            let last = lines[start..end]
                 .iter()
                 .rposition(|l| !l.trim().is_empty() && !l.trim_start().starts_with('#'));
-            lines.insert(last.map_or(0, |i| i + 1), line);
+            lines.insert(last.map_or(start, |i| start + i + 1), line);
         }
     }
+    joined(toml, &lines)
+}
+
+fn joined(toml: &str, lines: &[String]) -> String {
     let mut out = lines.join("\n");
     if toml.ends_with('\n') {
         out.push('\n');
@@ -95,6 +124,32 @@ mod tests {
         assert_eq!(
             set_top("name = \"A\"\n", "repository", "r"),
             "name = \"A\"\nrepository = \"r\"\n"
+        );
+    }
+
+    #[test]
+    fn table_keys_are_set_in_their_table_created_if_missing() {
+        let toml = "name = \"A\"\n\n[package]\nlicense = \"MIT\"\nrepository = \"a\"\n\n[go]\n";
+        assert_eq!(
+            set_in(toml, "package", "repository", "b"),
+            toml.replace("\"a\"", "\"b\"")
+        );
+        assert_eq!(
+            set_in("name = \"A\"\n\n[go]\n", "package", "repository", "b"),
+            "name = \"A\"\n\n[package]\nrepository = \"b\"\n\n[go]\n"
+        );
+        assert_eq!(
+            set_in("name = \"A\"\n", "package", "license", "MIT"),
+            "name = \"A\"\n\n[package]\nlicense = \"MIT\"\n"
+        );
+        assert_eq!(
+            set_in(
+                "[package]\nlicense = \"MIT\"\n[go]\n",
+                "package",
+                "homepage",
+                "h"
+            ),
+            "[package]\nlicense = \"MIT\"\nhomepage = \"h\"\n[go]\n"
         );
     }
 

@@ -576,7 +576,6 @@ impl Operation {
         let include_operation = match include_mode {
             IncludeMode::OnlyPublic => !x_internal,
             IncludeMode::PublicAndInternal => true,
-            IncludeMode::OnlyInternal => x_internal,
             IncludeMode::OnlySpecified => specified_operations.contains(&op_id),
         };
         if !include_operation || excluded_operations.contains(&op_id) {

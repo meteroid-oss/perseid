@@ -7,7 +7,10 @@ use std::{
     process::Command,
 };
 
-use perseid::github::{Push, push_workflow};
+use perseid::{
+    config::PushOn,
+    github::{Push, push_workflow},
+};
 use serde_json::Value;
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -104,8 +107,15 @@ fn seed(repos: &Repos, sha: Option<&str>) {
 
 /// Runs the push step at `sha` of the API repository, returning its output.
 fn push(repos: &Repos, sha: &str) -> String {
+    push_at(repos, sha, "")
+}
+
+/// Runs the push step at `sha`, triggered by the release or tag `tag` when not empty.
+fn push_at(repos: &Repos, sha: &str, tag: &str) -> String {
     let yaml = push_workflow(&Push {
         branch: "main",
+        on: PushOn::Release,
+        tags: "v*",
         spec: "openapi.json",
         generate: None,
         sdks_repo: "acme/api-sdks",
@@ -127,6 +137,7 @@ fn push(repos: &Repos, sha: &str) -> String {
         .current_dir(&repos.api)
         .env("SPEC", step["env"]["SPEC"].as_str().unwrap())
         .env("SNAPSHOT", step["env"]["SNAPSHOT"].as_str().unwrap())
+        .env("REF", tag)
         .env("KNOWN_HOSTS", step["env"]["KNOWN_HOSTS"].as_str().unwrap())
         .env("SDKS_REPO", "acme/api-sdks")
         .env(
@@ -190,13 +201,17 @@ fn newer_specs_are_pushed_and_older_or_diverged_ones_skipped() {
 
     let out = push(&repos, d);
     assert!(
-        out.contains(&format!("Pushed the spec of {d} to acme/api-sdks")),
+        out.contains(&format!(
+            "Pushed the spec of acme/api@{} to acme/api-sdks",
+            &d[..7]
+        )),
         "{out}"
     );
     assert_eq!(sdks_file(&repos, "openapi.json"), "{\"v\": 2}");
     let source: Value = serde_json::from_str(&sdks_file(&repos, ".perseid/source.json")).unwrap();
     assert_eq!(source["sha"], d.as_str());
     assert_eq!(source["repo"], "acme/api");
+    assert!(source.get("ref").is_none(), "{source}");
     let message = git(&repos.sdks, &["log", "-1", "--format=%s%n%an", "main"]);
     assert_eq!(
         message,
@@ -250,6 +265,8 @@ fn specs_never_synced_are_pushed() {
 fn generated_specs_are_written_before_being_pushed() {
     let yaml = push_workflow(&Push {
         branch: "main",
+        on: PushOn::Change,
+        tags: "v*",
         spec: "api/openapi.json",
         generate: Some("cargo run --bin openapi > api/openapi.json"),
         sdks_repo: "acme/api-sdks",
@@ -268,4 +285,77 @@ fn generated_specs_are_written_before_being_pushed() {
         "cargo run --bin openapi > api/openapi.json\n"
     );
     assert_eq!(workflow["concurrency"]["cancel-in-progress"], false);
+}
+
+#[test]
+fn releases_push_their_tag_and_record_it() {
+    let (repos, shas) = repos();
+    let [_, b, _, d, e] = shas.as_slice() else {
+        unreachable!()
+    };
+    seed(&repos, Some(b));
+    let out = push_at(&repos, d, "v1.4.0");
+    let at = format!("acme/api@v1.4.0 ({})", &d[..7]);
+    assert!(
+        out.contains(&format!("Pushed the spec of {at} to acme/api-sdks")),
+        "{out}"
+    );
+    let source: Value = serde_json::from_str(&sdks_file(&repos, ".perseid/source.json")).unwrap();
+    assert_eq!(
+        (source["sha"].as_str(), source["ref"].as_str()),
+        (Some(d.as_str()), Some("v1.4.0"))
+    );
+    let message = git(&repos.sdks, &["log", "-1", "--format=%s", "main"]);
+    assert_eq!(message, format!("spec: {at}"));
+
+    let out = push_at(&repos, e, "v0.9.0-fork");
+    assert!(
+        out.contains("doesn't descend from: skipped"),
+        "tags off the default branch's history are skipped: {out}"
+    );
+}
+
+/// The workflow of each `push_on`, also written for actionlint.
+fn workflow(on: PushOn, name: &str) -> Value {
+    let yaml = push_workflow(&Push {
+        branch: "main",
+        on,
+        tags: "api-v*",
+        spec: "openapi.json",
+        generate: None,
+        sdks_repo: "acme/api-sdks",
+        snapshot: "openapi.json",
+    });
+    fs::write(Path::new(env!("CARGO_TARGET_TMPDIR")).join(name), &yaml).unwrap();
+    serde_norway::from_str(&yaml).unwrap()
+}
+
+#[test]
+fn specs_are_pushed_on_changes_releases_or_tags() {
+    let change = workflow(PushOn::Change, "perseid-push-change.yml");
+    assert_eq!(change["on"]["push"]["branches"][0], "main");
+    assert_eq!(change["on"]["push"]["paths"][0], "openapi.json");
+    assert_eq!(change["jobs"]["push"]["if"], "github.ref_name == 'main'");
+
+    let release = workflow(PushOn::Release, "perseid-push-release.yml");
+    assert_eq!(release["on"]["release"]["types"][0], "published");
+    assert!(release["on"].get("push").is_none());
+    let guard = "startsWith(github.ref, 'refs/tags/') || github.ref_name == 'main'";
+    assert_eq!(release["jobs"]["push"]["if"], guard);
+
+    let tag = workflow(PushOn::Tag, "perseid-push-tag.yml");
+    assert_eq!(tag["on"]["push"]["tags"][0], "api-v*");
+    assert!(tag["on"]["push"].get("paths").is_none());
+    assert_eq!(tag["jobs"]["push"]["if"], guard);
+
+    for workflow in [&change, &release, &tag] {
+        assert!(workflow["on"].get("workflow_dispatch").is_some());
+        let step = &workflow["jobs"]["push"]["steps"][1];
+        assert!(
+            step["env"]["REF"]
+                .as_str()
+                .unwrap()
+                .contains("github.ref_name")
+        );
+    }
 }

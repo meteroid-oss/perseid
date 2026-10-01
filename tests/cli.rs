@@ -961,7 +961,7 @@ fn typescript_int64_is_opt_in() {
     )
     .unwrap();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
-    assert!(!ok && out.contains("`int64` must be"), "{out}");
+    assert!(!ok && out.contains("unknown variant `long`"), "{out}");
 
     fs::write(
         &config,
@@ -1152,6 +1152,18 @@ fn init_fills_package_metadata_from_the_spec() {
     assert!(ok, "{out}");
     let read = |path: &str| fs::read_to_string(dir.path().join(path)).unwrap();
     let config = read("perseid.toml");
+    assert!(
+        config.starts_with(
+            "#:schema https://raw.githubusercontent.com/meteroid-oss/perseid/main/perseid.schema.json\n"
+        ),
+        "{config}"
+    );
+    let table: toml::Table = config.parse().unwrap();
+    assert_eq!(
+        table["package"]["license"].as_str(),
+        Some("MIT"),
+        "{config}"
+    );
     for line in [
         "description = \"The Petstore API.\"",
         "license = \"MIT\"",
