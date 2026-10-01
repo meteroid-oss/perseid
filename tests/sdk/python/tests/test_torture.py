@@ -29,11 +29,10 @@ def generate(name: str, python: str = "", spec: str | None = None) -> object:
     else:
         (project / "openapi.yaml").write_text(spec)
     (project / "perseid.toml").write_text(
-        f'spec = "openapi.yaml"\nname = "{name.title()}"\n'
+        f'spec = "openapi.yaml"\nname = "{name.title()}"\nsdks = ["python"]\n'
         f'base_url = "https://torture.test/v1"\n[python]\n{python}'
     )
-    for command in (["init"], ["generate"]):
-        subprocess.run(["perseid", *command], cwd=project, check=True, capture_output=True)
+    subprocess.run(["perseid", "generate"], cwd=project, check=True, capture_output=True)
     sys.path.insert(0, str(project / "python"))
     importlib.import_module(f"{name}.models")
     return importlib.import_module(name)
