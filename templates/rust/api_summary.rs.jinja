@@ -29,8 +29,7 @@ pub type ErrorBody = crate::models::{{ api.default_error | to_upper_camel_case }
 {% else -%}
 /// The error body of the API, which documents none.
 pub type ErrorBody = serde_json::Value;
-{% endif -%}
-{% if sdk.futures_core %}
+{% endif %}
 
 impl<T: serde::de::DeserializeOwned> futures_core::Stream for Paginator<'_, T> {
     type Item = Result<T, crate::error::Error>;
@@ -42,7 +41,6 @@ impl<T: serde::de::DeserializeOwned> futures_core::Stream for Paginator<'_, T> {
         self.get_mut().poll_item(cx)
     }
 }
-{% endif %}
 
 {% for resource in api.resources -%}
     mod {{ resource.name | to_snake_case }};

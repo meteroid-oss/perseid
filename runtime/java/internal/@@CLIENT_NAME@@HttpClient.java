@@ -57,45 +57,6 @@ public class @@CLIENT_NAME@@HttpClient {
     private final List<List<String>> security;
 
     public @@CLIENT_NAME@@HttpClient(
-            HttpUrl baseUrl, Map<String, String> defaultHeaders, List<Long> retrySchedule) {
-        this(baseUrl, defaultHeaders, retrySchedule, List.of());
-    }
-
-    public @@CLIENT_NAME@@HttpClient(
-            HttpUrl baseUrl,
-            Map<String, String> defaultHeaders,
-            List<Long> retrySchedule,
-            List<Interceptor> interceptors) {
-        this(
-                baseUrl,
-                defaultHeaders,
-                retrySchedule,
-                okHttpClient(null, @@CLIENT_NAME@@Options.DEFAULT_TIMEOUT, interceptors));
-    }
-
-    public @@CLIENT_NAME@@HttpClient(
-            HttpUrl baseUrl,
-            Map<String, String> defaultHeaders,
-            List<Long> retrySchedule,
-            OkHttpClient client) {
-        this(baseUrl, defaultHeaders, retrySchedule, client, null);
-    }
-
-    public @@CLIENT_NAME@@HttpClient(
-            HttpUrl baseUrl,
-            Map<String, String> defaultHeaders,
-            List<Long> retrySchedule,
-            List<Interceptor> interceptors,
-            @@CLIENT_NAME@@Auth auth) {
-        this(
-                baseUrl,
-                defaultHeaders,
-                retrySchedule,
-                okHttpClient(null, @@CLIENT_NAME@@Options.DEFAULT_TIMEOUT, interceptors),
-                auth);
-    }
-
-    public @@CLIENT_NAME@@HttpClient(
             HttpUrl baseUrl,
             Map<String, String> defaultHeaders,
             List<Long> retrySchedule,
@@ -253,15 +214,7 @@ public class @@CLIENT_NAME@@HttpClient {
             return this;
         }
 
-        public <T> T execute(Class<T> type) throws IOException, ApiException {
-            return execute(responseType(type));
-        }
-
-        public <T> T execute(JavaType type) throws IOException, ApiException {
-            return readJson(sendRequest(client), type);
-        }
-
-        public byte[] executeBytes() throws IOException, ApiException {
+        private byte[] executeBytes() throws IOException, ApiException {
             try (Response response = sendRequest(client)) {
                 if (!response.isSuccessful()) {
                     throw error(response);
@@ -271,7 +224,7 @@ public class @@CLIENT_NAME@@HttpClient {
         }
 
         /** Opens a {@code text/event-stream} response; read and call timeouts do not apply. */
-        public EventStream executeEventStream() throws IOException, ApiException {
+        private EventStream executeEventStream() throws IOException, ApiException {
             OkHttpClient.Builder streaming = client.newBuilder();
             if (options != null && options.getTimeout() != null) {
                 withTimeout(streaming, options.getTimeout());
@@ -303,7 +256,7 @@ public class @@CLIENT_NAME@@HttpClient {
 
         public <T> T send(JavaType type) throws ApiException {
             try {
-                return execute(type);
+                return readJson(sendRequest(client), type);
             } catch (IOException e) {
                 throw transportError(e);
             }
@@ -354,87 +307,6 @@ public class @@CLIENT_NAME@@HttpClient {
         private ApiException error(Response response) throws IOException {
             return @@CLIENT_NAME@@HttpClient.this.error(response, errors);
         }
-    }
-
-    /** @deprecated internal, use {@link #call}. */
-    @Deprecated
-    public <Req, Res> Res executeRequest(
-            String method, HttpUrl url, Headers headers, Req reqBody, Class<Res> responseClass)
-            throws ApiException, IOException {
-        return call(method, url).headers(headers).json(reqBody).execute(responseClass);
-    }
-
-    /** @deprecated internal, use {@link #call}. */
-    @Deprecated
-    public <Req, Res> Res executeRequest(
-            String method, HttpUrl url, Headers headers, Req reqBody, JavaType responseType)
-            throws ApiException, IOException {
-        return call(method, url).headers(headers).json(reqBody).execute(responseType);
-    }
-
-    /** @deprecated internal, use {@link #call}. */
-    @Deprecated
-    public <Req, Res> Res executeFormRequest(
-            String method,
-            HttpUrl url,
-            Headers headers,
-            Req reqBody,
-            Class<Res> responseClass,
-            Collection<String> deepObject,
-            Collection<String> unexploded)
-            throws ApiException, IOException {
-        return call(method, url)
-                .headers(headers)
-                .form(reqBody, deepObject, unexploded)
-                .execute(responseClass);
-    }
-
-    /** @deprecated internal, use {@link #call}. */
-    @Deprecated
-    public <Req, Res> Res executeFormRequest(
-            String method,
-            HttpUrl url,
-            Headers headers,
-            Req reqBody,
-            JavaType responseType,
-            Collection<String> deepObject,
-            Collection<String> unexploded)
-            throws ApiException, IOException {
-        return call(method, url)
-                .headers(headers)
-                .form(reqBody, deepObject, unexploded)
-                .execute(responseType);
-    }
-
-    /** @deprecated internal, use {@link #call}. */
-    @Deprecated
-    public <Req> byte[] executeBinaryRequest(
-            String method, HttpUrl url, Headers headers, Req reqBody)
-            throws ApiException, IOException {
-        return call(method, url).headers(headers).json(reqBody).executeBytes();
-    }
-
-    /** @deprecated internal, use {@link #call}. */
-    @Deprecated
-    public <Res> Res executeBodyRequest(
-            String method, HttpUrl url, Headers headers, RequestBody body, Class<Res> responseClass)
-            throws ApiException, IOException {
-        return call(method, url).headers(headers).body(body).execute(responseClass);
-    }
-
-    /** @deprecated internal, use {@link #call}. */
-    @Deprecated
-    public <Res> Res executeBodyRequest(
-            String method, HttpUrl url, Headers headers, RequestBody body, JavaType responseType)
-            throws ApiException, IOException {
-        return call(method, url).headers(headers).body(body).execute(responseType);
-    }
-
-    /** @deprecated internal, use {@link #call}. */
-    @Deprecated
-    public EventStream executeEventStream(String method, HttpUrl url, Headers headers)
-            throws ApiException, IOException {
-        return call(method, url).headers(headers).executeEventStream();
     }
 
     private RequestBody formBody(
@@ -505,15 +377,10 @@ public class @@CLIENT_NAME@@HttpClient {
                 error =
                         code >= 500
                                 ? new InternalServerException(message, code, body)
-                                : new ApiException(message, code, body, objectMapper);
+                                : new ApiException(message, code, body);
         }
-        // An ApiException scaffolded by an older version implements neither.
-        if (error instanceof Utils.WithResponseHeaders) {
-            ((Utils.WithResponseHeaders) error).setResponseHeaders(response.headers());
-        }
-        if (error instanceof Utils.WithError) {
-            ((Utils.WithError) error).setError(errorBody(body, code, errors));
-        }
+        error.setResponseHeaders(response.headers());
+        error.setError(errorBody(body, code, errors));
         return error;
     }
 

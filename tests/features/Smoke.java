@@ -2,8 +2,8 @@ import com.features.Features;
 import com.features.FeaturesOptions;
 import com.features.Paginator;
 import com.features.api.Streaming;
-import com.features.api.StreamingStreamEventsOptions;
-import com.features.api.WidgetsListWidgetEventsOptions;
+import com.features.api.StreamingRetrieveEventsStreamOptions;
+import com.features.api.WidgetsListEventsOptions;
 import com.features.api.WireBetaSearchOptions;
 import com.features.api.WireSearchOptions;
 import com.features.exceptions.ApiException;
@@ -54,26 +54,26 @@ public class Smoke {
 
     public static void main(String[] args) throws Exception {
         Features client = new Features("tok", options());
-        expect(client.getAccount().health().getStatus(), "||");
-        expect(client.getAccount().machineStatus().getStatus(), "Bearer tok||");
-        expect(ids(client.getWidgets().listWidgetsIter(), Widget::getId), List.of("w1", "w2", "w3"));
-        WidgetsListWidgetEventsOptions events = new WidgetsListWidgetEventsOptions();
+        expect(client.getAccount().retrieveHealth().getStatus(), "||");
+        expect(client.getAccount().retrieveMachine().getStatus(), "Bearer tok||");
+        expect(ids(client.getWidgets().listIter(), Widget::getId), List.of("w1", "w2", "w3"));
+        WidgetsListEventsOptions events = new WidgetsListEventsOptions();
         events.setKind("created");
-        expect(ids(client.getWidgets().listWidgetEventsIter("w1", events), Event::getId), List.of("e1", "e2", "e3"));
-        expect(ids(client.getGadgets().listGadgetsIter(), Gadget::getId), List.of("g1", "g2", "g3"));
-        expect(ids(client.getRecords().listRecordsIter(), Entry::getId), List.of("r1", "r2", "r3"));
+        expect(ids(client.getWidgets().listEventsIter("w1", events), Event::getId), List.of("e1", "e2", "e3"));
+        expect(ids(client.getGadgets().listIter(), Gadget::getId), List.of("g1", "g2", "g3"));
+        expect(ids(client.getRecords().listIter(), Entry::getId), List.of("r1", "r2", "r3"));
 
         FeaturesOptions basic = options();
         basic.setBasicAuth("u", "p");
-        expect(new Features(null, basic).getAccount().createSession().getStatus(), "Basic dTpw||");
+        expect(new Features(null, basic).getAccount().session().getStatus(), "Basic dTpw||");
         FeaturesOptions provided = options();
         provided.setTokenProvider(() -> "fresh");
-        expect(new Features(null, provided).getAccount().machineStatus().getStatus(), "Bearer fresh||");
+        expect(new Features(null, provided).getAccount().retrieveMachine().getStatus(), "Bearer fresh||");
         FeaturesOptions keyed = options();
         keyed.setApiKeys(Map.of("api_key", "k"));
-        expect(ids(new Features(null, keyed).getWidgets().listWidgetsIter(), Widget::getId), List.of("w1", "w2", "w3"));
+        expect(ids(new Features(null, keyed).getWidgets().listIter(), Widget::getId), List.of("w1", "w2", "w3"));
         try {
-            new Features(null, options()).getWidgets().listWidgetsIter().iterator().hasNext();
+            new Features(null, options()).getWidgets().listIter().iterator().hasNext();
             throw new AssertionError("expected an authentication error");
         } catch (RuntimeException expected) {
             // Checked (edition 1) API errors are wrapped, unchecked ones thrown as they are.
@@ -81,9 +81,9 @@ public class Smoke {
             expect(((ApiException) error).getCode(), 401);
         }
 
-        StreamingStreamEventsOptions topic = new StreamingStreamEventsOptions();
+        StreamingRetrieveEventsStreamOptions topic = new StreamingRetrieveEventsStreamOptions();
         topic.setTopic("news");
-        try (EventStream stream = client.getStreaming().streamEvents(topic)) {
+        try (EventStream stream = client.getStreaming().retrieveEventsStream(topic)) {
             expect(
                     stream.stream().collect(Collectors.toList()),
                     List.of(
@@ -91,7 +91,7 @@ public class Smoke {
                             new SseEvent("message", "line1\nline2", "1", null),
                             new SseEvent("message", "{\"n\": 3}", "3", Duration.ofMillis(1500))));
         }
-        Streaming.UploadFileBody body = new Streaming.UploadFileBody();
+        Streaming.CreateFileBody body = new Streaming.CreateFileBody();
         body.setFile(Upload.of(bytes("hello")).withFilename("a.txt").withContentType("text/plain"));
         body.setName("doc");
         body.setCount(2);
@@ -100,11 +100,11 @@ public class Smoke {
         body.setMeta(meta);
         body.setTags(List.of("a", "b"));
         expect(
-                client.getStreaming().uploadFile(body).getStatus(),
+                client.getStreaming().createFile(body).getStatus(),
                 "count=::2;file=a.txt:text/plain:hello;meta=:application/json:{\"status\":\"ok\"};name=::doc;tags=::a;tags=::b");
-        expect(client.getStreaming().uploadContent("f1", Upload.of(bytes("raw"))).getStatus(), "application/octet-stream:raw");
+        expect(client.getStreaming().updateFileContent("f1", Upload.of(bytes("raw"))).getStatus(), "application/octet-stream:raw");
         Upload streamed = Upload.of(new ByteArrayInputStream(bytes("streamed")), -1);
-        expect(client.getStreaming().uploadContent("f1", streamed).getStatus(), "application/octet-stream:streamed");
+        expect(client.getStreaming().updateFileContent("f1", streamed).getStatus(), "application/octet-stream:streamed");
 
         WireSearchOptions search =
                 new WireSearchOptions()
@@ -135,7 +135,7 @@ public class Smoke {
                         + "&shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b");
         WireBetaSearchOptions beta = new WireBetaSearchOptions().limit(2).features("x,y");
         expect(client.getWire().betaSearch(beta).getStatus(), "beta=true&limit=2|features=x,y");
-        expect(client.getWire().putImage("42", Upload.of(bytes("png"))).getStatus(), "42:image/png:png");
+        expect(client.getWire().updateImage("42", Upload.of(bytes("png"))).getStatus(), "42:image/png:png");
         System.out.println("java smoke test passed");
     }
 }

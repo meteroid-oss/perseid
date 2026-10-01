@@ -50,7 +50,7 @@ public class HttpTests
     {
         var (client, server) = Client(_ => Reply(HttpStatusCode.OK, ThingJson));
         using var _ = client;
-        var thing = await client.Things.UpdateThingAsync("a/b", new ThingPatch { Count = 9007199254740993L });
+        var thing = await client.Things.UpdateAsync("a/b", new ThingPatch { Count = 9007199254740993L });
         Assert.Equal("/v1/things/a%2Fb", server.Seen[0].Request.RequestUri!.AbsolutePath);
         Assert.Equal("""{"count":9007199254740993}""", server.Seen[0].Body);
         Assert.Equal("t1", thing.Id);
@@ -61,7 +61,7 @@ public class HttpTests
     {
         var (client, server) = Client(_ => Reply(HttpStatusCode.OK, """{"data":[]}"""));
         using var _ = client;
-        await client.Things.ListThingsAsync(
+        await client.Things.ListAsync(
             new()
             {
                 Ids = ["a", "b"],
@@ -88,13 +88,13 @@ public class HttpTests
         var (client, server) = Client(_ => Reply(HttpStatusCode.Created, ThingJson));
         using var _ = client;
         var body = new ThingCreate { Name = "n", Kind = Kind.Alpha };
-        await client.Things.CreateThingAsync(body, new() { IdempotencyKey = "mine" });
-        await client.Things.CreateThingAsync(
+        await client.Things.CreateAsync(body, new() { IdempotencyKey = "mine" });
+        await client.Things.CreateAsync(
             body,
             requestOptions: new() { Headers = { ["IDEMPOTENCY-KEY"] = "theirs" } }
         );
-        await client.Things.CreateThingAsync(body, requestOptions: new() { IdempotencyKey = "option" });
-        await client.Things.CreateThingAsync(body);
+        await client.Things.CreateAsync(body, requestOptions: new() { IdempotencyKey = "option" });
+        await client.Things.CreateAsync(body);
         Assert.Equal("mine", Header(server.Seen[0].Request, "Idempotency-Key"));
         Assert.Equal("theirs", Header(server.Seen[1].Request, "Idempotency-Key"));
         Assert.Equal("option", Header(server.Seen[2].Request, "Idempotency-Key"));
@@ -106,7 +106,7 @@ public class HttpTests
     {
         var (client, server) = Client(_ => Reply(HttpStatusCode.OK, ThingJson));
         using var _ = client;
-        await client.Things.GetThingAsync(
+        await client.Things.RetrieveAsync(
             "t1",
             new RequestOptions { Headers = { ["X-Extra"] = "1", ["User-Agent"] = "mine" } }
         );
@@ -126,7 +126,7 @@ public class HttpTests
     {
         var (client, server) = Client(_ => Reply(status));
         using var _ = client;
-        var error = await Assert.ThrowsAnyAsync<ApiException>(() => client.Things.GetThingAsync("t1"));
+        var error = await Assert.ThrowsAnyAsync<ApiException>(() => client.Things.RetrieveAsync("t1"));
         Assert.Equal(status, error.StatusCode);
         Assert.Equal(attempts, server.Seen.Count);
         if (attempts > 1)
@@ -140,10 +140,10 @@ public class HttpTests
     {
         var (client, server) = Client(_ => Reply(HttpStatusCode.InternalServerError));
         using var _ = client;
-        await Assert.ThrowsAnyAsync<ApiException>(() => client.Things.UpdateThingAsync("t1", new()));
+        await Assert.ThrowsAnyAsync<ApiException>(() => client.Things.UpdateAsync("t1", new()));
         Assert.Single(server.Seen);
         await Assert.ThrowsAnyAsync<ApiException>(
-            () => client.Things.UpdateThingAsync("t1", new(), new() { IdempotencyKey = "k" })
+            () => client.Things.UpdateAsync("t1", new(), new() { IdempotencyKey = "k" })
         );
         Assert.Equal(4, server.Seen.Count);
     }
@@ -166,7 +166,7 @@ public class HttpTests
         );
         using var _ = client;
         var clock = Stopwatch.StartNew();
-        await client.Things.GetThingAsync("t1");
+        await client.Things.RetrieveAsync("t1");
         Assert.InRange(clock.Elapsed, TimeSpan.FromSeconds(0.9), TimeSpan.FromSeconds(30));
         Assert.Equal(2, server.Seen.Count);
     }
@@ -184,12 +184,12 @@ public class HttpTests
             new() { HttpMessageHandler = server, RetrySchedule = [TimeSpan.Zero] }
         );
         await Assert.ThrowsAsync<TimeoutException>(
-            () => client.Things.GetThingAsync("t1", new() { Timeout = TimeSpan.FromMilliseconds(20) })
+            () => client.Things.RetrieveAsync("t1", new() { Timeout = TimeSpan.FromMilliseconds(20) })
         );
         Assert.Equal(2, server.Seen.Count);
         await Assert.ThrowsAsync<TimeoutException>(
             () =>
-                client.Things.GetThingAsync(
+                client.Things.RetrieveAsync(
                     "t1",
                     new() { Timeout = TimeSpan.FromMilliseconds(20), MaxRetries = 0 }
                 )
@@ -208,7 +208,7 @@ public class HttpTests
         });
         using var _ = client;
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => client.Things.GetThingAsync("t1", cancellationToken: cancel.Token)
+            () => client.Things.RetrieveAsync("t1", cancellationToken: cancel.Token)
         );
         Assert.Single(server.Seen);
     }
@@ -220,7 +220,7 @@ public class HttpTests
             new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([1, 2, 3]) }
         );
         using var _ = client;
-        Assert.Equal([1, 2, 3], await client.Things.DownloadThingAsync("t1"));
+        Assert.Equal([1, 2, 3], await client.Things.RetrievePdfAsync("t1"));
     }
 
     [Fact]
@@ -237,11 +237,11 @@ public class HttpTests
         });
         using var _ = client;
         var invalid = await Assert.ThrowsAsync<UnprocessableEntityException>(
-            () => client.Things.CreateThingAsync(new ThingCreate { Name = "", Kind = Kind.Alpha })
+            () => client.Things.CreateAsync(new ThingCreate { Name = "", Kind = Kind.Alpha })
         );
         Assert.Equal(["empty"], invalid.GetError<ValidationError>()!.Fields!["name"]);
         Assert.Equal("req_1", invalid.GetRequestId());
-        var missing = await Assert.ThrowsAsync<NotFoundException>(() => client.Things.GetThingAsync("t1"));
+        var missing = await Assert.ThrowsAsync<NotFoundException>(() => client.Things.RetrieveAsync("t1"));
         Assert.IsAssignableFrom<ApiException>(missing);
         Assert.Null(missing.GetError<Problem>());
     }

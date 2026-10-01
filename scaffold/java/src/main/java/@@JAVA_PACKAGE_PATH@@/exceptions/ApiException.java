@@ -1,7 +1,5 @@
 package @@JAVA_PACKAGE@@.exceptions;
 
-import @@JAVA_INTERNAL_PACKAGE@@.Utils;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.Optional;
 import okhttp3.Headers;
 
@@ -10,8 +8,7 @@ import okhttp3.Headers;
  * Common statuses have their own subclass, such as {@link NotFoundException} or {@link
  * RateLimitException}.
  */
-public class ApiException extends RuntimeException
-        implements Utils.WithResponseHeaders, Utils.WithError {
+public class ApiException extends RuntimeException {
     private static final long serialVersionUID = 1L;
 
     private final int code;
@@ -23,10 +20,6 @@ public class ApiException extends RuntimeException
         super(message);
         this.code = code;
         this.responseBody = responseBody;
-    }
-
-    public ApiException(String message, int code, String responseBody, ObjectMapper mapper) {
-        this(message, code, responseBody);
     }
 
     /** The HTTP status, or 0 when there was no response. */
@@ -59,12 +52,12 @@ public class ApiException extends RuntimeException
         return type.isInstance(error) ? Optional.of(type.cast(error)) : Optional.empty();
     }
 
-    @Override
+    /** Called by the SDK with the response headers. */
     public void setResponseHeaders(Headers headers) {
         this.headers = headers;
     }
 
-    @Override
+    /** Called by the SDK with the body parsed as its declared schema. */
     public void setError(Object error) {
         this.error = error;
     }

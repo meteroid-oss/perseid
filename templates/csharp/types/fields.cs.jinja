@@ -3,7 +3,7 @@
 {% set ty = m.field_type(field, m.union_class(field, union_owner, type_names)) -%}
 {% set tags = type.discriminator_defaults | default({}) if owner == type_name else {} -%}
 {% set tag_default = tags[field.name] if field.required and field.name in tags else none -%}
-{% set patch = sdk.patch_nullable and (patch_body | default(false) or owner is endingwith "Patch") and field.nullable -%}
+{% set patch = (patch_body | default(false) or owner is endingwith "Patch") and field.nullable -%}
 {% if field.description is defined %}
 {{ m.doc(field.description) }}
 {%- endif %}

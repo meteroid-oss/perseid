@@ -24,9 +24,9 @@ func Ptr[T any](v T) *T {
 //	field = @@PACKAGE_NAME@@.Null[T]()   // explicit null, the server clears it
 //	field = @@PACKAGE_NAME@@.Set(value)  // set to value
 //
-// With patch_nullable enabled, the optional nullable fields of PATCH request
-// bodies have this type. Decoding a JSON null leaves a *Nullable nil, as
-// encoding/json does for every pointer.
+// The optional nullable fields of PATCH request bodies have this type.
+// Decoding a JSON null leaves a *Nullable nil, as encoding/json does for
+// every pointer.
 type Nullable[T any] struct {
 	value T
 	null  bool

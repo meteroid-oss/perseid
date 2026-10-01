@@ -8,28 +8,21 @@ use heck::ToSnakeCase as _;
 use itertools::Itertools as _;
 
 use super::resources::{Operation, Resource, Resources};
-use crate::config::MethodNames;
 
-/// Sets `method_name` on every operation, and makes it the operation's `name` with
-/// [`MethodNames::Resource`]. Overrides (`names`, then `x-perseid-name`) apply in both modes.
+/// Names every operation after its resource, unless `names` or `x-perseid-name` overrides it.
 pub(crate) fn apply(
     resources: &mut Resources,
-    mode: MethodNames,
     names: &BTreeMap<String, String>,
 ) -> anyhow::Result<()> {
     for resource in resources.values_mut() {
-        name_resource(resource, mode, names)?;
+        name_resource(resource, names)?;
     }
     Ok(())
 }
 
-fn name_resource(
-    resource: &mut Resource,
-    mode: MethodNames,
-    names: &BTreeMap<String, String>,
-) -> anyhow::Result<()> {
+fn name_resource(resource: &mut Resource, names: &BTreeMap<String, String>) -> anyhow::Result<()> {
     for sub in resource.subresources.values_mut() {
-        name_resource(sub, mode, names)?;
+        name_resource(sub, names)?;
     }
     let key = |name: &str| name.to_snake_case();
     let overrides: Vec<Option<String>> = resource
@@ -96,22 +89,10 @@ fn name_resource(
         .map(|i| base_name(&resource.operations[i], &overrides[i], &derived[i]))
         .collect();
     let ops = &resource.operations;
-    let method_names: Vec<String> = (0..ops.len())
+    let chosen: Vec<String> = (0..ops.len())
         .map(|i| match ops[i].stream {
             true => stream_name(ops, &base, i),
             false => base[i].clone(),
-        })
-        .collect();
-    let chosen: Vec<String> = (0..ops.len())
-        .map(|i| match (mode, ops[i].stream) {
-            (MethodNames::Resource, _) => method_names[i].clone(),
-            (MethodNames::OperationId, false) => {
-                overrides[i].clone().unwrap_or_else(|| ops[i].name.clone())
-            }
-            (MethodNames::OperationId, true) => match base_of(ops, i) {
-                Some(b) if overrides[b].is_some() => method_names[i].clone(),
-                _ => ops[i].name.clone(),
-            },
         })
         .collect();
     let mut seen = BTreeMap::new();
@@ -128,8 +109,7 @@ fn name_resource(
             );
         }
     }
-    for ((op, method_name), name) in resource.operations.iter_mut().zip(method_names).zip(chosen) {
-        op.method_name = method_name;
+    for (op, name) in resource.operations.iter_mut().zip(chosen) {
         op.name = name;
     }
     Ok(())

@@ -46,7 +46,7 @@ using var client = new PetstoreClient(
     new PetstoreClientOptions { BaseUrl = $"http://127.0.0.1:{port}" }
 );
 
-var created = await client.Pets.CreatePetAsync(
+var created = await client.Pets.CreateAsync(
     new PetCreate { Name = "Rex", Status = PetStatus.Available }
 );
 var post = seen[^1];
@@ -70,10 +70,10 @@ Check(
     "model equality"
 );
 
-await client.Pets.ListPetsAsync(new PetsListPetsOptions { Limit = 10, Status = PetStatus.Sold });
+await client.Pets.ListAsync(new PetsListOptions { Limit = 10, Status = PetStatus.Sold });
 Check(seen[^1].Url == "/pets?limit=10&status=sold", $"query {seen[^1].Url}");
 
-var retried = await client.Pets.GetPetAsync("flaky");
+var retried = await client.Pets.RetrieveAsync("flaky");
 Check(retried.Id == "flaky", "retried response");
 Check(seen[^1].Headers["petstore-retry-count"] == "1", "retry count header");
 Check(
@@ -81,10 +81,10 @@ Check(
     "request id kept across retries"
 );
 
-await client.Pets.DeletePetAsync("p1");
+await client.Pets.DeleteAsync("p1");
 try
 {
-    await client.Pets.GetPetAsync("missing/one");
+    await client.Pets.RetrieveAsync("missing/one");
     Check(false, "404 must throw");
 }
 catch (ApiException e)
@@ -97,7 +97,7 @@ using var cancelled = new CancellationTokenSource();
 cancelled.Cancel();
 try
 {
-    await client.Pets.GetPetAsync("p1", cancellationToken: cancelled.Token);
+    await client.Pets.RetrieveAsync("p1", cancellationToken: cancelled.Token);
     Check(false, "cancellation must throw");
 }
 catch (OperationCanceledException) { }
@@ -113,7 +113,7 @@ using var impatient = new PetstoreClient(
 );
 try
 {
-    await impatient.Pets.GetPetAsync("slow");
+    await impatient.Pets.RetrieveAsync("slow");
     Check(false, "timeout must throw");
 }
 catch (TimeoutException) { }

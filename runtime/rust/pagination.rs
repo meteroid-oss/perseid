@@ -36,7 +36,7 @@ type Fetch<'a> = Box<dyn FnMut(Option<Value>) -> PageFuture<'a> + Send + 'a>;
 
 /// Every item of a paginated list operation, fetching the next page once the
 /// current one is consumed: `while let Some(item) = items.next().await`.
-/// With the `futures-core` dependency it is also a `Stream`.
+/// It is also a `futures_core::Stream`.
 pub struct Paginator<'a, T> {
     spec: &'static Spec,
     fetch: Fetch<'a>,

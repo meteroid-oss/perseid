@@ -8,10 +8,8 @@ package {{ sdk.java_package }};
 {% for resource in api.resources -%}
 import {{ sdk.java_package }}.api.{{ resource.name | to_upper_camel_case }};
 {% endfor %}
-{% if sdk.java_internal_package != sdk.java_package -%}
 import {{ sdk.java_internal_package }}.{{ sdk.client_name }}Auth;
 import {{ sdk.java_internal_package }}.{{ sdk.client_name }}HttpClient;
-{% endif -%}
 import okhttp3.HttpUrl;
 
 import java.util.List;

@@ -228,6 +228,7 @@ paths:
   /wire/beta?beta=true:
     get:
       operationId: beta_search
+      x-perseid-name: beta_search
       tags: [wire]
       parameters:
         - { name: limit, in: query, schema: { type: integer, format: int32 } }

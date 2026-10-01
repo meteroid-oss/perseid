@@ -22,7 +22,7 @@
     {% endfor -%}
     {{ union_imports() }}
     {% set type_name = type.name | to_upper_camel_case -%}
-    {% if sdk.typed_unions and type.target.is_union() -%}
+    {% if type.target.is_union() -%}
     {{ doc_comment }}
     {{ union_enum(type_name, type.target) }}
     {% else -%}

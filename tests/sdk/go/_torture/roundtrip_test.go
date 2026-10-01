@@ -125,7 +125,7 @@ func TestQueryParameters(t *testing.T) {
 		io.WriteString(w, `{"data":[]}`)
 	})
 	since := time.Date(2024, 1, 2, 3, 4, 5, 123456789, time.FixedZone("x", 3600))
-	_, err := client.Things().ListThings(context.Background(), ThingsListThingsOptions{
+	_, err := client.Things().List(context.Background(), ThingsListOptions{
 		IDs:       []string{"a", "b"},
 		Since:     &since,
 		XRequired: "r",
@@ -146,7 +146,7 @@ func TestRequestOptions(t *testing.T) {
 	client, rec := server(t, func(_ int32, w http.ResponseWriter, _ *http.Request) {
 		io.WriteString(w, thingJSON)
 	})
-	thing, err := client.Things().CreateThing(context.Background(), ThingCreate{Name: "n", Kind: KindAlpha}, nil,
+	thing, err := client.Things().Create(context.Background(), ThingCreate{Name: "n", Kind: KindAlpha}, nil,
 		WithHeader("X-Extra", "1"), WithHeader("User-Agent", "mine"), WithIdempotencyKey("key-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -164,7 +164,7 @@ func TestRequestOptions(t *testing.T) {
 	slow, _ := server(t, func(_ int32, w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
 	})
-	_, err = slow.Things().GetThing(context.Background(), "t1", WithTimeout(20*time.Millisecond), WithMaxRetries(0))
+	_, err = slow.Things().Retrieve(context.Background(), "t1", WithTimeout(20*time.Millisecond), WithMaxRetries(0))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want a deadline", err)
 	}
@@ -184,7 +184,7 @@ func TestRetries(t *testing.T) {
 		client, rec := server(t, func(_ int32, w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(tc.status)
 		})
-		_, err := client.Things().GetThing(context.Background(), "t1")
+		_, err := client.Things().Retrieve(context.Background(), "t1")
 		var apiErr *APIError
 		if !errors.As(err, &apiErr) || apiErr.StatusCode != tc.status {
 			t.Errorf("%d: err = %v", tc.status, err)
@@ -201,7 +201,7 @@ func TestNonIdempotentRequestsAreOnlyRetriedOn429(t *testing.T) {
 			w.Header().Set("X-Request-Id", "req_1")
 			w.WriteHeader(status)
 		})
-		_, err := client.Things().UpdateThing(context.Background(), "t1", ThingPatch{})
+		_, err := client.Things().Update(context.Background(), "t1", ThingPatch{})
 		var apiErr *APIError
 		if !errors.As(err, &apiErr) || apiErr.Header.Get("X-Request-Id") != "req_1" {
 			t.Fatalf("%d: err = %v", status, err)
@@ -213,7 +213,7 @@ func TestNonIdempotentRequestsAreOnlyRetriedOn429(t *testing.T) {
 	client, rec := server(t, func(_ int32, w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	})
-	_, _ = client.Things().UpdateThing(context.Background(), "t1", ThingPatch{}, WithIdempotencyKey("k"))
+	_, _ = client.Things().Update(context.Background(), "t1", ThingPatch{}, WithIdempotencyKey("k"))
 	if got := rec.requests.Load(); got != 3 {
 		t.Errorf("PATCH with a key: %d attempts, want 3", got)
 	}
@@ -230,7 +230,7 @@ func TestRetryAfterOverridesTheSchedule(t *testing.T) {
 	})
 	client.cfg.retrySchedule = []time.Duration{time.Hour}
 	start := time.Now()
-	if _, err := client.Things().GetThing(context.Background(), "t1"); err != nil {
+	if _, err := client.Things().Retrieve(context.Background(), "t1"); err != nil {
 		t.Fatal(err)
 	}
 	if elapsed := time.Since(start); elapsed < 50*time.Millisecond || elapsed > 10*time.Second {

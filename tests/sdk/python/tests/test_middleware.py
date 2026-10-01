@@ -51,9 +51,9 @@ class MiddlewareTest(unittest.TestCase):
         options = PetstoreOptions(middleware=[make_cache(), self.origin()])
         with Petstore("token", options) as client:
             for _ in range(3):
-                self.assertEqual(client.pets.get_pet("1").name, "Rex")
+                self.assertEqual(client.pets.retrieve("1").name, "Rex")
             self.assertEqual(len(self.seen), 1)
-            client.pets.get_pet("2")
+            client.pets.retrieve("2")
             self.assertEqual(len(self.seen), 2)
 
     def test_middleware_can_change_the_request(self):
@@ -62,7 +62,7 @@ class MiddlewareTest(unittest.TestCase):
             return next(request)
 
         with Petstore("token", PetstoreOptions(middleware=[tag, self.origin()])) as client:
-            client.pets.get_pet("1")
+            client.pets.retrieve("1")
         self.assertEqual(self.seen[0].headers["x-tag"], "yes")
         self.assertEqual(self.seen[0].headers["authorization"], "Bearer token")
 
@@ -77,7 +77,7 @@ class MiddlewareTest(unittest.TestCase):
             options = PetstoreOptions(async_middleware=[make_async_cache(), origin])
             async with PetstoreAsync("token", options) as client:
                 for _ in range(3):
-                    self.assertEqual((await client.pets.get_pet("1")).name, "Rex")
+                    self.assertEqual((await client.pets.retrieve("1")).name, "Rex")
 
         asyncio.run(run())
         self.assertEqual(len(calls), 1)

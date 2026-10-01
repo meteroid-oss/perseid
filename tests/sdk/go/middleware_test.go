@@ -66,7 +66,7 @@ func TestCacheMiddlewareAnswersRepeatedGetsWithoutReachingTheOrigin(t *testing.T
 	var seen []*http.Request
 	client := petstore.New("token", &petstore.Options{Middleware: []petstore.Middleware{cache(), origin(&seen)}})
 	for i := 0; i < 3; i++ {
-		pet, err := client.Pets().GetPet(context.Background(), "1")
+		pet, err := client.Pets().Retrieve(context.Background(), "1")
 		if err != nil || pet.Name != "Rex" {
 			t.Fatalf("pet %v, err %v", pet, err)
 		}
@@ -74,7 +74,7 @@ func TestCacheMiddlewareAnswersRepeatedGetsWithoutReachingTheOrigin(t *testing.T
 	if len(seen) != 1 {
 		t.Fatalf("origin reached %d times, want 1", len(seen))
 	}
-	if _, err := client.Pets().GetPet(context.Background(), "2"); err != nil || len(seen) != 2 {
+	if _, err := client.Pets().Retrieve(context.Background(), "2"); err != nil || len(seen) != 2 {
 		t.Fatalf("err %v, origin reached %d times, want 2", err, len(seen))
 	}
 }
@@ -88,7 +88,7 @@ func TestMiddlewareCanChangeTheRequest(t *testing.T) {
 		})
 	}
 	client := petstore.New("token", &petstore.Options{Middleware: []petstore.Middleware{tag, origin(&seen)}})
-	if _, err := client.Pets().GetPet(context.Background(), "1"); err != nil {
+	if _, err := client.Pets().Retrieve(context.Background(), "1"); err != nil {
 		t.Fatal(err)
 	}
 	if got := seen[0].Header.Get("x-tag"); got != "yes" {

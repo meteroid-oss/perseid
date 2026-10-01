@@ -67,10 +67,6 @@ jobs:
         run: |
           mkdir sdk && cd sdk
           perseid init --spec "${{ startsWith(matrix.spec, 'https') && matrix.spec || format('{0}/{1}', github.workspace, matrix.spec) }}"
-          # The smoke and petstore tests call methods by their operation ids.
-          case "${{ matrix.spec }}" in
-            *features.yaml|*petstore.yaml) sed -i 's/^method_names = .*/method_names = "operation_id"/' perseid.toml ;;
-          esac
           perseid generate
           perseid generate --check
       - working-directory: ${{ runner.temp }}/sdk/rust

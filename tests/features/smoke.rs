@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use features::api::{
-    BasicAuth, Features, FeaturesOptions, RequestOptions, SseEvent, StreamingStreamEventsOptions,
-    StreamingUploadFileBody, TokenProvider, Upload, WidgetsListWidgetEventsOptions,
+    BasicAuth, Features, FeaturesOptions, RequestOptions, SseEvent, StreamingRetrieveEventsStreamOptions,
+    StreamingCreateFileBody, TokenProvider, Upload, WidgetsListEventsOptions,
     WireBetaSearchOptions, WireSearchOptions,
 };
 use features::models::{
@@ -26,48 +26,48 @@ where
 #[tokio::test]
 async fn smoke() {
     let tok = client("tok", Default::default());
-    assert_eq!(tok.account().health().await.unwrap().status, "||");
-    assert_eq!(tok.account().machine_status().await.unwrap().status, "Bearer tok||");
+    assert_eq!(tok.account().retrieve_health().await.unwrap().status, "||");
+    assert_eq!(tok.account().retrieve_machine().await.unwrap().status, "Bearer tok||");
     let widgets = tok.widgets();
-    assert_eq!(ids(widgets.list_widgets_iter(None), |w| w.id).await, ["w1", "w2", "w3"]);
-    let options = WidgetsListWidgetEventsOptions { kind: "created".into(), starting_after: None };
-    let events = widgets.list_widget_events_iter("w1".into(), options);
+    assert_eq!(ids(widgets.list_iter(None), |w| w.id).await, ["w1", "w2", "w3"]);
+    let options = WidgetsListEventsOptions { kind: "created".into(), starting_after: None };
+    let events = widgets.list_events_iter("w1".into(), options);
     assert_eq!(ids(events, |e| e.id).await, ["e1", "e2", "e3"]);
-    let mut gadgets = tok.gadgets().list_gadgets_iter(None);
+    let mut gadgets = tok.gadgets().list_iter(None);
     let mut gadget_ids = Vec::new();
     while let Some(gadget) = gadgets.next().await {
         gadget_ids.push(gadget.unwrap().id);
     }
     assert_eq!(gadget_ids, ["g1", "g2", "g3"]);
-    assert_eq!(ids(tok.records().list_records_iter(None), |r| r.id).await, ["r1", "r2", "r3"]);
+    assert_eq!(ids(tok.records().list_iter(None), |r| r.id).await, ["r1", "r2", "r3"]);
     let streamed: Vec<String> =
-        widgets.list_widgets_iter(None).map_ok(|w| w.id).try_collect().await.unwrap();
+        widgets.list_iter(None).map_ok(|w| w.id).try_collect().await.unwrap();
     assert_eq!(streamed, ["w1", "w2", "w3"]);
-    let first = tok.gadgets().list_gadgets_iter(None).take(1).collect::<Vec<_>>().await;
+    let first = tok.gadgets().list_iter(None).take(1).collect::<Vec<_>>().await;
     assert_eq!(first.len(), 1);
     let other = RequestOptions::new().header("authorization", "Bearer other");
-    let status = tok.account().with_options(other).machine_status().await.unwrap().status;
+    let status = tok.account().with_options(other).retrieve_machine().await.unwrap().status;
     assert_eq!(status, "Bearer other||");
 
     let basic_auth = Some(BasicAuth { username: "u".into(), password: "p".into() });
     let basic = client("", FeaturesOptions { basic_auth, ..Default::default() });
-    assert_eq!(basic.account().create_session().await.unwrap().status, "Basic dTpw||");
+    assert_eq!(basic.account().session().await.unwrap().status, "Basic dTpw||");
     let token_provider = Some(TokenProvider::new(|| async { Ok("fresh".to_owned()) }));
     let provided = client("", FeaturesOptions { token_provider, ..Default::default() });
-    assert_eq!(provided.account().machine_status().await.unwrap().status, "Bearer fresh||");
+    assert_eq!(provided.account().retrieve_machine().await.unwrap().status, "Bearer fresh||");
     let api_keys = [("api_key".to_owned(), "k".to_owned())].into();
     let keyed = client("", FeaturesOptions { api_keys, ..Default::default() });
-    assert_eq!(ids(keyed.widgets().list_widgets_iter(None), |w| w.id).await, ["w1", "w2", "w3"]);
+    assert_eq!(ids(keyed.widgets().list_iter(None), |w| w.id).await, ["w1", "w2", "w3"]);
     let anonymous = client("", Default::default());
-    assert!(anonymous.widgets().list_widgets_iter(None).next().await.unwrap().is_err());
+    assert!(anonymous.widgets().list_iter(None).next().await.unwrap().is_err());
 }
 
 #[tokio::test]
 async fn streaming() {
     let client = client("tok", Default::default());
     let streaming = client.streaming();
-    let options = StreamingStreamEventsOptions { topic: Some("news".into()) };
-    let mut stream = streaming.stream_events(Some(options)).await.unwrap();
+    let options = StreamingRetrieveEventsStreamOptions { topic: Some("news".into()) };
+    let mut stream = streaming.retrieve_events_stream(Some(options)).await.unwrap();
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {
         events.push(event.unwrap());
@@ -86,7 +86,7 @@ async fn streaming() {
             event("message", r#"{"n": 3}"#, "3", Some(1500)),
         ]
     );
-    let body = StreamingUploadFileBody {
+    let body = StreamingCreateFileBody {
         file: Upload::bytes("hello").with_filename("a.txt").with_content_type("text/plain"),
         name: "doc".into(),
         count: Some(2),
@@ -94,10 +94,10 @@ async fn streaming() {
         tags: Some(vec!["a".into(), "b".into()]),
     };
     assert_eq!(
-        streaming.upload_file(body).await.unwrap().status,
+        streaming.create_file(body).await.unwrap().status,
         r#"count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc;tags=::a;tags=::b"#
     );
-    let raw = streaming.upload_content("f1", Upload::bytes("raw")).await.unwrap();
+    let raw = streaming.update_file_content("f1", Upload::bytes("raw")).await.unwrap();
     assert_eq!(raw.status, "application/octet-stream:raw");
 }
 
@@ -157,6 +157,6 @@ async fn wire() {
         overridden.beta_search(Some(beta)).await.unwrap().status,
         "beta=true&limit=2|features=z"
     );
-    let image = wire.put_image(42, Upload::bytes("png")).await.unwrap();
+    let image = wire.update_image(42, Upload::bytes("png")).await.unwrap();
     assert_eq!(image.status, "42:image/png:png");
 }

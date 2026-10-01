@@ -432,13 +432,9 @@ fn multipart_fields(
 pub(crate) struct Operation {
     /// The operation ID from the spec.
     pub(crate) id: String,
-    /// The name to use for the operation in code.
+    /// The name in code: after the HTTP method and the path within the resource (`list`,
+    /// `retrieve`, `create_source`), or the override of `[names]`/`x-perseid-name`.
     pub(crate) name: String,
-    /// The name after the HTTP method and the path within the resource (`list`, `retrieve`,
-    /// `create_source`), or the override of `[names]`/`x-perseid-name`. It is `name` when
-    /// `method_names = "resource"`.
-    #[serde(default)]
-    pub(crate) method_name: String,
     /// `x-perseid-name` of the operation.
     #[serde(skip)]
     pub(crate) x_perseid_name: Option<String>,
@@ -692,7 +688,6 @@ impl Operation {
             Some(_) => bail!("`x-perseid-name` must be a non-empty string"),
         };
         let op = Operation {
-            method_name: op_name.clone(),
             x_perseid_name,
             stream: false,
             id: op_id,
@@ -736,7 +731,6 @@ impl Operation {
     fn event_stream_variant(&self) -> Option<Self> {
         self.json_or_event_stream.then(|| Self {
             name: format!("{}_stream", self.name),
-            method_name: format!("{}_stream", self.method_name),
             stream: true,
             response_body_schema_name: None,
             response_body_is_list: false,

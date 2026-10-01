@@ -558,24 +558,13 @@ fn resolve_schema_ref_in_field_type(
 }
 
 /// See [`super::Api::settle_object_unions`].
-pub(crate) fn settle_object_unions(
-    types: &mut Types,
-    typed: bool,
-    best_match: bool,
-) -> (usize, usize) {
+pub(crate) fn settle_object_unions(types: &mut Types, best_match: bool) -> (usize, usize) {
     let mut counts = (0, 0);
     for ty in types.values_mut() {
         ty.data
-            .for_each_field_type(|t| t.settle_object_unions(typed, best_match, &mut counts));
+            .for_each_field_type(|t| t.settle_object_unions(best_match, &mut counts));
     }
     counts
-}
-
-/// Types the unions of every schema as untyped JSON.
-pub(crate) fn untype_unions(types: &mut Types) {
-    for ty in types.values_mut() {
-        ty.data.for_each_field_type(FieldType::untype_unions);
-    }
 }
 
 /// Replaces the embedded `allOf` parts of every struct by their fields, for targets that
@@ -2238,7 +2227,7 @@ impl FieldType {
         }
     }
 
-    fn settle_object_unions(&mut self, typed: bool, best_match: bool, counts: &mut (usize, usize)) {
+    fn settle_object_unions(&mut self, best_match: bool, counts: &mut (usize, usize)) {
         match self {
             Self::Union {
                 variants,
@@ -2246,32 +2235,23 @@ impl FieldType {
                 requested,
             } => {
                 for variant in variants.iter_mut() {
-                    variant
-                        .r#type
-                        .settle_object_unions(typed, best_match, counts);
+                    variant.r#type.settle_object_unions(best_match, counts);
                 }
                 let wanted = best_match || *requested == Some(UnionMode::BestMatch);
-                if *mode == UnionMode::BestMatch && typed {
+                if *mode == UnionMode::BestMatch {
                     if wanted {
                         counts.0 += 1;
                     } else {
                         counts.1 += 1;
+                        *self = Self::JsonObject;
                     }
-                }
-                let keep = match mode {
-                    UnionMode::Json => true,
-                    UnionMode::Rules => typed,
-                    UnionMode::BestMatch => typed && wanted,
-                };
-                if !keep {
-                    *self = Self::JsonObject;
                 }
             }
             Self::List { inner } | Self::Set { inner } => {
-                Arc::make_mut(inner).settle_object_unions(typed, best_match, counts)
+                Arc::make_mut(inner).settle_object_unions(best_match, counts)
             }
             Self::Map { value_ty } => {
-                Arc::make_mut(value_ty).settle_object_unions(typed, best_match, counts)
+                Arc::make_mut(value_ty).settle_object_unions(best_match, counts)
             }
             _ => {}
         }
@@ -2943,7 +2923,7 @@ mod tests {
             BTreeSet::from(["Customer", "Deleted", "Tier"])
         );
         assert!(types["Charge"].referenced_components().is_empty());
-        assert_eq!(settle_object_unions(&mut types, true, false), (0, 1));
+        assert_eq!(settle_object_unions(&mut types, false), (0, 1));
         assert_eq!(field_type(&types, "Charge", "both"), &FieldType::JsonObject);
     }
 
@@ -3063,20 +3043,11 @@ mod tests {
         assert_eq!(variants[1].properties, ["author", "title"]);
 
         let mut json = types.clone();
-        assert_eq!(settle_object_unions(&mut json, true, false), (1, 1));
+        assert_eq!(settle_object_unions(&mut json, false), (1, 1));
         assert_eq!(field_type(&json, "Charge", "doc"), &FieldType::JsonObject);
         assert!(best_match(&json, "pinned"));
-        assert_eq!(settle_object_unions(&mut types, true, true), (2, 0));
+        assert_eq!(settle_object_unions(&mut types, true), (2, 0));
         assert!(best_match(&types, "doc"));
-
-        let mut untyped = object_unions();
-        assert_eq!(settle_object_unions(&mut untyped, false, true), (0, 0));
-        for field in ["customer", "source", "doc", "pinned"] {
-            assert_eq!(
-                field_type(&untyped, "Charge", field),
-                &FieldType::JsonObject
-            );
-        }
     }
 
     #[test]

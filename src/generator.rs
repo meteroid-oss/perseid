@@ -49,10 +49,6 @@ pub(crate) fn generate_with_output_context(
         api.inline_aliases()?;
     }
     api.settle_object_unions(&sdk);
-    let typed_unions = sdk["typed_unions"].as_bool().unwrap_or(false);
-    if matches!(tpl_file_ext, "ts" | "py") && !typed_unions {
-        api.untype_unions();
-    }
     if tpl_file_ext == "java" {
         api.inline_string_alias_bodies()?;
     }

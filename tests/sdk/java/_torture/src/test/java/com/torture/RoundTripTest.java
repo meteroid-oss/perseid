@@ -41,7 +41,7 @@ class RoundTripTest {
 
     private static void assertRoundTrip(Class<?> type, String json) throws Exception {
         Object parsed = Utils.getObjectMapper().readValue(json, type);
-        assertEquals(PLAIN.readTree(json), PLAIN.readTree(Utils.toJson(parsed)), type.getSimpleName());
+        assertEquals(PLAIN.readTree(json), PLAIN.readTree(Utils.json(parsed)), type.getSimpleName());
     }
 
     @ParameterizedTest
@@ -208,7 +208,7 @@ class RoundTripTest {
         assertEquals(variant.equals("deleted"), account.isDeletedAccount());
         assertEquals(variant.equals("unrecognized"), account.isUnrecognized());
         assertEquals(id, account.id());
-        assertEquals(PLAIN.readTree(json), PLAIN.readTree(Utils.toJson(account)));
+        assertEquals(PLAIN.readTree(json), PLAIN.readTree(Utils.json(account)));
     }
 
     @Test

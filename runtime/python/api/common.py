@@ -21,7 +21,6 @@ import dataclasses
 import datetime as _datetime
 import email.utils
 import enum
-import inspect
 import random
 import time
 import typing as t
@@ -224,17 +223,12 @@ def _raise_for_status(response: httpx.Response, error_types: ErrorTypes | None) 
     if response.is_success:
         return response
     # Any other status -- 4xx, 5xx, or a 3xx left unfollowed -- is an error.
-    args: tuple[t.Any, ...] = (response.status_code, response.content)
-    if _FROM_RESPONSE_TAKES_HEADERS:
-        args += (response.headers,)
-    error = error_class(response.status_code).from_response(*args)
+    error = error_class(response.status_code).from_response(
+        response.status_code, response.content, response.headers
+    )
     if isinstance(error, ApiStatusError):
         error.body = _error_body(response, error_types)
     raise error
-
-
-# An `errors.py` scaffolded before response headers were passed takes two arguments.
-_FROM_RESPONSE_TAKES_HEADERS = len(inspect.signature(ApiException.from_response).parameters) >= 3
 
 
 def _error_body(response: httpx.Response, error_types: ErrorTypes | None) -> t.Any:

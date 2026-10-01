@@ -12,7 +12,7 @@ use super::{
 
 {% set recursive = recursive_refs | map("to_upper_camel_case") | list -%}
 {% set type_name = type.name | to_upper_camel_case -%}
-{% set defaults = type.discriminator_defaults | default({}) if sdk.typed_unions else {} -%}
+{% set defaults = type.discriminator_defaults | default({}) -%}
 {% set defaulted = type.fields | selectattr("required") | rejectattr("nullable") | rejectattr("flatten") | selectattr("name", "in", defaults) | map(attribute="name") | list -%}
 {{ doc_comment }}
 #[derive(Clone, Debug, {% if not defaulted %}Default, {% endif %}PartialEq, Deserialize, Serialize)]

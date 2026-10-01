@@ -30,7 +30,7 @@ def generate(name: str, context: str = "", spec: str | None = None) -> object:
         (project / "openapi.yaml").write_text(spec)
     (project / "perseid.toml").write_text(
         f'spec = "openapi.yaml"\nname = "{name.title()}"\n'
-        f'base_url = "https://torture.test/v1"\n[python]\ntyped_unions = true\n{context}'
+        f'base_url = "https://torture.test/v1"\n[python]\n{context}'
     )
     for command in (["init"], ["generate"]):
         subprocess.run(["perseid", *command], cwd=project, check=True, capture_output=True)
@@ -101,7 +101,6 @@ components:
 """
 
 torture = generate("torture")
-named = generate("named", 'method_names = "resource"\n')
 expandable = generate("expandable", spec=EXPANDABLE_SPEC)
 flat = generate("flat", "[python.context]\nflat_unions = true\n")
 adjacent = generate("adjacent", spec=ADJACENT_SPEC)
@@ -303,7 +302,7 @@ class ClientTest(unittest.TestCase):
 
     def test_request_shape(self) -> None:
         with client(self.respond(httpx.Response(200, json=THING))) as api:
-            thing = api.things.get_thing("a/b", extra_headers={"X-Extra": "1"}, timeout=2)
+            thing = api.things.retrieve("a/b", extra_headers={"X-Extra": "1"}, timeout=2)
         request = self.requests[0]
         self.assertEqual(thing.id, "a/b")
         self.assertEqual(request.url.raw_path, b"/v1/things/a%2Fb")
@@ -313,7 +312,7 @@ class ClientTest(unittest.TestCase):
 
     def test_query_and_header_params(self) -> None:
         with client(self.respond(httpx.Response(200, json={"data": [], "total": 0}))) as api:
-            api.things.list_things(
+            api.things.list(
                 x_required="r",
                 ids=["a", "b"],
                 csv_ids=["c", "d"],
@@ -334,8 +333,8 @@ class ClientTest(unittest.TestCase):
     def test_list_bodies_and_odd_query_names(self) -> None:
         widget = {"id": "w", "name": "n"}
         with client(self.respond(httpx.Response(200, json=[widget]))) as api:
-            created = api.widgets.bulk_create_widgets([models.WidgetUpdate(name="n")])
-            api.widgets.list_widgets(date_created_lt="2024-01-01")
+            created = api.widgets.bulk([models.WidgetUpdate(name="n")])
+            api.widgets.list(date_created_lt="2024-01-01")
         self.assertEqual(created, [models.Widget(id="w", name="n")])
         self.assertEqual(json.loads(self.requests[0].content), [{"name": "n"}])
         self.assertEqual(self.requests[1].url.params["DateCreated<"], "2024-01-01")
@@ -343,16 +342,16 @@ class ClientTest(unittest.TestCase):
     def test_a_user_idempotency_key_replaces_the_automatic_one(self) -> None:
         create = models.ThingCreate(name="n", kind=models.Kind.ALPHA)
         with client(self.respond(httpx.Response(200, json=THING))) as api:
-            api.things.create_thing(create)
-            api.things.create_thing(create, idempotency_key="mine")
-            api.things.create_thing(create, extra_headers={"IDEMPOTENCY-KEY": "extra"})
+            api.things.create(create)
+            api.things.create(create, idempotency_key="mine")
+            api.things.create(create, extra_headers={"IDEMPOTENCY-KEY": "extra"})
         keys = [r.headers.get_list("idempotency-key") for r in self.requests]
         self.assertTrue(keys[0][0].startswith("auto_"))
         self.assertEqual(keys[1:], [["mine"], ["extra"]])
 
     def test_patch_sends_explicit_nulls(self) -> None:
         with client(self.respond(httpx.Response(200, json=THING))) as api:
-            api.things.update_thing("t", models.ThingPatch(name="n", description=None))
+            api.things.update("t", models.ThingPatch(name="n", description=None))
         self.assertEqual(json.loads(self.requests[0].content), {"name": "n", "description": None})
 
     def test_429_is_retried_after_the_delay_the_server_asks_for(self) -> None:
@@ -362,7 +361,7 @@ class ClientTest(unittest.TestCase):
         )
         with client(self.respond(*responses), retry_schedule=[0.0]) as api:
             started = time.monotonic()
-            api.things.update_thing("t", models.ThingPatch())
+            api.things.update("t", models.ThingPatch())
         self.assertGreaterEqual(time.monotonic() - started, 0.2)
         self.assertEqual(self.requests[1].headers["torture-retry-count"], "1")
 
@@ -374,10 +373,10 @@ class ClientTest(unittest.TestCase):
         )
         with client(self.respond(*responses), retry_schedule=[0.0]) as api:
             with self.assertRaises(ApiException) as raised:
-                api.things.update_thing("t", models.ThingPatch())
+                api.things.update("t", models.ThingPatch())
             self.assertEqual(raised.exception.headers["x-request-id"], "req_1")
             self.assertEqual(len(self.requests), 1)
-            api.things.create_thing(models.ThingCreate(name="n", kind=models.Kind.ALPHA))
+            api.things.create(models.ThingCreate(name="n", kind=models.Kind.ALPHA))
         self.assertEqual(len(self.requests), 3)
         self.assertEqual(self.requests[1].headers["idempotency-key"],
                          self.requests[2].headers["idempotency-key"])
@@ -389,7 +388,7 @@ class ClientTest(unittest.TestCase):
 
         with client(handler, retry_schedule=[0.0, 0.0]) as api:
             with self.assertRaises(NetworkException):
-                api.things.get_thing("t")
+                api.things.retrieve("t")
         self.assertEqual(len(self.requests), 3)
 
     def test_async_client(self) -> None:
@@ -401,7 +400,7 @@ class ClientTest(unittest.TestCase):
             async with torture.TortureAsync(
                 "token", httpx_client=httpx.AsyncClient(transport=transport)
             ) as api:
-                return await api.shapes.echo_shape(
+                return await api.shapes.create(
                     models.Shape(type="circle", content=models.Circle(radius=1.5, type="circle"))
                 )
 
@@ -411,7 +410,7 @@ class ClientTest(unittest.TestCase):
     def test_keyword_resources_are_escaped(self) -> None:
         reserved = SAMPLES["Reserved"]
         with client(self.respond(httpx.Response(200, json=reserved))) as api:
-            echoed = api.class_.echo_reserved(models.Reserved.from_dict(reserved))
+            echoed = api.class_.reserved(models.Reserved.from_dict(reserved))
         self.assertEqual(echoed.class_, "c")
         self.assertEqual(json.loads(self.requests[0].content), reserved)
 
@@ -436,7 +435,7 @@ class ScoresTest(unittest.TestCase):
         )
         with client(self.respond(invalid)) as api:
             with self.assertRaises(UnprocessableEntityError) as raised:
-                api.things.create_thing(create)
+                api.things.create(create)
         self.assertIsInstance(raised.exception, ApiException)
         self.assertEqual(raised.exception.body, models.ValidationError(message="bad", fields={"name": ["short"]}))
         self.assertEqual(raised.exception.request_id, "r1")
@@ -445,13 +444,13 @@ class ScoresTest(unittest.TestCase):
                 response = httpx.Response(status, json={"title": "t"})
                 with client(self.respond(response), num_retries=0) as api:
                     with self.assertRaises(error) as raised:
-                        api.widgets.create_widget(models.WidgetUpdate(name="n"))
+                        api.widgets.create(models.WidgetUpdate(name="n"))
                 self.assertIs(type(raised.exception), error)
                 expected = models.Problem(title="t") if status < 500 else None
                 self.assertEqual(raised.exception.body, expected)
         with client(self.respond(httpx.Response(503, text="<html>")), num_retries=0) as api:
             with self.assertRaises(InternalServerError) as raised:
-                api.widgets.list_widgets()
+                api.widgets.list()
         self.assertIsNone(raised.exception.body)
 
     def test_503_is_not_replayed_for_non_idempotent_requests(self) -> None:
@@ -459,9 +458,9 @@ class ScoresTest(unittest.TestCase):
         responses = (unavailable, unavailable, httpx.Response(200, json=THING))
         with client(self.respond(*responses), retry_schedule=[0.0]) as api:
             with self.assertRaises(InternalServerError):
-                api.things.update_thing("t", models.ThingPatch())
+                api.things.update("t", models.ThingPatch())
             self.assertEqual(len(self.requests), 1)
-            api.things.get_thing("t")
+            api.things.retrieve("t")
         self.assertEqual(len(self.requests), 3)
 
     def test_union_variants_default_their_discriminator(self) -> None:
@@ -490,9 +489,9 @@ class ScoresTest(unittest.TestCase):
 
     def test_resource_method_names(self) -> None:
         transport = httpx.MockTransport(self.respond(httpx.Response(200, json=THING)))
-        with named.Named("token", httpx_client=httpx.Client(transport=transport)) as api:
+        with Torture("token", httpx_client=httpx.Client(transport=transport)) as api:
             thing = api.things.retrieve("a/b")
-            api.things.update("a/b", named.models.ThingPatch())
+            api.things.update("a/b", models.ThingPatch())
         self.assertEqual(thing.id, "a/b")
         self.assertEqual([r.method for r in self.requests], ["GET", "PATCH"])
 

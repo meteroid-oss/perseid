@@ -3,7 +3,6 @@
 // this file is @generated
 package {{ sdk.java_package }}.api;
 
-{% set edition2 = sdk.edition >= 2 -%}
 {% set models = referenced_components | map("to_upper_camel_case") | list -%}
 {% set request_options = sdk.java_package ~ ".RequestOptions" if "RequestOptions" in models else "RequestOptions" -%}
 import {{ sdk.java_internal_package }}.{{ sdk.client_name }}HttpClient;
@@ -14,9 +13,6 @@ import {{ sdk.java_package }}.Paginator;
 import {{ sdk.java_package }}.RequestOptions;
 {% endif -%}
 import {{ sdk.java_internal_package }}.Utils;
-{% if not edition2 -%}
-import {{ sdk.java_package }}.exceptions.ApiException;
-{% endif -%}
 {% set body_kinds = resource.operations | map(attribute="request_body_kind") | list -%}
 {% if "multipart" in body_kinds -%}
 import {{ sdk.java_package }}.streaming.Multipart;
@@ -28,9 +24,6 @@ import {{ sdk.java_package }}.streaming.Upload;
 import {{ sdk.java_package }}.streaming.EventStream;
 {% endif -%}
 
-{% if not edition2 -%}
-import java.io.IOException;
-{% endif -%}
 import java.util.List;
 import java.util.Map;
 
@@ -87,9 +80,7 @@ public class {{ resource_type_name }} {
 {% endfor %}
 
 {% for op in resource.operations -%}
-    {% set throws = "" if edition2 else " throws IOException, ApiException" -%}
     {% set res_type = "void" -%}
-    {% set terminal = "send" if edition2 else "execute" -%}
     {% set res_java_type = none -%}
     {% if op.response_is_event_stream -%}
         {% set res_type = "EventStream" -%}
@@ -162,29 +153,28 @@ public class {{ resource_type_name }} {
     {% endset -%}
 
     {{ doc }}
-    public {{ res_type }} {{ op_name }}({{ func_args | strip_trailing_comma }}){{ throws }} {
+    public {{ res_type }} {{ op_name }}({{ func_args | strip_trailing_comma }}) {
         {% if res_type != "void" %}return {% endif %}{{ op_name }}({{ call_args }}{% if has_options %}new {{ options_type }}(), {% endif %}{{ request_options }}.none());
     }
     {% if has_options %}
 
     {{ doc }}
-    public {{ res_type }} {{ op_name }}({{ func_args }}final {{ options_type }} options){{ throws }} {
+    public {{ res_type }} {{ op_name }}({{ func_args }}final {{ options_type }} options) {
         {% if res_type != "void" %}return {% endif %}{{ op_name }}({{ call_args }}options, {{ request_options }}.none());
     }
-    {% if edition2 %}
+
 
     {{ doc }}
     public {{ res_type }} {{ op_name }}({{ func_args }}final {{ request_options }} requestOptions) {
         {% if res_type != "void" %}return {% endif %}{{ op_name }}({{ call_args }}new {{ options_type }}(), requestOptions);
     }
     {% endif %}
-    {% endif %}
 
     {{ doc }}
     public {{ res_type }} {{ op_name }}(
             {{ func_args }}
             {%- if has_options %}final {{ options_type }} options, {% endif -%}
-            final {{ request_options }} requestOptions){{ throws }} {
+            final {{ request_options }} requestOptions) {
         {% set ns = namespace(literal=[], calls=[], expr="") -%}
         {% set path_and_query = op.path | split("?") | list -%}
         {% for segment in (path_and_query[0] | split("/") | list)[1:] -%}
@@ -273,11 +263,11 @@ public class {{ resource_type_name }} {
         {% endif -%}
         {% set chain = chain + [".options(requestOptions)"] -%}
         {% if op.response_is_event_stream -%}
-            {% set chain = chain + ["." ~ terminal ~ "EventStream()"] -%}
+            {% set chain = chain + [".sendEventStream()"] -%}
         {% elif op.response_is_binary -%}
-            {% set chain = chain + ["." ~ terminal ~ "Bytes()"] -%}
+            {% set chain = chain + [".sendBytes()"] -%}
         {% else -%}
-            {% set chain = chain + ["." ~ terminal ~ "(" ~ (res_java_type or "Void.class") ~ ")"] -%}
+            {% set chain = chain + [".send(" ~ (res_java_type or "Void.class") ~ ")"] -%}
         {% endif -%}
         {% if res_type != "void" %}return {% endif -%}
         {{ http_client }}.call({{ op.method | upper | tojson }}, {{ "url.build()" if has_query else "url" }})
@@ -306,13 +296,12 @@ public class {{ resource_type_name }} {
         return {{ op_name }}Iter({{ call_args }}options, {{ request_options }}.none());
     }
 
-    {% if edition2 -%}
     /** Iterates over every item of {@link #{{ op_name }}}, fetching further pages on demand. */
     public Paginator<{{ item_ty }}> {{ op_name }}Iter({{ func_args }}final {{ request_options }} requestOptions) {
         return {{ op_name }}Iter({{ call_args }}new {{ options_type }}(), requestOptions);
     }
 
-    {% endif -%}
+
     /** Iterates over every item of {@link #{{ op_name }}}, fetching further pages on demand. */
     public Paginator<{{ item_ty }}> {{ op_name }}Iter(
             {{ func_args }}final {{ options_type }} options, final {{ request_options }} requestOptions) {

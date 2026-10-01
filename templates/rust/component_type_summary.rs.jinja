@@ -3,10 +3,8 @@
 
 #[path = "../codec.rs"]
 pub(crate) mod codec;
-{% if sdk.typed_unions %}
 #[path = "../unions.rs"]
 pub(crate) mod union_rules;
-{% endif %}
 
 {% for _, type in api.types | items -%}
     pub mod {{ type.name | to_rust_ident }};
@@ -19,8 +17,7 @@ pub use self::{
         {{ type.name | to_rust_ident }}::{{ type_name }},
     {% endfor -%}
 };
-{% endif -%}
-{% if sdk.chrono %}
+{% endif %}
 
 impl crate::request::QueryParamValue for chrono::DateTime<chrono::Utc> {
     fn encode(&self) -> String {
@@ -33,8 +30,6 @@ impl crate::request::QueryParamValue for chrono::NaiveDate {
         self.to_string()
     }
 }
-{% endif %}
-{% if sdk.typed_unions %}
 {% from "types/macros.rs.jinja" import has_union, union_name -%}
 {% set type_names = api.types | items | map(attribute=1) | map(attribute="name") | map("to_upper_camel_case") | list -%}
 {% set ids = namespace(all=[]) -%}
@@ -102,4 +97,3 @@ impl {{ module }}::{{ union }} {
 {{ union_exports(module, type_name, [{"name": "item", "type": type.target}]) }}
 {%- endif -%}
 {% endfor -%}
-{% endif %}

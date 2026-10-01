@@ -39,15 +39,6 @@ enum Command {
         /// Skip the release-please files and the SDK release workflow.
         #[arg(long)]
         no_release: bool,
-        /// Deprecated: run `perseid setup` after `perseid init`.
-        #[arg(long, hide = true)]
-        github: bool,
-        /// With --github, apply the setup without asking.
-        #[arg(long, short, hide = true)]
-        yes: bool,
-        /// With --github, print URLs instead of opening them in a browser.
-        #[arg(long, hide = true)]
-        no_browser: bool,
     },
     /// Set up GitHub as perseid.toml describes: repositories, keys, secrets, the App and workflows.
     Setup {
@@ -112,9 +103,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
             name,
             base_url,
             no_release,
-            github,
-            yes,
-            no_browser,
         } => {
             let root = cli.config.parent().map(|p| cwd.join(p)).unwrap_or(cwd);
             let init = init::Init {
@@ -127,11 +115,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
             for path in init::run(init, &root)? {
                 println!("+ {}", path.strip_prefix(&root).unwrap_or(&path).display());
             }
-            if github {
-                eprintln!("\n`perseid init --github` is now `perseid init`, then `perseid setup`");
-                let options = setup_options(yes, false, no_browser);
-                return perseid::github::setup(&root.join(config::FILE), &options);
-            }
             println!(
                 "\nNext: `perseid setup` to automate the SDKs on GitHub, or `perseid generate` to write them here"
             );
@@ -141,7 +124,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             dry_run,
             no_browser,
         } => {
-            let options = setup_options(yes, dry_run, no_browser);
+            let options = perseid::github::Options {
+                yes,
+                dry_run,
+                browser: !no_browser,
+            };
             return perseid::github::setup(&cli.config, &options);
         }
         Command::Status => return perseid::github::status(&cli.config),
@@ -223,14 +210,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
-}
-
-fn setup_options(yes: bool, dry_run: bool, no_browser: bool) -> perseid::github::Options {
-    perseid::github::Options {
-        yes,
-        dry_run,
-        browser: !no_browser,
-    }
 }
 
 fn deliver(

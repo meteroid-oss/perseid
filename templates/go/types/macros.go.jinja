@@ -47,7 +47,7 @@
 {#- Non-empty when `ty` is a union, or a collection of one, rendered as a type. -#}
 {% macro go_has_union(ty) -%}
     {%- if ty.is_union() -%}
-        {{ sdk.typed_unions | default(false) }}
+        true
     {%- elif ty.is_list() or ty.is_set() -%}
         {{ go_has_union(ty.inner_type()) }}
     {%- elif ty.is_map() -%}

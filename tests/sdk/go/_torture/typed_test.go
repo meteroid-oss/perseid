@@ -71,7 +71,7 @@ func TestErrorsMatchStatusSentinelsAndDecodeBodies(t *testing.T) {
 		io.WriteString(w, `not json`)
 	})
 
-	_, err := client.Widgets().ListWidgets(context.Background(), nil)
+	_, err := client.Widgets().List(context.Background(), nil)
 	if !errors.Is(err, ErrNotFound) || errors.Is(err, ErrConflict) || errors.Is(err, ErrServer) {
 		t.Fatalf("sentinels: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestErrorsMatchStatusSentinelsAndDecodeBodies(t *testing.T) {
 		t.Fatalf("request id: %v", err)
 	}
 
-	_, err = client.Widgets().CreateWidget(context.Background(), CreateWidgetRequest{})
+	_, err = client.Widgets().Create(context.Background(), CreateWidgetRequest{})
 	if !errors.Is(err, ErrUnprocessableEntity) {
 		t.Fatalf("422: %v", err)
 	}

@@ -49,17 +49,7 @@ pub fn populate_env(
          language: Option<Cow<'_, str>>,
          owner: Cow<'_, str>| { ident::idents(&names, &case, language.as_deref(), &owner) },
     );
-    env.add_filter("go_name", |state: &State, s: Cow<'_, str>| {
-        let enabled = state
-            .lookup("sdk")
-            .and_then(|sdk| sdk.get_attr("go_initialisms").ok())
-            .is_some_and(|v| v.is_true());
-        if enabled {
-            go::initialisms(&s)
-        } else {
-            s.into_owned()
-        }
-    });
+    env.add_filter("go_name", |s: Cow<'_, str>| go::initialisms(&s));
     // `tojson` writes `'` as `\u0027`, which Rust string literals reject.
     env.add_filter("rust_str", |s: Cow<'_, str>| format!("{s:?}"));
     env.add_filter("to_rust_variant", |s: Cow<'_, str>| {

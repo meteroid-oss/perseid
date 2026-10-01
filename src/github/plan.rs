@@ -1087,7 +1087,7 @@ fn collisions(
                     let file = root.join(&sdk.path).join(path);
                     if file.exists()
                         && !std::fs::read_to_string(&file)
-                            .is_ok_and(|t| crate::generate::marked(&t))
+                            .is_ok_and(|t| crate::generate::marked(&file, &t))
                     {
                         taken.push(
                             file.strip_prefix(root)
@@ -1113,7 +1113,7 @@ fn collisions(
                         continue;
                     }
                     let text = cx.api.raw(&repo, &branch, &path)?.unwrap_or_default();
-                    if !crate::generate::marked(&String::from_utf8_lossy(&text)) {
+                    if !crate::generate::marked(Path::new(&path), &String::from_utf8_lossy(&text)) {
                         taken.push(path);
                     }
                 }

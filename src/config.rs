@@ -32,18 +32,14 @@ pub struct Config {
     pub version: Option<String>,
     pub header_prefix: Option<String>,
     pub user_agent: Option<String>,
-    pub patch_nullable: Option<bool>,
     /// Installs the Standard Webhooks signature verifier in every SDK.
     pub webhooks: Option<bool>,
-    pub method_names: Option<MethodNames>,
-    /// Method names by operation id, over the naming strategy.
+    /// Method names by operation id, over the resource-style names.
     #[serde(default)]
     pub names: BTreeMap<String, String>,
     /// Default request timeout, in seconds.
     pub timeout: Option<u64>,
-    /// Primitive-or-object unions as typed values rather than untyped JSON.
-    pub typed_unions: Option<bool>,
-    /// How typed unions decode objects that no rule tells apart.
+    /// How unions decode objects that no rule tells apart.
     pub untagged_unions: Option<UntaggedUnions>,
     /// SPDX license expression of the packages.
     pub license: Option<String>,
@@ -92,20 +88,13 @@ pub struct Target {
     pub version: Option<String>,
     pub header_prefix: Option<String>,
     pub user_agent: Option<String>,
-    pub patch_nullable: Option<bool>,
     pub webhooks: Option<bool>,
     /// TypeScript type of int64 values: `number` (the default), `bigint` or `string`.
     pub int64: Option<String>,
-    /// Go: spell initialisms the Go way (`CustomerID`, not `CustomerId`).
-    pub initialisms: Option<bool>,
-    /// Java: 2 for unchecked exceptions, typed unions and plumbing in an `internal` package.
-    pub edition: Option<u32>,
-    pub method_names: Option<MethodNames>,
     /// Method names by operation id, over the top-level `[names]`.
     #[serde(default)]
     pub names: BTreeMap<String, String>,
     pub timeout: Option<u64>,
-    pub typed_unions: Option<bool>,
     pub untagged_unions: Option<UntaggedUnions>,
     /// Operation ids left out of this SDK only, on top of the top-level `exclude`.
     #[serde(default)]
@@ -114,7 +103,7 @@ pub struct Target {
     pub context: BTreeMap<String, Value>,
 }
 
-/// How a typed union decodes an object when several variants are objects that neither a
+/// How a union decodes an object when several variants are objects that neither a
 /// discriminator nor the constants and required properties they declare tell apart.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -125,17 +114,6 @@ pub enum UntaggedUnions {
     /// The variant whose required properties are all present and which knows the most
     /// properties, the first declared on ties.
     BestMatch,
-}
-
-/// How operations are named in code.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum MethodNames {
-    /// After the operation id: `customers.getCustomers`.
-    #[default]
-    OperationId,
-    /// After the HTTP method and the path within the resource: `customers.list`.
-    Resource,
 }
 
 /// How a list operation pages, as `x-pagination` on an operation or `[pagination]` in perseid.toml.
@@ -247,6 +225,9 @@ impl Config {
                 path.display()
             )
         })?;
+        let table: toml::Table =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+        removed_keys(&table).with_context(|| format!("in {}", path.display()))?;
         let config: Self =
             toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         ensure!(
@@ -261,25 +242,6 @@ impl Config {
                 .all(|t| t.as_ref().is_none_or(|t| t.int64.is_none())),
             "`int64` is only supported in [typescript]"
         );
-        let not_java = [
-            &config.rust,
-            &config.typescript,
-            &config.python,
-            &config.go,
-            &config.csharp,
-        ];
-        ensure!(
-            not_java
-                .iter()
-                .all(|t| t.as_ref().is_none_or(|t| t.edition.is_none())),
-            "`edition` is only supported in [java]"
-        );
-        if let Some(edition) = config.java.as_ref().and_then(|t| t.edition) {
-            ensure!(
-                (1..=2).contains(&edition),
-                "[java] `edition` must be 1 or 2"
-            );
-        }
         if let Some(int64) = config.typescript.as_ref().and_then(|t| t.int64.as_deref()) {
             ensure!(
                 ["number", "bigint", "string"].contains(&int64),
@@ -304,11 +266,6 @@ impl Config {
         let mut filters = self.filters();
         filters.excluded.extend(sdk.target.exclude.iter().cloned());
         filters.reserved = reserved_type_names(sdk.language, &self.name);
-        filters.method_names = sdk
-            .target
-            .method_names
-            .or(self.method_names)
-            .unwrap_or_default();
         filters.names.extend(sdk.target.names.clone());
         filters
     }
@@ -324,7 +281,6 @@ impl Config {
             specified: self.only.iter().cloned().collect(),
             pagination: self.pagination.clone(),
             reserved: BTreeSet::new(),
-            method_names: self.method_names.unwrap_or_default(),
             names: self.names.clone(),
         }
     }
@@ -427,14 +383,11 @@ impl Config {
             "default_base_url": pick(&target.base_url, &self.base_url, "http://localhost"),
             "user_agent_prefix": pick(&target.user_agent, &self.user_agent, &kebab),
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
-            "patch_nullable": target.patch_nullable.or(self.patch_nullable).unwrap_or(false),
             "webhooks": target.webhooks.or(self.webhooks).unwrap_or(false),
             "int64": target.int64.as_deref().unwrap_or("number"),
-            "go_initialisms": target.initialisms.unwrap_or(false),
             "version": version,
             "extra_exports": target.exports,
             "timeout": target.timeout.or(self.timeout).unwrap_or(60),
-            "typed_unions": target.typed_unions.or(self.typed_unions).unwrap_or(false),
             "untagged_unions": match target.untagged_unions.or(self.untagged_unions).unwrap_or_default() {
                 UntaggedUnions::Json => "json",
                 UntaggedUnions::BestMatch => "best-match",
@@ -447,21 +400,10 @@ impl Config {
         });
         let map = context.as_object_mut().unwrap();
         if language == "java" {
-            let edition = target.edition.unwrap_or(1);
-            let (internal_package, internal_dir) = if edition >= 2 {
-                (format!("{package}.internal"), "internal")
-            } else {
-                (package.clone(), ".")
-            };
-            map.insert("edition".into(), edition.into());
-            map.insert("typed_unions".into(), (edition >= 2).into());
-            map.insert("java_internal_package".into(), internal_package.into());
-            map.insert("java_internal_dir".into(), internal_dir.into());
-        }
-        if language == "rust" {
-            map.insert("chrono".into(), rust_depends_on(dir, "chrono").into());
-            let futures = rust_depends_on(dir, "futures-core");
-            map.insert("futures_core".into(), futures.into());
+            map.insert(
+                "java_internal_package".into(),
+                format!("{package}.internal").into(),
+            );
         }
         map.extend(self.context.clone());
         map.extend(target.context.clone());
@@ -469,16 +411,42 @@ impl Config {
     }
 }
 
-/// Rust dates are `chrono` types when the crate depends on it (or has no manifest yet), so
-/// SDKs predating it keep their string dates.
-fn rust_depends_on(dir: &Path, dependency: &str) -> bool {
-    let Ok(text) = std::fs::read_to_string(dir.join("Cargo.toml")) else {
-        return true;
-    };
-    toml::from_str::<toml::Value>(&text)
-        .ok()
-        .and_then(|manifest| manifest.get("dependencies")?.get(dependency).cloned())
-        .is_some()
+/// Keys of earlier versions, whose behaviour is now the only one.
+const REMOVED: [(&str, &str); 5] = [
+    (
+        "method_names",
+        "methods are named after their resource; `[names]` renames one",
+    ),
+    ("typed_unions", "unions are always typed"),
+    (
+        "patch_nullable",
+        "nullable optional PATCH fields can always be cleared",
+    ),
+    (
+        "initialisms",
+        "Go names always spell initialisms the Go way",
+    ),
+    ("edition", "Java SDKs always have edition 2's API"),
+];
+
+fn removed_keys(table: &toml::Table) -> Result<()> {
+    let tables = std::iter::once(("", table)).chain(
+        LANGUAGES
+            .into_iter()
+            .filter_map(|l| Some((l, table.get(l)?.as_table()?))),
+    );
+    for (language, table) in tables {
+        for (key, why) in REMOVED {
+            if table.contains_key(key) {
+                let at = match language {
+                    "" => String::new(),
+                    language => format!("[{language}] "),
+                };
+                anyhow::bail!("{at}`{key}` was removed ({why}): delete it");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The SDK's own package manifest owns its version, so release tooling keeps working.
@@ -822,20 +790,28 @@ mod tests {
     }
 
     #[test]
-    fn method_names_and_overrides_are_per_language() {
-        let toml = "spec = \"s\"\nname = \"Acme\"\nmethod_names = \"resource\"\n\
-                    [names]\na = \"x\"\n[go]\nmethod_names = \"operation_id\"\nnames = { a = \"y\" }\n[rust]\n";
+    fn name_overrides_are_per_language() {
+        let toml = "spec = \"s\"\nname = \"Acme\"\n\
+                    [names]\na = \"x\"\n[go]\nnames = { a = \"y\" }\n[rust]\n";
         let config: Config = toml::from_str(toml).unwrap();
         let sdks = config.sdks(&[]).unwrap();
-        let rust = config.filters_for(&sdks[0]);
-        let go = config.filters_for(&sdks[1]);
-        assert_eq!(
-            (rust.method_names, rust.names["a"].as_str()),
-            (MethodNames::Resource, "x")
+        assert_eq!(config.filters_for(&sdks[0]).names["a"], "x");
+        assert_eq!(config.filters_for(&sdks[1]).names["a"], "y");
+    }
+
+    #[test]
+    fn removed_keys_say_what_to_do() {
+        let error = |toml: &str| {
+            removed_keys(&toml.parse().unwrap())
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(error("method_names = \"resource\"").contains("`method_names` was removed"));
+        let java = error("[java]\nedition = 2");
+        assert!(
+            java.contains("[java] `edition`") && java.contains("delete it"),
+            "{java}"
         );
-        assert_eq!(
-            (go.method_names, go.names["a"].as_str()),
-            (MethodNames::OperationId, "y")
-        );
+        assert!(removed_keys(&"[go]\nmodule = \"m\"".parse().unwrap()).is_ok());
     }
 }

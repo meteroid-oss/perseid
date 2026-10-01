@@ -7,14 +7,10 @@ here=$(cd "$(dirname "$0")" && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# The tests call methods by their operation ids.
-pin_names() { sed -i 's/^method_names = .*/method_names = "operation_id"/' perseid.toml; }
-
 cp "$here/../fixtures/petstore.yaml" "$work/openapi.yaml"
 cd "$work"
 perseid init "$lang"
 sed -i '/^name = /a webhooks = true' perseid.toml
-pin_names
 perseid generate "$lang"
 cp -r "$here/$lang/." "$lang/"
 cd "$lang"
@@ -23,7 +19,7 @@ case "$lang" in
   rust)
     cargo test --features webhooks
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
-    cd "$work/torture" && perseid init rust && pin_names && perseid generate rust
+    cd "$work/torture" && perseid init rust && perseid generate rust
     mkdir -p rust/tests && cp "$here/rust/torture/"*.rs rust/tests/ && cd rust && cargo test ;;
   typescript)
     npm install --no-audit --no-fund && npm run build
@@ -34,7 +30,7 @@ case "$lang" in
   go)
     go vet ./... && go test ./...
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
-    cd "$work/torture" && perseid init go && pin_names && perseid generate go
+    cd "$work/torture" && perseid init go && perseid generate go
     cp "$here/go/_torture/"*_test.go go/ && cd go && go vet ./... && go test ./... ;;
   java)
     gradle_test() {
@@ -49,11 +45,11 @@ GRADLE
     }
     rm -rf _torture && gradle_test
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
-    cd "$work/torture" && perseid init java && pin_names && perseid generate java
+    cd "$work/torture" && perseid init java && perseid generate java
     cp -r "$here/java/_torture/." java/ && cd java && gradle_test ;;
   csharp)
     rm -rf _torture && dotnet test Tests
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
-    cd "$work/torture" && perseid init csharp && pin_names && perseid generate csharp
+    cd "$work/torture" && perseid init csharp && perseid generate csharp
     cp -r "$here/csharp/_torture/." csharp/ && cd csharp && dotnet test Tests ;;
 esac

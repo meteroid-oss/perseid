@@ -33,10 +33,10 @@ test("a cache middleware answers repeated GETs without reaching the origin", asy
   const seen = [];
   const petstore = new Petstore("token", { middleware: [cache(), origin(seen)] });
   for (let i = 0; i < 3; i++) {
-    assert.equal((await petstore.pets.getPet("1")).name, "Rex");
+    assert.equal((await petstore.pets.retrieve("1")).name, "Rex");
   }
   assert.equal(seen.length, 1);
-  await petstore.pets.getPet("2");
+  await petstore.pets.retrieve("2");
   assert.equal(seen.length, 2);
 });
 
@@ -47,7 +47,7 @@ test("middleware runs in order and can change the request", async () => {
     return next(request);
   };
   const petstore = new Petstore("token", { middleware: [tag, origin(seen)] });
-  await petstore.pets.getPet("1");
+  await petstore.pets.retrieve("1");
   assert.equal(seen[0].headers.get("x-tag"), "yes");
   assert.equal(seen[0].headers.get("authorization"), "Bearer token");
 });
@@ -59,7 +59,7 @@ test("middleware composes with a custom fetch", async () => {
     return Response.json(PET);
   };
   const petstore = new Petstore("token", { fetch, middleware: [cache()] });
-  await petstore.pets.getPet("1");
-  await petstore.pets.getPet("1");
+  await petstore.pets.retrieve("1");
+  await petstore.pets.retrieve("1");
   assert.equal(reached, 1);
 });

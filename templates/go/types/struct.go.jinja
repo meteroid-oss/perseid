@@ -1,6 +1,6 @@
 {% from "types/macros.go.jinja" import go_field_type, go_json_tag, go_deprecated, go_ident, go_export, go_type, go_union_name, go_union -%}
 {% set type_name = go_ident(type.name) -%}
-{% set patch = patch_body and sdk.patch_nullable -%}
+{% set patch = patch_body -%}
 {% macro field_type(field) %}{% if field.flatten %}{{ go_type(field.type) }}{% else %}{{ go_field_type(field, patch, go_union_name(type.name, field.name, field.type, type_names)) }}{% endif %}{% endmacro -%}
 {% set unions %}{% for field in type.fields if not field.flatten %}{% set union = go_union_name(type.name, field.name, field.type, type_names) %}{% if union %}
 {{ go_union(union, field.type) }}

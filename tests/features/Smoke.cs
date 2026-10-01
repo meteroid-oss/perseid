@@ -25,43 +25,43 @@ void Equal<T>(T expected, T actual)
 void Ids(string expected, List<string> actual) => Equal(expected, string.Join(",", actual));
 
 using var client = new FeaturesClient("tok", new() { BaseUrl = serverUrl });
-Equal("||", (await client.Account.HealthAsync()).Status);
-Equal("Bearer tok||", (await client.Account.MachineStatusAsync()).Status);
-Ids("w1,w2,w3", await Collect(client.Widgets.ListWidgetsIterAsync(), w => w.Id));
+Equal("||", (await client.Account.RetrieveHealthAsync()).Status);
+Equal("Bearer tok||", (await client.Account.RetrieveMachineAsync()).Status);
+Ids("w1,w2,w3", await Collect(client.Widgets.ListIterAsync(), w => w.Id));
 Ids(
     "e1,e2,e3",
-    await Collect(client.Widgets.ListWidgetEventsIterAsync("w1", new() { Kind = "created" }), e => e.Id)
+    await Collect(client.Widgets.ListEventsIterAsync("w1", new() { Kind = "created" }), e => e.Id)
 );
-Ids("g1,g2,g3", await Collect(client.Gadgets.ListGadgetsIterAsync(), g => g.Id));
-Ids("r1,r2,r3", await Collect(client.Records.ListRecordsIterAsync(), r => r.Id));
+Ids("g1,g2,g3", await Collect(client.Gadgets.ListIterAsync(), g => g.Id));
+Ids("r1,r2,r3", await Collect(client.Records.ListIterAsync(), r => r.Id));
 
 using var basic = new FeaturesClient(
     null,
     new() { BaseUrl = serverUrl, BasicAuth = new("u", "p") }
 );
-Equal("Basic dTpw||", (await basic.Account.CreateSessionAsync()).Status);
+Equal("Basic dTpw||", (await basic.Account.SessionAsync()).Status);
 
 using var provided = new FeaturesClient(
     null,
     new() { BaseUrl = serverUrl, TokenProvider = _ => ValueTask.FromResult("fresh") }
 );
-Equal("Bearer fresh||", (await provided.Account.MachineStatusAsync()).Status);
+Equal("Bearer fresh||", (await provided.Account.RetrieveMachineAsync()).Status);
 
 using var keyed = new FeaturesClient(
     null,
     new() { BaseUrl = serverUrl, ApiKeys = new() { ApiKey = "k" } }
 );
-Ids("w1,w2,w3", await Collect(keyed.Widgets.ListWidgetsIterAsync(), w => w.Id));
+Ids("w1,w2,w3", await Collect(keyed.Widgets.ListIterAsync(), w => w.Id));
 using var anonymous = new FeaturesClient(null, new() { BaseUrl = serverUrl });
 try
 {
-    await anonymous.Widgets.ListWidgetsAsync();
+    await anonymous.Widgets.ListAsync();
     throw new Exception("an unauthenticated call must fail");
 }
 catch (ApiException e) when ((int)e.StatusCode == 401) { }
 
 var events = new List<SseEvent>();
-await using (var stream = await client.Streaming.StreamEventsAsync(new() { Topic = "news" }))
+await using (var stream = await client.Streaming.RetrieveEventsStreamAsync(new() { Topic = "news" }))
 {
     await foreach (var sse in stream)
     {
@@ -74,7 +74,7 @@ Equal(new SseEvent("greeting", "news", "1"), events[0]);
 Equal(new SseEvent("message", "line1\nline2", "1"), events[1]);
 Equal(new SseEvent("message", "{\"n\": 3}", "3", 1500), events[2]);
 
-var uploaded = await client.Streaming.UploadFileAsync(
+var uploaded = await client.Streaming.CreateFileAsync(
     new()
     {
         File = Upload.FromBytes(Encoding.UTF8.GetBytes("hello"), "a.txt", "text/plain"),
@@ -90,12 +90,12 @@ Equal(
 );
 Equal(
     "application/octet-stream:raw bytes",
-    (await client.Streaming.UploadContentAsync("f1", Encoding.UTF8.GetBytes("raw bytes"))).Status
+    (await client.Streaming.UpdateFileContentAsync("f1", Encoding.UTF8.GetBytes("raw bytes"))).Status
 );
 using var streamed = new MemoryStream(Encoding.UTF8.GetBytes("streamed"));
 Equal(
     "application/octet-stream:streamed",
-    (await client.Streaming.UploadContentAsync("f1", streamed)).Status
+    (await client.Streaming.UpdateFileContentAsync("f1", streamed)).Status
 );
 
 var searched = await client.Wire.SearchAsync(
@@ -142,6 +142,6 @@ Equal(
 );
 Equal(
     "42:image/png:png",
-    (await client.Wire.PutImageAsync("42", Encoding.UTF8.GetBytes("png"))).Status
+    (await client.Wire.UpdateImageAsync("42", Encoding.UTF8.GetBytes("png"))).Status
 );
 Console.WriteLine("csharp smoke test passed");

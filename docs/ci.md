@@ -124,7 +124,7 @@ files perseid didn't write. Once confirmed, it:
 
 Running it again changes nothing once in sync. `--dry-run` prints the plan and exits with 2 when
 changes are pending (0 otherwise), `--yes` applies without asking, and `--no-browser` prints URLs
-instead of opening them. `perseid init --github` still works: it runs `init`, then `setup`.
+instead of opening them.
 
 `perseid status`, from the API repository or an SDKs repository, runs the same comparison
 without changing anything, then checks how the automation fares: the last spec synced (commit and

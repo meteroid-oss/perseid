@@ -336,10 +336,7 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		apiErr := newAPIError(resp.StatusCode, respBody)
-		// An errors.go scaffolded before response headers were kept has no setHeader.
-		if withHeader, ok := any(apiErr).(interface{ setHeader(http.Header) }); ok {
-			withHeader.setHeader(resp.Header)
-		}
+		apiErr.setHeader(resp.Header)
 		return attemptResult{
 			status:     resp.StatusCode,
 			err:        apiErr,

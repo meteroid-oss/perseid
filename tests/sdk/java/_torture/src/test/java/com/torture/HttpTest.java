@@ -5,7 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.net.httpserver.HttpServer;
-import com.torture.api.ThingsListThingsOptions;
+import com.torture.api.ThingsListOptions;
 import com.torture.exceptions.ApiException;
 import com.torture.exceptions.ApiTimeoutException;
 import com.torture.exceptions.InternalServerException;
@@ -74,15 +74,15 @@ class HttpTest {
 
     @Test
     void pathsKeepTheServerPrefixAndEscapeParameters() throws Exception {
-        client().getThings().getThing("a/b?c=d");
-        client().getThings().getThing("100%");
+        client().getThings().retrieve("a/b?c=d");
+        client().getThings().retrieve("100%");
         assertEquals(List.of("GET /v1/things/a%2Fb%3Fc=d", "GET /v1/things/100%25"), requests);
-        assertThrows(IllegalArgumentException.class, () -> client().getThings().getThing(".."));
+        assertThrows(IllegalArgumentException.class, () -> client().getThings().retrieve(".."));
     }
 
     @Test
     void queryParametersAreEncoded() throws Exception {
-        client().getThings().listThings(new ThingsListThingsOptions()
+        client().getThings().list(new ThingsListOptions()
                 .ids(List.of("x", "y"))
                 .kind(Kind.BETA_2)
                 .since(OffsetDateTime.parse("2024-01-02T03:04:00Z")));
@@ -93,14 +93,14 @@ class HttpTest {
     void rateLimitedRequestsAreRetriedAfterTheirDelay() throws Exception {
         statuses.add(429);
         retryAfter = "0";
-        assertEquals("n", client().getThings().getThing("t").getName());
+        assertEquals("n", client().getThings().retrieve("t").getName());
         assertEquals(2, requests.size());
     }
 
     @Test
     void postsAreRetriedWithTheSameIdempotencyKey() throws Exception {
         statuses.add(503);
-        client().getThings().createThing(new com.torture.models.ThingCreate().name("n").kind(Kind.ALPHA));
+        client().getThings().create(new com.torture.models.ThingCreate().name("n").kind(Kind.ALPHA));
         assertEquals(2, idempotencyKeys.size());
         assertTrue(idempotencyKeys.get(0).startsWith("auto_"));
         assertEquals(idempotencyKeys.get(0), idempotencyKeys.get(1));
@@ -110,7 +110,7 @@ class HttpTest {
     void patchesWithoutAnIdempotencyKeyAreNotRetried() {
         statuses.add(503);
         ApiException error = assertThrows(
-                ApiException.class, () -> client().getThings().updateThing("t", new ThingPatch()));
+                ApiException.class, () -> client().getThings().update("t", new ThingPatch()));
         assertEquals(503, error.getCode());
         assertEquals(1, requests.size());
     }
@@ -119,7 +119,7 @@ class HttpTest {
     void aLongRetryAfterReturnsTheError() {
         statuses.add(429);
         retryAfter = "3600";
-        ApiException error = assertThrows(ApiException.class, () -> client().getThings().getThing("t"));
+        ApiException error = assertThrows(ApiException.class, () -> client().getThings().retrieve("t"));
         assertEquals(429, error.getCode());
         assertEquals("3600", error.getHeaders().get("retry-after"));
         assertEquals(1, requests.size());
@@ -136,7 +136,7 @@ class HttpTest {
                     return chain.proceed(chain.request());
                 })
                 .build());
-        new Torture("token", options).getThings().getThing("t");
+        new Torture("token", options).getThings().retrieve("t");
         assertEquals(List.of("/things/t"), seen);
     }
 
@@ -155,7 +155,7 @@ class HttpTest {
         options.setTimeout(Duration.ofMillis(200));
         options.setRetrySchedule(List.of());
         ApiTimeoutException error =
-                assertThrows(ApiTimeoutException.class, () -> new Torture("token", options).getThings().getThing("t"));
+                assertThrows(ApiTimeoutException.class, () -> new Torture("token", options).getThings().retrieve("t"));
         assertEquals(0, error.getCode());
     }
 
@@ -166,11 +166,11 @@ class HttpTest {
                 RequestOptions.builder().header("x-trace", "t1").maxRetries(0).idempotencyKey("k1").build();
         InternalServerException error = assertThrows(
                 InternalServerException.class,
-                () -> client().getThings().createThing(new com.torture.models.ThingCreate().name("n"), once));
+                () -> client().getThings().create(new com.torture.models.ThingCreate().name("n"), once));
         assertEquals(503, error.getCode());
         assertEquals(List.of("t1"), traces);
         assertEquals(List.of("k1"), idempotencyKeys);
-        client().getThings().listThings(RequestOptions.builder().header("x-trace", "t2").build());
+        client().getThings().list(RequestOptions.builder().header("x-trace", "t2").build());
         assertEquals(List.of("t1", "t2"), traces);
     }
 
@@ -185,20 +185,20 @@ class HttpTest {
             exchange.close();
         });
         RequestOptions fast = RequestOptions.builder().timeout(Duration.ofMillis(200)).maxRetries(0).build();
-        assertThrows(ApiTimeoutException.class, () -> client().getThings().getThing("t", fast));
+        assertThrows(ApiTimeoutException.class, () -> client().getThings().retrieve("t", fast));
     }
 
     @Test
     void errorsHaveAStatusClassAndATypedBody() {
         statuses.add(404);
-        NotFoundException missing = assertThrows(NotFoundException.class, () -> client().getThings().getThing("t"));
+        NotFoundException missing = assertThrows(NotFoundException.class, () -> client().getThings().retrieve("t"));
         assertEquals(404, missing.getCode());
 
         statuses.add(422);
         errorBody = "{\"message\":\"bad name\",\"fields\":{\"name\":[\"too short\"]}}";
         UnprocessableEntityException invalid = assertThrows(
                 UnprocessableEntityException.class,
-                () -> client().getThings().createThing(new com.torture.models.ThingCreate().name("n")));
+                () -> client().getThings().create(new com.torture.models.ThingCreate().name("n")));
         ValidationError body = invalid.getError(ValidationError.class).orElseThrow();
         assertEquals("bad name", body.getMessage());
         assertEquals(List.of("too short"), body.getFields().get("name"));

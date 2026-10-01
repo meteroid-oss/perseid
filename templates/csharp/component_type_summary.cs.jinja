@@ -48,7 +48,6 @@ namespace {{ sdk.package_name }}.Models;
 {% endif -%}
 {% endfor -%}
 {% set expandables = namespace(list=[]) -%}
-{% if sdk.typed_unions | default(false) -%}
 {% set taken = api.types | list | map("to_upper_camel_case") | list -%}
 {% for _, type in api.types | items if type.kind in ["struct", "struct_enum"] -%}
 {% set type_name = type.name | to_upper_camel_case -%}
@@ -90,7 +89,6 @@ namespace {{ sdk.package_name }}.Models;
 {% endfor -%}
 {% endfor -%}
 {% endfor -%}
-{% endif -%}
 {% for resource in api.resources -%}
 {% for op in resource.operations -%}
 {% set op_types = namespace(list=[m.body_type(op), m.response_type(op)]) -%}

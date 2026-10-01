@@ -2,16 +2,15 @@
     {{ name | to_rust_ident }}
 {% endmacro -%}
 
-{# The Rust type of a spec type. Dates are chrono types when the crate depends on chrono.
-   With `typed_unions`, a union is the enum named `union`. -#}
+{# The Rust type of a spec type, where a union is the enum named `union`. -#}
 {% macro rust_type(ty, union=none) -%}
 {% if union and ty.is_union() -%}
 {{ union }}
 {%- elif ty.is_datetime() -%}
-{% if sdk.chrono %}chrono::DateTime<chrono::Utc>{% else %}String{% endif -%}
-{% elif ty.is_date() -%}
-{% if sdk.chrono %}chrono::NaiveDate{% else %}String{% endif -%}
-{% elif ty.is_list() or ty.is_set() -%}
+chrono::DateTime<chrono::Utc>
+{%- elif ty.is_date() -%}
+chrono::NaiveDate
+{%- elif ty.is_list() or ty.is_set() -%}
 Vec<{{ rust_type(ty.inner_type(), union) }}>
 {%- elif ty.is_map() -%}
 std::collections::HashMap<String, {{ rust_type(ty.value_type(), union) }}>
@@ -238,7 +237,7 @@ match crate::models::union_rules::best_match(&value, &[
 
 {# The enum of the union in field `field` of `owner`, when unions are typed. -#}
 {% macro union_name(owner, field, ty, names=none) -%}
-{% if sdk.typed_unions and has_union(ty) -%}
+{% if has_union(ty) -%}
 {% set name = owner ~ (field | to_upper_camel_case) -%}
 {{ name }}{% if name in (type_names if names is none else names) %}Union{% endif %}
 {%- endif %}
@@ -246,11 +245,9 @@ match crate::models::union_rules::best_match(&value, &[
 
 {# Schemas only unions refer to, which `referenced_components` leaves out. -#}
 {% macro union_imports() -%}
-{% if sdk.typed_unions -%}
 {% for c in union_refs if c != type.name and c not in referenced_components -%}
 use super::{{ c | to_rust_ident }}::{{ c | to_upper_camel_case }};
 {% endfor -%}
-{% endif -%}
 {%- endmacro %}
 
 {# A struct's fields. Required nullable fields always serialize, `null` included; nullable
@@ -259,10 +256,6 @@ use super::{{ c | to_rust_ident }}::{{ c | to_upper_camel_case }};
 {% for field in fields if field.name != skip %}
     {% if field.description is defined -%}
         {{ field.description | to_doc_comment(style="rust") }}
-        {% if field.type.is_datetime() and not sdk.chrono -%}
-        ///
-        /// RFC 3339 date-time.
-        {% endif -%}
     {% endif -%}
     {% if field.deprecated -%}
         #[deprecated]

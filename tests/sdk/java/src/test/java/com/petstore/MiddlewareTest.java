@@ -62,10 +62,10 @@ class MiddlewareTest {
         Petstore petstore = new Petstore("token", options);
 
         for (int i = 0; i < 3; i++) {
-            assertEquals("Rex", petstore.getPets().getPet("1").getName());
+            assertEquals("Rex", petstore.getPets().retrieve("1").getName());
         }
         assertEquals(1, seen.size());
-        petstore.getPets().getPet("2");
+        petstore.getPets().retrieve("2");
         assertEquals(2, seen.size());
     }
 
@@ -75,7 +75,7 @@ class MiddlewareTest {
         PetstoreOptions options = new PetstoreOptions();
         options.getInterceptors().add(chain -> chain.proceed(chain.request().newBuilder().header("x-tag", "yes").build()));
         options.getInterceptors().add(origin(seen));
-        new Petstore("token", options).getPets().getPet("1");
+        new Petstore("token", options).getPets().retrieve("1");
 
         assertEquals("yes", seen.get(0).header("x-tag"));
         assertEquals("Bearer token", seen.get(0).header("Authorization"));

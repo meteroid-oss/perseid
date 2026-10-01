@@ -9,4 +9,4 @@
 {% set members = (ns.names + [unknown | lower]) | idents("shouty", "java", owner) -%}
 {% set values = ns.values -%}
 {% set integer = true -%}
-{% include ("types/open_enum.java.jinja" if sdk.edition >= 2 else "types/closed_enum.java.jinja") %}
+{% include "types/open_enum.java.jinja" %}

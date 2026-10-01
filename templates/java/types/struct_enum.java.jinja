@@ -13,8 +13,8 @@
     "Map", "Set", "Optional", "ArrayList", "HashMap", "LinkedHashMap", "LinkedHashSet", "BigDecimal",
     "OffsetDateTime", "URI", "Visibility", "JsonAnyGetter", "JsonAnySetter", "JsonAutoDetect",
     "JsonIgnoreProperties", "JsonInclude", "JsonProperty", "JsonSubTypes", "JsonTypeInfo",
-    "JsonTypeName", "JsonUnwrapped", "JsonProcessingException"] or (sdk.edition >= 2 and cls in [
-    "JsonValue", "TypeReference", "DeserializationContext", "JsonNode", "JsonDeserialize", "IOException"]) -%}
+    "JsonTypeName", "JsonUnwrapped", "JsonProcessingException", "JsonValue", "TypeReference",
+    "DeserializationContext", "JsonNode", "JsonDeserialize", "IOException"] -%}
 {% set ns.classes = ns.classes + [cls ~ "Variant" if shadowed else cls] -%}
 {% endfor -%}
 {% set classes = ns.classes -%}
@@ -41,16 +41,12 @@ import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.annotation.JsonTypeName;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
-{% if sdk.edition >= 2 -%}
 import com.fasterxml.jackson.annotation.JsonValue;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import java.io.IOException;
-{% else -%}
-import com.fasterxml.jackson.core.JsonProcessingException;
-{% endif -%}
 import {{ sdk.java_internal_package }}.Utils;
 
 import java.math.BigDecimal;

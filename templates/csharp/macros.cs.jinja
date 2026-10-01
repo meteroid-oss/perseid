@@ -95,7 +95,7 @@
 {% for _ in range(8) -%}
 {% if t.ty.is_list() or t.ty.is_set() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
 {% endfor -%}
-{% if sdk.typed_unions | default(false) and t.ty.is_union() -%}
+{% if t.ty.is_union() -%}
 {% set id = owner ~ (field.name | to_rust_variant) -%}
 {{ id }}{% if id in taken %}Union{% endif %}
 {%- endif %}

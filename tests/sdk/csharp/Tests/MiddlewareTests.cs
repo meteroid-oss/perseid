@@ -77,10 +77,10 @@ public class MiddlewareTests
         using var client = new PetstoreClient("token", options);
         for (var i = 0; i < 3; i++)
         {
-            Assert.Equal("Rex", (await client.Pets.GetPetAsync("1")).Name);
+            Assert.Equal("Rex", (await client.Pets.RetrieveAsync("1")).Name);
         }
         Assert.Single(origin.Seen);
-        await client.Pets.GetPetAsync("2");
+        await client.Pets.RetrieveAsync("2");
         Assert.Equal(2, origin.Seen.Count);
     }
 
@@ -93,7 +93,7 @@ public class MiddlewareTests
         options.Handlers.Add(new Tag("outer", order));
         options.Handlers.Add(new Tag("inner", order));
         using var client = new PetstoreClient("token", options);
-        await client.Pets.GetPetAsync("1");
+        await client.Pets.RetrieveAsync("1");
         Assert.Equal(["outer", "inner"], order);
         Assert.Equal(["outer", "inner"], origin.Seen[0].Headers.GetValues("x-tag"));
         Assert.Equal("Bearer token", origin.Seen[0].Headers.Authorization?.ToString());
@@ -114,7 +114,7 @@ public class MiddlewareTests
         };
         options.Handlers.Add(new Tag("tag", order));
         using var client = new PetstoreClient("token", options);
-        await client.Pets.GetPetAsync("1");
+        await client.Pets.RetrieveAsync("1");
         Assert.Equal(2, order.Count);
     }
 
@@ -127,8 +127,8 @@ public class MiddlewareTests
         options.Handlers.Add(new Cache());
         using (var client = new PetstoreClient(http, "token", options))
         {
-            await client.Pets.GetPetAsync("1");
-            await client.Pets.GetPetAsync("1");
+            await client.Pets.RetrieveAsync("1");
+            await client.Pets.RetrieveAsync("1");
         }
         Assert.Single(origin.Seen);
         await http.GetAsync("https://example.com/still-usable");

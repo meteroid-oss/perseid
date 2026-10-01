@@ -102,12 +102,12 @@ async fn cache_serves_repeated_gets_without_reaching_the_origin() {
     let petstore = client(&origin);
 
     for _ in 0..3 {
-        let pet = petstore.pets().get_pet("1").await.unwrap();
+        let pet = petstore.pets().retrieve("1").await.unwrap();
         assert_eq!(pet.name, "Rex");
     }
     assert_eq!(origin.calls.load(Ordering::SeqCst), 1);
 
-    petstore.pets().get_pet("2").await.unwrap();
+    petstore.pets().retrieve("2").await.unwrap();
     assert_eq!(origin.calls.load(Ordering::SeqCst), 2);
 }
 
@@ -115,7 +115,7 @@ async fn cache_serves_repeated_gets_without_reaching_the_origin() {
 async fn middleware_runs_in_order_and_can_change_the_request() {
     let origin = Origin::default();
     let petstore = client(&origin);
-    petstore.pets().get_pet("1").await.unwrap();
+    petstore.pets().retrieve("1").await.unwrap();
 
     let seen = origin.seen_headers.lock().unwrap();
     assert_eq!(seen[0]["x-tag"], "yes");

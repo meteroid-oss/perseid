@@ -32,7 +32,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import okhttp3.Headers;
 import okhttp3.HttpUrl;
 
 /** JSON and parameter encoding shared by the generated code. Internal. */
@@ -146,29 +145,9 @@ public final class Utils {
         return segment;
     }
 
-    /** Implemented by an {@code ApiException} that keeps the headers of its response. */
-    public interface WithResponseHeaders {
-        void setResponseHeaders(Headers headers);
-    }
-
-    /** Implemented by an {@code ApiException} that keeps the body parsed as its declared schema. */
-    public interface WithError {
-        void setError(Object error);
-    }
-
     public interface ToQueryParam {
         /** The value as sent in a query string, before URL encoding. */
         String toQueryParam();
-    }
-
-    /** {@code value} as JSON, with the SDK's settings. */
-    public static String toJson(Object value) throws JsonProcessingException {
-        return MAPPER.writeValueAsString(value);
-    }
-
-    /** Parse {@code json} into a {@code type}, with the SDK's settings. */
-    public static <T> T fromJson(String json, Class<T> type) throws JsonProcessingException {
-        return MAPPER.readValue(json, type);
     }
 
     /** {@code value} as JSON; a value the mapper cannot write is a bug, thrown unchecked. */

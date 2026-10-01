@@ -44,7 +44,6 @@ pub struct Filters {
     pub pagination: Vec<crate::config::Pagination>,
     /// Type names the SDK's runtime or language already uses, which schemas are renamed from.
     pub reserved: BTreeSet<String>,
-    pub method_names: crate::config::MethodNames,
     /// Method names by operation id.
     pub names: BTreeMap<String, String>,
 }

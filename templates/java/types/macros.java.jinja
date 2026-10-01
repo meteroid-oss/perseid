@@ -23,13 +23,11 @@
 {%- endif -%}
 {%- endmacro %}
 
-{#- Whether `ty` holds a typed union, which edition 2 renders as a class. -#}
+{#- Whether `ty` holds a typed union, rendered as a class. -#}
 {% macro has_union(ty) -%}
-{%- if sdk.edition >= 2 -%}
 {%- if ty.is_union() -%}true
 {%- elif ty.is_list() or ty.is_set() -%}{{ has_union(ty.inner_type()) }}
 {%- elif ty.is_map() -%}{{ has_union(ty.value_type()) }}
-{%- endif -%}
 {%- endif -%}
 {%- endmacro %}
 
@@ -63,7 +61,7 @@
 private {{ ty }} {{ var }};
 {% else -%}
 {% if default is not none -%}
-{% set value = default | tojson if ty == "String" else ty ~ (".of(" if sdk.edition >= 2 else ".fromValue(") ~ (default | tojson) ~ ")" -%}
+{% set value = default | tojson if ty == "String" else ty ~ ".of(" ~ (default | tojson) ~ ")" -%}
 {% set init = " = " ~ ("Optional.of(" ~ value ~ ")" if is_optional(field) else value) -%}
 {% endif -%}
 @JsonProperty({{ field.name | tojson }})
@@ -453,9 +451,8 @@ public abstract static class {{ cls }} {
 {% endif -%}
 {%- endmacro %}
 
-{#- fromJson and toJson of `cls`, unchecked from edition 2. -#}
+{#- fromJson and toJson of `cls`, unchecked. -#}
 {% macro json_methods(cls) -%}
-{% if sdk.edition >= 2 -%}
 /**
  * Parse {@code json} as {@code {{ cls }}}.
  *
@@ -469,19 +466,4 @@ public static {{ cls }} fromJson(String json) {
 public String toJson() {
     return Utils.json(this);
 }
-{%- else -%}
-/**
- * Parse {@code json} as {@code {{ cls }}}.
- *
- * @throws JsonProcessingException if it is not valid JSON of this shape
- */
-public static {{ cls }} fromJson(String json) throws JsonProcessingException {
-    return Utils.fromJson(json, {{ cls }}.class);
-}
-
-/** This {{ cls }} as JSON. */
-public String toJson() throws JsonProcessingException {
-    return Utils.toJson(this);
-}
-{%- endif %}
 {%- endmacro %}

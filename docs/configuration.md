@@ -6,7 +6,6 @@
 spec = "openapi.json"               # or an https:// URL, JSON or YAML
 name = "Acme"                       # Acme client, `acme` packages
 base_url = "https://api.acme.com"
-method_names = "resource"           # customers.list rather than customers.listCustomers
 license = "MIT"                     # package metadata, from the spec and the git remote
 repository = "https://github.com/acme/acme-sdks"
 
@@ -30,13 +29,11 @@ repo = "acme/acme-go"               # lives in its own repository, module github
 | `push_spec` | `owner/name` of a separate SDKs repository this repository sends its spec to, which generates the SDKs from its own `perseid.toml`; the SDK tables here only seed that file when `perseid setup` creates it. See [repository layouts](ci.md#repository-layouts) |
 | `generate` | The command writing the spec in the API repository's CI when it isn't committed, run from its root before pushing the spec |
 | `name` | UpperCamelCase client name; package names derive from it |
-| `base_url`, `header_prefix`, `user_agent`, `version`, `patch_nullable` | Defaults for every SDK |
+| `base_url`, `header_prefix`, `user_agent`, `version` | Defaults for every SDK |
 | `webhooks` | Install the [webhook verifier](customizing.md#webhooks) |
-| `method_names` | `operation_id` (default): methods are named after operation ids; `resource`: after the HTTP method and the path within their resource (`list`, `create`, `retrieve`, `update`, `delete`, `list_sources`, `capture`), falling back to the operation id when two would collide |
-| `[names]` | Method names by operation id, over `method_names` (as does `x-perseid-name` on an operation) |
-| `timeout` | Default request timeout in seconds, 60 by default. SDKs generated before 0.4 used 15 s (none in TypeScript): set `timeout = 15` to keep that |
-| `typed_unions` | Type values told apart by their JSON type, such as Stripe's expandable `string \| Customer` or `object \| ""`, in Rust, TypeScript, Python, Go and C# (Java: `edition = 2`), instead of untyped JSON; see [languages](languages.md) and [unions of objects](#unions-of-objects) |
-| `untagged_unions` | With typed unions, how unions of objects that no property tells apart decode: `json` (default, untyped JSON) or `best-match`; see [unions of objects](#unions-of-objects) |
+| `[names]` | Method names by operation id, over the [resource-style names](#method-names) (as does `x-perseid-name` on an operation) |
+| `timeout` | Default request timeout in seconds, 60 by default |
+| `untagged_unions` | How unions of objects that no property tells apart decode: `json` (default, untyped JSON) or `best-match`; see [unions of objects](#unions-of-objects) |
 | `license`, `repository`, `homepage`, `description`, `authors` | Package metadata written into the manifests `perseid init` creates |
 | `include` | `only-public` (default, skips `x-internal: true`), `public-and-internal` or `only-internal` |
 | `exclude`, `only` | Operation ids to leave out, or to keep exclusively |
@@ -47,33 +44,32 @@ repo = "acme/acme-go"               # lives in its own repository, module github
 ## Language tables
 
 Every table takes `path`, `repo`, `package`, `version`, `base_url`, `header_prefix`, `user_agent`,
-`webhooks`, `patch_nullable`, `method_names`, `names`, `timeout`, `typed_unions`, `untagged_unions`, `exclude`
-(operation ids left out of that SDK only) and a `context` table. A table with
+`webhooks`, `names`, `timeout`, `untagged_unions`, `exclude` (operation ids left out of that SDK
+only) and a `context` table. A table with
 `repo = "owner/name"` generates into that repository, checked out under `.perseid/repos`, at its
 root, or in a folder named after the language when several SDKs share the repository; `path`
 overrides either. Both override the top-level `repo`.
 
 Language-specific keys:
 
-- `[go]`: `module`; `initialisms = true` spells names the Go way (`CustomerID`, `APIKey`);
-  with `patch_nullable = true`, nullable optional PATCH fields are `*Nullable[T]`.
+- `[go]`: `module`.
 - `[typescript]`: `exports`, modules re-exported from the entry point; `int64` = `"number"`
   (default, exact up to 2^53), `"bigint"` or `"string"`.
-- `[csharp]`: with `patch_nullable = true`, nullable optional PATCH fields are `MaybeUnset<T>`.
-- `[java]`: `edition = 2` makes exceptions unchecked (no `throws IOException, ApiException`),
-  enums classes that keep unknown values, types primitive-or-object unions as classes, and moves
-  the HTTP client and `Utils` to an `internal` package. The scaffolded `ApiException` must extend `RuntimeException`.
 - `[python.context]`: `flat_unions = true` types unions as `Circle | Square` instead of a wrapper model.
 
-`perseid init` turns on `method_names = "resource"`, `initialisms`, `typed_unions`,
-`patch_nullable` and Java's `edition = 2` for new SDKs; they rename or retype public API, so
-existing SDKs opt in. It leaves `untagged_unions` to its `json` default. It also fills the package metadata from the spec's `info` (license, contact,
+`perseid init` fills the package metadata from the spec's `info` (license, contact,
 description) and the `origin` git remote.
+
+## Method names
+
+Methods are named after the HTTP method and the path within their resource: `list`, `create`,
+`retrieve`, `update`, `delete`, `list_sources`, `capture`. A name two operations of a resource
+would share falls back to the operation id. `[names]` and `x-perseid-name` rename one.
 
 ## Unions of objects
 
 A `oneOf`/`anyOf` of several objects without a `discriminator` (Stripe's
-`Charge.customer: string | Customer | DeletedCustomer`) is typed, with typed unions, when the
+`Charge.customer: string | Customer | DeletedCustomer`) is typed when the
 object variants can be told apart from their schemas: perseid looks for the fewest `const` or
 single-value `enum` properties (`deleted: true`) and required properties only one variant
 declares (`file_id`), and checks the most specific variant first. `DeletedCustomer` is picked
@@ -100,7 +96,6 @@ another variant than the one picked (see [languages](languages.md)).
 
 The model also carries, for templates to use:
 
-- `op.method_name`, the resource-style name (`op.name` when `method_names = "resource"`).
 - `op.errors`, the schema of each error response by status (`404`, `4XX`, `default`);
   `error_schemas` and `default_error` (the schema of nearly every operation's errors) on the API
   and in every template, and `is_error_schema` in type templates.

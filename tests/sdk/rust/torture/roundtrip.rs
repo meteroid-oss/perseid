@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use torture::{
     api::{
         middleware::{BoxError, BoxFuture, Middleware, Next, Request, Response},
-        HttpClient, RequestBody, RequestOptions, ThingsCreateThingOptions, ThingsListThingsOptions,
+        HttpClient, RequestBody, RequestOptions, ThingsCreateOptions, ThingsListOptions,
         Torture, TortureOptions,
     },
     error::Error,
@@ -170,10 +170,10 @@ impl Middleware for Origin {
 #[tokio::test]
 async fn caller_idempotency_key_replaces_the_automatic_one() {
     let origin = Origin::default();
-    let options = ThingsCreateThingOptions { idempotency_key: Some("mine".into()) };
+    let options = ThingsCreateOptions { idempotency_key: Some("mine".into()) };
     let create = ThingCreate::new(Kind::Alpha, "n");
-    origin.client().things().create_thing(create.clone(), Some(options)).await.unwrap();
-    origin.client().things().create_thing(create, None).await.unwrap();
+    origin.client().things().create(create.clone(), Some(options)).await.unwrap();
+    origin.client().things().create(create, None).await.unwrap();
 
     let requests = origin.requests();
     let keys: Vec<_> = requests[0].1.get_all("idempotency-key").iter().collect();
@@ -185,7 +185,7 @@ async fn caller_idempotency_key_replaces_the_automatic_one() {
 async fn header_and_date_query_params_are_encoded() {
     let origin = Origin::replying(vec![(200, vec![], r#"{"data":[]}"#)]);
     let since = "2024-01-02T03:04:05Z".parse().unwrap();
-    let options = ThingsListThingsOptions {
+    let options = ThingsListOptions {
         x_required: "req".into(),
         since: Some(since),
         day: Some("2024-02-29".parse().unwrap()),
@@ -193,7 +193,7 @@ async fn header_and_date_query_params_are_encoded() {
         csv_ids: Some(vec!["a".into(), "b".into()]),
         ..Default::default()
     };
-    origin.client().things().list_things(options).await.unwrap();
+    origin.client().things().list(options).await.unwrap();
 
     let (target, headers) = &origin.requests()[0];
     assert_eq!(
@@ -212,7 +212,7 @@ async fn throttled_requests_are_retried_after_the_advertised_delay() {
         (503, vec![], "busy"),
         (429, vec![("retry-after", "0")], "slow down"),
     ]);
-    let thing = origin.client().things().get_thing("t/1").await.unwrap();
+    let thing = origin.client().things().retrieve("t/1").await.unwrap();
     assert_eq!(thing.id, "i");
 
     let requests = origin.requests();
@@ -227,7 +227,7 @@ async fn non_idempotent_requests_are_not_retried() {
     let error = origin
         .client()
         .things()
-        .update_thing("t", ThingPatch::new())
+        .update("t", ThingPatch::new())
         .await
         .unwrap_err();
     assert_eq!(origin.requests().len(), 1);
@@ -245,7 +245,7 @@ async fn errors_are_typed() {
     let error = origin
         .client()
         .things()
-        .create_thing(ThingCreate::new(Kind::Alpha, "n"), None)
+        .create(ThingCreate::new(Kind::Alpha, "n"), None)
         .await
         .unwrap_err();
     let Error::Api(api) = error else { panic!("{error:?}") };
@@ -259,11 +259,11 @@ async fn errors_are_typed() {
         ..Default::default()
     };
     options.middleware.push(origin);
-    let error = Torture::new("t", Some(options)).tree().get_tree().await.unwrap_err();
+    let error = Torture::new("t", Some(options)).tree().retrieve().await.unwrap_err();
     assert!(matches!(error, Error::Timeout), "{error:?}");
 
     let origin = Origin::replying(vec![(200, vec![], "not json")]);
-    let error = origin.client().tree().get_tree().await.unwrap_err();
+    let error = origin.client().tree().retrieve().await.unwrap_err();
     assert!(matches!(error, Error::Decode(_)), "{error:?}");
     assert!(std::error::Error::source(&error).is_some());
 }
@@ -311,7 +311,7 @@ async fn http_client_and_connector_can_be_replaced() {
         ..Default::default()
     }
     .with_connector(hyper_util::client::legacy::connect::HttpConnector::new());
-    let thing = Torture::new("t", Some(options)).things().get_thing("i").await.unwrap();
+    let thing = Torture::new("t", Some(options)).things().retrieve("i").await.unwrap();
     assert_eq!(thing.name, "n");
 
     let count = Arc::new(AtomicUsize::new(0));
@@ -321,7 +321,7 @@ async fn http_client_and_connector_can_be_replaced() {
         http_client: Some(Arc::new(Counting(inner, count.clone()))),
         ..Default::default()
     };
-    Torture::new("t", Some(options)).things().get_thing("i").await.unwrap();
+    Torture::new("t", Some(options)).things().retrieve("i").await.unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 1);
 }
 
@@ -363,7 +363,7 @@ async fn request_options_apply_to_one_call() {
         .client()
         .things()
         .with_options(options)
-        .create_thing(ThingCreate::new(Kind::Alpha, "n"), None)
+        .create(ThingCreate::new(Kind::Alpha, "n"), None)
         .await
         .unwrap_err();
     assert_eq!(error.status(), Some(StatusCode::SERVICE_UNAVAILABLE));
@@ -375,18 +375,18 @@ async fn request_options_apply_to_one_call() {
 
     let slow = Origin { delay: Some(Duration::from_secs(5)), ..Origin::default() };
     let options = RequestOptions::new().timeout(Duration::from_millis(20)).max_retries(0);
-    let error = slow.client().tree().with_options(options).get_tree().await.unwrap_err();
+    let error = slow.client().tree().with_options(options).retrieve().await.unwrap_err();
     assert!(matches!(error, Error::Timeout), "{error:?}");
 
     let invalid = RequestOptions::new().header("bad header", "v");
-    let error = Origin::default().client().tree().with_options(invalid).get_tree().await.unwrap_err();
+    let error = Origin::default().client().tree().with_options(invalid).retrieve().await.unwrap_err();
     assert!(matches!(error, Error::Request(_)), "{error:?}");
 }
 
 #[tokio::test]
 async fn api_errors_expose_their_payload_and_request_id() {
     let origin = Origin::replying(vec![(404, vec![("x-request-id", "req_1")], r#"{"title":"gone"}"#)]);
-    let error = origin.client().tree().get_tree().await.unwrap_err();
+    let error = origin.client().tree().retrieve().await.unwrap_err();
     let api = error.api().unwrap();
     assert_eq!(api.request_id(), Some("req_1"));
     let payload: torture::api::ErrorBody = api.payload().unwrap();

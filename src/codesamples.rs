@@ -211,7 +211,6 @@ pub async fn generate_codesamples(
             specified: BTreeSet::new(),
             pagination: Vec::new(),
             reserved: BTreeSet::new(),
-            method_names: Default::default(),
             names: Default::default(),
         },
     )?;

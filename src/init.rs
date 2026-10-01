@@ -103,7 +103,6 @@ pub fn draft(init: &Init, root: &Path) -> Result<(String, bool)> {
         if let Some(url) = base_url {
             toml += &format!("base_url = {url:?}\n");
         }
-        toml += "method_names = \"resource\"\n";
         toml += &metadata(&doc, root);
         toml += &layouts(&source, &name.to_kebab_case(), root);
         toml
@@ -120,18 +119,6 @@ pub fn draft(init: &Init, root: &Path) -> Result<(String, bool)> {
         .filter(|l| !existing.contains_key(l.as_str()))
     {
         toml += &format!("\n[{language}]\n");
-        if language == "go" {
-            toml += "initialisms = true\npatch_nullable = true\ntyped_unions = true\n";
-        }
-        if language == "csharp" {
-            toml += "patch_nullable = true\ntyped_unions = true\n";
-        }
-        if ["rust", "typescript", "python"].contains(&language.as_str()) {
-            toml += "typed_unions = true\n";
-        }
-        if language == "java" {
-            toml += "edition = 2\n";
-        }
         added = true;
     }
     Ok((toml, added || !config_path.exists()))

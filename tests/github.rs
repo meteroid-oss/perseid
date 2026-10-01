@@ -840,14 +840,11 @@ fn setup_without_credentials_says_how_to_get_them() {
     let server = Arc::new(Mutex::new(GitHub::with_spec_repo()));
     let port = serve(server);
     let (dir, bin) = api_checkout(false);
-    let args = ["init", "rust", "--github", "--yes"];
     let env = [("PERSEID_GITHUB_CLIENT_ID", "")];
-    let (code, out) = perseid(dir.path(), bin.path(), port, &args, "", &env);
+    let (code, out) = perseid(dir.path(), bin.path(), port, &["init", "rust"], "", &env);
+    assert_eq!(code, 0, "{out}");
+    let (code, out) = perseid(dir.path(), bin.path(), port, &["setup", "--yes"], "", &env);
     assert_ne!(code, 0);
-    assert!(
-        out.contains("is now `perseid init`, then `perseid setup`"),
-        "{out}"
-    );
     assert!(
         out.contains("set GH_TOKEN") && out.contains("gh auth login"),
         "{out}"
@@ -1177,7 +1174,7 @@ fn setup_sends_the_spec_to_an_sdks_repository_orchestrating_one_per_language() {
 
 /// A clone of acme/petstore-sdks, an SDK monorepo generated from a URL until now.
 fn sdks_checkout(fake: &mut GitHub) -> (tempfile::TempDir, tempfile::TempDir) {
-    let config = "spec = \"https://api.example.com/openapi.yaml\"\nname = \"Petstore\"\nmethod_names = \"resource\"\n\n[typescript]\npath = \"ts\"\ntyped_unions = true\n";
+    let config = "spec = \"https://api.example.com/openapi.yaml\"\nname = \"Petstore\"\n\n[typescript]\npath = \"ts\"\n";
     let release = "{\n  \"packages\": {\n    \"docs\": {\n      \"release-type\": \"simple\"\n    }\n  }\n}\n";
     let handwritten = "export const mine = 1;\n";
     let files = [

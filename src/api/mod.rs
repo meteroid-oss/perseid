@@ -53,7 +53,7 @@ impl Api {
             &filters.excluded,
             &filters.specified,
         );
-        if let Err(e) = naming::apply(&mut resources, filters.method_names, &filters.names) {
+        if let Err(e) = naming::apply(&mut resources, &filters.names) {
             errors.push(format!("{e:#}"));
         }
         let (mut types, type_errors) = types::from_referenced_components(
@@ -154,20 +154,12 @@ impl Api {
         Ok(())
     }
 
-    pub(crate) fn untype_unions(&mut self) {
-        types::untype_unions(&mut self.types);
-    }
-
-    /// Settles the unions of several objects for the SDK of context `sdk`: untyped JSON
-    /// without typed unions, and those without rules unless best match is on. Returns how
-    /// many are decided by best match and how many best match would type.
+    /// Settles the unions of several objects for the SDK of context `sdk`: those without rules
+    /// are untyped JSON unless best match is on. Returns how many are decided by best match
+    /// and how many best match would type.
     pub(crate) fn settle_object_unions(&mut self, sdk: &serde_json::Value) -> (usize, usize) {
-        let typed = match sdk["edition"].as_u64() {
-            Some(edition) => edition >= 2,
-            None => sdk["typed_unions"].as_bool().unwrap_or(false),
-        };
         let best_match = sdk["untagged_unions"].as_str() == Some("best-match");
-        types::settle_object_unions(&mut self.types, typed, best_match)
+        types::settle_object_unions(&mut self.types, best_match)
     }
 
     pub(crate) fn inline_flattened_fields(&mut self) -> anyhow::Result<()> {
