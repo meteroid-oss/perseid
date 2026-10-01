@@ -345,7 +345,11 @@ fn infer_discriminator(value: &mut Value, schemas: &Map<String, Value>) {
             _ => infer_discriminator(child, schemas),
         }
     }
-    if map.contains_key("discriminator") || map.contains_key("x-perseid-union") {
+    // A `oneOf` next to properties is an adjacently tagged union, which the model reads as is.
+    if ["discriminator", "x-perseid-union", "properties"]
+        .iter()
+        .any(|key| map.contains_key(*key))
+    {
         return;
     }
     let Some(Value::Array(variants)) = map.get("oneOf") else {
@@ -356,7 +360,6 @@ fn infer_discriminator(value: &mut Value, schemas: &Map<String, Value>) {
     } else if let [Value::Object(variant)] = &variants[..]
         && !variant.contains_key("$ref")
         && !is_null_schema(&variants[0])
-        && !map.contains_key("properties")
     {
         let variant = variant.clone();
         map.remove("oneOf");
@@ -1541,7 +1544,11 @@ mod tests {
             "Base": { "type": "object", "properties": { "at": { "type": "string" } } },
             "Untagged": { "oneOf": [tagged("a"), { "type": "object", "properties": { "kind": { "const": "b" } } }] },
             "Shared": { "oneOf": [tagged("a"), tagged("a")] },
-            "Opted": { "oneOf": [tagged("a"), tagged("b")], "x-perseid-union": "json" }
+            "Opted": { "oneOf": [tagged("a"), tagged("b")], "x-perseid-union": "json" },
+            "Adjacent": {
+                "properties": { "id": { "type": "string" } },
+                "oneOf": [tagged("a"), tagged("b")]
+            }
         } } }));
         let s = &doc["components"]["schemas"];
         assert_eq!(
@@ -1554,6 +1561,7 @@ mod tests {
         assert!(s["Untagged"].get("discriminator").is_none());
         assert!(s["Shared"].get("discriminator").is_none());
         assert!(s["Opted"].get("discriminator").is_none());
+        assert!(s["Adjacent"].get("discriminator").is_none());
     }
 
     #[test]
