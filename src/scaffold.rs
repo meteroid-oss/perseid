@@ -126,6 +126,10 @@ pub fn release_workflow(branch: &str) -> Vec<u8> {
         .expect("the embedded release workflow");
     String::from_utf8_lossy(template)
         .replace("\"@@BRANCH@@\"", &Value::from(branch).to_string())
+        .replace(
+            "meteroid-oss/perseid/publish@v0",
+            &crate::github::uses("publish"),
+        )
         .into_bytes()
 }
 

@@ -1016,7 +1016,10 @@ fn connect_pushes_the_spec_to_a_repository_holding_every_sdk() {
     );
     for line in [
         "    paths: [\"openapi.yaml\",\".github/workflows/perseid-push.yml\"]\n",
-        "      - uses: meteroid-oss/perseid/push@v0\n        with:\n          spec: \"openapi.yaml\"\n          to: acme/petstore-sdks\n          deploy-key: ${{ secrets.PERSEID_SDKS_DEPLOY_KEY }}\n",
+        &format!(
+            "      - uses: {}\n        with:\n          spec: \"openapi.yaml\"\n          to: acme/petstore-sdks\n          deploy-key: ${{{{ secrets.PERSEID_SDKS_DEPLOY_KEY }}}}\n",
+            perseid::github::uses("push")
+        ),
     ] {
         assert!(push.contains(line), "{line}\n{push}");
     }
