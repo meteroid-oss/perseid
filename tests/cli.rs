@@ -530,6 +530,13 @@ fn empty_sdk_repositories_get_a_skeleton() {
         "`perseid setup` adds the release files"
     );
 
+    let (ok, out) = perseid(dir.path(), &["generate", "go", "--no-format"]);
+    assert!(ok, "{out}");
+    let (_, out) = perseid(dir.path(), &["generate", "go", "--check", "--no-format"]);
+    assert!(
+        out.contains("+ client.go") && !out.contains("local changes"),
+        "checks the generated files against the repository, empty: {out}"
+    );
     fs::write(checkout.join("client.go"), "// my edit\n").unwrap();
     let (ok, out) = perseid(dir.path(), &["generate", "go", "--no-format"]);
     assert!(

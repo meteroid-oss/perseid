@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -208,17 +208,20 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             let sdks = config.sdks(&languages)?;
             let out = out.map(|out| cwd.join(out));
-            let dirs = sdks
-                .iter()
-                .map(|sdk| {
-                    Ok(match (&out, sdk.remote()) {
-                        (Some(out), _) if sdk.path == "." => out.join(sdk.language),
-                        (Some(out), _) => out.join(&sdk.path),
-                        (None, Some(repo)) => pr::checkout(repo, &root, pr)?.join(&sdk.path),
-                        (None, None) => root.join(&sdk.path),
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
+            let mut checkouts = BTreeSet::new();
+            let mut dirs = Vec::new();
+            for sdk in &sdks {
+                dirs.push(match (&out, sdk.remote()) {
+                    (Some(out), _) if sdk.path == "." => out.join(sdk.language),
+                    (Some(out), _) => out.join(&sdk.path),
+                    (None, Some(repo)) => {
+                        let checkout = pr::checkout(repo, &root, pr)?;
+                        checkouts.insert(checkout.clone());
+                        checkout.join(&sdk.path)
+                    }
+                    (None, None) => root.join(&sdk.path),
+                });
+            }
             if let Some(twice) = dirs
                 .iter()
                 .find(|d| dirs.iter().filter(|o| o == d).count() > 1)
@@ -246,6 +249,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     .map(|h| h.join().expect("generation thread panicked"))
                     .collect()
             });
+            if !check {
+                checkouts.iter().try_for_each(|c| pr::record(c))?;
+            }
             let mut changes = BTreeMap::new();
             for (sdk, result) in sdks.iter().zip(results) {
                 changes.insert(

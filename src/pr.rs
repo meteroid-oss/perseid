@@ -89,8 +89,39 @@ pub fn origin(config: &crate::config::Config, root: &Path, spec: &str) -> Option
 /// Where `perseid connect`'s workflow records the commit it pushed the spec of.
 pub const SOURCE: &str = ".perseid/source.json";
 
+/// Where a checkout keeps the tree perseid last generated in it.
+const GENERATED: &str = ".git/perseid-generated";
+
+/// The tree of the files in the worktree of `dir`, untracked ones included, its index untouched.
+fn worktree_tree(dir: &Path) -> Result<String> {
+    let index = dir.join(".git/perseid-index");
+    let git = |args: &[&str]| -> Result<String> {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_INDEX_FILE", &index)
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "`git {}` failed in {}:\n{}",
+            args.join(" "),
+            dir.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    };
+    let tree = git(&["add", "--all"]).and_then(|_| git(&["write-tree"]));
+    let _ = std::fs::remove_file(&index);
+    tree
+}
+
+/// Records what perseid generated in the checkout at `dir`, which the next run may then reset.
+pub fn record(dir: &Path) -> Result<()> {
+    crate::fsx::write(&dir.join(GENERATED), worktree_tree(dir)?.as_bytes())
+}
+
 /// A fresh checkout of the default branch of `repo`, in a disposable directory under `.perseid/`.
-/// Local changes there stop it, unless `discard`.
+/// Changes there that perseid didn't generate stop it, unless `discard`.
 pub fn checkout(repo: &str, root: &Path, discard: bool) -> Result<PathBuf> {
     let url = if repo.contains(':') {
         repo.to_owned()
@@ -106,8 +137,13 @@ pub fn checkout(repo: &str, root: &Path, discard: bool) -> Result<PathBuf> {
     crate::fsx::write(&repos.join(".gitignore"), b"*\n")?;
     let dir = repos.join(segments[segments.len().saturating_sub(2)..].join("/"));
     if dir.join(".git").is_dir() {
+        let pristine = || -> Result<bool> {
+            let tree = worktree_tree(&dir)?;
+            let generated = std::fs::read_to_string(dir.join(GENERATED)).unwrap_or_default();
+            Ok(tree == generated || tree == git(&dir, &["rev-parse", "HEAD^{tree}"])?)
+        };
         ensure!(
-            discard || git(&dir, &["status", "--porcelain"])?.is_empty(),
+            discard || pristine()?,
             "{} has local changes, which `perseid generate` would discard: commit and push them, \
              or delete that directory (`--pr` discards them)",
             dir.display()

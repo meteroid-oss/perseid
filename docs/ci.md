@@ -108,7 +108,7 @@ optionally `--repo`, `--spec` and `--name`. Without a spec, `spec` is `openapi.j
 `perseid connect` will push; `perseid generate --spec <path|url>` previews the SDKs meanwhile.
 `perseid generate` starts each SDK from its package skeleton (manifest, README, errors) the first
 time, and prints where each one went. An SDK with its own `repo` is generated into a shallow clone
-of it under `.perseid/repos/<owner>/<name>`, reset on each run: local changes there stop `generate`
+of it under `.perseid/repos/<owner>/<name>`, reset on each run: changes there perseid didn't generate stop `generate`
 unless `--pr` is passed. Before `perseid setup` creates those repositories,
 `perseid generate --out <dir>` previews every SDK in `<dir>/<language>` (or `<dir>/<path>`) without cloning anything,
 and `--out <dir> --check` compares against that directory.
