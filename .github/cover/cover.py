@@ -12,9 +12,11 @@ LANGUAGES = [
     ("Python", "#f4d35e"),
     ("Go", "#3fc6e8"),
     ("Java", "#f5873a"),
+    ("C#", "#b07ce8"),
 ]
 TAGLINE = "OpenAPI in, idiomatic SDKs out."
-SUBLINE = "GitHub-native SDK generation. No cloud, no subscription."
+SUBLINE = "Pull requests from your own CI. No cloud, no subscription."
+COMMAND = "npx perseid init"
 
 W, H = 1280, 640
 RX, RY = 1000, 150
@@ -72,8 +74,8 @@ svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewB
   <text x="88" y="348" class="tag">{TAGLINE}</text>
   <text x="88" y="392" class="sub">{SUBLINE}</text>
   <g transform="translate(86,440)">
-    <rect width="484" height="46" rx="10" fill="#080b16" stroke="#232a44"/>
-    <text x="20" y="29" class="cmd"><tspan fill="#8fa3e0">$</tspan> curl -fsSL sh.meteroid.com/perseid | sh</text>
+    <rect width="{58 + len(COMMAND) * 10.9:.0f}" height="46" rx="10" fill="#080b16" stroke="#232a44"/>
+    <text x="20" y="29" class="cmd"><tspan fill="#8fa3e0">$</tspan> {COMMAND}</text>
   </g>
   <text x="88" y="590" class="foot">github.com/meteroid-oss/perseid</text>
 </svg>'''
