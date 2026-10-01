@@ -68,9 +68,11 @@ It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients),
 
 ## In your CI
 
-`perseid setup` writes the workflow for you: it runs the `meteroid-oss/perseid@v0` Action
+`perseid setup` writes the workflows for you: `sdks.yml` runs the `meteroid-oss/perseid@v0` Action
 on every spec change (pushed by `perseid connect` on each release of your API, or each change),
-and `perseid status` tells how it fares, from either repository. To set it up by hand, or on self-hosted runners and other CIs with the
+and `sdk-release.yml`, at the root of each repository holding SDKs, releases them from its default
+branch. Setup rewrites both when they drift, and `perseid status` tells how the automation fares,
+from either repository. To set it up by hand, or on self-hosted runners and other CIs with the
 `ghcr.io/meteroid-oss/perseid` image, see [CI and releases](docs/ci.md).
 
 ## Docs

@@ -1,10 +1,11 @@
-# Written by `perseid setup`, yours to edit. release-please turns conventional commits under
-# each SDK into a release PR; merging it tags the bumped SDKs and publishes them to their registries.
+# Written by `perseid setup`, which rewrites it when it differs: delete this line to keep your edits.
+# release-please turns conventional commits under each SDK into a release PR; merging it tags the
+# bumped SDKs and publishes them to their registries.
 name: SDK Release
 
 on:
   push:
-    branches: [main]
+    branches: ["@@BRANCH@@"]
   workflow_dispatch:
     inputs:
       path:
@@ -20,24 +21,22 @@ concurrency:
 
 jobs:
   release-please:
-    if: github.event_name == 'push'
+    if: ${{ github.event_name == 'push' && !github.event.repository.fork }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write
       actions: write
-    env:
-      SDK_APP_ID: ${{ vars.SDK_APP_ID || secrets.SDK_APP_ID }}
     outputs:
       paths: ${{ steps.release.outputs.paths_released }}
       releases: ${{ toJSON(steps.release.outputs) }}
     steps:
       # GitHub App installation tokens expire after an hour, so they are minted on each run.
       - id: app
-        if: env.SDK_APP_ID != ''
+        if: vars.SDK_APP_ID != ''
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ env.SDK_APP_ID }}
+          app-id: ${{ vars.SDK_APP_ID }}
           private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
@@ -54,39 +53,63 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TOKEN: ${{ steps.app.outputs.token || secrets.RELEASE_TOKEN || github.token }}
           DEFAULT_TOKEN: ${{ github.token }}
-          BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          PR: ${{ steps.release.outputs.pr }}
           WORKFLOWS: ${{ vars.SDK_CI_WORKFLOWS }}
         run: |
           [ "$TOKEN" = "$DEFAULT_TOKEN" ] || exit 0
+          branch=$(jq -r .headBranchName <<< "$PR")
           for workflow in $WORKFLOWS; do
-            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"
+            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$branch"
           done
       # Auto-merges the release PR when the pushed commit came from a PR labeled by the perseid
       # Action's `auto-merge: true`. A merge made with the default token triggers no publish.
       - if: steps.release.outputs.pr
         env:
           GH_TOKEN: ${{ steps.app.outputs.token || secrets.RELEASE_TOKEN || github.token }}
-          PR: ${{ fromJSON(steps.release.outputs.pr).number }}
+          PR: ${{ steps.release.outputs.pr }}
         run: |
           labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[].labels[].name] | join(" ")')
           case " $labels " in
-            *" perseid:auto-release "*) gh pr merge "$PR" --auto --squash --repo "$GITHUB_REPOSITORY" ;;
+            *" perseid:auto-release "*) gh pr merge "$(jq -r .number <<< "$PR")" --auto --squash --repo "$GITHUB_REPOSITORY" ;;
           esac
 
+  # A manual run publishes one release-please package again, from the selected tag or branch.
+  dispatch:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    outputs:
+      paths: ${{ steps.package.outputs.paths }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - id: package
+        env:
+          SDK_PATH: ${{ inputs.path }}
+        run: |
+          if ! jq -e --arg path "$SDK_PATH" '.packages | has($path)' release-please-config.json > /dev/null; then
+            echo "::error::$SDK_PATH isn't a package of release-please-config.json: $(jq -r '.packages | keys | join(", ")' release-please-config.json)"
+            exit 1
+          fi
+          echo "paths=$(jq -cn --arg path "$SDK_PATH" '[$path]')" >> "$GITHUB_OUTPUT"
+
   publish:
-    needs: release-please
-    if: ${{ !failure() && !cancelled() && (github.event_name == 'workflow_dispatch' || needs.release-please.outputs.paths != '[]') }}
+    needs: [release-please, dispatch]
+    if: ${{ !failure() && !cancelled() && (needs.release-please.outputs.paths || needs.dispatch.outputs.paths || '[]') != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        path: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.path) || needs.release-please.outputs.paths) }}
+        path: ${{ fromJSON(needs.release-please.outputs.paths || needs.dispatch.outputs.paths) }}
     runs-on: ubuntu-24.04
+    # Registries trust this file name and the `release` environment: renaming either breaks publishing.
     environment: release
     permissions:
       contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: meteroid-oss/perseid/publish@v0
         with:
           path: ${{ matrix.path }}

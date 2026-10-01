@@ -126,7 +126,7 @@ pub fn commit(
     Ok(Outcome::Committed)
 }
 
-/// The release-please files and `sdk-release.yml` a repository holding `sdks` lacks, which the
+/// `sdk-release.yml` and the release-please files a repository holding `sdks` lacks, which the
 /// user's token commits: the App that later pushes SDK updates can't write workflow files.
 pub fn release_files(
     api: &GitHub,
@@ -135,8 +135,9 @@ pub fn release_files(
     branch: &str,
     sdks: &[&Sdk],
 ) -> Result<Vec<File>> {
-    let files =
-        crate::scaffold::release_scaffold(config, sdks, |path| read(api, repo, branch, path))?;
+    let files = crate::scaffold::release_scaffold(config, sdks, "", branch, |path| {
+        read(api, repo, branch, path)
+    })?;
     Ok(files
         .into_iter()
         .map(|(path, content)| File {

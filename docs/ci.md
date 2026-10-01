@@ -119,7 +119,7 @@ perseid didn't write. Once confirmed, it:
    `release-please-config.json`;
 2. commits `sdk-release.yml` and the release-please files to each SDK repository with your
    token, so the App needs no permission on workflow files (`release = false` in `perseid.toml`
-   leaves them out);
+   leaves them out), and rewrites `sdk-release.yml` when it differs from what setup writes;
 3. creates a GitHub App in your browser (Contents and Pull requests write, no webhook) when SDKs
    live in other repositories than the workflow's, stores its `SDK_APP_ID` variable and
    `SDK_APP_PRIVATE_KEY` secret where they are used, and waits while you install it; when every
@@ -262,8 +262,8 @@ repository variable lists workflow files and no other token is configured.
 Pull requests and merges made with either token start workflows like a person's would, so SDK CI,
 auto-merge and releases work without dispatching.
 
-**Releases**: the scaffolded `sdk-release.yml` mints the same way when `SDK_APP_ID` (variable or
-secret) and `SDK_APP_PRIVATE_KEY` are set, scoped to its own repository, and otherwise uses the
+**Releases**: the scaffolded `sdk-release.yml` mints the same way when the `SDK_APP_ID` variable
+and `SDK_APP_PRIVATE_KEY` secret are set, scoped to its own repository, and otherwise uses the
 `RELEASE_TOKEN` secret (a fine-grained personal access token) or the default token. With the
 default token, release PRs get no CI unless dispatched, and auto-merged release PRs publish nothing.
 
@@ -295,15 +295,28 @@ Or anywhere: `docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/work" ghcr.io/met
 
 Every SDK keeps its own version, in its own manifest, and is released on its own. `perseid setup`
 adds [release-please](https://github.com/googleapis/release-please) (`release-please-config.json`)
-and `.github/workflows/sdk-release.yml` to each repository holding SDKs (skip them with
-`release = false` in `perseid.toml`):
+and `.github/workflows/sdk-release.yml` to the root of each repository holding SDKs (skip them with
+`release = false` in `perseid.toml`). With `perseid.toml` in a folder, the release files still go
+at the root, where GitHub and release-please read them, and the release-please packages are named
+by their path from the root (`api/typescript`).
+
+`sdk-release.yml` runs release-please on pushes to the repository's default branch, never in forks.
+Setup rewrites it when it differs from what it writes: delete its first line,
+``# Written by `perseid setup` ``, to keep your own version (setup then only warns). Registries
+trust its file name and its `release` environment, so keep both. Running it by hand publishes one
+package again, from the selected tag or branch: its `path` input must name a package of
+`release-please-config.json` (`.` for the root). The publish job installs npm dependencies without
+running their scripts, which would otherwise see its OIDC token.
+
+Releases go as follows:
 
 1. The Action titles its pull request as a conventional commit sized by
    [oasdiff](https://github.com/oasdiff/oasdiff): `feat(api)!:` for breaking API changes,
    `feat(api):` for other API changes, `fix(api):` otherwise (`bump` input, `--bump` flag).
 2. Merging it, or any `fix:`/`feat:` commit touching an SDK, opens a release PR bumping the
    touched SDKs and their changelogs. Before 1.0, breaking changes bump the minor version.
-3. Merging the release PR tags each SDK (`rust/v0.4.0`, or `v0.4.0` alone in its repository) and
+3. Merging the release PR tags each SDK (`rust/v0.4.0`; Go tags carry the module's folder, such as
+   `api/go/v0.4.0`, as the module proxy expects; `v0.4.0` alone in its repository) and
    publishes it through `meteroid-oss/perseid/publish`: trusted publishing (OIDC) for crates.io,
    npm and PyPI, a Central Portal token and GPG key for Maven Central, an API key for NuGet, the
    module proxy for Go. Versions already on the registry are skipped, so re-running a failed job is safe.

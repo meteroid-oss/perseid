@@ -69,7 +69,13 @@ struct Package {
     config: Value,
 }
 
-fn package(config: &Config, sdk: &Sdk, dir: &Path, released: Option<String>) -> Package {
+fn package(
+    config: &Config,
+    sdk: &Sdk,
+    path: String,
+    dir: &Path,
+    released: Option<String>,
+) -> Package {
     let context = config.context(sdk, dir);
     let java = context["java_package"].as_str().unwrap().replace('.', "/");
     let mut entry = match sdk.language {
@@ -86,26 +92,56 @@ fn package(config: &Config, sdk: &Sdk, dir: &Path, released: Option<String>) -> 
             "extra-files": ["gradle.properties", format!("src/main/java/{java}/Version.java")],
         }),
     };
-    entry["component"] = sdk.language.into();
-    if sdk.path == "." {
+    // Go resolves a module in a subdirectory from tags prefixed with that directory.
+    entry["component"] = match sdk.language {
+        "go" if path != "." => path.as_str().into(),
+        language => language.into(),
+    };
+    if path == "." {
         entry["include-component-in-tag"] = false.into();
     }
     Package {
-        path: sdk.path.clone(),
+        path,
         released,
         config: entry,
     }
 }
 
-/// The release-please files and release workflow of a repository holding `sdks`, as `read` lacks them.
+/// `path` under the folder `dir`, relative to the repository root.
+fn package_path(dir: &str, path: &str) -> String {
+    let path = path.trim_start_matches("./");
+    match (dir, path) {
+        ("" | ".", path) => path.to_owned(),
+        (dir, "." | "") => dir.to_owned(),
+        (dir, path) => format!("{dir}/{path}"),
+    }
+}
+
+pub const RELEASE_WORKFLOW: &str = ".github/workflows/sdk-release.yml";
+
+/// The release workflow of a repository whose default branch is `branch`.
+pub fn release_workflow(branch: &str) -> Vec<u8> {
+    let (_, template) = assets::under("scaffold/release")
+        .find(|(path, _)| *path == RELEASE_WORKFLOW)
+        .expect("the embedded release workflow");
+    String::from_utf8_lossy(template)
+        .replace("\"@@BRANCH@@\"", &Value::from(branch).to_string())
+        .into_bytes()
+}
+
+/// The release workflow, and the release-please files `read` lacks or holds without some of
+/// `sdks`, for a repository whose root `read` reads and where perseid.toml lives in `dir`.
 pub fn release_scaffold(
     config: &Config,
     sdks: &[&Sdk],
+    dir: &str,
+    branch: &str,
     read: impl Fn(&str) -> Result<Option<String>>,
 ) -> Result<Vec<(String, Vec<u8>)>> {
     let mut packages = Vec::new();
     for sdk in sdks {
-        let dir = tempfile::tempdir()?;
+        let path = package_path(dir, &sdk.path);
+        let manifests = tempfile::tempdir()?;
         for file in [
             "package.json",
             "Cargo.toml",
@@ -113,21 +149,21 @@ pub fn release_scaffold(
             "gradle.properties",
             "version.go",
         ] {
-            let path = match sdk.path.as_str() {
-                "." => file.to_owned(),
-                sdk => format!("{sdk}/{file}"),
-            };
-            if let Some(text) = read(&path)? {
-                std::fs::write(dir.path().join(file), text)?;
+            if let Some(text) = read(&package_path(&path, file))? {
+                std::fs::write(manifests.path().join(file), text)?;
             }
         }
-        let released = manifest_version(dir.path());
-        packages.push(package(config, sdk, dir.path(), released));
+        let released = manifest_version(manifests.path());
+        packages.push(package(config, sdk, path, manifests.path(), released));
     }
-    release_files(read, &packages)
+    let mut files = release_files(read, &packages)?;
+    if !packages.is_empty() {
+        files.push((RELEASE_WORKFLOW.to_owned(), release_workflow(branch)));
+    }
+    Ok(files)
 }
 
-/// The release-please files and workflow `read` lacks or holds without some of `packages`.
+/// The release-please files `read` lacks or holds without some of `packages`.
 fn release_files(
     read: impl Fn(&str) -> Result<Option<String>>,
     packages: &[Package],
@@ -180,11 +216,6 @@ fn release_files(
         for (path, value) in [(config_path, &config), (manifest_path, &manifest)] {
             let text = serde_json::to_string_pretty(value)? + "\n";
             files.push((path.to_owned(), text.into_bytes()));
-        }
-    }
-    for (path, content) in assets::under("scaffold/release") {
-        if read(path)?.is_none() {
-            files.push((path.to_owned(), content.to_vec()));
         }
     }
     Ok(files)
@@ -335,7 +366,7 @@ mod tests {
         let pyproject = "[project]\nname = \"petstore\"\nversion = \"1.4.0\"\n";
         let read = |path: &str| Ok((path == "python/pyproject.toml").then(|| pyproject.to_owned()));
         let files: std::collections::BTreeMap<String, Vec<u8>> =
-            release_scaffold(&config, &held, read)
+            release_scaffold(&config, &held, "", "main", read)
                 .unwrap()
                 .into_iter()
                 .collect();
@@ -358,14 +389,47 @@ mod tests {
             json!({ "python": "1.4.0" }),
             "never released SDKs start at initial-version"
         );
-        assert!(files.contains_key(".github/workflows/sdk-release.yml"));
+        let workflow = String::from_utf8_lossy(&files[RELEASE_WORKFLOW]);
+        assert!(workflow.contains("branches: [\"main\"]\n"), "{workflow}");
 
         let root = "name = \"Petstore\"\nsdks = [\"go\"]\nrepo = \"acme/petstore-{lang}\"\n";
         let config: Config = toml::from_str(root).unwrap();
         let sdks = config.sdks(&[]).unwrap();
-        let files = release_scaffold(&config, &[&sdks[0]], |_| Ok(None)).unwrap();
+        let files = release_scaffold(&config, &[&sdks[0]], "", "main", |_| Ok(None)).unwrap();
         let release: Value = serde_json::from_slice(&files[0].1).unwrap();
         assert_eq!(release["packages"]["."]["include-component-in-tag"], false);
+        assert_eq!(release["packages"]["."]["component"], "go");
+    }
+
+    #[test]
+    fn release_please_packages_are_relative_to_the_repository_root() {
+        let toml = "name = \"Petstore\"\nsdks = [\"typescript\", \"go\"]\n";
+        let config: Config = toml::from_str(toml).unwrap();
+        let sdks = config.sdks(&[]).unwrap();
+        let held: Vec<&Sdk> = sdks.iter().collect();
+        let package = r#"{ "name": "petstore", "version": "2.0.0" }"#;
+        let read =
+            |path: &str| Ok((path == "api/typescript/package.json").then(|| package.to_owned()));
+        let files: std::collections::BTreeMap<String, Vec<u8>> =
+            release_scaffold(&config, &held, "api", "trunk", read)
+                .unwrap()
+                .into_iter()
+                .collect();
+        let json = |path: &str| -> Value { serde_json::from_slice(&files[path]).unwrap() };
+        let release = json("release-please-config.json");
+        assert_eq!(
+            release["packages"]["api/typescript"]["component"],
+            "typescript"
+        );
+        assert_eq!(release["packages"]["api/go"]["component"], "api/go");
+        assert_eq!(
+            json(".release-please-manifest.json"),
+            json!({ "api/typescript": "2.0.0" })
+        );
+        let workflow = String::from_utf8_lossy(&files[RELEASE_WORKFLOW]);
+        assert!(workflow.contains("branches: [\"trunk\"]\n"), "{workflow}");
+        assert_eq!(package_path("api", "."), "api");
+        assert_eq!(package_path(".", "Cargo.toml"), "Cargo.toml");
     }
 
     #[test]

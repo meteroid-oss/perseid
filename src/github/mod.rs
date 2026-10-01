@@ -348,10 +348,9 @@ fn local_files(top: &Path, dir: &str, config: &Config, sdks: &[Sdk]) -> Result<V
             [
                 "release-please-config.json",
                 ".release-please-manifest.json",
-                ".github/workflows/sdk-release.yml",
+                crate::scaffold::RELEASE_WORKFLOW,
             ]
-            .iter()
-            .map(|p| join(dir, p)),
+            .map(str::to_owned),
         );
     }
     if let Source::File(file) = config.source() {

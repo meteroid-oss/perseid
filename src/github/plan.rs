@@ -19,9 +19,23 @@ use super::{
     layout::{self, SDKS_WORKFLOW},
     link, relative, secrets, toplevel, workflow,
 };
-use crate::config::{self, Config, Source};
+use crate::{
+    config::{self, Config, Source},
+    scaffold::RELEASE_WORKFLOW,
+};
 
 const OWNED: &str = "# Written by `perseid";
+
+/// Whether perseid wrote the workflow `remote` holds, or there is none: setup rewrites it then.
+fn owned(remote: Option<&[u8]>) -> bool {
+    remote.is_none_or(|r| r.starts_with(OWNED.as_bytes()))
+}
+
+fn own_release_workflow(repo: &str, branch: &str) -> String {
+    format!(
+        "{repo} keeps its own {RELEASE_WORKFLOW}: check it runs release-please on `{branch}` and publishes from the `release` environment"
+    )
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mark {
@@ -358,16 +372,28 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
             true => "main".to_owned(),
             false => default_branch(&api.find(&format!("/repos/{repo}"))?),
         };
-        let files = bootstrap::release_files(api, &hub.config, repo, &base, &held)?;
+        let mut files = Vec::new();
+        let mut updated = Vec::new();
+        for file in bootstrap::release_files(api, &hub.config, repo, &base, &held)? {
+            let remote = match created.contains(repo) {
+                true => None,
+                false => api.raw(repo, &base, &file.path)?,
+            };
+            if remote.as_deref() == Some(file.content.as_slice()) {
+                continue;
+            }
+            if file.path == RELEASE_WORKFLOW && !owned(remote.as_deref()) {
+                plan.warnings.push(own_release_workflow(repo, &base));
+                continue;
+            }
+            if remote.is_some() {
+                updated.push(file.path.clone());
+            }
+            files.push(file);
+        }
         if files.is_empty() {
             plan.add(Mark::Keep, format!("{repo}: release files in place"), None);
             continue;
-        }
-        let mut updated = Vec::new();
-        for file in &files {
-            if !created.contains(repo) && api.raw(repo, &base, &file.path)?.is_some() {
-                updated.push(file.path.clone());
-            }
         }
         let commit = Commit {
             repo: repo.clone(),
@@ -474,16 +500,18 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
             executable: false,
         },
     ];
-    let (top, root) = &hub.local;
+    let top = &hub.local.0;
     if release {
-        let read = |path: &str| Ok(std::fs::read_to_string(root.join(path)).ok());
+        let read = |path: &str| Ok(std::fs::read_to_string(top.join(path)).ok());
         let local: Vec<&crate::config::Sdk> = sdks
             .iter()
             .filter(|s| s.repo.as_deref().is_none_or(|r| same(r, &hub.repo)))
             .collect();
-        for (path, content) in crate::scaffold::release_scaffold(&hub.config, &local, read)? {
+        let scaffold =
+            crate::scaffold::release_scaffold(&hub.config, &local, dir, &hub_base, read)?;
+        for (path, content) in scaffold {
             candidates.push(File {
-                path: join(dir, &path),
+                path,
                 content,
                 executable: false,
             });
@@ -507,15 +535,17 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
         if remote.as_deref() == Some(file.content.as_slice()) {
             continue;
         }
-        if file.path == SDKS_WORKFLOW
-            && let Some(remote) = &remote
-            && !remote.starts_with(OWNED.as_bytes())
-        {
+        if file.path == SDKS_WORKFLOW && !owned(remote.as_deref()) {
             plan.warnings.push(format!(
                 "{} keeps its own {SDKS_WORKFLOW}: check it runs meteroid-oss/perseid@v0 on {}",
                 hub.repo,
                 triggers.join(", ")
             ));
+            continue;
+        }
+        if file.path == RELEASE_WORKFLOW && !owned(remote.as_deref()) {
+            plan.warnings
+                .push(own_release_workflow(&hub.repo, &hub_base));
             continue;
         }
         if remote.is_some() {

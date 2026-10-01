@@ -32,6 +32,7 @@ struct Repo {
     deploy_keys: Vec<Value>,
     pull_requests_allowed: bool,
     released: bool,
+    default_branch: Option<String>,
 }
 
 #[derive(Default)]
@@ -76,6 +77,14 @@ impl GitHub {
             ..Repo::default()
         };
         self.repos.insert(name.into(), repo);
+    }
+
+    /// Makes `branch` the default branch of `repo`, in place of `main`.
+    fn rename_main(&mut self, repo: &str, branch: &str) {
+        let repo = self.repos.get_mut(repo).unwrap();
+        let head = repo.refs.remove("main").unwrap();
+        repo.refs.insert(branch.into(), head);
+        repo.default_branch = Some(branch.into());
     }
 
     fn blob(&mut self, content: &[u8]) -> String {
@@ -223,7 +232,7 @@ impl GitHub {
                     200,
                     json!({
                         "full_name": name, "private": repo.private, "visibility": visibility,
-                        "default_branch": "main",
+                        "default_branch": repo.default_branch.as_deref().unwrap_or("main"),
                         "permissions": { "admin": !repo.readonly, "push": true },
                     }),
                 )
@@ -1303,6 +1312,7 @@ fn sdks_checkout(fake: &mut GitHub) -> (tempfile::TempDir, tempfile::TempDir) {
         ("perseid.toml", config),
         ("release-please-config.json", release),
         ("ts/src/index.ts", handwritten),
+        (".github/workflows/sdk-release.yml", "name: Releases\n"),
     ];
     fake.add_repo("acme/petstore-sdks", &files);
     let (dir, bin) = checkout("acme/petstore-sdks");
@@ -1341,6 +1351,7 @@ fn setup_completes_an_existing_sdks_repository_receiving_the_spec() {
         "  + acme/petstore-sdks: pull request with .github/workflows/sdks.yml, perseid.toml, release-please-config.json, .release-please-manifest.json and ",
         "(updating perseid.toml, release-please-config.json)",
         "! acme/petstore-sdks: perseid would overwrite files it didn't generate, and stops instead: ts/src/index.ts",
+        "! acme/petstore-sdks keeps its own .github/workflows/sdk-release.yml: check it runs release-please on `main`",
     ] {
         assert!(out.contains(line), "{line}\n{out}");
     }
@@ -1355,6 +1366,10 @@ fn setup_completes_an_existing_sdks_repository_receiving_the_spec() {
     assert_eq!(
         setup["ts/src/index.ts"], "export const mine = 1;\n",
         "never overwritten"
+    );
+    assert_eq!(
+        setup[".github/workflows/sdk-release.yml"],
+        "name: Releases\n"
     );
     assert!(
         setup["perseid.toml"].contains("[typescript]\npath = \"ts\"\n"),
@@ -1435,4 +1450,62 @@ fn setup_polls_a_url_spec_daily() {
         "{workflow}"
     );
     assert!(out.contains("perseid checks the spec every day"), "{out}");
+}
+
+#[test]
+fn setup_writes_the_release_files_at_the_root_of_a_repository_holding_perseid_toml_in_a_folder() {
+    let config = "spec = \"openapi.yaml\"\nname = \"Petstore\"\nsdks = [\"typescript\", \"go\"]\n";
+    let outdated = "# Written by `perseid setup`, yours to edit.\nname: SDK Release\n";
+    let mut fake = GitHub::default();
+    fake.add_repo(
+        "acme/petstore",
+        &[
+            ("api/openapi.yaml", SPEC),
+            (".github/workflows/sdk-release.yml", outdated),
+        ],
+    );
+    fake.rename_main("acme/petstore", "trunk");
+    let server = Arc::new(Mutex::new(fake));
+    let port = serve(server.clone());
+    let (dir, bin) = checkout("acme/petstore");
+    let api = dir.path().join("api");
+    fs::create_dir_all(&api).unwrap();
+    fs::write(api.join("openapi.yaml"), SPEC).unwrap();
+    fs::write(api.join("perseid.toml"), config).unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "--quiet", "-m", "spec"]);
+
+    let (code, out) = perseid(&api, bin.path(), port, &["setup", "--yes"], "", &TOKEN);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("(updating .github/workflows/sdk-release.yml)"),
+        "perseid wrote it, so it is rewritten: {out}"
+    );
+    let github = server.lock().unwrap();
+    let files = github.files("acme/petstore", "perseid/setup");
+    assert!(
+        !files
+            .keys()
+            .any(|path| path.starts_with("api/.") || path.starts_with("api/release-please")),
+        "{files:?}"
+    );
+    let release: Value = serde_json::from_str(&files["release-please-config.json"]).unwrap();
+    let packages: Vec<&String> = release["packages"].as_object().unwrap().keys().collect();
+    assert_eq!(packages, ["api/typescript", "api/go"]);
+    assert_eq!(release["packages"]["api/go"]["component"], "api/go");
+    let workflow = &files[".github/workflows/sdk-release.yml"];
+    keep("subfolder-sdk-release.yml", workflow);
+    assert!(workflow.contains("branches: [\"trunk\"]\n"), "{workflow}");
+    assert!(
+        files[".github/workflows/sdks.yml"].contains("working-directory: api\n"),
+        "{files:?}"
+    );
+    let staged = git(dir.path(), &["diff", "--cached", "--name-only"]);
+    for path in [
+        ".github/workflows/sdk-release.yml",
+        ".release-please-manifest.json",
+        "release-please-config.json",
+    ] {
+        assert!(staged.lines().any(|line| line == path), "{path}\n{staged}");
+    }
 }
