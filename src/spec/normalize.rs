@@ -25,6 +25,7 @@ const PROPERTY_ANNOTATIONS: [&str; 5] = [
 pub(super) fn normalize(doc: &mut Value) -> Result<()> {
     let root = doc.clone();
     inline_operation_refs(doc, &root)?;
+    infer_discriminators(doc);
     Promoter::run(doc);
     flatten_all_of(doc);
     Ok(())
@@ -300,6 +301,136 @@ fn normalize_content(holder: &mut Value) {
             false => (k, v),
         })
         .collect();
+}
+
+/// Gives every `oneOf` without a discriminator the property its variants are told apart by, as
+/// serde's tagged enums are written, and replaces a `oneOf` of one untagged inline variant by it.
+fn infer_discriminators(doc: &mut Value) {
+    let schemas = doc
+        .pointer("/components/schemas")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    for pointer in ["/components/schemas", "/paths"] {
+        if let Some(Value::Object(children)) = doc.pointer_mut(pointer) {
+            children
+                .values_mut()
+                .for_each(|c| infer_discriminator(c, &schemas));
+        }
+    }
+}
+
+fn infer_discriminator(value: &mut Value, schemas: &Map<String, Value>) {
+    let map = match value {
+        Value::Object(map) => map,
+        Value::Array(items) => {
+            return items
+                .iter_mut()
+                .for_each(|v| infer_discriminator(v, schemas));
+        }
+        _ => return,
+    };
+    for (key, child) in map.iter_mut() {
+        match key.as_str() {
+            "example" | "examples" | "default" | "enum" | "const" => {}
+            "properties" | "patternProperties" => {
+                for property in child
+                    .as_object_mut()
+                    .into_iter()
+                    .flat_map(|p| p.values_mut())
+                {
+                    infer_discriminator(property, schemas);
+                }
+            }
+            _ => infer_discriminator(child, schemas),
+        }
+    }
+    if map.contains_key("discriminator") || map.contains_key("x-perseid-union") {
+        return;
+    }
+    let Some(Value::Array(variants)) = map.get("oneOf") else {
+        return;
+    };
+    if let Some(property) = implicit_discriminator(variants, schemas) {
+        map.insert("discriminator".into(), json!({ "propertyName": property }));
+    } else if let [Value::Object(variant)] = &variants[..]
+        && !variant.contains_key("$ref")
+        && !is_null_schema(&variants[0])
+        && !map.contains_key("properties")
+    {
+        let variant = variant.clone();
+        map.remove("oneOf");
+        for (key, value) in variant {
+            map.entry(key).or_insert(value);
+        }
+    }
+}
+
+/// The one property every variant requires with a single string value, distinct across them.
+fn implicit_discriminator(variants: &[Value], schemas: &Map<String, Value>) -> Option<String> {
+    let tags = variants
+        .iter()
+        .map(|v| tags(v, schemas, 0))
+        .collect::<Option<Vec<_>>>()?;
+    let mut candidates = tags.first()?.keys().filter(|property| {
+        let values: BTreeSet<_> = tags.iter().filter_map(|t| t.get(*property)).collect();
+        values.len() == tags.len()
+    });
+    let property = candidates.next()?;
+    candidates.next().is_none().then(|| property.clone())
+}
+
+/// The required properties of an object schema that allow a single string, by name. `None` when
+/// the schema is not an object.
+fn tags(
+    schema: &Value,
+    schemas: &Map<String, Value>,
+    depth: usize,
+) -> Option<BTreeMap<String, String>> {
+    let resolve = |s: &'_ Value| -> Option<Value> {
+        match s.get("$ref").and_then(Value::as_str) {
+            Some(target) => schemas.get(target.strip_prefix(SCHEMA_PREFIX)?).cloned(),
+            None => Some(s.clone()),
+        }
+    };
+    let schema = resolve(schema)?;
+    if depth > 16 || is_null_schema(&schema) {
+        return None;
+    }
+    is_object_shallow(&schema)?;
+    let mut found = BTreeMap::new();
+    for part in schema
+        .get("allOf")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        found.extend(tags(part, schemas, depth + 1)?);
+    }
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let properties = schema.get("properties").and_then(Value::as_object);
+    for (name, property) in properties.into_iter().flatten() {
+        let value = resolve(property).and_then(|p| match (p.get("const"), p.get("enum")) {
+            (Some(Value::String(value)), _) => Some(value.clone()),
+            (None, Some(Value::Array(values))) => match &values[..] {
+                [Value::String(value)] => Some(value.clone()),
+                _ => None,
+            },
+            _ => None,
+        });
+        if let Some(value) = value
+            && required.contains(&name.as_str())
+        {
+            found.insert(name.clone(), value);
+        }
+    }
+    Some(found)
 }
 
 fn is_null_schema(schema: &Value) -> bool {
@@ -885,13 +1016,26 @@ fn merge_all_of(schema: &Value, schemas: &Map<String, Value>, depth: usize) -> O
             _ => Some(out),
         };
     }
+    let union = parts
+        .iter()
+        .position(|p| tagged_union(p, schemas).is_some());
     let mut merged = Merged::default();
-    for part in parts {
-        merged.part(part, schemas)?;
+    for (index, part) in parts.iter().enumerate() {
+        if Some(index) != union {
+            merged.part(part, schemas)?;
+        }
     }
     let mut own = map.clone();
     own.remove("allOf");
     merged.part(&Value::Object(own), schemas)?;
+    if let Some(union) = union.and_then(|index| tagged_union(parts[index], schemas)) {
+        if !merged.references.is_empty() {
+            return None;
+        }
+        for key in ["oneOf", "discriminator"] {
+            out.insert(key.into(), union[key].clone());
+        }
+    }
     out.insert("type".into(), "object".into());
     out.insert("properties".into(), Value::Object(merged.properties));
     match merged.required.is_empty() {
@@ -947,6 +1091,18 @@ impl Merged {
         }
         Some(())
     }
+}
+
+/// The discriminated union an `allOf` part is, whose variants then carry the other parts' fields.
+fn tagged_union<'a>(part: &'a Value, schemas: &'a Map<String, Value>) -> Option<&'a Value> {
+    let union = match part.get("$ref").and_then(Value::as_str) {
+        Some(target) => schemas.get(target.strip_prefix(SCHEMA_PREFIX)?)?,
+        None => part,
+    };
+    (union.get("oneOf").is_some_and(Value::is_array)
+        && union.get("discriminator").is_some()
+        && !has_properties(union))
+    .then_some(union)
 }
 
 /// Whether a referenced `allOf` part is an object, which SDKs can embed.
@@ -1369,6 +1525,71 @@ mod tests {
             "C": { "allOf": [{ "$ref": "#/components/schemas/U" }, { "properties": { "a": { "type": "string" } } }] }
         } } }));
         assert!(doc["components"]["schemas"]["C"].get("allOf").is_some());
+    }
+
+    #[test]
+    fn variants_requiring_one_distinct_constant_infer_their_discriminator() {
+        let tagged = |kind: &str| {
+            json!({ "type": "object", "required": ["kind", "id"], "properties": {
+                "kind": { "type": "string", "enum": [kind] }, "id": { "type": "string", "enum": ["x"] } } })
+        };
+        let doc = normalized(json!({ "components": { "schemas": {
+            "Event": { "oneOf": [
+                tagged("created"),
+                { "allOf": [{ "$ref": "#/components/schemas/Base" }, tagged("deleted")] }
+            ] },
+            "Base": { "type": "object", "properties": { "at": { "type": "string" } } },
+            "Untagged": { "oneOf": [tagged("a"), { "type": "object", "properties": { "kind": { "const": "b" } } }] },
+            "Shared": { "oneOf": [tagged("a"), tagged("a")] },
+            "Opted": { "oneOf": [tagged("a"), tagged("b")], "x-perseid-union": "json" }
+        } } }));
+        let s = &doc["components"]["schemas"];
+        assert_eq!(
+            s["Event"]["discriminator"]["mapping"],
+            json!({
+                "created": "#/components/schemas/EventCreatedVariant",
+                "deleted": "#/components/schemas/EventDeletedVariant"
+            })
+        );
+        assert!(s["Untagged"].get("discriminator").is_none());
+        assert!(s["Shared"].get("discriminator").is_none());
+        assert!(s["Opted"].get("discriminator").is_none());
+    }
+
+    #[test]
+    fn a_union_of_one_untagged_inline_variant_is_that_variant() {
+        let doc = normalized(json!({ "components": { "schemas": { "Strategy": {
+            "description": "d",
+            "oneOf": [{ "type": "object", "required": ["Suffix"], "properties": { "Suffix": { "type": "string" } } }]
+        } } } }));
+        assert_eq!(
+            doc["components"]["schemas"]["Strategy"],
+            json!({ "description": "d", "type": "object", "required": ["Suffix"],
+                    "properties": { "Suffix": { "type": "string" } } })
+        );
+    }
+
+    #[test]
+    fn all_of_over_a_tagged_union_gives_its_variants_the_other_fields() {
+        let doc = normalized(json!({ "components": { "schemas": {
+            "Kind": {
+                "oneOf": [{ "$ref": "#/components/schemas/Static" }],
+                "discriminator": { "propertyName": "type" }
+            },
+            "Static": { "type": "object", "properties": { "type": { "enum": ["static"] } } },
+            "Label": { "allOf": [
+                { "$ref": "#/components/schemas/Kind" },
+                { "type": "object", "required": ["id"], "properties": { "id": { "type": "string" } } }
+            ] }
+        } } }));
+        let label = &doc["components"]["schemas"]["Label"];
+        assert!(label.get("allOf").is_none());
+        assert_eq!(label["required"], json!(["id"]));
+        assert_eq!(
+            label["oneOf"],
+            json!([{ "$ref": "#/components/schemas/Static" }])
+        );
+        assert_eq!(label["discriminator"]["propertyName"], "type");
     }
 
     #[test]

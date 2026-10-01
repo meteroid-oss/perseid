@@ -869,12 +869,12 @@ impl Operation {
 }
 
 /// A tag as a resource name, which every SDK can use as an identifier: `1-Click Apps` becomes
-/// `one_click_apps`.
+/// `one_click_apps`, and `Requête` becomes `requete`.
 fn resource_name(tag: &str) -> String {
     const DIGITS: [&str; 10] = [
         "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
     ];
-    let name = tag.to_snake_case();
+    let name = deunicode::deunicode(tag).to_snake_case();
     let digits = name.bytes().take_while(u8::is_ascii_digit).count();
     let spelled = name
         .bytes()
@@ -1586,6 +1586,7 @@ mod tests {
         assert_eq!(resource_name("2FA"), "two_fa");
         assert_eq!(resource_name("42"), "four_two");
         assert_eq!(resource_name("Pets"), "pets");
+        assert_eq!(resource_name("Petite Requête"), "petite_requete");
     }
 
     #[test]

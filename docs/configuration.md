@@ -169,7 +169,12 @@ would share falls back to the operation id. `[names]` and `x-perseid-name` renam
 
 ## Unions of objects
 
-A `oneOf`/`anyOf` of several objects without a `discriminator` (Stripe's
+A `oneOf` whose object variants all require one property allowing a single string, distinct
+across them (`kind: {enum: [pat]}`, as serde's tagged enums are written), is a tagged union on
+that property as if it declared it as `discriminator`. An `allOf` of such a union and objects
+gives every variant the objects' fields, and a `oneOf` of one untagged object is that object.
+
+Otherwise a `oneOf`/`anyOf` of several objects without a `discriminator` (Stripe's
 `Charge.customer: string | Customer | DeletedCustomer`) is typed when the
 object variants can be told apart from their schemas: perseid looks for the fewest `const` or
 single-value `enum` properties (`deleted: true`) and required properties only one variant
@@ -227,3 +232,4 @@ The model also carries, for templates to use:
   the SDK already uses (`Upload`, `Options`...) get a `Model` suffix.
 - A variant missing from the discriminator `mapping` is tagged with the `const` or `enum` of its
   discriminator property, falling back to its schema name.
+- Tags become ASCII identifiers: `Petite Requête` is the `petite_requete` resource.

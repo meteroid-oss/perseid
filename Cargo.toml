@@ -18,6 +18,7 @@ camino = "1.1.9"
 clap = { version = "4.5.23", features = ["derive"] }
 cliclack = "0.5.6"
 crypto_box = { version = "0.9", features = ["seal"] }
+deunicode = "1.6.2"
 fs-err = "3.0.0"
 heck = "0.5.0"
 indexmap = "2.7.0"
