@@ -6,7 +6,9 @@ import { Webhook, WebhookVerificationError } from "../dist/esm/index.js";
 
 const SECRET = "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw";
 const PAYLOAD = '{"test": 2432232314}';
-const now = () => Math.floor(Date.now() / 1000);
+// One instant for the whole run, so a signature and its timestamp never straddle a second.
+const NOW = Math.floor(Date.now() / 1000);
+const now = () => NOW;
 
 function headers(prefix, signature, timestamp = now()) {
   return {
@@ -27,7 +29,7 @@ test("signs like the Standard Webhooks test vector", () => {
 
 test("verifies both header families and header containers", () => {
   const webhook = new Webhook(SECRET);
-  const signature = webhook.sign("msg_1", new Date(), PAYLOAD);
+  const signature = webhook.sign("msg_1", new Date(NOW * 1000), PAYLOAD);
   for (const prefix of ["webhook", "svix"]) {
     webhook.verify(PAYLOAD, headers(prefix, signature));
     webhook.verify(Buffer.from(PAYLOAD), new Headers(headers(prefix, signature)));
@@ -38,7 +40,7 @@ test("verifies both header families and header containers", () => {
 
 test("rejects tampered, stale and incomplete requests", () => {
   const webhook = new Webhook(SECRET);
-  const signature = webhook.sign("msg_1", new Date(), PAYLOAD);
+  const signature = webhook.sign("msg_1", new Date(NOW * 1000), PAYLOAD);
   const fails = (payload, h, message) =>
     assert.throws(
       () => webhook.verify(payload, h),
@@ -56,7 +58,7 @@ test("rejects tampered, stale and incomplete requests", () => {
 
 test("webhook headers win over svix headers", () => {
   const webhook = new Webhook(SECRET);
-  const signature = webhook.sign("msg_1", new Date(), PAYLOAD);
+  const signature = webhook.sign("msg_1", new Date(NOW * 1000), PAYLOAD);
   const mixed = { ...headers("svix", signature), ...headers("webhook", "v1,AAAA") };
   assert.throws(() => webhook.verify(PAYLOAD, mixed), WebhookVerificationError);
 });
