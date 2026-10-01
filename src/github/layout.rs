@@ -43,14 +43,14 @@ pub fn diagram(source: Option<&str>, hub: &str, targets: &[String]) -> String {
 pub fn targets(sdks: &[Sdk], hub: &str) -> Vec<String> {
     let local: Vec<String> = sdks
         .iter()
-        .filter(|s| s.repo.is_none())
+        .filter(|s| s.local)
         .map(|s| format!("{}/", s.path))
         .collect();
     let mut out = Vec::new();
     if !local.is_empty() {
         out.push(format!("{hub} ({})", local.join(", ")));
     }
-    out.extend(sdks.iter().filter_map(|s| s.repo.clone()));
+    out.extend(sdks.iter().filter_map(|s| s.remote().map(str::to_owned)));
     out
 }
 

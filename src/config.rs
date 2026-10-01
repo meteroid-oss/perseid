@@ -101,6 +101,9 @@ pub struct Config {
     #[serde(default, deserialize_with = "target::<CSharp, _>")]
     #[schemars(with = "Option<CSharp>")]
     pub csharp: Option<Target>,
+    /// `owner/name` of the repository holding perseid.toml, where SDKs without `repo` live.
+    #[serde(skip)]
+    pub here: Option<String>,
 }
 
 /// Package metadata written into the manifests `perseid generate` creates.
@@ -356,9 +359,30 @@ pub fn json_schema() -> String {
 
 pub struct Sdk<'a> {
     pub language: &'static str,
+    /// The repository `repo` names, even when it's the one holding perseid.toml.
     pub repo: Option<String>,
     pub path: String,
+    /// Lives in the repository holding perseid.toml: no `repo`, or that one.
+    pub local: bool,
     target: &'a Target,
+}
+
+impl Sdk<'_> {
+    /// The repository the SDK lives in, unless that's the one holding perseid.toml.
+    pub fn remote(&self) -> Option<&str> {
+        self.repo.as_deref().filter(|_| !self.local)
+    }
+}
+
+/// Whether two `owner/name` repositories (or URLs ending with one) are the same, ignoring case.
+pub fn same_repo(a: &str, b: &str) -> bool {
+    let slug = |r: &str| {
+        let r = r.trim_end_matches('/').trim_end_matches(".git");
+        let mut parts = r.rsplit(['/', ':']);
+        let name = parts.next().unwrap_or_default();
+        format!("{}/{name}", parts.next().unwrap_or_default()).to_lowercase()
+    };
+    slug(a) == slug(b)
 }
 
 /// Where the spec is read from, as `spec` says.
@@ -387,8 +411,9 @@ impl Config {
                 path.display()
             )
         })?;
-        let config = Self::parse(&text, &path.display().to_string())?;
+        let mut config = Self::parse(&text, &path.display().to_string())?;
         let root = std::path::absolute(path)?.parent().unwrap().to_owned();
+        config.here = crate::github::origin_repo(&root);
         Ok((config, root))
     }
 
@@ -503,20 +528,24 @@ impl Config {
                     let repo = self.repo.as_deref()?;
                     Some(repo.replace("{lang}", language))
                 });
-                (language, target, repo)
+                let local = repo
+                    .as_deref()
+                    .is_none_or(|r| self.here.as_deref().is_some_and(|here| same_repo(r, here)));
+                (language, target, repo, local)
             })
             .collect();
         let shared = |repo: &str| all.iter().filter(|a| a.2.as_deref() == Some(repo)).count() > 1;
         let sdks = all
             .iter()
             .filter(|(language, ..)| selected.is_empty() || selected.iter().any(|s| s == language))
-            .map(|(language, target, repo)| Sdk {
+            .map(|(language, target, repo, local)| Sdk {
                 language,
                 path: target.path.clone().unwrap_or_else(|| match repo {
-                    Some(repo) if !shared(repo) => ".".into(),
+                    Some(repo) if !local && !shared(repo) => ".".into(),
                     _ => (*language).into(),
                 }),
                 repo: repo.clone(),
+                local: *local,
                 target,
             })
             .collect::<Vec<_>>();
@@ -1002,6 +1031,26 @@ mod tests {
             layout("name = \"Acme\"\nsdks = [\"rust\"]\n"),
             [("rust".into(), None, "rust".into())]
         );
+    }
+
+    #[test]
+    fn sdks_in_the_repository_holding_perseid_toml_are_local() {
+        let toml = "name = \"Acme\"\nsdks = [\"go\", \"rust\"]\n[go]\nrepo = \"Acme/SDKs\"\n\
+                    [rust]\nrepo = \"acme/rust\"\n";
+        let mut config: Config = toml::from_str(toml).unwrap();
+        config.here = Some("acme/sdks".into());
+        let sdks = config.sdks(&[]).unwrap();
+        assert_eq!(
+            sdks.iter()
+                .map(|s| (s.language, s.remote(), s.path.clone()))
+                .collect::<Vec<_>>(),
+            [
+                ("rust", Some("acme/rust"), ".".into()),
+                ("go", None, "go".into())
+            ]
+        );
+        assert!(same_repo("https://github.com/acme/sdks.git", "ACME/sdks"));
+        assert!(!same_repo("acme/sdks", "other/sdks"));
     }
 
     #[test]

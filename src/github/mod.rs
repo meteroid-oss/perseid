@@ -343,7 +343,7 @@ fn join(dir: &str, path: &str) -> String {
 /// The new files of this checkout a setup commits: spec, release files, SDKs generated here.
 fn local_files(top: &Path, dir: &str, config: &Config, sdks: &[Sdk]) -> Result<Vec<String>> {
     let mut specs = Vec::new();
-    if config.release != Some(false) && sdks.iter().any(|s| s.repo.is_none()) {
+    if config.release != Some(false) && sdks.iter().any(|s| s.local) {
         specs.extend(
             [
                 "release-please-config.json",
@@ -357,11 +357,7 @@ fn local_files(top: &Path, dir: &str, config: &Config, sdks: &[Sdk]) -> Result<V
     if let Source::File(file) = config.source() {
         specs.push(join(dir, file));
     }
-    specs.extend(
-        sdks.iter()
-            .filter(|s| s.repo.is_none())
-            .map(|s| join(dir, &s.path)),
-    );
+    specs.extend(sdks.iter().filter(|s| s.local).map(|s| join(dir, &s.path)));
     let mut args = vec![
         "status",
         "--porcelain=v1",
@@ -428,7 +424,7 @@ fn checklist(plan: &plan::Plan, pulls: &[String], ui: &Ui) -> Result<()> {
         )),
     }
     for sdk in config.sdks(&[])? {
-        let repo = sdk.repo.as_deref().unwrap_or(hub);
+        let repo = sdk.remote().unwrap_or(hub);
         let context = config.context(&sdk, Path::new("/nonexistent"));
         let text = |key: &str| context[key].as_str().unwrap_or_default().to_owned();
         let publisher = format!("repository {repo}, workflow sdk-release.yml, environment release");

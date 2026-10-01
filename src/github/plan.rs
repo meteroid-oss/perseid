@@ -210,7 +210,7 @@ fn unused_folders(plan: &mut Plan, config: &Config, root: &Path) -> Result<()> {
     let unused: Vec<String> = config
         .sdks(&[])?
         .iter()
-        .filter(|s| s.repo.is_some())
+        .filter(|s| !s.local)
         .filter(|s| root.join(s.language).is_dir())
         .map(|s| format!("{}/", s.language))
         .collect();
@@ -268,12 +268,9 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
     let sdks = hub.config.sdks(&[])?;
     let remote: BTreeSet<String> = sdks
         .iter()
-        .filter_map(|s| s.repo.clone())
-        .filter(|r| !same(r, &hub.repo))
+        .filter_map(|s| s.remote().map(str::to_owned))
         .collect();
-    let local_sdks = sdks
-        .iter()
-        .any(|s| s.repo.as_deref().is_none_or(|r| same(r, &hub.repo)));
+    let local_sdks = sdks.iter().any(|s| s.local);
     plan.targets = layout::targets(&sdks, &hub.repo);
     let hub_owner = owner_of(&hub.repo).to_owned();
     let owner = remote
@@ -350,10 +347,8 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
     }
     let release = hub.config.release != Some(false);
     for repo in remote.iter().filter(|_| release) {
-        let held: Vec<&crate::config::Sdk> = sdks
-            .iter()
-            .filter(|s| s.repo.as_deref() == Some(repo))
-            .collect();
+        let held: Vec<&crate::config::Sdk> =
+            sdks.iter().filter(|s| s.remote() == Some(repo)).collect();
         let base = match created.contains(repo) {
             true => "main".to_owned(),
             false => default_branch(&api.find(&format!("/repos/{repo}"))?),
@@ -477,10 +472,7 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
     let (top, root) = &hub.local;
     if release {
         let read = |path: &str| Ok(std::fs::read_to_string(root.join(path)).ok());
-        let local: Vec<&crate::config::Sdk> = sdks
-            .iter()
-            .filter(|s| s.repo.as_deref().is_none_or(|r| same(r, &hub.repo)))
-            .collect();
+        let local: Vec<&crate::config::Sdk> = sdks.iter().filter(|s| s.local).collect();
         for (path, content) in crate::scaffold::release_scaffold(&hub.config, &local, read)? {
             candidates.push(File {
                 path: join(dir, &path),
@@ -700,9 +692,9 @@ fn collisions(
     };
     for sdk in config.sdks(&[])? {
         let planned = crate::generate::planned(config, root, &sdk, &spec)?;
-        let repo = sdk.repo.clone().unwrap_or_else(|| hub.to_owned());
+        let repo = sdk.remote().unwrap_or(hub).to_owned();
         let mut taken = Vec::new();
-        match &sdk.repo {
+        match sdk.remote() {
             None => {
                 for path in &planned {
                     let file = root.join(&sdk.path).join(path);

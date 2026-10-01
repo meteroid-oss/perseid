@@ -340,7 +340,7 @@ fn health(report: &mut Report, api: &GitHub, plan: &Plan) -> Result<()> {
     let config = plan.config();
     let mut repos = BTreeSet::new();
     for sdk in config.sdks(&[])? {
-        repos.insert(sdk.repo.unwrap_or_else(|| plan.hub.clone()));
+        repos.insert(sdk.remote().unwrap_or(&plan.hub).to_owned());
     }
     for repo in &repos {
         let owner = repo.split('/').next().unwrap_or_default();
