@@ -155,6 +155,11 @@ fn remote(temp: &Path, to: &str) -> Result<(String, Vec<(String, String)>)> {
         (None, key) => {
             let url = format!("git@github.com:{to}.git");
             let Some(key) = key else {
+                if env("GITHUB_ACTIONS").as_deref() == Some("true") {
+                    bail!(
+                        "no credential for {to}: pass the action `deploy-key` or `token` (is the secret set in this repository?)"
+                    );
+                }
                 return Ok((url, vec![]));
             };
             let (key_file, hosts) = (temp.join("deploy_key"), temp.join("known_hosts"));

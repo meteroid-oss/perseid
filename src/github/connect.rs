@@ -412,7 +412,7 @@ fn plan_credentials(api: &GitHub, plan: &mut Plan, here: &str, hub: &str, auth: 
             (
                 link::APP_ID,
                 format!(
-                    "the ID of a GitHub App installed on {hub}, with Contents read and write: `gh variable set {} -R {here} --body <id>`",
+                    "the ID of a GitHub App with Contents read and write, installed on {hub} only (its key can write wherever it is installed): `gh variable set {} -R {here} --body <id>`",
                     link::APP_ID
                 ),
             ),

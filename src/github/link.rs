@@ -13,8 +13,8 @@ use super::{Ui, api::GitHub, secrets};
 
 pub const SECRET: &str = "PERSEID_SDKS_DEPLOY_KEY";
 pub const TOKEN_SECRET: &str = "PERSEID_SDKS_TOKEN";
-pub const APP_ID: &str = "SDK_APP_ID";
-pub const APP_KEY: &str = "SDK_APP_PRIVATE_KEY";
+pub const APP_ID: &str = "PERSEID_PUSH_APP_ID";
+pub const APP_KEY: &str = "PERSEID_PUSH_APP_PRIVATE_KEY";
 pub const WORKFLOW: &str = ".github/workflows/perseid-push.yml";
 pub use crate::pr::SOURCE;
 
@@ -64,7 +64,8 @@ pub enum Auth {
     DeployKey,
     /// A personal access token in the PERSEID_SDKS_TOKEN secret, which you add.
     Token,
-    /// A GitHub App installed on the SDKs repository, set as SDK_APP_ID and SDK_APP_PRIVATE_KEY.
+    /// A GitHub App installed on the SDKs repository only, set as PERSEID_PUSH_APP_ID and
+    /// PERSEID_PUSH_APP_PRIVATE_KEY.
     App,
 }
 
@@ -283,7 +284,7 @@ pub fn push_workflow(push: &Push) -> String {
                     "It pushes as the GitHub App set as {APP_ID} and {APP_KEY}, installed on {hub}."
                 ),
                 format!(
-                    "      - id: app\n        uses: actions/create-github-app-token@v2\n        with:\n          app-id: ${{{{ vars.{APP_ID} }}}}\n          private-key: ${{{{ secrets.{APP_KEY} }}}}\n          owner: {owner}\n          repositories: {name}\n"
+                    "      - id: app\n        uses: actions/create-github-app-token@v2\n        with:\n          app-id: ${{{{ vars.{APP_ID} }}}}\n          private-key: ${{{{ secrets.{APP_KEY} }}}}\n          owner: {owner}\n          repositories: {name}\n          permission-contents: write\n"
                 ),
                 "token: ${{ steps.app.outputs.token }}".to_owned(),
             )

@@ -401,6 +401,25 @@ fn specs_are_pushed_on_changes_releases_or_tags() {
 }
 
 #[test]
+fn runs_without_a_credential_say_which_is_missing() {
+    let (repos, shas) = repos();
+    seed(&repos, None);
+    git(&repos.api, &["checkout", "--quiet", &shas[3]]);
+    let output = Command::new(env!("CARGO_BIN_EXE_perseid"))
+        .args(["push-spec", "openapi.json", "--to", "acme/api-sdks"])
+        .current_dir(&repos.api)
+        .env("GITHUB_ACTIONS", "true")
+        .env_remove("PERSEID_SDKS_TOKEN")
+        .env_remove("PERSEID_SDKS_DEPLOY_KEY")
+        .env_remove("GITHUB_REF")
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(err.contains("no credential for acme/api-sdks"), "{err}");
+}
+
+#[test]
 fn tokens_push_over_https() {
     let (repos, shas) = repos();
     seed(&repos, None);

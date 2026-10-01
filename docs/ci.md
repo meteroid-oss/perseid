@@ -144,8 +144,9 @@ releases and `change` otherwise (`--on change|release|tag`, `--tags` for `tag`),
 The key and the secret are its only changes on GitHub, made once you agree; declining prints the
 `ssh-keygen` and `gh` commands to add them yourself. `--auth token` pushes with a fine-grained
 token in the `PERSEID_SDKS_TOKEN` secret instead, and `--auth app` with a token of a GitHub App
-installed on the SDKs repository (`SDK_APP_ID` variable, `SDK_APP_PRIVATE_KEY` secret), minted for
-that repository only: `connect` then changes nothing on GitHub and says what to add.
+installed on the SDKs repository only (`PERSEID_PUSH_APP_ID` variable,
+`PERSEID_PUSH_APP_PRIVATE_KEY` secret), minted for that repository and Contents write only:
+`connect` then changes nothing on GitHub and says what to add.
 
 Running either again changes nothing once in sync, and `connect` keeps the key and the settings it
 isn't given. `--dry-run` prints the plan and exits with 2 when changes are pending (0 otherwise),
