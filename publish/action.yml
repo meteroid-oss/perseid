@@ -47,12 +47,14 @@ runs:
     - id: detect
       shell: bash
       working-directory: ${{ inputs.path }}
+      env:
+        SDK_PATH: ${{ inputs.path }}
       run: |
         for pair in Cargo.toml:rust package.json:typescript pyproject.toml:python go.mod:go gradle.properties:java build.gradle:java; do
           if [ -f "${pair%%:*}" ]; then echo "language=${pair#*:}" >> "$GITHUB_OUTPUT"; exit 0; fi
         done
         if compgen -G '*.sln' > /dev/null; then echo "language=csharp" >> "$GITHUB_OUTPUT"; exit 0; fi
-        echo "::error::no package manifest in ${{ inputs.path }}"
+        echo "::error::no package manifest in $SDK_PATH"
         exit 1
 
     - if: steps.detect.outputs.language == 'rust'
@@ -93,7 +95,8 @@ runs:
           exit 0
         fi
         npm install -g 'npm@^11.5.1'
-        if [ -f package-lock.json ]; then npm ci; else npm install; fi
+        # Dependency scripts would run with the job's OIDC token.
+        if [ -f package-lock.json ]; then npm ci --ignore-scripts; else npm install --ignore-scripts; fi
         npm run build --if-present
         # Provenance requires the package to name the repository it is built from.
         if [ "$(npm pkg get repository)" = "{}" ]; then
