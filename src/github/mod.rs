@@ -75,6 +75,9 @@ impl Ui {
         if self.yes {
             return Ok(default);
         }
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            return crate::prompt::confirm(question, default);
+        }
         loop {
             print!("? {question} {} ", if default { "[Y/n]" } else { "[y/N]" });
             std::io::stdout().flush()?;

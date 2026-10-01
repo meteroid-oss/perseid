@@ -193,23 +193,18 @@ fn proposed(api: &GitHub, repo: &str) -> Result<PushOn> {
 }
 
 fn ask_on(proposed: PushOn) -> Result<PushOn> {
-    use std::io::{BufRead, Write};
-    loop {
-        print!(
-            "? Push the spec on each release, change or tag? [{}] ",
-            proposed.name()
-        );
-        std::io::stdout().flush()?;
-        let mut line = String::new();
-        std::io::stdin().lock().read_line(&mut line)?;
-        match line.trim() {
-            "" => return Ok(proposed),
-            "release" => return Ok(PushOn::Release),
-            "change" => return Ok(PushOn::Change),
-            "tag" => return Ok(PushOn::Tag),
-            _ => continue,
-        }
-    }
+    let options = [PushOn::Release, PushOn::Change, PushOn::Tag];
+    let labels: Vec<String> = options
+        .iter()
+        .map(|o| match o {
+            PushOn::Release => "on each GitHub release".to_owned(),
+            PushOn::Change => "on each change to the default branch".to_owned(),
+            PushOn::Tag => "on each tag".to_owned(),
+        })
+        .collect();
+    let default = options.iter().position(|o| *o == proposed).unwrap_or(0);
+    let picked = crate::prompt::pick_one("Push the spec", &labels, default)?;
+    Ok(options[picked])
 }
 
 /// The perseid.toml of `hub`, and its path: at the root, or the only one.

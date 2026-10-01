@@ -1,12 +1,12 @@
 //! `perseid init`: perseid.toml, from the spec found here and the SDKs asked for.
 
 use std::{
-    io::{BufRead, IsTerminal, Write},
+    io::IsTerminal,
     path::Path,
     process::{Command, Stdio},
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Result, bail, ensure};
 use heck::{ToKebabCase, ToUpperCamelCase};
 use serde_json::{Value, json};
 
@@ -38,6 +38,9 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     let interactive = std::io::stdin().is_terminal();
     if !interactive && init.sdks.is_empty() {
         bail!("perseid init asks which SDKs to generate: without a terminal, pass {FLAGS}");
+    }
+    if interactive {
+        crate::prompt::intro("perseid init")?;
     }
     let spec = match &init.spec {
         Some(spec) => Some(spec.clone()),
@@ -161,57 +164,39 @@ fn checked(sdks: &[String]) -> Result<Vec<String>> {
     Ok(out)
 }
 
-fn ask(question: &str) -> Result<String> {
-    print!("? {question} ");
-    std::io::stdout().flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    Ok(line.trim().to_owned())
-}
-
 fn ask_sdks() -> Result<Vec<String>> {
-    let choices: Vec<String> = LANGUAGES
+    let items: Vec<(&str, &str)> = LANGUAGES
         .iter()
-        .enumerate()
-        .map(|(i, l)| format!("{} {l}", i + 1))
+        .map(|l| match *l {
+            "rust" => ("Rust", "crates.io"),
+            "typescript" => ("TypeScript", "npm"),
+            "python" => ("Python", "PyPI"),
+            "go" => ("Go", "Go modules"),
+            "java" => ("Java", "Maven Central"),
+            _ => ("C#", "NuGet"),
+        })
         .collect();
-    println!("  {}", choices.join("  "));
-    loop {
-        let answer = ask("Which SDKs? (names or numbers, comma-separated)")?;
-        let picked: Vec<String> = answer
-            .split([',', ' '])
-            .filter(|a| !a.is_empty())
-            .map(|a| match a.parse::<usize>() {
-                Ok(n) if (1..=LANGUAGES.len()).contains(&n) => LANGUAGES[n - 1].to_owned(),
-                _ => a.to_owned(),
-            })
-            .collect();
-        match checked(&picked) {
-            Ok(sdks) if !sdks.is_empty() => return Ok(sdks),
-            Ok(_) => println!("  pick at least one"),
-            Err(error) => println!("  {error}"),
-        }
-    }
+    let picked = crate::prompt::pick_many("Which SDKs?", &items)?;
+    Ok(picked
+        .into_iter()
+        .map(|i| LANGUAGES[i].to_owned())
+        .collect())
 }
 
 fn ask_layout(sdks: &[String], name: &str, here: Option<&str>) -> Result<Option<String>> {
     let owner = here.and_then(|r| r.split('/').next()).unwrap_or("acme");
     let pattern = format!("{owner}/{}-{{lang}}", name.to_kebab_case());
     let repos: Vec<String> = sdks.iter().map(|s| pattern.replace("{lang}", s)).collect();
-    println!("  1 here, a folder each: {}", folders(sdks));
-    println!("  2 a repository each: {}", repos.join(", "));
-    loop {
-        match ask("Where do the SDKs live? [1]")?.as_str() {
-            "" | "1" => return Ok(None),
-            "2" => {
-                let answer = ask(&format!("Repository of each SDK? [{pattern}]"))?;
-                return Ok(Some(match answer.is_empty() {
-                    true => pattern,
-                    false => answer,
-                }));
-            }
-            _ => continue,
-        }
+    let choices = [
+        format!("Here, a folder each: {}", folders(sdks)),
+        format!("A repository each: {}", repos.join(", ")),
+    ];
+    match crate::prompt::pick_one("Where do the SDKs live?", &choices, 0)? {
+        0 => Ok(None),
+        _ => Ok(Some(crate::prompt::text(
+            "Repository of each SDK",
+            &pattern,
+        )?)),
     }
 }
 
@@ -310,19 +295,8 @@ pub fn pick_spec(root: &Path, interactive: bool) -> Result<Option<String>> {
             Ok(Some(first.clone()))
         }
         _ => {
-            for (i, spec) in specs.iter().enumerate() {
-                println!("  {} {spec}", i + 1);
-            }
-            loop {
-                let answer = ask("Which OpenAPI spec? [1]")?;
-                let n = match answer.as_str() {
-                    "" => 1,
-                    n => n.parse::<usize>().context("a number")?,
-                };
-                if let Some(spec) = specs.get(n.wrapping_sub(1)) {
-                    return Ok(Some(spec.clone()));
-                }
-            }
+            let picked = crate::prompt::pick_one("Which OpenAPI spec?", &specs, 0)?;
+            Ok(Some(specs[picked].clone()))
         }
     }
 }
