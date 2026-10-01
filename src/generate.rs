@@ -391,10 +391,18 @@ pub fn marked(path: &Path, text: &str) -> bool {
     })
 }
 
-pub fn summary(changes: &BTreeMap<String, Vec<Change>>) -> String {
+/// The changes of each SDK, named with the directory `places` gives it, if any.
+pub fn summary(
+    changes: &BTreeMap<String, Vec<Change>>,
+    places: &BTreeMap<String, String>,
+) -> String {
     let listed = changes.values().map(Vec::len).sum::<usize>() <= 30;
     let mut out = String::new();
     for (name, changes) in changes {
+        let name = match places.get(name) {
+            Some(place) => format!("{name} ({place})"),
+            None => name.clone(),
+        };
         let count = |f: fn(&Change) -> bool| changes.iter().filter(|c| f(c)).count();
         let (added, modified, removed) = (
             count(|c| matches!(c, Change::Added(_))),

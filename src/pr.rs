@@ -3,7 +3,7 @@ use std::{
     process::Command,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 
 pub const BRANCH: &str = "perseid/update";
 
@@ -90,7 +90,8 @@ pub fn origin(config: &crate::config::Config, root: &Path, spec: &str) -> Option
 pub const SOURCE: &str = ".perseid/source.json";
 
 /// A fresh checkout of the default branch of `repo`, in a disposable directory under `.perseid/`.
-pub fn checkout(repo: &str, root: &Path) -> Result<PathBuf> {
+/// Local changes there stop it, unless `discard`.
+pub fn checkout(repo: &str, root: &Path, discard: bool) -> Result<PathBuf> {
     let url = if repo.contains(':') {
         repo.to_owned()
     } else {
@@ -105,6 +106,12 @@ pub fn checkout(repo: &str, root: &Path) -> Result<PathBuf> {
     crate::fsx::write(&repos.join(".gitignore"), b"*\n")?;
     let dir = repos.join(segments[segments.len().saturating_sub(2)..].join("/"));
     if dir.join(".git").is_dir() {
+        ensure!(
+            discard || git(&dir, &["status", "--porcelain"])?.is_empty(),
+            "{} has local changes, which `perseid generate` would discard: commit and push them, \
+             or delete that directory (`--pr` discards them)",
+            dir.display()
+        );
         git(
             &dir,
             &["fetch", "--quiet", "--depth", "1", "origin", "HEAD"],
@@ -115,8 +122,21 @@ pub fn checkout(repo: &str, root: &Path) -> Result<PathBuf> {
         )?;
         git(&dir, &["clean", "--quiet", "-fd"])?;
     } else {
-        std::fs::create_dir_all(&dir)?;
-        git(&dir, &["clone", "--quiet", "--depth", "1", &url, "."])?;
+        let parent = dir.parent().unwrap_or(&repos);
+        std::fs::create_dir_all(parent)?;
+        let target = dir.to_string_lossy();
+        if let Err(error) = git(&repos, &["clone", "--quiet", "--depth", "1", &url, &target]) {
+            let _ = std::fs::remove_dir_all(&dir);
+            let _ = std::fs::remove_dir(parent);
+            let message = format!("{error:#}").to_lowercase();
+            let missing = ["not found", "does not appear to be a git repository"];
+            ensure!(
+                !missing.iter().any(|m| message.contains(m)),
+                "{repo} doesn't exist yet: `perseid setup` creates it; preview with \
+                 `perseid generate --out <dir>`"
+            );
+            return Err(error);
+        }
     }
     Ok(dir)
 }

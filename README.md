@@ -13,7 +13,7 @@ One static binary, running in your CI: an open-source and headless alternative t
 ```sh
 # in the repository that will hold your SDKs
 npx perseid init      # which SDKs, where they live → perseid.toml
-npx perseid generate  # optional local preview
+npx perseid generate --out preview  # optional local preview, in preview/<lang>
 npx perseid setup     # GitHub side: workflows, releases
 
 # spec in another repository (even private)? run there:
@@ -23,7 +23,7 @@ npx perseid connect acme/acme-sdks   # pushes the spec on each release or change
 | Command | Runs in | Does |
 |---|---|---|
 | `init` | the SDKs repository | writes `perseid.toml`, nothing else: the spec found there, the SDKs you pick, where they live |
-| `generate` | the SDKs repository | writes the SDKs from `spec` (or `--spec <path\|url>`), starting each from its package skeleton |
+| `generate` | the SDKs repository | writes the SDKs from `spec` (or `--spec <path\|url>`), starting each from its package skeleton: here, in a checkout of its `repo` under `.perseid/repos`, or all under `--out <dir>` |
 | `setup` | the SDKs repository | plans, then sets up GitHub: SDK repositories, the App, `sdks.yml`, release files |
 | `connect <owner/sdks-repo>` | the repository holding the spec | a deploy key and `perseid-push.yml`, pushing the spec to the SDKs repository |
 

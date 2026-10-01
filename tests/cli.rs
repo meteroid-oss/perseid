@@ -129,7 +129,7 @@ fn generate_is_idempotent_and_check_detects_drift() {
 
     let (ok, out) = perseid(dir.path(), &["generate", "--check", "--no-format"]);
     assert!(ok, "{out}");
-    assert!(out.contains("rust: up to date"), "{out}");
+    assert!(out.contains("rust (rust): up to date"), "{out}");
 
     fs::write(models.join("stale.rs"), "// this file is @generated\n").unwrap();
     fs::write(models.join("mine.rs"), "// handwritten\n").unwrap();
@@ -515,17 +515,100 @@ fn empty_sdk_repositories_get_a_skeleton() {
     .unwrap();
     let (ok, out) = perseid(dir.path(), &["generate", "go", "--no-format"]);
     assert!(ok, "{out}");
-    let checkout = dir
-        .path()
-        .join(".perseid/repos")
+    let relative = Path::new(".perseid/repos")
         .join(dir.path().file_name().unwrap())
         .join("go-sdk");
+    assert!(
+        out.contains(&format!("go ({}): ", relative.display())),
+        "{out}"
+    );
+    let checkout = dir.path().join(&relative);
     assert!(checkout.join("go.mod").exists());
     assert!(checkout.join("client.go").exists());
     assert!(
         !checkout.join("release-please-config.json").exists(),
         "`perseid setup` adds the release files"
     );
+
+    fs::write(checkout.join("client.go"), "// my edit\n").unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "go", "--no-format"]);
+    assert!(
+        !ok && out.contains(&format!("{} has local changes", checkout.display())),
+        "{out}"
+    );
+    assert_eq!(
+        fs::read_to_string(checkout.join("client.go")).unwrap(),
+        "// my edit\n"
+    );
+}
+
+fn git_in(dir: &Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {args:?}");
+}
+
+#[test]
+fn sdks_in_the_repository_holding_perseid_toml_are_generated_in_place() {
+    let dir = project();
+    git_in(dir.path(), &["init", "--quiet"]);
+    let origin = "https://github.com/Acme/Petstore-SDKs";
+    git_in(dir.path(), &["remote", "add", "origin", origin]);
+    edit_config(dir.path(), |c| {
+        c.replace("[go]\n", "[go]\nrepo = \"acme/petstore-sdks\"\n")
+    });
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("go (go): ") && out.contains("rust (rust): "),
+        "{out}"
+    );
+    assert!(dir.path().join("go/go.mod").exists());
+    assert!(!dir.path().join(".perseid/repos").exists());
+}
+
+#[test]
+fn out_previews_sdks_whose_repository_doesnt_exist_yet() {
+    let dir = project();
+    edit_config(dir.path(), |c| {
+        c.replace(
+            "[go]\n",
+            "[go]\nrepo = \"file:///nonexistent/acme/petstore-go\"\n",
+        )
+    });
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(!ok);
+    assert!(
+        out.contains(
+            "file:///nonexistent/acme/petstore-go doesn't exist yet: `perseid setup` creates it; \
+             preview with `perseid generate --out <dir>`"
+        ),
+        "{out}"
+    );
+    assert!(!dir.path().join(".perseid/repos/acme").exists());
+
+    let (ok, out) = perseid(dir.path(), &["generate", "--out", "preview", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("go (preview/go): ") && out.contains("rust (preview/rust): "),
+        "{out}"
+    );
+    assert!(dir.path().join("preview/go/go.mod").exists());
+    assert!(dir.path().join("preview/rust/Cargo.toml").exists());
+    assert!(!dir.path().join("rust").exists());
+
+    let check = ["generate", "--out", "preview", "--check", "--no-format"];
+    let (ok, out) = perseid(dir.path(), &check);
+    assert!(ok && out.contains("go (preview/go): up to date"), "{out}");
+    fs::remove_file(dir.path().join("preview/go/client.go")).unwrap();
+    let (ok, out) = perseid(dir.path(), &check);
+    assert!(!ok && out.contains("+ client.go"), "{out}");
+
+    let (ok, out) = perseid(dir.path(), &["generate", "--out", "preview", "--pr"]);
+    assert!(!ok && out.contains("--pr"), "{out}");
 }
 
 #[test]

@@ -131,7 +131,7 @@ table for an SDK `sdks` doesn't list fails. Every table takes:
 | Key | |
 |---|---|
 | `path` | Output directory, relative to the repository the SDK lives in |
-| `repo` | `owner/name` of a GitHub repository to generate into, over the top-level `repo`: checked out under `.perseid/repos`, the SDK at its root, or in a folder named after the language when several SDKs share the repository |
+| `repo` | `owner/name` of a GitHub repository to generate into, over the top-level `repo`: checked out under `.perseid/repos`, the SDK at its root, or in a folder named after the language when several SDKs share the repository. The repository holding `perseid.toml` (its `origin`) counts as no `repo`: the SDK is generated here, in a folder named after the language |
 | `package` | Crate, npm package, Python package, Go package, Java package or C# root namespace and NuGet package; derived from `name` by default |
 | `base_url`, `timeout`, `webhooks`, `untagged_unions`, `header_prefix`, `user_agent`, `names`, `context` | Over the [SDK defaults](#sdk-defaults) |
 | `exclude` | Operation ids left out of this SDK only |
