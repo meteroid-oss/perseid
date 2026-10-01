@@ -263,7 +263,7 @@
           "type": "string"
         },
         "module": {
-          "description": "Module path: `github.com/{repo}/{path}` of the repository the SDK lives in by default.",
+          "description": "Module path: that of the repository and folder the SDK lives in by default.",
           "default": null,
           "type": "string"
         },
@@ -459,7 +459,7 @@
           "type": "string"
         },
         "repository": {
-          "description": "URL of the source repository.",
+          "description": "URL of the source repository of the SDKs without a `repo`: the `origin` remote of the repository holding perseid.toml by default. An SDK with a `repo` names that one.",
           "type": "string"
         }
       },

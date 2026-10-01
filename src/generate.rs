@@ -275,6 +275,12 @@ pub fn sdk(
 ) -> Result<Vec<Change>> {
     std::fs::create_dir_all(dir)?;
     let context = config.context(sdk, dir);
+    if sdk.language == "go" && config.go_module(sdk).is_none() {
+        eprintln!(
+            "warning: the Go module path is `{}`, as neither a `repo` nor an `origin` remote tells where the SDK lives: set `module` under [go]",
+            context["go_module"].as_str().unwrap_or_default()
+        );
+    }
     let stage = tempfile::Builder::new()
         .prefix("perseid-stage-")
         .tempdir_in(dir)?;
