@@ -25,7 +25,7 @@ npx perseid connect acme/acme-sdks   # pushes the spec on each release or change
 | `init` | the SDKs repository | writes `perseid.toml`, nothing else: the spec found there, the SDKs you pick, where they live |
 | `generate` | the SDKs repository | writes the SDKs from `spec` (or `--spec <path\|url>`), starting each from its package skeleton |
 | `setup` | the SDKs repository | plans, then sets up GitHub: SDK repositories, the App, `sdks.yml`, release files |
-| `connect <owner/sdks-repo>` | the repository holding the spec | a deploy key and `perseid-push.yml`, pushing the spec to the SDKs repository |
+| `connect <owner/sdks-repo>` | the repository holding the spec | a deploy key on GitHub, and `perseid-push.yml` for you to commit, pushing the spec to the SDKs repository |
 
 With the spec and the SDKs in one repository, `connect` isn't needed. Merge the pull requests, and
 every spec change (or every release of your API) lands as SDK pull requests, then releases. See

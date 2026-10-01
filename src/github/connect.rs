@@ -17,7 +17,7 @@ use super::{
     bootstrap::{self, File},
     git, join, layout,
     link::{self, Push, PushOn, Pushed},
-    plan::{self, Action, Commit, Mark, Plan, Session},
+    plan::{self, Action, Mark, Plan, Session},
     secrets, toplevel,
 };
 use crate::config::{self, Config, Source};
@@ -136,23 +136,16 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
         bail!("nothing changed");
     }
     println!();
-    let pulls = plan::apply(&api, &mut plan, &ui)?;
+    plan::apply(&api, &mut plan, &ui)?;
     println!("\n✓ {}", plan.diagram);
-    println!("\nNext steps");
-    let mut step = 0;
-    let mut item = |text: String| {
-        step += 1;
-        ui.info(&format!("{step}. {text}"));
-    };
-    for pull in &pulls {
-        item(format!(
-            "Merge {pull}, then `git pull`: perseid staged {}",
-            link::WORKFLOW
-        ));
-    }
     let Pushed { hub, on, .. } = &settings.pushed;
-    item(format!(
-        "The spec reaches {hub} {}: run the Spec workflow (`gh workflow run perseid-push.yml`) to push it now",
+    println!("\nNext steps");
+    ui.info(&format!(
+        "1. Review {}, then commit and push it to the default branch",
+        link::WORKFLOW
+    ));
+    ui.info(&format!(
+        "2. The spec then reaches {hub} {}: run the Spec workflow (`gh workflow run perseid-push.yml`) to push it now",
         when(*on)
     ));
     Ok(ExitCode::SUCCESS)
@@ -241,8 +234,8 @@ fn admin(info: &Value) -> bool {
     info["permissions"]["admin"] != false
 }
 
-/// What GitHub lacks for `settings` to push the spec: the deploy key and its secret, the
-/// variable naming the SDKs repository, and the workflow.
+/// What `settings` lacks to push the spec: the deploy key and its secret on GitHub, and the
+/// workflow here, which the user commits.
 pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
     let api = cx.api;
     let Settings { here, top, pushed } = settings;
@@ -250,10 +243,9 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
     let here_info = api.get(&format!("/repos/{here}"))?;
     ensure!(
         admin(&here_info),
-        "{} isn't an admin of {here}, which gets the {} secret and the {} variable: ask an admin of {here} to run `npx perseid connect {hub}` there",
+        "{} isn't an admin of {here}, which gets the {} secret: ask an admin of {here} to run `npx perseid connect {hub}` there",
         cx.login,
-        link::SECRET,
-        link::VARIABLE
+        link::SECRET
     );
     let hub_info = api.find(&format!("/repos/{hub}"))?.with_context(|| {
         format!(
@@ -278,6 +270,11 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
     plan.hub = hub.to_owned();
     plan.hub_dir = dir.to_owned();
     plan.diagram = format!("{here} ──spec──▶ {hub} ({destination})");
+    if bootstrap::read(api, hub, &hub_base, layout::SDKS_WORKFLOW)?.is_none() {
+        plan.warnings.push(format!(
+            "{hub} doesn't regenerate its SDKs yet: run `npx perseid setup` there, or the specs pushed to it wait unused"
+        ));
+    }
 
     let secret = secrets::has_secret(api, here, link::SECRET)?;
     let text = format!(
@@ -319,23 +316,6 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
         ),
     }
 
-    let variable = format!("{here}: variable {} = {hub}", link::VARIABLE);
-    match secrets::variable(api, here, link::VARIABLE)? {
-        Some(value) if value.eq_ignore_ascii_case(hub) => plan.add(Mark::Keep, variable, None),
-        current => plan.add(
-            match current {
-                Some(_) => Mark::Change,
-                None => Mark::Add,
-            },
-            variable,
-            Some(Action::Variable {
-                repo: here.clone(),
-                name: link::VARIABLE,
-                value: hub.to_owned(),
-            }),
-        ),
-    }
-
     let here_base = bootstrap::default_branch(&here_info);
     let yaml = link::push_workflow(&Push {
         branch: &here_base,
@@ -344,42 +324,36 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
         spec: &pushed.spec,
         build: pushed.build.as_deref(),
         hub,
-        destination: &destination,
-        config: &config_path,
         private: pushed.private,
     });
-    let remote = api.raw(here, &here_base, link::WORKFLOW)?;
-    let files = match remote.as_deref() == Some(yaml.as_bytes()) {
-        true => vec![],
-        false => vec![File {
-            path: link::WORKFLOW.into(),
-            content: yaml.into_bytes(),
-            executable: false,
-        }],
-    };
-    let updated = match remote {
-        Some(_) => vec![link::WORKFLOW.to_owned()],
-        None => vec![],
-    };
-    let summary = format!(
-        "{}, `{}` pushes {} to {hub} with the {} deploy key, which can write to that repository only.",
-        when(pushed.on),
-        link::WORKFLOW,
-        pushed.spec,
-        link::SECRET
-    );
-    plan::plan_commit(
-        cx,
-        &mut plan,
-        Commit {
-            repo: here.clone(),
-            base: here_base,
-            files,
-            message: "ci: push the spec to the SDKs repository",
-            pull_request: Some(summary),
-            local: Some(top.clone()),
-        },
-        &updated,
-    )?;
+    let local = std::fs::read(top.join(link::WORKFLOW)).ok();
+    match local.as_deref() == Some(yaml.as_bytes()) {
+        true => plan.add(
+            Mark::Keep,
+            format!("{} is up to date here", link::WORKFLOW),
+            None,
+        ),
+        false => plan.add(
+            match local {
+                Some(_) => Mark::Change,
+                None => Mark::Add,
+            },
+            format!("{}, written here for you to commit", link::WORKFLOW),
+            Some(Action::Write {
+                top: top.clone(),
+                file: File {
+                    path: link::WORKFLOW.into(),
+                    content: yaml.clone().into_bytes(),
+                    executable: false,
+                },
+            }),
+        ),
+    }
+    if api.raw(here, &here_base, link::WORKFLOW)?.as_deref() != Some(yaml.as_bytes()) {
+        plan.warnings.push(format!(
+            "`{here_base}` of {here} doesn't hold this {} yet: commit and push it",
+            link::WORKFLOW
+        ));
+    }
     Ok(plan)
 }

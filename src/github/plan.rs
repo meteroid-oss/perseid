@@ -46,16 +46,16 @@ pub(super) enum Action {
     Commit(Commit),
     AllowPullRequests(String),
     App(Box<AppPlan>),
+    /// Writes `file` in the checkout at `top`, leaving the commit to the user.
+    Write {
+        top: PathBuf,
+        file: File,
+    },
     DeployKey {
         api_repo: String,
         sdks_repo: String,
         /// Whether `perseid connect` can register it on `sdks_repo`, and the key it replaces.
         register: (bool, Option<u64>),
-    },
-    Variable {
-        repo: String,
-        name: &'static str,
-        value: String,
     },
 }
 
@@ -802,15 +802,15 @@ pub fn apply(api: &GitHub, plan: &mut Plan, ui: &Ui) -> Result<Vec<String>> {
                 }
             }
             Action::App(app) => apply_app(api, *app, ui)?,
+            Action::Write { top, file } => {
+                crate::fsx::write(&top.join(&file.path), &file.content)?;
+                ui.ok(&format!("Wrote {}", file.path));
+            }
             Action::DeployKey {
                 api_repo,
                 sdks_repo,
                 register,
             } => link::add_deploy_key(api, &api_repo, &sdks_repo, register, ui)?,
-            Action::Variable { repo, name, value } => {
-                secrets::set_variable(api, &repo, name, &value)?;
-                ui.ok(&format!("{repo}: variable {name} = {value}"));
-            }
         }
     }
     Ok(pulls)

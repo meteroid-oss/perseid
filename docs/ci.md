@@ -52,12 +52,13 @@ acme/api ──spec──▶ acme/api-sdks ──PRs──▶ acme/api-typescrip
 npx perseid init                  # perseid.toml: spec = "openapi.json", sdks, repo
 npx perseid setup                 # sdks.yml, release files, the App for other repositories
 # in acme/api, once perseid.toml is on acme/api-sdks's default branch
-npx perseid connect acme/api-sdks # deploy key, PERSEID_SDKS_REPO, perseid-push.yml
+npx perseid connect acme/api-sdks # deploy key, perseid-push.yml to commit
 ```
 
-`perseid connect` reads `perseid.toml` of the SDKs repository to know where its spec goes, and
-writes `.github/workflows/perseid-push.yml`, whose spec path, trigger, tags and build command are
-plain values you can read and edit; run `connect` again to change them. Pull requests opened from
+`perseid connect` checks `perseid.toml` of the SDKs repository, and writes
+`.github/workflows/perseid-push.yml` in your clone, for you to review and commit: a trigger, an
+optional build step and the `meteroid-oss/perseid/push` action, whose spec path and SDKs
+repository are plain values you can edit; run `connect` again to change them. Pull requests opened from
 a pushed spec say which commit it comes from: "Generated from acme/api@a1b2c3d", or
 "acme/api@v1.4.0 (a1b2c3d)" when a release or tag pushed it (with `--private`, the commit alone,
 without the API repository's name).
@@ -136,10 +137,11 @@ committing it), asks when to push it, proposing `release` when the repository pu
 releases and `change` otherwise (`--on change|release|tag`, `--tags` for `tag`), then plans:
 
 1. a write deploy key on the SDKs repository, its private half the `PERSEID_SDKS_DEPLOY_KEY`
-   secret of the API repository; without admin rights on the SDKs repository, it prints the
-   public key and where an admin of it adds it;
-2. the `PERSEID_SDKS_REPO` variable of the API repository;
-3. a pull request adding `.github/workflows/perseid-push.yml`.
+   secret of the API repository (generated in memory, never written to disk); without admin
+   rights on the SDKs repository, it prints the public key and where an admin of it adds it;
+2. `.github/workflows/perseid-push.yml`, written in your clone: commit and push it.
+
+The key and the secret are its only changes on GitHub.
 
 Running either again changes nothing once in sync, and `connect` keeps the key and the settings it
 isn't given. `--dry-run` prints the plan and exits with 2 when changes are pending (0 otherwise),
@@ -148,7 +150,7 @@ isn't given. `--dry-run` prints the plan and exits with 2 when changes are pendi
 `perseid status` runs the same comparison without changing anything, then checks how the
 automation fares. In the SDKs repository: the last spec pushed (commit, release and age), open
 `perseid/update` pull requests, the last `sdks.yml` run and the App installation. In the API
-repository, without a `perseid.toml`: the key, secret and variable `perseid-push.yml` needs, the
+repository, without a `perseid.toml`: the key and secret `perseid-push.yml` needs, the
 last spec the SDKs repository received and the last `perseid-push.yml` run. Each problem comes with
 the fix; it exits with 1 when something needs you. Without GitHub credentials it checks the clone
 only.
@@ -162,9 +164,10 @@ only.
 - `release`: when a GitHub release is published;
 - `tag`: when a tag matching `--tags` (`v*` by default) is pushed.
 
-It can also be run by hand, from the default branch or a tag. It takes the spec of the commit that
-triggered it, clones the SDKs repository over SSH, pinned to GitHub's published host keys, and
-commits the spec to the SDKs repository's `spec` path as `spec: acme/api@a1b2c3d`
+It can also be run by hand, from the default branch or a tag. Its action runs
+`perseid push-spec <spec> --to <owner/sdks-repo>`, which takes the spec of the commit that
+triggered it, clones the SDKs repository over SSH with the deploy key, pinned to GitHub's published
+host keys, and commits the spec to the `spec` path of the SDKs repository's `perseid.toml` as `spec: acme/api@a1b2c3d`
 (`spec: acme/api@v1.4.0 (a1b2c3d)` for a release or tag) with `.perseid/source.json` naming the
 commit, and the tag as `ref`, unless:
 
@@ -175,7 +178,7 @@ commit, and the tag as `ref`, unless:
   (to resync after rewriting history, remove `sha` from `.perseid/source.json`);
 - the spec didn't change.
 
-Runs share the `perseid-push` concurrency group without cancelling each other, so pushes happen
+Runs share the `perseid-push` concurrency group without cancelling a running push, so pushes happen
 one at a time and in order. The deploy key reaches the SDKs repository only, and nothing on the SDKs
 side can read or write the API repository. With `--private`, `.perseid/source.json` and the commit
 messages leave out the API repository's name.

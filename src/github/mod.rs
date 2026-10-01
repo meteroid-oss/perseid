@@ -9,6 +9,7 @@ mod connect;
 mod layout;
 mod link;
 mod plan;
+mod push;
 mod secrets;
 mod status;
 
@@ -23,6 +24,7 @@ use anyhow::{Context, Result, bail};
 pub use connect::{Connect, connect};
 pub use layout::origin_repo;
 pub use link::{Push, PushOn, push_workflow};
+pub use push::{PushSpec, push_spec};
 pub use status::status;
 
 use crate::config::{Config, Sdk, Source};
