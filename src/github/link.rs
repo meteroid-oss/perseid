@@ -192,31 +192,20 @@ pub fn pushed(yaml: &str) -> Option<Pushed> {
             .as_str()
             .is_some_and(|u| u.starts_with("meteroid-oss/perseid/push@"))
     });
-    let (spec, auth, private) = match action {
-        Some(step) => {
-            let with = &step["with"];
-            let auth = match with["token"].as_str() {
-                None => Auth::DeployKey,
-                Some(token) if token.contains("steps.app") => Auth::App,
-                Some(_) => Auth::Token,
-            };
-            (&with["spec"], auth, with["private"] == true)
-        }
-        // Written before `perseid push-spec`, running its shell inline.
-        None => {
-            let env = &step("Push the spec to the SDKs repository")?["env"];
-            let private = env["SOURCE_REPOSITORY"].as_str() == Some("");
-            (&env["SPEC"], Auth::DeployKey, private)
-        }
+    let with = &action?["with"];
+    let auth = match with["token"].as_str() {
+        None => Auth::DeployKey,
+        Some(token) if token.contains("steps.app") => Auth::App,
+        Some(_) => Auth::Token,
     };
     Some(Pushed {
         hub,
         on,
         tags,
-        spec: spec.as_str()?.to_owned(),
+        spec: with["spec"].as_str()?.to_owned(),
         build,
         auth,
-        private,
+        private: with["private"] == true,
     })
 }
 
@@ -391,26 +380,5 @@ mod tests {
         assert_eq!(steps[1]["with"]["repositories"], "api-sdks");
         assert_eq!(steps[2]["with"]["token"], "${{ steps.app.outputs.token }}");
         assert!(steps[2]["with"].get("deploy-key").is_none(), "{yaml}");
-    }
-
-    #[test]
-    fn workflows_running_the_shell_inline_read_back_too() {
-        let legacy = r#"# Written by `perseid connect acme/api-sdks`: pushes the spec to acme/api-sdks on each change,
-name: Spec
-on:
-  push:
-    branches: ["main"]
-jobs:
-  push:
-    steps:
-      - uses: actions/checkout@v5
-      - name: Push the spec to the SDKs repository
-        env:
-          SPEC: "openapi.json"
-          SOURCE_REPOSITORY: ''
-        run: echo
-"#;
-        let read = pushed(legacy).unwrap();
-        assert_eq!((read.spec.as_str(), read.private), ("openapi.json", true));
     }
 }
