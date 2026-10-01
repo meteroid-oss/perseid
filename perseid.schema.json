@@ -58,17 +58,25 @@
         }
       ]
     },
-    "name": {
-      "description": "Client name, in any form (`Acme`, `acme-api`, `Acme API`): the `AcmeApi` client, the `acme_api` and `acme-api` packages.",
-      "type": "string"
+    "metadata": {
+      "description": "Package metadata written into the manifests `perseid generate` creates.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Package"
+        }
+      ]
     },
-    "names": {
+    "methods": {
       "description": "Method names by operation id, over the resource-style names.",
       "default": {},
       "type": "object",
       "additionalProperties": {
         "type": "string"
       }
+    },
+    "name": {
+      "description": "Client name, in any form (`Acme`, `acme-api`, `Acme API`): the `AcmeApi` client, the `acme_api` and `acme-api` packages.",
+      "type": "string"
     },
     "only": {
       "description": "Operation ids to generate, leaving out every other operation.",
@@ -81,14 +89,6 @@
     "overrides": {
       "description": "Directory mirroring `templates/<lang>/…` and `runtime/<lang>/…` to override built-ins: `.perseid` by default.",
       "type": "string"
-    },
-    "package": {
-      "description": "Package metadata written into the manifests `perseid generate` creates.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/Package"
-        }
-      ]
     },
     "pagination": {
       "description": "Paginated list operations, detected from their query parameter and response shape.",
@@ -192,8 +192,8 @@
           "description": "Prefix of this SDK's own headers, over the top-level one.",
           "type": "string"
         },
-        "names": {
-          "description": "Method names by operation id, over the top-level `[names]`.",
+        "methods": {
+          "description": "Method names by operation id, over the top-level `[methods]`.",
           "default": {},
           "type": "object",
           "additionalProperties": {
@@ -262,18 +262,18 @@
           "description": "Prefix of this SDK's own headers, over the top-level one.",
           "type": "string"
         },
-        "module": {
-          "description": "Module path: that of the repository and folder the SDK lives in by default.",
-          "default": null,
-          "type": "string"
-        },
-        "names": {
-          "description": "Method names by operation id, over the top-level `[names]`.",
+        "methods": {
+          "description": "Method names by operation id, over the top-level `[methods]`.",
           "default": {},
           "type": "object",
           "additionalProperties": {
             "type": "string"
           }
+        },
+        "module": {
+          "description": "Module path: that of the repository and folder the SDK lives in by default.",
+          "default": null,
+          "type": "string"
         },
         "package": {
           "description": "Go package name: the snake_case `name` by default.",
@@ -363,8 +363,8 @@
           "description": "Prefix of this SDK's own headers, over the top-level one.",
           "type": "string"
         },
-        "names": {
-          "description": "Method names by operation id, over the top-level `[names]`.",
+        "methods": {
+          "description": "Method names by operation id, over the top-level `[methods]`.",
           "default": {},
           "type": "object",
           "additionalProperties": {
@@ -551,8 +551,8 @@
           "description": "Prefix of this SDK's own headers, over the top-level one.",
           "type": "string"
         },
-        "names": {
-          "description": "Method names by operation id, over the top-level `[names]`.",
+        "methods": {
+          "description": "Method names by operation id, over the top-level `[methods]`.",
           "default": {},
           "type": "object",
           "additionalProperties": {
@@ -621,8 +621,8 @@
           "description": "Prefix of this SDK's own headers, over the top-level one.",
           "type": "string"
         },
-        "names": {
-          "description": "Method names by operation id, over the top-level `[names]`.",
+        "methods": {
+          "description": "Method names by operation id, over the top-level `[methods]`.",
           "default": {},
           "type": "object",
           "additionalProperties": {
@@ -707,8 +707,8 @@
             }
           ]
         },
-        "names": {
-          "description": "Method names by operation id, over the top-level `[names]`.",
+        "methods": {
+          "description": "Method names by operation id, over the top-level `[methods]`.",
           "default": {},
           "type": "object",
           "additionalProperties": {

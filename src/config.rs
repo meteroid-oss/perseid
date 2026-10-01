@@ -40,7 +40,7 @@ pub struct Config {
     /// `false` leaves out the release-please files and the release workflow `perseid init` writes.
     pub release: Option<bool>,
     /// Package metadata written into the manifests `perseid generate` creates.
-    #[serde(default)]
+    #[serde(default, rename = "metadata")]
     pub package: Package,
     /// API base URL the clients default to.
     pub base_url: Option<String>,
@@ -56,7 +56,7 @@ pub struct Config {
     /// How unions decode objects that no rule tells apart.
     pub untagged_unions: Option<UntaggedUnions>,
     /// Method names by operation id, over the resource-style names.
-    #[serde(default)]
+    #[serde(default, rename = "methods")]
     pub names: BTreeMap<String, String>,
     /// Also generates the operations marked `x-internal: true`.
     #[serde(default)]
@@ -222,8 +222,8 @@ macro_rules! language {
             timeout: Option<u64>,
             /// How unions decode objects that no rule tells apart, over the top-level setting.
             untagged_unions: Option<UntaggedUnions>,
-            /// Method names by operation id, over the top-level `[names]`.
-            #[serde(default)]
+            /// Method names by operation id, over the top-level `[methods]`.
+            #[serde(default, rename = "methods")]
             names: BTreeMap<String, String>,
             /// Operation ids left out of this SDK only, on top of the top-level `exclude`.
             #[serde(default)]
@@ -685,10 +685,12 @@ impl Config {
 const CONNECT: &str = "was removed: the repository holding the spec pushes it with `npx perseid connect <owner/sdks-repository>`, which writes its workflow";
 
 /// Keys of earlier versions, and what replaces them.
-const OUTDATED: [(&str, &str); 20] = [
+const OUTDATED: [(&str, &str); 22] = [
+    ("package", "was renamed: name the table `[metadata]`"),
+    ("names", "was renamed `methods`"),
     (
         "method_names",
-        "was removed (methods are named after their resource; `[names]` renames one): delete it",
+        "was removed (methods are named after their resource; `[methods]` renames one): delete it",
     ),
     (
         "typed_unions",
@@ -720,11 +722,11 @@ const OUTDATED: [(&str, &str); 20] = [
         "include",
         "was removed: `internal = true` also generates x-internal operations, `only = [...]` lists the operations to generate",
     ),
-    ("description", "moved to the [package] table"),
-    ("license", "moved to the [package] table"),
-    ("homepage", "moved to the [package] table"),
-    ("repository", "moved to the [package] table"),
-    ("authors", "moved to the [package] table"),
+    ("description", "moved to the [metadata] table"),
+    ("license", "moved to the [metadata] table"),
+    ("homepage", "moved to the [metadata] table"),
+    ("repository", "moved to the [metadata] table"),
+    ("authors", "moved to the [metadata] table"),
     ("int64", "is only supported in [typescript]"),
     ("flat_unions", "is only supported in [python]"),
 ];
@@ -740,7 +742,7 @@ fn removed_keys(table: &toml::Table) -> Result<()> {
             let own = matches!(
                 (language, key),
                 ("typescript", "int64") | ("python", "flat_unions")
-            ) || !language.is_empty() && why == CONNECT;
+            ) || !language.is_empty() && (why == CONNECT || key == "package");
             if table.contains_key(key) && !own {
                 let at = match language {
                     "" => String::new(),
@@ -1008,7 +1010,7 @@ mod tests {
 
     #[test]
     fn timeout_and_package_metadata_reach_templates() {
-        let toml = "spec = \"s\"\nname = \"Acme\"\nsdks = [\"rust\", \"go\"]\ntimeout = 15\n[package]\nlicense = \"MIT\"\n\
+        let toml = "spec = \"s\"\nname = \"Acme\"\nsdks = [\"rust\", \"go\"]\ntimeout = 15\n[metadata]\nlicense = \"MIT\"\n\
                     authors = [\"A <a@x.dev>\"]\n[go]\ntimeout = 30\n[rust]\n";
         let go = context(toml, "go");
         assert_eq!(
@@ -1164,7 +1166,7 @@ mod tests {
     #[test]
     fn name_overrides_are_per_language() {
         let toml = "name = \"Acme\"\nsdks = [\"rust\", \"go\"]\n\
-                    [names]\na = \"x\"\n[go]\nnames = { a = \"y\" }\n";
+                    [methods]\na = \"x\"\n[go]\nmethods = { a = \"y\" }\n";
         let config: Config = toml::from_str(toml).unwrap();
         let sdks = config.sdks(&[]).unwrap();
         assert_eq!(config.filters_for(&sdks[0]).names["a"], "x");
@@ -1185,6 +1187,11 @@ mod tests {
             "{java}"
         );
         assert!(removed_keys(&"[go]\nmodule = \"m\"".parse().unwrap()).is_ok());
+        assert!(error("[package]\nlicense = \"MIT\"").contains("`[metadata]`"));
+        assert!(
+            error("[go]\nnames = { a = \"b\" }").contains("[go] `names` was renamed `methods`")
+        );
+        assert!(removed_keys(&"[typescript]\npackage = \"@acme/sdk\"".parse().unwrap()).is_ok());
         for key in ["push_spec", "push_on", "generate"] {
             let error = error(&format!("{key} = \"x\""));
             assert_eq!(error, format!("`{key}` {CONNECT}"));
@@ -1192,7 +1199,7 @@ mod tests {
         assert!(error("[push]\nto = \"acme/sdks\"").starts_with("`push` was removed"));
         assert_eq!(
             error("repository = \"https://github.com/acme/api\""),
-            "`repository` moved to the [package] table"
+            "`repository` moved to the [metadata] table"
         );
         assert!(error("include = \"public-and-internal\"").contains("`internal = true`"));
         assert!(error("[rust]\nversion = \"1.0.0\"").starts_with("[rust] `version` was removed"));

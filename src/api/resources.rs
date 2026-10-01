@@ -433,7 +433,7 @@ pub(crate) struct Operation {
     /// The operation ID from the spec.
     pub(crate) id: String,
     /// The name in code: after the HTTP method and the path within the resource (`list`,
-    /// `retrieve`, `create_source`), or the override of `[names]`/`x-perseid-name`.
+    /// `retrieve`, `create_source`), or the override of `[methods]`/`x-perseid-name`.
     pub(crate) name: String,
     /// `x-perseid-name` of the operation.
     #[serde(skip)]
