@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.0](https://github.com/meteroid-oss/perseid/compare/v0.3.2...v0.4.0) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* `sdks_repo`, `push_on`, `push_tags` and `generate` moved to `[push]` as `to`, `on`, `tags` and `generate`.
+* `push_spec` is now `sdks_repo`; top-level `description`, `license`, `homepage`, `repository` and `authors` moved to `[package]`; `include` was removed (`internal = true`, or `only`); `version` was removed; `flat_unions` moved from `[python.context]` to `[python]`; `int64` outside `[typescript]` and `flat_unions` outside `[python]` are rejected.
+* removed `init --github` and the `method_names`, `typed_unions`, `patch_nullable`, `initialisms` and `edition` keys; Java edition 1 output and scaffold compatibility shims are gone.
+
+### Features
+
+* declarative repository layouts, perseid setup and perseid status ([#33](https://github.com/meteroid-oss/perseid/issues/33)) ([d4a5818](https://github.com/meteroid-oss/perseid/commit/d4a58188fb3e11a5d178a91216fbfff36152cd86))
+* group spec-push settings in a [push] table ([#37](https://github.com/meteroid-oss/perseid/issues/37)) ([8d2c487](https://github.com/meteroid-oss/perseid/commit/8d2c487275c45d0641314040e53e05eff99da705))
+* perseid.toml [package] table, sdks_repo with push_on, simpler filters and a JSON Schema ([#36](https://github.com/meteroid-oss/perseid/issues/36)) ([92d3506](https://github.com/meteroid-oss/perseid/commit/92d3506cba9bcdc89eda2a022b00d07146c742d7))
+
+
+### Code Refactoring
+
+* drop compatibility switches and deprecated commands ([#35](https://github.com/meteroid-oss/perseid/issues/35)) ([5c4ec8b](https://github.com/meteroid-oss/perseid/commit/5c4ec8b2ac9c73498478ce72208cb2a49c168339))
+
 ## [0.3.2](https://github.com/meteroid-oss/perseid/compare/v0.3.1...v0.3.2) (2026-09-30)
 
 
