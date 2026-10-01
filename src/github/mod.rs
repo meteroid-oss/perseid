@@ -225,6 +225,20 @@ pub struct Workflow<'a> {
     pub requires: Option<&'a str>,
 }
 
+/// `meteroid-oss/perseid`, or its `action` folder, at the tag of this binary's release line:
+/// `v0.6` for 0.6.x, since minor releases may break before 1.0, then `v1` for 1.x.
+pub fn uses(action: &str) -> String {
+    let tag = match env!("CARGO_PKG_VERSION").split('.').collect::<Vec<_>>()[..] {
+        ["0", minor, ..] => format!("v0.{minor}"),
+        [major, ..] => format!("v{major}"),
+        [] => "v0".to_owned(),
+    };
+    match action {
+        "" => format!("meteroid-oss/perseid@{tag}"),
+        action => format!("meteroid-oss/perseid/{action}@{tag}"),
+    }
+}
+
 pub fn workflow(w: &Workflow) -> String {
     let paths = serde_json::to_string(w.paths).unwrap_or_default();
     let schedule = match w.daily {
@@ -241,11 +255,10 @@ pub fn workflow(w: &Workflow) -> String {
     if !w.dir.is_empty() {
         with += &format!("          working-directory: {}\n", w.dir);
     }
+    let action = uses("");
     let condition = match w.requires {
-        Some(file) => format!(
-            "      - if: hashFiles('{file}') != ''\n        uses: meteroid-oss/perseid@v0\n"
-        ),
-        None => "      - uses: meteroid-oss/perseid@v0\n".to_owned(),
+        Some(file) => format!("      - if: hashFiles('{file}') != ''\n        uses: {action}\n"),
+        None => format!("      - uses: {action}\n"),
     };
     let perseid = match with.is_empty() {
         true => condition,
@@ -475,6 +488,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn workflows_pin_the_release_line_of_this_binary() {
+        let version = env!("CARGO_PKG_VERSION");
+        let line = match version.strip_prefix("0.") {
+            Some(rest) => format!("v0.{}", rest.split('.').next().unwrap()),
+            None => format!("v{}", version.split('.').next().unwrap()),
+        };
+        assert_eq!(uses(""), format!("meteroid-oss/perseid@{line}"));
+        assert_eq!(uses("push"), format!("meteroid-oss/perseid/push@{line}"));
+    }
+
+    #[test]
     fn the_workflow_runs_in_the_config_directory() {
         let paths = ["api/openapi.json".to_owned(), "api/perseid.toml".to_owned()];
         let repositories = ["api".to_owned(), "acme-node".to_owned()];
@@ -522,7 +546,10 @@ mod tests {
             "{yaml}"
         );
         assert!(
-            yaml.ends_with("      - if: hashFiles('openapi.json') != ''\n        uses: meteroid-oss/perseid@v0\n"),
+            yaml.ends_with(&format!(
+                "      - if: hashFiles('openapi.json') != ''\n        uses: {}\n",
+                uses("")
+            )),
             "{yaml}"
         );
     }

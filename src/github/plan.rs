@@ -529,8 +529,9 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
         }
         if file.path == SDKS_WORKFLOW && !owned(remote.as_deref()) {
             plan.warnings.push(format!(
-                "{} keeps its own {SDKS_WORKFLOW}: check it runs meteroid-oss/perseid@v0 on {}",
+                "{} keeps its own {SDKS_WORKFLOW}: check it runs {} on {}",
                 hub.repo,
+                super::uses(""),
                 triggers.join(", ")
             ));
             continue;

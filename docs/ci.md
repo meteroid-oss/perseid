@@ -69,6 +69,9 @@ their description names the URL and a digest of what it served.
 
 ## GitHub Action
 
+Pin the release line, `@v0.6`: before 1.0 a minor release may break, and `perseid setup` writes
+the line of the perseid that wrote the workflow, updating it when you run setup with a newer one.
+
 ```yaml
 # .github/workflows/sdks.yml in the repository that owns openapi.json
 on:
@@ -80,7 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: meteroid-oss/perseid@v0
+      - uses: meteroid-oss/perseid@v0.6
         with:
           token: ${{ secrets.SDK_TOKEN }}   # contents + pull requests write on the SDK repositories
 ```
@@ -276,7 +279,7 @@ repository variable lists workflow files and no other token is configured.
           private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: acme-typescript,acme-python   # the SDK repositories
-      - uses: meteroid-oss/perseid@v0
+      - uses: meteroid-oss/perseid@v0.6
         with:
           token: ${{ steps.app.outputs.token || secrets.SDK_TOKEN }}
 ```
