@@ -9,6 +9,7 @@ mod connect;
 mod layout;
 mod link;
 mod plan;
+mod push;
 mod secrets;
 mod status;
 
@@ -22,7 +23,8 @@ use anyhow::{Context, Result, bail};
 
 pub use connect::{Connect, connect};
 pub use layout::origin_repo;
-pub use link::{Push, PushOn, push_workflow};
+pub use link::{Auth, Push, PushOn, push_workflow};
+pub use push::{PushSpec, push_spec};
 pub use status::status;
 
 use crate::config::{Config, Sdk, Source};
@@ -84,7 +86,7 @@ impl Ui {
             let mut line = String::new();
             if std::io::stdin().lock().read_line(&mut line)? == 0 {
                 println!();
-                return Ok(default);
+                return Ok(false);
             }
             match line.trim().to_lowercase().as_str() {
                 "" => return Ok(default),

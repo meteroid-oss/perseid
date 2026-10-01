@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use perseid::{
     config::{self, Config, LANGUAGES},
     generate::{self, Options},
-    github::PushOn,
+    github::{Auth, PushOn},
     init,
     pr::{self, Bump},
     scaffold,
@@ -111,11 +111,27 @@ enum Command {
         /// Tags pushing the spec with `--on tag`, as a GitHub Actions glob (default: `v*`).
         #[arg(long)]
         tags: Option<String>,
+        /// How the workflow authenticates to the SDKs repository (default: a deploy key).
+        #[arg(long, value_enum)]
+        auth: Option<Auth>,
         /// Leave this repository's name out of what the SDKs repository records.
         #[arg(long)]
         private: bool,
         #[command(flatten)]
         apply: Apply,
+    },
+    /// Commit the spec to the SDKs repository, unless it holds a newer one: what perseid-push.yml
+    /// runs, authenticating with the deploy key in `PERSEID_SDKS_DEPLOY_KEY` when set.
+    #[command(hide = true)]
+    PushSpec {
+        /// The OpenAPI document, relative to this directory.
+        spec: String,
+        /// The SDKs repository, `owner/name`.
+        #[arg(long)]
+        to: String,
+        /// Leave this repository's name out of what the SDKs repository records.
+        #[arg(long)]
+        private: bool,
     },
     /// Check the GitHub setup without changing it: pending changes, last spec, pull requests, runs.
     Status,
@@ -168,6 +184,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             build,
             on,
             tags,
+            auth,
             private,
             apply,
         } => {
@@ -177,9 +194,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 build,
                 on,
                 tags,
+                auth,
                 private,
             };
             return perseid::github::connect(&cwd, connect, &apply.options());
+        }
+        Command::PushSpec { spec, to, private } => {
+            let push = perseid::github::PushSpec { spec, to, private };
+            return perseid::github::push_spec(&cwd, push);
         }
         Command::Status => return perseid::github::status(&cli.config),
         Command::Generate {
