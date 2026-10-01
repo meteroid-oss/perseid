@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Mutex, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -44,6 +44,7 @@ pub struct GitHub {
     agent: Agent,
     base: String,
     token: Option<String>,
+    expiration: Mutex<Option<String>>,
 }
 
 impl GitHub {
@@ -52,7 +53,14 @@ impl GitHub {
             agent: agent(),
             base: api_base(),
             token,
+            expiration: Mutex::default(),
         }
+    }
+
+    /// When the token expires, as GitHub last wrote it (`2026-11-01 12:00:00 UTC`), for tokens
+    /// that do.
+    pub fn expiration(&self) -> Option<String> {
+        self.expiration.lock().ok()?.clone()
     }
 
     pub fn send(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Reply> {
@@ -119,6 +127,14 @@ impl GitHub {
             .get("x-oauth-scopes")
             .and_then(|v| v.to_str().ok())
             .map(str::to_owned);
+        if let Some(date) = response
+            .headers()
+            .get("github-authentication-token-expiration")
+            .and_then(|v| v.to_str().ok())
+            && let Ok(mut expiration) = self.expiration.lock()
+        {
+            *expiration = Some(date.to_owned());
+        }
         let text = response
             .body_mut()
             .with_config()
@@ -180,6 +196,47 @@ pub fn check(method: &str, path: &str, reply: Reply) -> Result<Value> {
     )
 }
 
+/// Seconds since the Unix epoch of a token expiration date: `2026-11-01 12:00:00 UTC`, or with
+/// a `+0200` offset.
+pub fn expiration_epoch(date: &str) -> Option<i64> {
+    let mut parts = date.split_whitespace();
+    let [year, month, day] = numbers(parts.next()?, '-')?;
+    let [hour, minute, second] = numbers(parts.next()?, ':')?;
+    let offset = match parts.next().unwrap_or("UTC") {
+        "UTC" | "GMT" | "Z" => 0,
+        zone => {
+            let sign = match zone.as_bytes().first()? {
+                b'+' => 1,
+                b'-' => -1,
+                _ => return None,
+            };
+            let hours: i64 = zone.get(1..3)?.parse().ok()?;
+            let minutes: i64 = zone.get(3..5)?.parse().ok()?;
+            sign * (hours * 3600 + minutes * 60)
+        }
+    };
+    let days = days_from_civil(year, month, day);
+    Some(days * 86400 + hour * 3600 + minute * 60 + second - offset)
+}
+
+fn numbers<const N: usize>(text: &str, separator: char) -> Option<[i64; N]> {
+    let parsed: Vec<i64> = text
+        .split(separator)
+        .map(|n| n.parse().ok())
+        .collect::<Option<_>>()?;
+    parsed.try_into().ok()
+}
+
+/// Days since 1970-01-01 of a Gregorian date, after Howard Hinnant's `days_from_civil`.
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
 /// Posts an OAuth form to the web root, which answers JSON when asked to.
 pub fn post_form(path: &str, form: &[(&str, &str)]) -> Result<Value> {
     let url = format!("{}{path}", web_base());
@@ -193,4 +250,28 @@ pub fn post_form(path: &str, form: &[(&str, &str)]) -> Result<Value> {
     let body: Value = serde_json::from_str(&text)
         .with_context(|| format!("GitHub answered {status} to {url} without JSON"))?;
     Ok(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expiration_epoch;
+
+    #[test]
+    fn token_expiration_dates_parse_to_epoch_seconds() {
+        assert_eq!(expiration_epoch("1970-01-01 00:00:00 UTC"), Some(0));
+        assert_eq!(
+            expiration_epoch("2026-11-01 12:00:00 UTC"),
+            Some(1_793_534_400)
+        );
+        assert_eq!(
+            expiration_epoch("2024-02-29 00:00:00 UTC"),
+            Some(1_709_164_800)
+        );
+        assert_eq!(
+            expiration_epoch("2026-11-01 14:30:00 +0230"),
+            expiration_epoch("2026-11-01 12:00:00 UTC")
+        );
+        assert_eq!(expiration_epoch("2026-11-01"), None);
+        assert_eq!(expiration_epoch("soon"), None);
+    }
 }

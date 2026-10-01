@@ -2,9 +2,9 @@
 //! declares, planned then applied from the terminal with the user's own GitHub credentials, once
 //! they agree. Files go through the user's own commits: `perseid init` writes them.
 
-mod api;
+pub(crate) mod api;
 mod app;
-mod auth;
+pub(crate) mod auth;
 mod bootstrap;
 mod connect;
 mod files;

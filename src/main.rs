@@ -87,7 +87,8 @@ enum Command {
         #[arg(long, conflicts_with = "pr")]
         out: Option<PathBuf>,
         /// Commit the generated files on top of the upstream branch to `perseid/update`, in a
-        /// temporary worktree, and open a pull request (needs `gh`).
+        /// temporary worktree, and open a pull request, with `GH_TOKEN` (else `GITHUB_TOKEN`,
+        /// gh's token or a browser login).
         #[arg(long)]
         pr: bool,
         /// Release size the pull request asks for, as its conventional-commit type.
@@ -562,8 +563,10 @@ fn deliver(
     if let Some(notes) = &request.notes {
         body += &format!("\n\n{}", notes.trim());
     }
+    let github = pr::Client::default();
     for (repo, delivery) in repos {
         let opened = pr::open(
+            &github,
             &repo,
             &delivery.dirs,
             &delivery.files,
@@ -571,16 +574,16 @@ fn deliver(
             subject.trim(),
             &body,
         )?;
-        let Some(url) = opened else {
+        let Some(pull) = opened else {
             println!("{}: nothing to update", repo.display());
             continue;
         };
-        println!("{url}");
+        println!("{}", pull.url);
         if request.auto_merge {
-            pr::auto_merge(&repo, &url)?;
+            pr::auto_merge(&github, &pull)?;
         }
         if request.hub.as_ref() == Some(&repo) {
-            pr::dispatch(&repo, &url, &request.dispatch)?;
+            pr::dispatch(&github, &pull, &request.dispatch)?;
         }
     }
     Ok(())

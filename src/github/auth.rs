@@ -15,12 +15,16 @@ const CLIENT_ID: &str = "Ov23liBrNho4EP0xC7Ob";
 
 /// A user token from the environment or the gh CLI.
 pub fn stored_token() -> Option<(String, &'static str)> {
-    for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
-        if let Some(token) = std::env::var(var).ok().filter(|t| !t.trim().is_empty()) {
-            return Some((token.trim().to_owned(), var));
-        }
-    }
-    gh_token().map(|token| (token, "gh"))
+    env_token().or_else(|| gh_token().map(|token| (token, "gh")))
+}
+
+/// `GH_TOKEN`, else `GITHUB_TOKEN`, with the name of the variable holding it.
+pub fn env_token() -> Option<(String, &'static str)> {
+    ["GH_TOKEN", "GITHUB_TOKEN"].into_iter().find_map(|var| {
+        let token = std::env::var(var).ok()?;
+        let token = token.trim();
+        (!token.is_empty()).then(|| (token.to_owned(), var))
+    })
 }
 
 /// A user token, from the environment, the gh CLI, or the device flow. Never written anywhere.

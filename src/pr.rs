@@ -1,10 +1,21 @@
 use std::{
+    cell::{Cell, OnceCell},
     collections::BTreeSet,
+    io::IsTerminal,
     path::{Path, PathBuf},
     process::Command,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail, ensure};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use serde_json::{Value, json};
+
+use crate::github::{
+    Options, Ui,
+    api::{GitHub, check, expiration_epoch},
+    auth,
+};
 
 pub const BRANCH: &str = "perseid/update";
 
@@ -42,15 +53,26 @@ impl Bump {
     }
 }
 
-fn run(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
-    let output = Command::new(program)
-        .args(args)
-        .current_dir(dir)
+fn run(dir: &Path, args: &[&str], config: &[(&str, String)]) -> Result<String> {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(dir);
+    if !config.is_empty() {
+        let count: usize = std::env::var("GIT_CONFIG_COUNT")
+            .ok()
+            .and_then(|c| c.parse().ok())
+            .unwrap_or(0);
+        for (i, (key, value)) in config.iter().enumerate() {
+            command.env(format!("GIT_CONFIG_KEY_{}", count + i), key);
+            command.env(format!("GIT_CONFIG_VALUE_{}", count + i), value);
+        }
+        command.env("GIT_CONFIG_COUNT", (count + config.len()).to_string());
+    }
+    let output = command
         .output()
-        .with_context(|| format!("running `{program}` (is it installed?)"))?;
+        .context("running `git` (is it installed?)")?;
     if !output.status.success() {
         bail!(
-            "`{program} {}` failed in {}:\n{}",
+            "`git {}` failed in {}:\n{}",
             args.join(" "),
             dir.display(),
             String::from_utf8_lossy(&output.stderr)
@@ -60,7 +82,25 @@ fn run(dir: &Path, program: &str, args: &[&str]) -> Result<String> {
 }
 
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    run(dir, "git", args)
+    run(dir, args, &[])
+}
+
+/// `git` reaching github.com with the token of the environment, when there is one, else with
+/// git's own credentials.
+fn remote_git(dir: &Path, args: &[&str]) -> Result<String> {
+    let config = auth::env_token().map(|(token, _)| token_config(&token));
+    run(dir, args, config.as_ref().map_or(&[], |c| &c[..]))
+}
+
+/// The extra headers of git, reset (actions/checkout persists one of its token, and two
+/// `Authorization` headers fail) then holding `token`. As environment, out of logs.
+fn token_config(token: &str) -> [(&'static str, String); 2] {
+    const KEY: &str = "http.https://github.com/.extraheader";
+    let basic = BASE64.encode(format!("x-access-token:{token}"));
+    [
+        (KEY, String::new()),
+        (KEY, format!("AUTHORIZATION: basic {basic}")),
+    ]
 }
 
 /// Where the generated spec comes from, for pull request descriptions: the commit that pushed
@@ -154,7 +194,7 @@ pub fn checkout(repo: &str, root: &Path, discard: bool) -> Result<PathBuf> {
              or delete that directory (`--pr` discards them)",
             dir.display()
         );
-        git(
+        remote_git(
             &dir,
             &["fetch", "--quiet", "--depth", "1", "origin", "HEAD"],
         )?;
@@ -167,7 +207,8 @@ pub fn checkout(repo: &str, root: &Path, discard: bool) -> Result<PathBuf> {
         let parent = dir.parent().unwrap_or(&repos);
         std::fs::create_dir_all(parent)?;
         let target = dir.to_string_lossy();
-        if let Err(error) = git(&repos, &["clone", "--quiet", "--depth", "1", &url, &target]) {
+        let clone = ["clone", "--quiet", "--depth", "1", &url, &target];
+        if let Err(error) = remote_git(&repos, &clone) {
             let _ = std::fs::remove_dir_all(&dir);
             let _ = std::fs::remove_dir(parent);
             let message = format!("{error:#}").to_lowercase();
@@ -259,18 +300,126 @@ fn mirror(from: &Path, to: &Path, paths: &[String], files: &[String]) -> Result<
     Ok(())
 }
 
+/// GitHub's REST API, authenticated on first use.
+#[derive(Default)]
+pub struct Client {
+    api: OnceCell<GitHub>,
+    expiration_checked: Cell<bool>,
+}
+
+impl Client {
+    fn api(&self) -> Result<&GitHub> {
+        if let Some(api) = self.api.get() {
+            return Ok(api);
+        }
+        let api = GitHub::new(Some(token()?));
+        Ok(self.api.get_or_init(|| api))
+    }
+
+    /// Warns, once, when the token expires within 30 days.
+    fn check_expiration(&self, api: &GitHub) {
+        if self.expiration_checked.replace(true) {
+            return;
+        }
+        let Some(date) = api.expiration() else {
+            return;
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        if expiration_epoch(&date).is_none_or(|expires| expires - now > 30 * 86400) {
+            return;
+        }
+        let day = date.split_whitespace().next().unwrap_or(&date);
+        warn(&format!(
+            "the GitHub token expires on {day}: renew the PERSEID_TOKEN secret, or use a GitHub \
+             App (`perseid app`)"
+        ));
+    }
+}
+
+/// `GH_TOKEN`, `GITHUB_TOKEN`, gh's token or, in a terminal, a browser login.
+fn token() -> Result<String> {
+    if let Some((token, _)) = auth::stored_token() {
+        return Ok(token);
+    }
+    let env = |name: &str| std::env::var(name).unwrap_or_default();
+    ensure!(
+        env("GITHUB_ACTIONS") != "true",
+        "no token to open the SDK pull requests: add the PERSEID_TOKEN secret (a fine-grained \
+         token with Contents, Pull requests and Workflows read and write on the SDK \
+         repositories), or run `perseid app`"
+    );
+    ensure!(
+        std::io::stdin().is_terminal() && env("CI").is_empty(),
+        "no token to open the pull requests: set GH_TOKEN to a GitHub token with Contents and \
+         Pull requests write on their repositories"
+    );
+    let ui = Ui::new(&Options {
+        yes: false,
+        dry_run: false,
+        browser: true,
+    });
+    auth::token(&ui).map(|(token, _)| token)
+}
+
+/// An open pull request of the update branch.
+pub struct Pull {
+    pub url: String,
+    repo: String,
+    number: u64,
+    node_id: String,
+}
+
+impl Pull {
+    fn new(repo: &str, pull: &Value) -> Result<Self> {
+        Ok(Self {
+            url: pull["html_url"].as_str().unwrap_or_default().to_owned(),
+            repo: repo.to_owned(),
+            number: pull["number"]
+                .as_u64()
+                .context("GitHub answered a pull request without a number")?,
+            node_id: pull["node_id"].as_str().unwrap_or_default().to_owned(),
+        })
+    }
+}
+
+/// `owner/name` of a remote URL: its last two segments.
+fn repo_of(remote: &str) -> Option<String> {
+    let path = remote.trim_end_matches('/').trim_end_matches(".git");
+    let mut segments = path.rsplit(['/', ':']).filter(|s| !s.is_empty());
+    let (name, owner) = (segments.next()?, segments.next()?);
+    Some(format!("{owner}/{name}"))
+}
+
+fn default_branch(dir: &Path) -> Result<String> {
+    let head = remote_git(dir, &["ls-remote", "--symref", "origin", "HEAD"])?;
+    head.lines()
+        .find_map(|l| l.strip_prefix("ref: refs/heads/")?.split_once('\t'))
+        .map(|(branch, _)| branch.to_owned())
+        .context("finding the default branch of `origin`")
+}
+
+fn warn(message: &str) {
+    match std::env::var("GITHUB_ACTIONS").as_deref() {
+        Ok("true") => println!("::warning::{message}"),
+        _ => eprintln!("warning: {message}"),
+    }
+}
+
 /// Commits the generated files under `paths`, and `files`, of the repository at `dir` on top of
 /// its upstream branch to the update branch, and opens (or refreshes) its PR. The commit is made
 /// in a temporary worktree: the checkout at `dir` keeps its branch, index and files.
 /// An open PR keeps its bump if larger: it releases every spec change since the last merge.
 pub fn open(
+    github: &Client,
     dir: &Path,
     paths: &[String],
     files: &[String],
     bump: Bump,
     subject: &str,
     body: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<Pull>> {
     let shallow = git(dir, &["rev-parse", "--is-shallow-repository"])? == "true";
     let fetch = |refspec: &str| {
         let mut args = vec!["fetch", "--quiet"];
@@ -278,7 +427,7 @@ pub fn open(
             args.extend(["--depth", "1"]);
         }
         args.extend(["origin", refspec]);
-        git(dir, &args)?;
+        remote_git(dir, &args)?;
         git(dir, &["rev-parse", "FETCH_HEAD"])
     };
     let branch = git(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
@@ -298,23 +447,19 @@ pub fn open(
     if git(work, &["status", "--porcelain"])?.is_empty() {
         return Ok(None);
     }
-    let existing = run(
-        dir,
-        "gh",
-        &[
-            "pr",
-            "list",
-            "--head",
-            BRANCH,
-            "--state",
-            "open",
-            "--json",
-            "url,title",
-            "--jq",
-            r#".[0] | select(.) | .url + "\t" + .title"#,
-        ],
-    )?;
-    let (existing, previous) = existing.split_once('\t').unwrap_or_default();
+    let remote = git(dir, &["remote", "get-url", "origin"])?;
+    let repo = repo_of(&remote)
+        .with_context(|| format!("`origin` of {} isn't on GitHub: {remote}", dir.display()))?;
+    let owner = repo.split('/').next().unwrap_or_default();
+    let api = github.api()?;
+    let pulls = api.get(&format!(
+        "/repos/{repo}/pulls?head={owner}:{BRANCH}&state=open"
+    ))?;
+    github.check_expiration(api);
+    let existing = pulls.get(0).filter(|p| p.is_object());
+    let previous = existing
+        .and_then(|p| p["title"].as_str())
+        .unwrap_or_default();
     let title = bump
         .max(Bump::of_title(previous).unwrap_or(bump))
         .title(subject);
@@ -335,87 +480,112 @@ pub fn open(
     let unchanged = fetch(BRANCH).is_ok_and(|sha| tree_of(&sha).ok() == tree_of(&head).ok());
     if !unchanged {
         let refspec = format!("{head}:refs/heads/{BRANCH}");
-        git(dir, &["push", "--quiet", "--force", "origin", &refspec])?;
+        remote_git(dir, &["push", "--quiet", "--force", "origin", &refspec])?;
     }
-    if !existing.is_empty() {
-        run(
-            dir,
-            "gh",
-            &["pr", "edit", BRANCH, "--title", &title, "--body", body],
-        )?;
-        return Ok(Some(existing.to_owned()));
-    }
-    let mut create = vec![
-        "pr", "create", "--head", BRANCH, "--title", &title, "--body", body,
-    ];
-    if let Some(base) = &base {
-        create.extend(["--base", base]);
-    }
-    run(dir, "gh", &create).map(Some)
+    let mut content = json!({ "title": title, "body": body });
+    let pull = match existing {
+        Some(pull) => {
+            let number = pull["number"].as_u64().unwrap_or_default();
+            api.patch(&format!("/repos/{repo}/pulls/{number}"), content)?
+        }
+        None => {
+            content["head"] = BRANCH.into();
+            content["base"] = base.map_or_else(|| default_branch(dir), Ok)?.into();
+            api.post(&format!("/repos/{repo}/pulls"), content)?
+        }
+    };
+    Pull::new(&repo, &pull).map(Some)
 }
 
-/// `owner/name` of a GitHub pull request URL.
-fn repo_of(url: &str) -> Option<String> {
-    let path: Vec<&str> = url.strip_prefix("https://")?.split('/').collect();
-    match path[..] {
-        [_, owner, name, "pull", _] => Some(format!("{owner}/{name}")),
-        _ => None,
-    }
-}
-
-/// `gh` in `dir`, for the repository of the pull request at `url`.
-fn gh_for(dir: &Path, url: &str, args: &[&str]) -> Result<String> {
-    let repo = repo_of(url);
-    let mut args = args.to_vec();
-    if let Some(repo) = &repo {
-        args.extend(["--repo", repo]);
-    }
-    run(dir, "gh", &args)
-}
-
-/// Enables auto-merge (squash) on the pull request at `url`, labelled so its release PR follows.
-pub fn auto_merge(dir: &Path, url: &str) -> Result<()> {
-    let description = "Auto-merge the release PR this change leads to";
-    let label = [
-        "label",
-        "create",
-        AUTO_RELEASE,
-        "--force",
-        "--color",
-        "6f42c1",
-    ];
-    gh_for(
-        dir,
+/// Enables auto-merge (squash) on `pull`, labelled so its release PR follows.
+pub fn auto_merge(github: &Client, pull: &Pull) -> Result<()> {
+    let api = github.api()?;
+    let Pull {
         url,
-        &[&label[..], &["--description", description]].concat(),
+        repo,
+        number,
+        node_id,
+    } = pull;
+    let labels = format!("/repos/{repo}/labels");
+    let label = json!({
+        "name": AUTO_RELEASE,
+        "color": "6f42c1",
+        "description": "Auto-merge the release PR this change leads to",
+    });
+    let reply = api.send("POST", &labels, Some(&label))?;
+    if reply.status != 422 {
+        check("POST", &labels, reply)?;
+    }
+    let add = json!({ "labels": [AUTO_RELEASE] });
+    api.post(&format!("/repos/{repo}/issues/{number}/labels"), add)?;
+    let query = "mutation($id: ID!) { enablePullRequestAutoMerge(input: \
+                 { pullRequestId: $id, mergeMethod: SQUASH }) { clientMutationId } }";
+    let reply = api.post(
+        "/graphql",
+        json!({ "query": query, "variables": { "id": node_id } }),
     )?;
-    run(dir, "gh", &["pr", "edit", url, "--add-label", AUTO_RELEASE])?;
-    run(dir, "gh", &["pr", "merge", url, "--auto", "--squash"])?;
+    let Some(error) = reply["errors"][0]["message"].as_str() else {
+        return Ok(());
+    };
+    let lower = error.to_lowercase();
+    // GitHub queues no merge for pull requests it could merge now: merge them, as gh does.
+    if lower.contains("clean status") || lower.contains("unstable status") {
+        let merge = json!({ "merge_method": "squash" });
+        api.put(&format!("/repos/{repo}/pulls/{number}/merge"), merge)?;
+        return Ok(());
+    }
+    ensure!(
+        lower.contains("auto merge is not allowed") || lower.contains("auto-merge is not allowed"),
+        "enabling auto-merge on {url}: {error}"
+    );
+    warn(&format!(
+        "{repo} doesn't allow auto-merge, so {url} waits to be merged: turn on \"Allow \
+         auto-merge\" in its settings (General)"
+    ));
     Ok(())
 }
 
-/// Runs `workflows` on the update branch of the pull request at `url`: pushes made with the
-/// default `GITHUB_TOKEN` start none.
-pub fn dispatch(dir: &Path, url: &str, workflows: &[String]) -> Result<()> {
+/// Runs `workflows` on the update branch of `pull`: pushes made with the default `GITHUB_TOKEN`
+/// start none.
+pub fn dispatch(github: &Client, pull: &Pull, workflows: &[String]) -> Result<()> {
     for workflow in workflows {
-        gh_for(dir, url, &["workflow", "run", workflow, "--ref", BRANCH])?;
+        let path = format!(
+            "/repos/{}/actions/workflows/{workflow}/dispatches",
+            pull.repo
+        );
+        github.api()?.post(&path, json!({ "ref": BRANCH }))?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AUTO_RELEASE, Bump, SOURCE, origin, repo_of};
+    use super::{AUTO_RELEASE, Bump, SOURCE, origin, repo_of, token_config};
 
     #[test]
     fn the_release_action_reads_the_auto_release_label() {
         let action = include_str!("../release/action.yml");
         assert!(action.contains(&format!(" {AUTO_RELEASE} ")), "{action}");
-        assert_eq!(
-            repo_of("https://github.com/acme/api-go/pull/12").as_deref(),
-            Some("acme/api-go")
-        );
-        assert_eq!(repo_of("https://pr/2"), None);
+    }
+
+    #[test]
+    fn remotes_name_their_github_repository() {
+        for remote in [
+            "https://github.com/acme/api-go",
+            "https://x-access-token@github.com/acme/api-go.git/",
+            "git@github.com:acme/api-go.git",
+        ] {
+            assert_eq!(repo_of(remote).as_deref(), Some("acme/api-go"), "{remote}");
+        }
+        assert_eq!(repo_of("origin.git"), None);
+    }
+
+    #[test]
+    fn pushes_reset_the_extra_headers_before_adding_the_token() {
+        let [(reset, empty), (key, header)] = token_config("ghs_1");
+        assert_eq!((reset, empty.as_str()), (key, ""));
+        assert_eq!(key, "http.https://github.com/.extraheader");
+        assert_eq!(header, "AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46Z2hzXzE=");
     }
 
     #[test]

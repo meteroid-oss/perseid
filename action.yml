@@ -115,5 +115,4 @@ runs:
       run: |
         # perseid reads these as flags, which can't be empty.
         for name in "${!PERSEID_@}"; do [ -n "${!name}" ] || unset "$name"; done
-        gh auth setup-git
         perseid $COMMAND

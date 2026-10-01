@@ -136,6 +136,11 @@ pushed) and commits there, so your branch, index, handwritten changes and unpush
 out of the pull request. Without a git identity configured, commits are
 authored by `github-actions[bot]`.
 
+It needs no `gh`: perseid calls the GitHub API itself, with `GH_TOKEN`, else `GITHUB_TOKEN`, else
+the `gh` CLI's token or, in a terminal, a browser login. With a token in the environment, it also
+clones, fetches and pushes with it (replacing the credentials `actions/checkout` persists);
+without, git uses your own credentials. When the token expires within 30 days, it warns.
+
 ## Quick setup: `perseid init`, `perseid setup-github` and `perseid connect`
 
 You need:
@@ -342,7 +347,7 @@ jobs:
     container: ghcr.io/meteroid-oss/perseid:0
     steps:
       - uses: actions/checkout@v4
-      - run: gh auth setup-git && perseid generate --pr
+      - run: perseid generate --pr
         env:
           GH_TOKEN: ${{ secrets.SDK_TOKEN }}
 ```

@@ -1,4 +1,9 @@
+#[cfg(unix)]
+use std::sync::{Arc, Mutex};
 use std::{fs, path::Path, process::Command};
+
+#[cfg(unix)]
+use serde_json::{Value, json};
 
 fn perseid(dir: &Path, args: &[&str]) -> (bool, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_perseid"))
@@ -498,18 +503,21 @@ fn git_in(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
-/// A project committed and pushed to a local `origin`, with a fake `gh` answering `pr list`
-/// with `listed` and logging its calls to `gh.log`.
+/// A project committed and pushed to a local `origin`, with a `bin` of the commands
+/// `generate --pr` gets: git, logging the extra headers of its pushes to `push.log`.
 #[cfg(unix)]
-fn pull_request_project(listed: &str) -> tempfile::TempDir {
-    use std::os::unix::fs::PermissionsExt;
-
+fn pull_request_project() -> tempfile::TempDir {
     let dir = project();
     let git = |args: &[&str]| git_in(dir.path(), args);
     git(&["init", "--quiet", "--initial-branch", "main"]);
     git(&["init", "--quiet", "--bare", "origin.git"]);
-    git(&["remote", "add", "origin", "origin.git"]);
-    fs::write(dir.path().join(".gitignore"), "origin.git\nbin\nhome\n").unwrap();
+    let origin = dir.path().join("origin.git");
+    git(&["remote", "add", "origin", origin.to_str().unwrap()]);
+    fs::write(
+        dir.path().join(".gitignore"),
+        "origin.git\nbin\nhome\n*.log\n",
+    )
+    .unwrap();
     git(&["add", "--all"]);
     git(&[
         "-c",
@@ -524,54 +532,195 @@ fn pull_request_project(listed: &str) -> tempfile::TempDir {
 
     let bin = dir.path().join("bin");
     fs::create_dir(&bin).unwrap();
-    let gh = bin.join("gh");
-    fs::write(
-        &gh,
-        format!(
-            "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\ncase \"$2\" in\n  list) printf '{listed}' ;;\n  create) echo https://pr/2 ;;\nesac\n"
+    let real = format!("{}/git", git(&["--exec-path"]));
+    let headers = "$GIT_CONFIG_KEY_0=$GIT_CONFIG_VALUE_0|$GIT_CONFIG_KEY_1=$GIT_CONFIG_VALUE_1";
+    executable(
+        &bin.join("git"),
+        &format!(
+            "#!/bin/sh\ncase \"$1\" in push) echo \"{headers}\" >> \"$LOG_DIR/push.log\" ;; esac\nexec {real} \"$@\"\n"
         ),
-    )
-    .unwrap();
-    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     fs::create_dir(dir.path().join("home")).unwrap();
     dir
 }
 
-/// Runs `generate rust --pr` with the fake `gh` and no git identity configured.
+/// What the fake GitHub API answers, besides creating pull requests.
 #[cfg(unix)]
-fn generate_pr(dir: &Path, bump: &str) -> String {
-    generate_pr_with(dir, &["--bump", bump])
+#[derive(Default)]
+struct Answers {
+    /// The open pull requests of `perseid/update`.
+    listed: Vec<Value>,
+    /// The `github-authentication-token-expiration` header.
+    expiration: Option<String>,
+    /// The error enabling auto-merge answers.
+    merge_error: Option<&'static str>,
+}
+
+/// A fake GitHub API, accepting the token `test-token`, which logs each request as
+/// `METHOD /path?query body`.
+#[cfg(unix)]
+fn fake_github(answers: Answers, log: Arc<Mutex<Vec<String>>>) -> u16 {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(&stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let mut parts = line.split_whitespace();
+            let method = parts.next().unwrap_or_default().to_owned();
+            let target = parts.next().unwrap_or_default().to_owned();
+            let (mut length, mut authorized) = (0, false);
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).unwrap();
+                let Some((name, value)) = header.trim_end().split_once(':') else {
+                    break;
+                };
+                match name.to_lowercase().as_str() {
+                    "content-length" => length = value.trim().parse().unwrap(),
+                    "authorization" => authorized = value.trim() == "Bearer test-token",
+                    _ => {}
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).unwrap();
+            let body = String::from_utf8(body).unwrap();
+            log.lock()
+                .unwrap()
+                .push(format!("{method} {target} {body}").trim_end().to_owned());
+            let path = target.split('?').next().unwrap();
+            let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+            let pull = |number: &str| {
+                let url = format!(
+                    "https://github.com/{}/{}/pull/{number}",
+                    segments[1], segments[2]
+                );
+                json!({ "number": number.parse::<u64>().unwrap(), "html_url": url, "node_id": format!("PR_{number}") })
+            };
+            let (status, reply) = match (method.as_str(), &segments[..]) {
+                _ if !authorized => (401, json!({ "message": "Bad credentials" })),
+                ("GET", ["repos", _, _, "pulls"]) => (200, json!(answers.listed)),
+                ("POST", ["repos", _, _, "pulls"]) => (201, pull("2")),
+                ("PATCH", ["repos", _, _, "pulls", number]) => (200, pull(number)),
+                ("POST", ["repos", _, _, "labels"]) => {
+                    (422, json!({ "message": "Validation Failed" }))
+                }
+                ("POST", ["repos", _, _, "issues", _, "labels"]) => (200, json!([])),
+                ("PUT", ["repos", _, _, "pulls", _, "merge"]) => (200, json!({ "merged": true })),
+                ("POST", ["repos", _, _, "actions", "workflows", _, "dispatches"]) => {
+                    (204, Value::Null)
+                }
+                ("POST", ["graphql"]) => match answers.merge_error {
+                    Some(error) => (200, json!({ "errors": [{ "message": error }] })),
+                    None => (200, json!({ "data": {} })),
+                },
+                _ => (404, json!({ "message": "Not Found" })),
+            };
+            let text = match reply {
+                Value::Null => String::new(),
+                reply => reply.to_string(),
+            };
+            let expiration = match &answers.expiration {
+                Some(date) => format!("github-authentication-token-expiration: {date}\r\n"),
+                None => String::new(),
+            };
+            let _ = write!(
+                &stream,
+                "HTTP/1.1 {status} X\r\n{expiration}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
+                text.len()
+            );
+        }
+    });
+    port
+}
+
+/// What `generate rust --pr` printed and asked of the fake GitHub API.
+#[cfg(unix)]
+struct PullRequestRun {
+    ok: bool,
+    output: String,
+    calls: Vec<String>,
 }
 
 #[cfg(unix)]
-fn generate_pr_with(dir: &Path, args: &[&str]) -> String {
+impl PullRequestRun {
+    /// The JSON bodies of the `method` requests to paths ending with `path`.
+    fn requests(&self, method: &str, path: &str) -> Vec<Value> {
+        self.calls
+            .iter()
+            .filter_map(|call| {
+                let (verb, rest) = call.split_once(' ')?;
+                let (target, body) = rest.split_once(' ').unwrap_or((rest, ""));
+                let matches = verb == method && target.split('?').next()?.ends_with(path);
+                matches.then(|| serde_json::from_str(body).unwrap_or(Value::Null))
+            })
+            .collect()
+    }
+
+    fn request(&self, method: &str, path: &str) -> Value {
+        let found = self.requests(method, path);
+        assert_eq!(found.len(), 1, "{method} …{path} in {:#?}", self.calls);
+        found.into_iter().next().unwrap()
+    }
+}
+
+/// Runs `generate rust --pr` against a fake GitHub API answering `answers`, with no `gh` on the
+/// PATH, no git identity configured, GH_TOKEN set to `test-token`, and `env`.
+#[cfg(unix)]
+fn run_pr(dir: &Path, args: &[&str], answers: Answers, env: &[(&str, &str)]) -> PullRequestRun {
+    let calls = Arc::default();
+    let port = fake_github(answers, Arc::clone(&calls));
     let output = Command::new(env!("CARGO_BIN_EXE_perseid"))
         .args(["generate", "rust", "--pr", "--no-format"])
         .args(args)
         .current_dir(dir)
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                dir.join("bin").display(),
-                std::env::var("PATH").unwrap()
-            ),
-        )
-        .env("GH_LOG", dir.join("gh.log"))
+        .env("PATH", dir.join("bin"))
+        .env("PERSEID_GITHUB_API", format!("http://127.0.0.1:{port}"))
+        .env("GH_TOKEN", "test-token")
+        .env("LOG_DIR", dir)
         .env("HOME", dir.join("home"))
         .env("XDG_CONFIG_HOME", dir.join("home"))
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GIT_CONFIG_COUNT")
         .env_remove("GIT_AUTHOR_NAME")
         .env_remove("GIT_AUTHOR_EMAIL")
         .env_remove("GIT_COMMITTER_NAME")
         .env_remove("GIT_COMMITTER_EMAIL")
         .env_remove("GITHUB_EVENT_BEFORE")
         .env_remove("GITHUB_ACTIONS")
+        .env_remove("CI")
+        .envs(env.iter().copied())
         .output()
         .unwrap();
-    let text = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "{text}");
-    fs::read_to_string(dir.join("gh.log")).unwrap()
+    PullRequestRun {
+        ok: output.status.success(),
+        output: String::from_utf8_lossy(&output.stdout).to_string()
+            + &String::from_utf8_lossy(&output.stderr),
+        calls: calls.lock().unwrap().clone(),
+    }
+}
+
+#[cfg(unix)]
+fn generate_pr(dir: &Path, bump: &str) -> PullRequestRun {
+    generate_pr_with(dir, &["--bump", bump])
+}
+
+#[cfg(unix)]
+fn generate_pr_with(dir: &Path, args: &[&str]) -> PullRequestRun {
+    let run = run_pr(dir, args, Answers::default(), &[]);
+    assert!(run.ok, "{}", run.output);
+    run
+}
+
+/// The title of the pull request `run` opened.
+#[cfg(unix)]
+fn opened_title(run: &PullRequestRun) -> String {
+    let created = run.request("POST", "/pulls");
+    assert_eq!(created["head"], "perseid/update", "{created}");
+    created["title"].as_str().unwrap().to_owned()
 }
 
 #[cfg(unix)]
@@ -584,7 +733,7 @@ fn executable(path: &Path, script: &str) {
 #[cfg(unix)]
 #[test]
 fn auto_bumps_are_sized_by_oasdiff_against_the_previous_commit() {
-    let dir = pull_request_project("");
+    let dir = pull_request_project();
     let spec = dir.path().join("openapi.yaml");
     let changed = fs::read_to_string(&spec)
         .unwrap()
@@ -601,19 +750,23 @@ fn auto_bumps_are_sized_by_oasdiff_against_the_previous_commit() {
     git_in(dir.path(), &[&commit[..], &["spec"]].concat());
     executable(
         &dir.path().join("bin/oasdiff"),
-        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG.oasdiff\"\ncase \"$*\" in\n  breaking*) exit 1 ;;\n  *markdown*) echo '- removed GET /pets/{id}' ;;\nesac\n",
+        "#!/bin/sh\necho \"$@\" >> \"$LOG_DIR/oasdiff.log\"\ncase \"$*\" in\n  breaking*) exit 1 ;;\n  *markdown*) echo '- removed GET /pets/{id}' ;;\nesac\n",
     );
 
-    let calls = generate_pr_with(dir.path(), &[]);
+    let run = generate_pr_with(dir.path(), &[]);
     assert!(
-        calls.contains("pr create --head perseid/update --title feat(api)!: update SDKs to"),
-        "{calls}"
+        opened_title(&run).starts_with("feat(api)!: update SDKs to"),
+        "{:#?}",
+        run.calls
     );
+    let body = &run.request("POST", "/pulls")["body"];
     assert!(
-        calls.contains("### API changes\n\n- removed GET /pets/{id}"),
-        "{calls}"
+        body.as_str()
+            .unwrap()
+            .contains("### API changes\n\n- removed GET /pets/{id}"),
+        "{body}"
     );
-    let runs = fs::read_to_string(dir.path().join("gh.log.oasdiff")).unwrap();
+    let runs = fs::read_to_string(dir.path().join("oasdiff.log")).unwrap();
     let first = runs.lines().next().unwrap();
     assert!(
         first.starts_with("breaking --fail-on ERR --severity-levels ")
@@ -625,20 +778,18 @@ fn auto_bumps_are_sized_by_oasdiff_against_the_previous_commit() {
 #[cfg(unix)]
 #[test]
 fn auto_bumps_without_a_previous_spec_are_minor() {
-    let dir = pull_request_project("");
-    let calls = generate_pr_with(dir.path(), &[]);
-    assert!(
-        calls.contains("pr create --head perseid/update --title feat(api): update SDKs to"),
-        "{calls}"
-    );
-    assert!(!calls.contains("API changes"), "{calls}");
+    let dir = pull_request_project();
+    let run = generate_pr_with(dir.path(), &[]);
+    assert!(opened_title(&run).starts_with("feat(api): update SDKs to"));
+    let body = run.request("POST", "/pulls")["body"].to_string();
+    assert!(!body.contains("API changes"), "{body}");
 }
 
 #[cfg(unix)]
 #[test]
 fn pull_requests_can_auto_merge_and_dispatch_ci() {
-    let dir = pull_request_project("");
-    let calls = generate_pr_with(
+    let dir = pull_request_project();
+    let run = generate_pr_with(
         dir.path(),
         &[
             "--bump",
@@ -648,15 +799,127 @@ fn pull_requests_can_auto_merge_and_dispatch_ci() {
             "ci.yml lint.yml",
         ],
     );
-    for call in [
-        "label create perseid:auto-release --force --color 6f42c1 --description Auto-merge the release PR this change leads to\n",
-        "pr edit https://pr/2 --add-label perseid:auto-release\n",
-        "pr merge https://pr/2 --auto --squash\n",
-        "workflow run ci.yml --ref perseid/update\n",
-        "workflow run lint.yml --ref perseid/update\n",
-    ] {
-        assert!(calls.contains(call), "{call} not in {calls}");
+    assert!(run.output.contains("/pull/2\n"), "{}", run.output);
+    assert_eq!(
+        run.request("POST", "/origin/labels"),
+        json!({
+            "name": "perseid:auto-release",
+            "color": "6f42c1",
+            "description": "Auto-merge the release PR this change leads to",
+        })
+    );
+    assert_eq!(
+        run.request("POST", "/issues/2/labels"),
+        json!({ "labels": ["perseid:auto-release"] })
+    );
+    let merge = run.request("POST", "/graphql");
+    assert_eq!(merge["variables"], json!({ "id": "PR_2" }));
+    let query = merge["query"].as_str().unwrap();
+    assert!(
+        query.contains("enablePullRequestAutoMerge") && query.contains("mergeMethod: SQUASH"),
+        "{query}"
+    );
+    for workflow in ["ci.yml", "lint.yml"] {
+        assert_eq!(
+            run.request("POST", &format!("/actions/workflows/{workflow}/dispatches")),
+            json!({ "ref": "perseid/update" })
+        );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_merge_warns_when_the_repository_disallows_it_and_merges_clean_pull_requests() {
+    let dir = pull_request_project();
+    let answers = Answers {
+        merge_error: Some("Pull request Auto merge is not allowed for this repository"),
+        ..Answers::default()
+    };
+    let run = run_pr(dir.path(), &["--auto-merge"], answers, &[]);
+    assert!(run.ok, "{}", run.output);
+    assert!(
+        run.output.contains("doesn't allow auto-merge") && run.output.contains("Allow auto-merge"),
+        "{}",
+        run.output
+    );
+    assert!(run.requests("PUT", "/merge").is_empty());
+
+    let answers = Answers {
+        merge_error: Some("Pull request Pull request is in clean status"),
+        ..Answers::default()
+    };
+    let run = run_pr(dir.path(), &["--auto-merge"], answers, &[]);
+    assert!(run.ok, "{}", run.output);
+    assert_eq!(
+        run.request("PUT", "/pulls/2/merge"),
+        json!({ "merge_method": "squash" })
+    );
+}
+
+/// `days` from now, as GitHub writes token expirations.
+#[cfg(unix)]
+fn expiration_in(days: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let (days, time) = ((now / 86400 + days) as i64 + 719_468, now % 86400);
+    let era = days.div_euclid(146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted + 2) / 5 + 1;
+    let month = if shifted < 10 {
+        shifted + 3
+    } else {
+        shifted - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year}-{month:02}-{day:02} {:02}:{:02}:00 UTC",
+        time / 3600,
+        time % 3600 / 60
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn tokens_expiring_within_30_days_are_warned_about() {
+    let dir = pull_request_project();
+    let soon = expiration_in(12);
+    let answers = Answers {
+        expiration: Some(soon.clone()),
+        ..Answers::default()
+    };
+    let run = run_pr(dir.path(), &[], answers, &[("GITHUB_ACTIONS", "true")]);
+    assert!(run.ok, "{}", run.output);
+    let day = soon.split(' ').next().unwrap();
+    let warning = format!("::warning::the GitHub token expires on {day}: renew the PERSEID_TOKEN");
+    assert_eq!(run.output.matches(&warning).count(), 1, "{}", run.output);
+
+    let answers = Answers {
+        expiration: Some(expiration_in(45)),
+        ..Answers::default()
+    };
+    let run = run_pr(dir.path(), &[], answers, &[]);
+    assert!(run.ok && !run.output.contains("expires"), "{}", run.output);
+}
+
+#[cfg(unix)]
+#[test]
+fn pull_requests_in_actions_need_a_token() {
+    let dir = pull_request_project();
+    let env = [("GITHUB_ACTIONS", "true"), ("GH_TOKEN", "")];
+    let run = run_pr(dir.path(), &["--bump", "patch"], Answers::default(), &env);
+    assert!(!run.ok, "{}", run.output);
+    assert!(
+        run.output.contains("add the PERSEID_TOKEN secret"),
+        "{}",
+        run.output
+    );
+    assert!(run.calls.is_empty(), "{:#?}", run.calls);
 }
 
 #[test]
@@ -792,18 +1055,44 @@ fn tools_install_downloads_the_pinned_tools_and_checks_they_run() {
 #[cfg(unix)]
 #[test]
 fn open_pull_requests_keep_their_largest_bump() {
-    let dir = pull_request_project("https://pr/1\\tfeat(api)!: update SDKs to Petstore 1\\n");
-    let calls = generate_pr(dir.path(), "patch");
+    let dir = pull_request_project();
+    let answers = Answers {
+        listed: vec![json!({
+            "number": 1,
+            "html_url": "https://github.com/acme/petstore-sdks/pull/1",
+            "node_id": "PR_1",
+            "title": "feat(api)!: update SDKs to Petstore 1",
+        })],
+        expiration: Some("2999-01-01 00:00:00 UTC".into()),
+        ..Answers::default()
+    };
+    let run = run_pr(dir.path(), &["--bump", "patch"], answers, &[]);
+    assert!(run.ok, "{}", run.output);
+    assert!(!run.output.contains("expires"), "{}", run.output);
+    let owner = dir.path().file_name().unwrap().to_str().unwrap();
+    let listed = &run.calls[0];
     assert!(
-        calls.contains("pr edit perseid/update --title feat(api)!: update SDKs to"),
-        "{calls}"
+        listed.starts_with(&format!(
+            "GET /repos/{owner}/origin/pulls?head={owner}:perseid/update&state=open"
+        )),
+        "{listed}"
     );
+    let edited = run.request("PATCH", "/pulls/1");
+    assert!(
+        edited["title"]
+            .as_str()
+            .unwrap()
+            .starts_with("feat(api)!: update SDKs to"),
+        "{edited}"
+    );
+    assert!(run.requests("POST", "/pulls").is_empty());
+    assert!(run.output.contains("/pull/1\n"), "{}", run.output);
 }
 
 #[cfg(unix)]
 #[test]
 fn pull_requests_leave_the_checkout_alone() {
-    let dir = pull_request_project("");
+    let dir = pull_request_project();
     let git = |args: &[&str]| git_in(dir.path(), args);
     let origin = |args: &[&str]| git_in(&dir.path().join("origin.git"), args);
     fs::write(dir.path().join("unpushed.txt"), "local").unwrap();
@@ -820,13 +1109,18 @@ fn pull_requests_leave_the_checkout_alone() {
     fs::create_dir_all(dir.path().join("rust")).unwrap();
     fs::write(dir.path().join("rust/NOTES.md"), "draft").unwrap();
     fs::write(dir.path().join("scratch.txt"), "draft").unwrap();
+    let persisted = "AUTHORIZATION: basic checkout-token";
+    git(&["config", "http.https://github.com/.extraheader", persisted]);
 
-    let calls = generate_pr(dir.path(), "minor");
-    assert!(
-        calls.contains("pr create --head perseid/update --title feat(api): update SDKs to"),
-        "{calls}"
+    let run = generate_pr(dir.path(), "minor");
+    assert!(opened_title(&run).starts_with("feat(api): update SDKs to"));
+    assert_eq!(run.request("POST", "/pulls")["base"], "main");
+    let pushed = fs::read_to_string(dir.path().join("push.log")).unwrap();
+    let header = "http.https://github.com/.extraheader";
+    assert_eq!(
+        pushed,
+        format!("{header}=|{header}=AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46dGVzdC10b2tlbg==\n")
     );
-    assert!(calls.contains("--base main"), "{calls}");
 
     assert_eq!(git(&["symbolic-ref", "--short", "HEAD"]), "main");
     assert_eq!(git(&["log", "-1", "--format=%s"]), "unpushed");
@@ -855,7 +1149,7 @@ fn pull_requests_leave_the_checkout_alone() {
 #[cfg(unix)]
 #[test]
 fn sdk_repository_pull_requests_target_its_default_branch() {
-    let dir = pull_request_project("");
+    let dir = pull_request_project();
     let git = |args: &[&str]| git_in(dir.path(), args);
     let remote = dir.path().join("rust-sdk.git");
     git(&[
@@ -888,14 +1182,26 @@ fn sdk_repository_pull_requests_target_its_default_branch() {
         )
     });
 
-    let calls = generate_pr(dir.path(), "minor");
-    assert!(calls.contains("pr create --head perseid/update"), "{calls}");
-    assert!(calls.contains("--base trunk"), "{calls}");
+    let run = generate_pr(dir.path(), "minor");
+    assert!(opened_title(&run).starts_with("feat(api): update SDKs to"));
+    assert_eq!(run.request("POST", "/rust-sdk/pulls")["base"], "trunk");
     let files = git_in(&remote, &["ls-tree", "-r", "--name-only", "perseid/update"]);
     for file in ["README.md", "Cargo.toml", "src/lib.rs"] {
         assert!(files.lines().any(|f| f == file), "{file} not in {files}");
     }
     assert!(!files.contains("openapi.yaml"), "{files}");
+
+    let spec = dir.path().join("openapi.yaml");
+    let changed = fs::read_to_string(&spec)
+        .unwrap()
+        .replace("title:", "description: Pets\n  title:");
+    fs::write(&spec, changed).unwrap();
+    let run = generate_pr(dir.path(), "minor");
+    assert_eq!(
+        run.request("POST", "/rust-sdk/pulls")["base"],
+        "trunk",
+        "the detached checkout of a second run targets the default branch too"
+    );
 }
 
 #[test]
