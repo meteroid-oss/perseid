@@ -1,11 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "perseid.toml",
-  "description": "perseid.toml: where the OpenAPI spec comes from, and the SDKs generated from it.",
+  "description": "perseid.toml: the SDKs to generate, and the OpenAPI spec they are generated from.",
   "type": "object",
   "required": [
-    "name",
-    "spec"
+    "name"
   ],
   "properties": {
     "base_url": {
@@ -84,7 +83,7 @@
       "type": "string"
     },
     "package": {
-      "description": "Package metadata written into the manifests `perseid init` creates.",
+      "description": "Package metadata written into the manifests `perseid generate` creates.",
       "allOf": [
         {
           "$ref": "#/definitions/Package"
@@ -99,14 +98,6 @@
         }
       ]
     },
-    "push": {
-      "description": "How the spec gets from the API repository to a separate repository generating the SDKs.",
-      "allOf": [
-        {
-          "$ref": "#/definitions/Push"
-        }
-      ]
-    },
     "python": {
       "description": "The Python SDK, a PyPI package.",
       "allOf": [
@@ -115,8 +106,12 @@
         }
       ]
     },
+    "release": {
+      "description": "`false` leaves out the release-please files and the release workflow `perseid setup` adds.",
+      "type": "boolean"
+    },
     "repo": {
-      "description": "Default repository of every SDK: `owner/name-{lang}` gives each its own (`{lang}` is `rust`, `node`, `python`, `go`, `java` or `dotnet`), `owner/name` holds them all in folders named after their language. Without it, the SDKs live next to perseid.toml.",
+      "description": "Default repository of every SDK: `owner/name-{lang}` gives each its own (`{lang}` is the language: `typescript`, `python`…), `owner/name` holds them all in folders named after their language. Without it, the SDKs live next to perseid.toml.",
       "type": "string"
     },
     "rust": {
@@ -127,8 +122,16 @@
         }
       ]
     },
+    "sdks": {
+      "description": "The SDKs to generate. A language table only overrides the settings of a listed SDK.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Language"
+      }
+    },
     "spec": {
-      "description": "The OpenAPI document (3.0 or 3.1, JSON or YAML): a path relative to perseid.toml, an http(s) URL, or `github:owner/repo/path` for a spec another repository pushes here.",
+      "description": "The OpenAPI document (3.0 or 3.1, JSON or YAML) generated from: a path relative to perseid.toml, where `perseid connect` pushes it from another repository, or an http(s) URL.",
+      "default": "openapi.json",
       "type": "string"
     },
     "timeout": {
@@ -405,6 +408,18 @@
       },
       "additionalProperties": false
     },
+    "Language": {
+      "description": "An SDK perseid generates.",
+      "type": "string",
+      "enum": [
+        "rust",
+        "typescript",
+        "python",
+        "go",
+        "java",
+        "csharp"
+      ]
+    },
     "OneOrMany": {
       "description": "One pagination rule, or several.",
       "anyOf": [
@@ -420,7 +435,7 @@
       ]
     },
     "Package": {
-      "description": "Package metadata written into the manifests `perseid init` creates.",
+      "description": "Package metadata written into the manifests `perseid generate` creates.",
       "type": "object",
       "properties": {
         "authors": {
@@ -505,59 +520,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "Push": {
-      "description": "How the spec gets from the API repository to a separate repository generating the SDKs. When both have a perseid.toml, either may set `on`, `tags` and `generate`, and both must agree.",
-      "type": "object",
-      "properties": {
-        "generate": {
-          "description": "Command writing the spec in the API repository's CI when it isn't committed, run from its root before pushing the spec.",
-          "type": "string"
-        },
-        "on": {
-          "description": "When the spec is pushed: `change` by default.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/PushOn"
-            }
-          ]
-        },
-        "tags": {
-          "description": "Tags pushing the spec with `on = \"tag\"`, as a GitHub Actions glob: `v*` by default.",
-          "type": "string"
-        },
-        "to": {
-          "description": "`owner/name` of the repository this one sends its spec to, which generates the SDKs from its own perseid.toml: on the API side only.",
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
-    },
-    "PushOn": {
-      "description": "When the API repository pushes its spec.",
-      "oneOf": [
-        {
-          "description": "Every push to the default branch changing the spec.",
-          "type": "string",
-          "enum": [
-            "change"
-          ]
-        },
-        {
-          "description": "Every published GitHub release, with the spec of its tag.",
-          "type": "string",
-          "enum": [
-            "release"
-          ]
-        },
-        {
-          "description": "Every tag matching `tags`.",
-          "type": "string",
-          "enum": [
-            "tag"
-          ]
-        }
-      ]
     },
     "Python": {
       "type": "object",

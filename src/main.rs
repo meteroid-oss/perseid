@@ -5,11 +5,13 @@ use clap::{Parser, Subcommand};
 use perseid::{
     config::{self, Config, LANGUAGES},
     generate::{self, Options},
+    github::PushOn,
     init,
     pr::{self, Bump},
+    scaffold,
 };
 
-/// OpenAPI in, idiomatic SDKs out. Rust, TypeScript, Python, Go and Java.
+/// OpenAPI in, idiomatic SDKs out: Rust, TypeScript, Python, Go, Java and C#.
 #[derive(Parser)]
 #[command(version, about)]
 struct Cli {
@@ -20,14 +22,41 @@ struct Cli {
     command: Command,
 }
 
+#[derive(clap::Args)]
+struct Apply {
+    /// Apply the plan without asking.
+    #[arg(long, short)]
+    yes: bool,
+    /// Print the plan and exit: 0 when in sync, 2 when changes are pending.
+    #[arg(long, conflicts_with = "yes")]
+    dry_run: bool,
+    /// Print URLs instead of opening them in a browser.
+    #[arg(long)]
+    no_browser: bool,
+}
+
+impl Apply {
+    fn options(&self) -> perseid::github::Options {
+        perseid::github::Options {
+            yes: self.yes,
+            dry_run: self.dry_run,
+            browser: !self.no_browser,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
-    /// Create perseid.toml and SDK package skeletons (re-run to scaffold newly added languages).
+    /// Write perseid.toml, in the repository that will hold the SDKs: which SDKs, where they live.
     Init {
-        /// Languages to scaffold (default: all).
-        #[arg(value_parser = LANGUAGES)]
-        languages: Vec<String>,
-        /// OpenAPI document, path or URL (default: detected).
+        /// SDKs to generate, comma-separated (asked when omitted).
+        #[arg(long, value_delimiter = ',', value_parser = LANGUAGES)]
+        sdks: Vec<String>,
+        /// Repository of each SDK, `owner/name-{lang}`, or `owner/name` holding them all (default:
+        /// a folder each, here).
+        #[arg(long)]
+        repo: Option<String>,
+        /// OpenAPI document, path or URL (default: detected, or `openapi.json` pushed by `perseid connect`).
         #[arg(long)]
         spec: Option<String>,
         /// Client name (default: derived from the spec title).
@@ -36,29 +65,15 @@ enum Command {
         /// API base URL (default: first server of the spec).
         #[arg(long)]
         base_url: Option<String>,
-        /// Skip the release-please files and the SDK release workflow.
-        #[arg(long)]
-        no_release: bool,
     },
-    /// Set up GitHub as perseid.toml describes: repositories, keys, secrets, the App and workflows.
-    Setup {
-        /// Apply the plan without asking.
-        #[arg(long, short)]
-        yes: bool,
-        /// Print the plan and exit: 0 when in sync, 2 when changes are pending.
-        #[arg(long, conflicts_with = "yes")]
-        dry_run: bool,
-        /// Print URLs instead of opening them in a browser.
-        #[arg(long)]
-        no_browser: bool,
-    },
-    /// Check the GitHub setup without changing it: pending changes, last sync, pull requests, runs.
-    Status,
-    /// Generate SDKs.
+    /// Generate the SDKs perseid.toml lists, from its spec, starting each from its package skeleton.
     Generate {
         /// Languages to generate (default: all configured).
         #[arg(value_parser = LANGUAGES)]
         languages: Vec<String>,
+        /// OpenAPI document to generate from, path or URL, over `spec` of perseid.toml.
+        #[arg(long)]
+        spec: Option<String>,
         /// Fail if generated files are out of date, without writing anything.
         #[arg(long, conflicts_with = "pr")]
         check: bool,
@@ -75,6 +90,35 @@ enum Command {
         #[arg(long)]
         no_format: bool,
     },
+    /// Set up GitHub for the SDKs perseid.toml describes: repositories, the App, workflows, releases.
+    Setup {
+        #[command(flatten)]
+        apply: Apply,
+    },
+    /// In the repository holding the spec: push it to the SDKs repository on each release or change.
+    Connect {
+        /// The SDKs repository, `owner/name`, holding perseid.toml.
+        hub: String,
+        /// The OpenAPI document, relative to this repository (default: detected).
+        #[arg(long)]
+        spec: Option<String>,
+        /// Command writing the spec in CI, when it isn't committed.
+        #[arg(long)]
+        build: Option<String>,
+        /// When to push the spec (default: `release` when the repository has releases, else `change`).
+        #[arg(long, value_enum)]
+        on: Option<PushOn>,
+        /// Tags pushing the spec with `--on tag`, as a GitHub Actions glob (default: `v*`).
+        #[arg(long)]
+        tags: Option<String>,
+        /// Leave this repository's name out of what the SDKs repository records.
+        #[arg(long)]
+        private: bool,
+        #[command(flatten)]
+        apply: Apply,
+    },
+    /// Check the GitHub setup without changing it: pending changes, last spec, pull requests, runs.
+    Status,
     /// Copy the built-in templates and runtime of a language into `.perseid/` to customize them.
     Eject {
         #[arg(value_parser = LANGUAGES)]
@@ -101,42 +145,46 @@ fn run(cli: Cli) -> Result<ExitCode> {
     let cwd = std::env::current_dir()?;
     match cli.command {
         Command::Init {
-            languages,
+            sdks,
+            repo,
             spec,
             name,
             base_url,
-            no_release,
         } => {
             let root = cli.config.parent().map(|p| cwd.join(p)).unwrap_or(cwd);
             let init = init::Init {
-                languages,
                 spec,
                 name,
+                sdks,
+                repo,
                 base_url,
-                release: !no_release,
             };
-            for path in init::run(init, &root)? {
-                println!("+ {}", path.strip_prefix(&root).unwrap_or(&path).display());
-            }
-            println!(
-                "\nNext: `perseid setup` to automate the SDKs on GitHub, or `perseid generate` to write them here"
-            );
+            init::run(init, &root)?;
         }
-        Command::Setup {
-            yes,
-            dry_run,
-            no_browser,
+        Command::Setup { apply } => return perseid::github::setup(&cli.config, &apply.options()),
+        Command::Connect {
+            hub,
+            spec,
+            build,
+            on,
+            tags,
+            private,
+            apply,
         } => {
-            let options = perseid::github::Options {
-                yes,
-                dry_run,
-                browser: !no_browser,
+            let connect = perseid::github::Connect {
+                hub,
+                spec,
+                build,
+                on,
+                tags,
+                private,
             };
-            return perseid::github::setup(&cli.config, &options);
+            return perseid::github::connect(&cwd, connect, &apply.options());
         }
         Command::Status => return perseid::github::status(&cli.config),
         Command::Generate {
             languages,
+            spec,
             check,
             pr,
             bump,
@@ -144,7 +192,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             no_format,
         } => {
             let (config, root) = Config::load(&cli.config)?;
-            let spec = generate::load_spec(&config, &root)?;
+            let spec = generate::load_spec(&config, &root, spec.as_deref())?;
             let options = Options {
                 check,
                 format: !no_format,
@@ -152,15 +200,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let sdks = config.sdks(&languages)?;
             let dirs = sdks
                 .iter()
-                .map(|sdk| match &sdk.repo {
-                    Some(repo) => {
-                        let checkout = pr::checkout(repo, &root)?;
-                        if !check {
-                            init::bootstrap(&config, sdk, &checkout)?;
-                        }
-                        Ok(checkout.join(&sdk.path))
+                .map(|sdk| {
+                    let repo = match &sdk.repo {
+                        Some(repo) => pr::checkout(repo, &root)?,
+                        None => root.clone(),
+                    };
+                    if !check {
+                        scaffold::bootstrap(&config, sdk, &repo)?;
                     }
-                    None => Ok(root.join(&sdk.path)),
+                    Ok(repo.join(&sdk.path))
                 })
                 .collect::<Result<Vec<_>>>()?;
             let results: Vec<_> = std::thread::scope(|scope| {
@@ -209,7 +257,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Schema => print!("{}", config::json_schema()),
         Command::Inspect => {
             let (config, root) = Config::load(&cli.config)?;
-            let spec = generate::load_spec(&config, &root)?;
+            let spec = generate::load_spec(&config, &root, None)?;
             println!("{}", perseid::inspect(&spec, &config)?);
         }
     }

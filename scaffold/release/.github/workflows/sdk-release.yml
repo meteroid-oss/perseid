@@ -1,4 +1,4 @@
-# Scaffolded by `perseid init`, yours to edit. release-please turns conventional commits under
+# Written by `perseid setup`, yours to edit. release-please turns conventional commits under
 # each SDK into a release PR; merging it tags the bumped SDKs and publishes them to their registries.
 name: SDK Release
 

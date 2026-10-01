@@ -135,7 +135,8 @@ pub fn release_files(
     branch: &str,
     sdks: &[&Sdk],
 ) -> Result<Vec<File>> {
-    let files = crate::init::release_scaffold(config, sdks, |path| read(api, repo, branch, path))?;
+    let files =
+        crate::scaffold::release_scaffold(config, sdks, |path| read(api, repo, branch, path))?;
     Ok(files
         .into_iter()
         .map(|(path, content)| File {

@@ -2,12 +2,16 @@
 
 ## Repository layouts
 
-`perseid.toml` says where the spec comes from and where the SDKs live; `perseid setup` makes
-GitHub match it. Which one to pick: the SDKs next to the API unless other teams own them, one
-repository per language when each ecosystem wants its own home, a separate SDKs repository when
-the API repository must not grant anything beyond sending its spec.
+`perseid.toml` lives in the repository that holds the SDKs, or orchestrates them: it lists the SDKs
+(`sdks`), where they live (`repo`) and the spec they are generated from (`spec`), and `perseid setup`
+makes GitHub match it. It never says where the spec comes from: when another repository holds the
+spec, `perseid connect` run there pushes it here.
 
-**Next to the API** (the default): every SDK is a folder of the API repository.
+Which one to pick: the SDKs next to the API unless other teams own them, one repository per
+language when each ecosystem wants its own home, a separate SDKs repository when the API repository
+must not grant anything beyond sending its spec.
+
+**Next to the API**: every SDK is a folder of the repository holding the spec.
 
 ```
 acme/api ──PRs──▶ acme/api (typescript/, python/)
@@ -15,64 +19,52 @@ acme/api ──PRs──▶ acme/api (typescript/, python/)
 
 ```toml
 spec = "openapi.json"
+sdks = ["typescript", "python"]
 ```
 
-**One repository per language**, orchestrated from the API repository: its workflow generates
-every SDK and opens their pull requests with a GitHub App installed on all of them. `{lang}`
-stands for `node`, `python`, `go`, `java`, `rust` or `dotnet`; a `repo` without it is one
-repository holding every SDK in a folder named after its language.
+**One repository per language**, orchestrated from the repository holding `perseid.toml`: its
+workflow generates every SDK and opens their pull requests with a GitHub App installed on all of
+them. `{lang}` stands for the language as `sdks` names it; a `repo` without it is one repository
+holding every SDK in a folder named after its language.
 
 ```
-acme/api ──PRs──▶ acme/api-node, acme/api-python
+acme/api ──PRs──▶ acme/api-typescript, acme/api-python
 ```
 
 ```toml
-spec = "openapi.json"
+sdks = ["typescript", "python"]
 repo = "acme/api-{lang}"     # or "acme/api-sdks": one repository, a folder per SDK
 ```
 
 **A separate SDKs repository** receiving the spec: the API repository only pushes its spec there,
-over SSH with a deploy key that can write to that one repository; the SDKs repository owns its
-own `perseid.toml`, generates the SDKs and never gets any access to the API repository. The SDKs
-live in it, or in one repository per language that it orchestrates with a GitHub App (installed
-on those repositories only, never on the API repository).
+over SSH with a deploy key that can write to that one repository; the SDKs repository generates the
+SDKs and never gets any access to the API repository. The SDKs live in it, or in one repository per
+language that it orchestrates with a GitHub App (installed on those repositories only, never on the
+API repository).
 
 ```
 acme/api ──spec──▶ acme/api-sdks ──PRs──▶ acme/api-sdks (typescript/, python/)
-acme/api ──spec──▶ acme/api-sdks ──PRs──▶ acme/api-node, acme/api-python
+acme/api ──spec──▶ acme/api-sdks ──PRs──▶ acme/api-typescript, acme/api-python
 ```
 
-```toml
-# acme/api: perseid.toml
-spec = "openapi.json"
-
-[push]
-to = "acme/api-sdks"
-on = "release"                 # optional: on each GitHub release instead of each change
-generate = "npm run openapi"   # only when the spec isn't committed: how CI writes it
-
-# acme/api-sdks: perseid.toml, which `perseid setup` writes when it creates the repository
-spec = "github:acme/api/openapi.json"   # kept here as openapi.json, with .perseid/source.json
-repo = "acme/api-{lang}"                # only for one repository per language
-
-[push]                                  # or here, without `to`, when set up from this side
-on = "release"
+```sh
+# in acme/api-sdks
+npx perseid init                  # perseid.toml: spec = "openapi.json", sdks, repo
+npx perseid setup                 # sdks.yml, release files, the App for other repositories
+# in acme/api, once perseid.toml is on acme/api-sdks's default branch
+npx perseid connect acme/api-sdks # deploy key, PERSEID_SDKS_REPO, perseid-push.yml
 ```
 
-`on`, `tags` and `generate` may be set on either side: `perseid setup` and `perseid status` read
-both `perseid.toml` and refuse settings that both set differently.
-
-`perseid setup` works from either side: in the API repository it creates or completes the SDKs
-repository from the SDK tables of its own `perseid.toml`; in the SDKs repository it sets up the
-API side remotely, which takes admin rights on the API repository.
+`perseid connect` reads `perseid.toml` of the SDKs repository to know where its spec goes, and
+writes `.github/workflows/perseid-push.yml`, whose spec path, trigger, tags and build command are
+plain values you can read and edit; run `connect` again to change them. Pull requests opened from
+a pushed spec say which commit it comes from: "Generated from acme/api@a1b2c3d", or
+"acme/api@v1.4.0 (a1b2c3d)" when a release or tag pushed it (with `--private`, the commit alone,
+without the API repository's name).
 
 **A spec at a URL**: `spec = "https://api.acme.com/openapi.json"` needs nothing from the API
 side. `sdks.yml` fetches it every day (and on demand), and opens pull requests when it changed;
 their description names the URL and a digest of what it served.
-
-`perseid.toml` with `spec = "github:…"` generates from the snapshot, and its pull requests say
-which commit it comes from: "Generated from acme/api@a1b2c3d", or "acme/api@v1.4.0 (a1b2c3d)"
-when a release or tag pushed it.
 
 ## GitHub Action
 
@@ -97,68 +89,87 @@ to `perseid/update` and opens or updates a pull request, in this repository or i
 repositories named by `repo`. For pull request checks, pass `command: generate --check`, which
 fails on drift. See [Tokens](#tokens) for which `token` to pass.
 
-## Quick setup: `perseid setup`
+## Quick setup: `perseid setup` and `perseid connect`
 
 You need:
 
 - Node 18+ for `npx perseid`, or the `curl` install;
 - on the account that will own the SDK repositories: permission to create repositories and, in an
   organization, to create GitHub Apps (organization owner or GitHub App manager);
-- with a separate SDKs repository: admin rights on it and on the API repository;
+- with a separate SDKs repository: admin rights on the API repository (for its secret and
+  variable) and, ideally, on the SDKs repository (for its deploy key);
 - for each SDK you publish, an account on its registry (npm, PyPI, crates.io, Maven Central,
   NuGet) to set up trusted publishing at the end.
 
-`perseid init` writes `perseid.toml`, with the [layouts](#repository-layouts) as commented
-examples. Then, in the same clone, `perseid setup` signs in with `GH_TOKEN`, the `gh` CLI's token
-or a browser login (it stores no token), compares `perseid.toml` with GitHub and prints the plan:
-`+` to add, `~` to change, `=` already in place, and warnings such as generated paths taken by
-files perseid didn't write. Once confirmed, it:
+`perseid init` writes `perseid.toml`, and nothing else: it finds the spec of the repository
+(`git ls-files` for an `openapi`/`swagger` JSON or YAML file holding an `openapi:` or `swagger:`
+key), asks which SDKs to generate and where they live. Without a terminal, pass `--sdks`, and
+optionally `--repo`, `--spec` and `--name`. Without a spec, `spec` is `openapi.json`, which
+`perseid connect` will push; `perseid generate --spec <path|url>` previews the SDKs meanwhile.
+`perseid generate` starts each SDK from its package skeleton (manifest, README, errors) the first
+time.
 
-1. creates the missing repositories, as private or public as the one it runs in, and reuses
-   existing ones: it only adds missing files, merges release-please packages into an existing
-   `release-please-config.json`, and never rewrites your settings in an existing `perseid.toml`
-   (only `spec`, for a repository that starts receiving the spec);
+Then, in the same clone, `perseid setup` signs in with `GH_TOKEN`, the `gh` CLI's token or a
+browser login (it stores no token), compares `perseid.toml` with GitHub and prints the plan: `+` to
+add, `~` to change, `=` already in place, and warnings such as generated paths taken by files
+perseid didn't write. Once confirmed, it:
+
+1. creates the missing SDK repositories, as private or public as the one it runs in, and reuses
+   existing ones: it only adds missing files and merges release-please packages into an existing
+   `release-please-config.json`;
 2. commits `sdk-release.yml` and the release-please files to each SDK repository with your
-   token, so the App needs no permission on workflow files;
+   token, so the App needs no permission on workflow files (`release = false` in `perseid.toml`
+   leaves them out);
 3. creates a GitHub App in your browser (Contents and Pull requests write, no webhook) when SDKs
    live in other repositories than the workflow's, stores its `SDK_APP_ID` variable and
-   `SDK_APP_PRIVATE_KEY` secret where they are used, and waits while you install it;
-4. for a separate SDKs repository: registers a write deploy key on it, stores its private half as
-   the `PERSEID_SDKS_DEPLOY_KEY` secret of the API repository with the `PERSEID_SDKS_REPO`
-   variable, and lets GitHub Actions open pull requests in the SDKs repository when it holds
-   every SDK (its workflow then uses the default token);
-5. opens a pull request adding `.github/workflows/sdks.yml` where the SDKs are generated, and
-   `.github/workflows/perseid-push.yml` in the API repository (a new, empty SDKs repository gets
-   its files committed directly), and stages the files it adds to your clone;
-6. lists the pull requests to merge, the SDKs repository's first, and what each registry needs.
+   `SDK_APP_PRIVATE_KEY` secret where they are used, and waits while you install it; when every
+   SDK lives here, it lets GitHub Actions open pull requests instead (its workflow then uses the
+   default token);
+4. opens a pull request adding `.github/workflows/sdks.yml`, `perseid.toml` and the release files
+   (a new, empty repository gets its files committed directly), and stages them in your clone;
+5. lists the pull requests to merge, what each registry needs and, when the spec isn't in the
+   repository yet, the `perseid connect` to run in the one holding it.
 
-Running it again changes nothing once in sync. `--dry-run` prints the plan and exits with 2 when
-changes are pending (0 otherwise), `--yes` applies without asking, and `--no-browser` prints URLs
-instead of opening them.
+`perseid setup` never touches the API repository. `perseid connect <owner/sdks-repo>`, run in it,
+does: it finds its spec (or `--spec <path>`; `--build "<command>"` when CI writes it instead of
+committing it), asks when to push it, proposing `release` when the repository publishes GitHub
+releases and `change` otherwise (`--on change|release|tag`, `--tags` for `tag`), then plans:
 
-`perseid status`, from the API repository or an SDKs repository, runs the same comparison
-without changing anything, then checks how the automation fares: the last spec synced (commit and
-age, and whether a newer spec commit is waiting), open `perseid/update` pull requests, the last
-`sdks.yml` and `perseid-push.yml` runs and the App installation. Each problem comes with the fix;
-it exits with 1 when something needs you. Without GitHub credentials it checks the clone only.
+1. a write deploy key on the SDKs repository, its private half the `PERSEID_SDKS_DEPLOY_KEY`
+   secret of the API repository; without admin rights on the SDKs repository, it prints the
+   public key and where an admin of it adds it;
+2. the `PERSEID_SDKS_REPO` variable of the API repository;
+3. a pull request adding `.github/workflows/perseid-push.yml`.
+
+Running either again changes nothing once in sync, and `connect` keeps the key and the settings it
+isn't given. `--dry-run` prints the plan and exits with 2 when changes are pending (0 otherwise),
+`--yes` applies without asking, and `--no-browser` prints URLs instead of opening them.
+
+`perseid status` runs the same comparison without changing anything, then checks how the
+automation fares. In the SDKs repository: the last spec pushed (commit, release and age), open
+`perseid/update` pull requests, the last `sdks.yml` run and the App installation. In the API
+repository, without a `perseid.toml`: the key, secret and variable `perseid-push.yml` needs, the
+last spec the SDKs repository received and the last `perseid-push.yml` run. Each problem comes with
+the fix; it exits with 1 when something needs you. Without GitHub credentials it checks the clone
+only.
 
 ### Spec pushes
 
-`perseid-push.yml` runs when `[push] on` says, set in the `perseid.toml` of either side (or both,
-alike):
+`perseid-push.yml` runs on `--on`:
 
-- `"change"` (the default): on the API repository's default branch when the spec changes (on
-  every push with `generate`, after running it);
-- `"release"`: when a GitHub release is published;
-- `"tag"`: when a tag matching `[push] tags` (`"v*"` by default) is pushed.
+- `change` (the default without GitHub releases): on the API repository's default branch when the
+  spec changes (on every push with `--build`, after running it);
+- `release`: when a GitHub release is published;
+- `tag`: when a tag matching `--tags` (`v*` by default) is pushed.
 
 It can also be run by hand, from the default branch or a tag. It takes the spec of the commit that
 triggered it, clones the SDKs repository over SSH, pinned to GitHub's published host keys, and
-commits the spec as `spec: acme/api@a1b2c3d` (`spec: acme/api@v1.4.0 (a1b2c3d)` for a release or
-tag) with `.perseid/source.json` naming the commit, and the tag as `ref`, unless:
+commits the spec to the SDKs repository's `spec` path as `spec: acme/api@a1b2c3d`
+(`spec: acme/api@v1.4.0 (a1b2c3d)` for a release or tag) with `.perseid/source.json` naming the
+commit, and the tag as `ref`, unless:
 
-- the SDKs repository has no `.perseid/source.json` yet: its setup pull request isn't merged,
-  run the workflow again once it is;
+- the SDKs repository has no `perseid.toml` yet: run `perseid init` there and push it, then run the
+  workflow again;
 - the synced commit isn't an ancestor of the pushed one: an older or diverged commit never
   overwrites a newer spec, so releases and tags must be cut from the default branch's history
   (to resync after rewriting history, remove `sha` from `.perseid/source.json`);
@@ -166,14 +177,14 @@ tag) with `.perseid/source.json` naming the commit, and the tag as `ref`, unless
 
 Runs share the `perseid-push` concurrency group without cancelling each other, so pushes happen
 one at a time and in order. The deploy key reaches the SDKs repository only, and nothing on the SDKs
-side can read or write the API repository.
+side can read or write the API repository. With `--private`, `.perseid/source.json` and the commit
+messages leave out the API repository's name.
 
 **Push the spec on release.** To ship SDKs for what you released rather than for every merged
-change, set `on = "release"` in `[push]` and run `perseid setup` again: it rewrites `perseid-push.yml` to
-run on `release: published`. Each release pushes its spec, the SDKs repository opens its
-`perseid/update` pull request naming the release ("Generated from acme/api@v1.4.0 (a1b2c3d)"),
-and `perseid status` reports spec changes made since as waiting for the next release instead of
-as a failure. With `on = "tag"`, any matching tag does the same, release or not.
+change, run `perseid connect <owner/sdks-repo> --on release`: it rewrites `perseid-push.yml` to run
+on `release: published`. Each release pushes its spec, and the SDKs repository opens its
+`perseid/update` pull request naming the release ("Generated from acme/api@v1.4.0 (a1b2c3d)").
+With `--on tag`, any matching tag does the same, release or not.
 
 The rest of this page is the setup by hand.
 
@@ -242,7 +253,7 @@ repository variable lists workflow files and no other token is configured.
           app-id: ${{ vars.SDK_APP_ID }}
           private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
-          repositories: acme-node,acme-python   # the SDK repositories
+          repositories: acme-typescript,acme-python   # the SDK repositories
       - uses: meteroid-oss/perseid@v0
         with:
           token: ${{ steps.app.outputs.token || secrets.SDK_TOKEN }}
@@ -282,10 +293,10 @@ Or anywhere: `docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:/work" ghcr.io/met
 
 ## Releases
 
-Every SDK keeps its own version, in its own manifest, and is released on its own. `perseid init`
-also scaffolds [release-please](https://github.com/googleapis/release-please)
-(`release-please-config.json`) and `.github/workflows/sdk-release.yml` (skip them with
-`--no-release`), and gives SDK repositories without a manifest the same on their first pull request:
+Every SDK keeps its own version, in its own manifest, and is released on its own. `perseid setup`
+adds [release-please](https://github.com/googleapis/release-please) (`release-please-config.json`)
+and `.github/workflows/sdk-release.yml` to each repository holding SDKs (skip them with
+`release = false` in `perseid.toml`):
 
 1. The Action titles its pull request as a conventional commit sized by
    [oasdiff](https://github.com/oasdiff/oasdiff): `feat(api)!:` for breaking API changes,

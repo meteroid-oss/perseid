@@ -57,34 +57,36 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
     run(dir, "git", args)
 }
 
-/// Where the generated spec comes from, for pull request descriptions: the commit of the
-/// repository that pushed it, or the URL and a digest of what it served.
+/// Where the generated spec comes from, for pull request descriptions: the commit that pushed
+/// it here, or the URL and a digest of what it served.
 pub fn origin(config: &crate::config::Config, root: &Path, spec: &str) -> Option<String> {
     use sha2::Digest;
-    match config.source() {
-        crate::config::Source::GitHub { .. } => {
-            let text = std::fs::read_to_string(root.join(SOURCE)).ok()?;
-            let source: serde_json::Value = serde_json::from_str(&text).ok()?;
-            let (repo, sha) = (source["repo"].as_str()?, source["sha"].as_str()?);
-            let short = sha.get(..7)?;
-            let commit = format!("https://github.com/{repo}/commit/{sha}");
-            Some(match source["ref"].as_str() {
-                Some(tag) => format!(
-                    "[{repo}@{tag}](https://github.com/{repo}/releases/tag/{tag}) ([{short}]({commit}))"
-                ),
-                None => format!("[{repo}@{short}]({commit})"),
-            })
-        }
-        crate::config::Source::Url(url) => {
-            let digest = sha2::Sha256::digest(spec.as_bytes());
-            let hex: String = digest.iter().take(6).map(|b| format!("{b:02x}")).collect();
-            Some(format!("<{url}> (sha256 `{hex}`)"))
-        }
-        crate::config::Source::File(_) => None,
+    if let crate::config::Source::Url(url) = config.source() {
+        let digest = sha2::Sha256::digest(spec.as_bytes());
+        let hex: String = digest.iter().take(6).map(|b| format!("{b:02x}")).collect();
+        return Some(format!("<{url}> (sha256 `{hex}`)"));
     }
+    let text = std::fs::read_to_string(root.join(SOURCE)).ok()?;
+    let source: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let sha = source["sha"].as_str()?;
+    let short = sha.get(..7)?;
+    let tag = source["ref"].as_str();
+    let Some(repo) = source["repo"].as_str() else {
+        return Some(match tag {
+            Some(tag) => format!("{tag} (`{short}`)"),
+            None => format!("`{short}`"),
+        });
+    };
+    let commit = format!("https://github.com/{repo}/commit/{sha}");
+    Some(match tag {
+        Some(tag) => format!(
+            "[{repo}@{tag}](https://github.com/{repo}/releases/tag/{tag}) ([{short}]({commit}))"
+        ),
+        None => format!("[{repo}@{short}]({commit})"),
+    })
 }
 
-/// Where a repository receiving the spec records which commit it comes from.
+/// Where `perseid connect`'s workflow records the commit it pushed the spec of.
 pub const SOURCE: &str = ".perseid/source.json";
 
 /// A fresh checkout of the default branch of `repo`, in a disposable directory under `.perseid/`.
@@ -209,25 +211,31 @@ mod tests {
         let config = |spec: &str| -> crate::config::Config {
             toml::from_str(&format!("spec = \"{spec}\"\nname = \"Acme\"\n")).unwrap()
         };
-        let source =
-            "{ \"repo\": \"acme/api\", \"path\": \"openapi.json\", \"sha\": \"a1b2c3d4e5\" }";
+        let local = config("openapi.json");
+        assert_eq!(origin(&local, dir.path(), "{}"), None);
+        let source = "{ \"repo\": \"acme/api\", \"sha\": \"a1b2c3d4e5\" }";
         crate::fsx::write(&dir.path().join(SOURCE), source.as_bytes()).unwrap();
         assert_eq!(
-            origin(&config("github:acme/api/openapi.json"), dir.path(), "{}").as_deref(),
+            origin(&local, dir.path(), "{}").as_deref(),
             Some("[acme/api@a1b2c3d](https://github.com/acme/api/commit/a1b2c3d4e5)")
         );
         assert_eq!(
             origin(&config("https://acme.dev/openapi.json"), dir.path(), "{}").as_deref(),
             Some("<https://acme.dev/openapi.json> (sha256 `44136fa355b3`)")
         );
-        assert_eq!(origin(&config("openapi.json"), dir.path(), "{}"), None);
-        let released = "{ \"repo\": \"acme/api\", \"path\": \"openapi.json\", \"sha\": \"a1b2c3d4e5\", \"ref\": \"v1.4.0\" }";
+        let released = "{ \"repo\": \"acme/api\", \"sha\": \"a1b2c3d4e5\", \"ref\": \"v1.4.0\" }";
         crate::fsx::write(&dir.path().join(SOURCE), released.as_bytes()).unwrap();
         assert_eq!(
-            origin(&config("github:acme/api/openapi.json"), dir.path(), "{}").as_deref(),
+            origin(&local, dir.path(), "{}").as_deref(),
             Some(
                 "[acme/api@v1.4.0](https://github.com/acme/api/releases/tag/v1.4.0) ([a1b2c3d](https://github.com/acme/api/commit/a1b2c3d4e5))"
             )
+        );
+        let private = "{ \"sha\": \"a1b2c3d4e5\", \"ref\": \"v1.4.0\" }";
+        crate::fsx::write(&dir.path().join(SOURCE), private.as_bytes()).unwrap();
+        assert_eq!(
+            origin(&local, dir.path(), "{}").as_deref(),
+            Some("v1.4.0 (`a1b2c3d`)")
         );
     }
 

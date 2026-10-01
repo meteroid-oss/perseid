@@ -1,5 +1,5 @@
-//! The one-way link from an API repository to the SDKs repository receiving its spec: a write
-//! deploy key of the SDKs repository only, and a workflow pushing the spec over SSH.
+//! The one-way link from the repository holding the spec to the SDKs repository receiving it: a
+//! write deploy key of the SDKs repository only, and a workflow pushing the spec over SSH.
 
 use std::path::Path;
 
@@ -10,31 +10,47 @@ use serde_json::{Value, json};
 use ssh_key::{Algorithm, LineEnding, PrivateKey};
 
 use super::{Ui, api::GitHub, secrets};
-use crate::config::PushOn;
 
 pub const SECRET: &str = "PERSEID_SDKS_DEPLOY_KEY";
 pub const VARIABLE: &str = "PERSEID_SDKS_REPO";
+pub const WORKFLOW: &str = ".github/workflows/perseid-push.yml";
 pub use crate::pr::SOURCE;
 
-/// The commit of the API repository a snapshot comes from, as `.perseid/source.json` holds it.
+/// The commit the spec was last pushed from, as `.perseid/source.json` holds it.
 #[derive(Deserialize, Serialize)]
 pub struct Source {
-    pub repo: String,
-    pub path: String,
+    /// Absent when pushed with `perseid connect --private`.
+    pub repo: Option<String>,
     pub sha: Option<String>,
     /// The release or tag that pushed it.
     #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
 }
 
-impl Source {
-    pub fn json(&self) -> String {
-        serde_json::to_string_pretty(self).unwrap_or_default() + "\n"
-    }
-}
-
 pub fn source(root: &Path) -> Option<Source> {
     serde_json::from_str(&std::fs::read_to_string(root.join(SOURCE)).ok()?).ok()
+}
+
+/// When the repository holding the spec pushes it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum PushOn {
+    /// Every push to the default branch changing the spec.
+    #[default]
+    Change,
+    /// Every published GitHub release, with the spec of its tag.
+    Release,
+    /// Every tag matching `--tags`.
+    Tag,
+}
+
+impl PushOn {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Change => "change",
+            Self::Release => "release",
+            Self::Tag => "tag",
+        }
+    }
 }
 
 /// The title naming the deploy key an API repository pushes with.
@@ -58,18 +74,16 @@ pub fn deploy_key(api: &GitHub, sdks_repo: &str, api_repo: &str) -> Result<Optio
     }))
 }
 
-/// Registers a new ed25519 write deploy key on `sdks_repo`, replacing `stale`, and stores its
-/// private half as a secret of `api_repo`.
+/// Generates an ed25519 deploy key and stores its private half as a secret of `api_repo`. With
+/// `register`, adds it to `sdks_repo` with write access, replacing `stale`; otherwise, says how
+/// an admin of `sdks_repo` adds it.
 pub fn add_deploy_key(
     api: &GitHub,
     api_repo: &str,
     sdks_repo: &str,
-    stale: Option<u64>,
+    (register, stale): (bool, Option<u64>),
     ui: &Ui,
 ) -> Result<()> {
-    if let Some(id) = stale {
-        api.delete(&format!("/repos/{sdks_repo}/keys/{id}"))?;
-    }
     let title = key_title(api_repo);
     let mut key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)
         .map_err(|e| anyhow!("generating a deploy key: {e}"))?;
@@ -81,14 +95,30 @@ pub fn add_deploy_key(
     let private = key
         .to_openssh(LineEnding::LF)
         .map_err(|e| anyhow!("encoding the deploy key: {e}"))?;
-    api.post(
-        &format!("/repos/{sdks_repo}/keys"),
-        json!({ "title": title, "key": public, "read_only": false }),
-    )?;
+    if register {
+        if let Some(id) = stale {
+            api.delete(&format!("/repos/{sdks_repo}/keys/{id}"))?;
+        }
+        api.post(
+            &format!("/repos/{sdks_repo}/keys"),
+            json!({ "title": title, "key": public, "read_only": false }),
+        )?;
+    }
     secrets::set_secret(api, api_repo, SECRET, &private)?;
-    ui.ok(&format!(
-        "{sdks_repo} has a write deploy key for {api_repo}, whose {SECRET} secret holds its private half"
-    ));
+    match register {
+        true => ui.ok(&format!(
+            "{sdks_repo} has a write deploy key for {api_repo}, whose {SECRET} secret holds its private half"
+        )),
+        false => {
+            ui.ok(&format!("{api_repo}: the {SECRET} secret holds a new deploy key"));
+            ui.say(&format!(
+                "An admin of {sdks_repo} must add its public half at {}/{sdks_repo}/settings/keys/new, checking \"Allow write access\":",
+                super::api::web_base()
+            ));
+            ui.info(&format!("Title: {title}"));
+            ui.info(&format!("Key:   {public}"));
+        }
+    }
     Ok(())
 }
 
@@ -98,13 +128,60 @@ pub struct Push<'a> {
     pub on: PushOn,
     /// The tags pushing the spec with `PushOn::Tag`.
     pub tags: &'a str,
-    /// The spec, relative to the API repository's root.
+    /// The spec, relative to the root of the repository holding it.
     pub spec: &'a str,
     /// Run from the repository's root to write the spec, when it isn't committed.
-    pub generate: Option<&'a str>,
-    pub sdks_repo: &'a str,
-    /// Where the SDKs repository keeps the spec, relative to its root.
-    pub snapshot: &'a str,
+    pub build: Option<&'a str>,
+    pub hub: &'a str,
+    /// Where the SDKs repository reads the spec, relative to its root: `spec` of its perseid.toml.
+    pub destination: &'a str,
+    /// The SDKs repository's perseid.toml, relative to its root.
+    pub config: &'a str,
+    /// Leaves this repository's name out of `.perseid/source.json` and commit messages.
+    pub private: bool,
+}
+
+/// What perseid-push.yml says, read back to update it or check it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Pushed {
+    pub hub: String,
+    pub on: PushOn,
+    pub tags: Option<String>,
+    pub spec: String,
+    pub build: Option<String>,
+    pub private: bool,
+}
+
+/// The settings of a perseid-push.yml that `perseid connect` wrote.
+pub fn pushed(yaml: &str) -> Option<Pushed> {
+    let header = yaml.lines().next()?;
+    let hub = header
+        .strip_prefix("# Written by `perseid connect ")?
+        .split('`')
+        .next()?
+        .to_owned();
+    let workflow: Value = serde_norway::from_str(yaml).ok()?;
+    let on = &workflow["on"];
+    let tags = on["push"]["tags"][0].as_str().map(str::to_owned);
+    let on = match (on.get("release"), &tags) {
+        (Some(_), _) => PushOn::Release,
+        (None, Some(_)) => PushOn::Tag,
+        (None, None) => PushOn::Change,
+    };
+    let steps = workflow["jobs"]["push"]["steps"].as_array()?;
+    let step = |name: &str| steps.iter().find(|s| s["name"] == name);
+    let env = &step("Push the spec to the SDKs repository")?["env"];
+    let build = step("Write the spec")
+        .and_then(|s| s["run"].as_str())
+        .map(|run| run.trim_end().to_owned());
+    Some(Pushed {
+        hub,
+        on,
+        tags,
+        spec: env["SPEC"].as_str()?.to_owned(),
+        build,
+        private: env["SOURCE_REPOSITORY"].as_str() == Some(""),
+    })
 }
 
 /// GitHub's SSH host keys, from https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
@@ -112,44 +189,53 @@ const KNOWN_HOSTS: &str = "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqn
 github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
 github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=";
 
-/// The shell pushing the spec, run from the API repository's checkout at `$GITHUB_SHA`.
+/// The shell pushing the spec, run from the checkout of the repository holding it at `$GITHUB_SHA`.
 const PUSH_SCRIPT: &str = r#"set -euo pipefail
 (umask 077 && printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/deploy_key")
 printf '%s\n' "$KNOWN_HOSTS" > "$RUNNER_TEMP/known_hosts"
 export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
 sdks="$RUNNER_TEMP/sdks"
 git clone --quiet --depth 1 "git@github.com:$SDKS_REPO.git" "$sdks"
-source="$sdks/$(dirname "$SNAPSHOT")/.perseid/source.json"
-if [ ! -f "$source" ]; then
-  echo "::notice::$SDKS_REPO isn't set up yet: merge its perseid/setup pull request, then run this workflow again"
+if [ ! -f "$sdks/$SDKS_CONFIG" ]; then
+  echo "::notice::$SDKS_REPO has no $SDKS_CONFIG yet: run \`perseid init\` there and commit it, then run this workflow again"
   exit 0
 fi
-synced=$(sed -n 's/.*"sha": *"\([0-9a-f]*\)".*/\1/p' "$source")
+source="$(dirname "$SDKS_CONFIG")/.perseid/source.json"
+synced=""
+if [ -f "$sdks/$source" ]; then
+  synced=$(sed -n 's/.*"sha": *"\([0-9a-f]*\)".*/\1/p' "$sdks/$source")
+fi
 if [ -n "$synced" ] && ! git merge-base --is-ancestor "$synced" "$GITHUB_SHA" 2>/dev/null; then
   echo "::notice::$SDKS_REPO has the spec of $synced, which $GITHUB_SHA doesn't descend from: skipped"
   exit 0
 fi
-if cmp -s "$SPEC" "$sdks/$SNAPSHOT"; then
+if cmp -s "$SPEC" "$sdks/$SDKS_SPEC"; then
   echo "$SDKS_REPO already has this spec"
   exit 0
 fi
-cp "$SPEC" "$sdks/$SNAPSHOT"
+mkdir -p "$(dirname "$sdks/$SDKS_SPEC")" "$(dirname "$sdks/$source")"
+cp "$SPEC" "$sdks/$SDKS_SPEC"
 at="${GITHUB_SHA::7}"
 ref=""
 if [ -n "${REF:-}" ]; then
   at="$REF ($at)"
   ref=$(printf ',\n  "ref": "%s"' "${REF//\"/}")
 fi
-printf '{\n  "repo": "%s",\n  "path": "%s",\n  "sha": "%s"%s\n}\n' "$GITHUB_REPOSITORY" "$SPEC" "$GITHUB_SHA" "$ref" > "$source"
-git -C "$sdks" add "$SNAPSHOT" "$source"
+repo=""
+if [ -n "${SOURCE_REPOSITORY:-}" ]; then
+  repo=$(printf '\n  "repo": "%s",' "$SOURCE_REPOSITORY")
+  at="$SOURCE_REPOSITORY@$at"
+fi
+printf '{%s\n  "sha": "%s"%s\n}\n' "$repo" "$GITHUB_SHA" "$ref" > "$sdks/$source"
+git -C "$sdks" add "$SDKS_SPEC" "$source"
 git -C "$sdks" -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-  commit --quiet -m "spec: $GITHUB_REPOSITORY@$at"
+  commit --quiet -m "spec: $at"
 git -C "$sdks" push --quiet origin HEAD
-echo "Pushed the spec of $GITHUB_REPOSITORY@$at to $SDKS_REPO"
+echo "Pushed the spec of $at to $SDKS_REPO"
 "#;
 
-/// The workflow of the API repository pushing its spec to the SDKs repository, one run at a time
-/// and never older commits over newer ones.
+/// The workflow pushing the spec to the SDKs repository, one run at a time and never older
+/// commits over newer ones.
 pub fn push_workflow(push: &Push) -> String {
     let indent = |text: &str, spaces: usize| {
         let pad = " ".repeat(spaces);
@@ -161,7 +247,7 @@ pub fn push_workflow(push: &Push) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     };
-    let generate = push.generate.map_or_else(String::new, |command| {
+    let build = push.build.map_or_else(String::new, |command| {
         format!(
             "      # Set up here the toolchain the command needs.\n      - name: Write the spec\n        run: |\n{}\n",
             indent(command, 10)
@@ -171,12 +257,11 @@ pub fn push_workflow(push: &Push) -> String {
     let tagged = format!("startsWith(github.ref, 'refs/tags/') || github.ref_name == {quoted}");
     let (when, trigger, guard) = match push.on {
         PushOn::Change => {
-            let paths = match push.generate {
+            let paths = match push.build {
                 Some(_) => String::new(),
                 None => format!(
                     "\n    paths: {}",
-                    serde_json::to_string(&[push.spec, ".github/workflows/perseid-push.yml"])
-                        .unwrap_or_default()
+                    serde_json::to_string(&[push.spec, WORKFLOW]).unwrap_or_default()
                 ),
             };
             (
@@ -196,10 +281,14 @@ pub fn push_workflow(push: &Push) -> String {
             tagged,
         ),
     };
+    let source = match push.private {
+        true => "''",
+        false => "${{ github.repository }}",
+    };
     format!(
-        r#"# Written by `perseid setup`: pushes the spec to {sdks} {when},
-# which regenerates the SDKs. The PERSEID_SDKS_DEPLOY_KEY deploy key can write to that
-# repository only.
+        r#"# Written by `perseid connect {hub}`: pushes the spec to {hub} {when},
+# which regenerates the SDKs. Run that command again to change these settings. The
+# PERSEID_SDKS_DEPLOY_KEY deploy key can write to {hub} only.
 name: Spec
 
 on:
@@ -222,21 +311,24 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-{generate}      - name: Push the spec to the SDKs repository
+{build}      - name: Push the spec to the SDKs repository
         env:
+          SPEC: {spec:?}
           SDKS_REPO: ${{{{ vars.PERSEID_SDKS_REPO }}}}
+          SDKS_SPEC: {destination:?}
+          SDKS_CONFIG: {config:?}
+          SOURCE_REPOSITORY: {source}
           DEPLOY_KEY: ${{{{ secrets.PERSEID_SDKS_DEPLOY_KEY }}}}
-          SPEC: {spec}
-          SNAPSHOT: {snapshot}
           REF: ${{{{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}}}
           KNOWN_HOSTS: |
 {known_hosts}
         run: |
 {script}
 "#,
-        sdks = push.sdks_repo,
+        hub = push.hub,
         spec = push.spec,
-        snapshot = push.snapshot,
+        destination = push.destination,
+        config = push.config,
         known_hosts = indent(KNOWN_HOSTS, 12),
         script = indent(PUSH_SCRIPT, 10),
     )
@@ -246,30 +338,61 @@ jobs:
 mod tests {
     use super::*;
 
+    fn push(on: PushOn, build: Option<&str>, private: bool) -> Push<'_> {
+        Push {
+            branch: "main",
+            on,
+            tags: "api-v*",
+            spec: "api/openapi.json",
+            build,
+            hub: "acme/api-sdks",
+            destination: "openapi.json",
+            config: "perseid.toml",
+            private,
+        }
+    }
+
     #[test]
     fn generated_specs_are_pushed_on_every_commit() {
-        let yaml = push_workflow(&Push {
-            branch: "main",
-            on: PushOn::Change,
-            tags: "v*",
-            spec: "api/openapi.json",
-            generate: Some("cargo run --bin openapi > api/openapi.json"),
-            sdks_repo: "acme/api-sdks",
-            snapshot: "openapi.json",
-        });
+        let command = "cargo run --bin openapi > api/openapi.json";
+        let yaml = push_workflow(&push(PushOn::Change, Some(command), false));
         assert!(!yaml.contains("paths:"), "{yaml}");
         assert!(
             yaml.contains("        run: |\n          cargo run --bin openapi > api/openapi.json\n"),
             "{yaml}"
         );
-        let parsed: serde_json::Value = serde_norway::from_str(&yaml).unwrap();
+        let parsed: Value = serde_norway::from_str(&yaml).unwrap();
         let steps = &parsed["jobs"]["push"]["steps"];
         assert_eq!(steps[2]["env"]["SPEC"], "api/openapi.json");
+        assert_eq!(steps[2]["env"]["SDKS_SPEC"], "openapi.json");
         assert!(
             steps[2]["env"]["KNOWN_HOSTS"]
                 .as_str()
                 .unwrap()
                 .ends_with("wsjk=\n")
         );
+    }
+
+    #[test]
+    fn workflows_read_back_as_their_settings() {
+        for (on, build, private) in [
+            (PushOn::Change, None, false),
+            (PushOn::Release, Some("make spec"), true),
+            (PushOn::Tag, None, false),
+        ] {
+            let read = pushed(&push_workflow(&push(on, build, private))).unwrap();
+            assert_eq!(
+                read,
+                Pushed {
+                    hub: "acme/api-sdks".into(),
+                    on,
+                    tags: (on == PushOn::Tag).then(|| "api-v*".into()),
+                    spec: "api/openapi.json".into(),
+                    build: build.map(str::to_owned),
+                    private,
+                }
+            );
+        }
+        assert_eq!(pushed("name: Spec\n"), None);
     }
 }

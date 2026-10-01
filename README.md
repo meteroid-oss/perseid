@@ -10,19 +10,28 @@ One static binary, running in your CI: an open-source and headless alternative t
 
 ## Get started
 
-In the repository that holds your spec, or in the one that will hold your SDKs and receive the spec:
-
 ```sh
-npx perseid init    # writes perseid.toml: where the spec comes from, where the SDKs live
-npx perseid setup   # plans, then sets up GitHub: repositories, keys, workflows, pull requests to merge
+# in the repository that will hold your SDKs
+npx perseid init      # which SDKs, where they live → perseid.toml
+npx perseid generate  # optional local preview
+npx perseid setup     # GitHub side: workflows, releases
+
+# spec in another repository (even private)? run there:
+npx perseid connect acme/acme-sdks   # pushes the spec on each release or change
 ```
 
-Merge the pull requests, and every spec change (or every release of your API) lands as SDK pull
-requests, then releases. See [repository layouts](docs/ci.md#repository-layouts) to pick one.
+| Command | Runs in | Does |
+|---|---|---|
+| `init` | the SDKs repository | writes `perseid.toml`, nothing else: the spec found there, the SDKs you pick, where they live |
+| `generate` | the SDKs repository | writes the SDKs from `spec` (or `--spec <path\|url>`), starting each from its package skeleton |
+| `setup` | the SDKs repository | plans, then sets up GitHub: SDK repositories, the App, `sdks.yml`, release files |
+| `connect <owner/sdks-repo>` | the repository holding the spec | a deploy key and `perseid-push.yml`, pushing the spec to the SDKs repository |
 
-Just trying it? `npx perseid init && npx perseid generate` writes the SDKs locally. Also installable
-with `curl -fsSL https://sh.meteroid.com/perseid | sh` or as the `ghcr.io/meteroid-oss/perseid`
-image; Linux and macOS, x64 and arm64.
+With the spec and the SDKs in one repository, `connect` isn't needed. Merge the pull requests, and
+every spec change (or every release of your API) lands as SDK pull requests, then releases. See
+[repository layouts](docs/ci.md#repository-layouts). Also installable with
+`curl -fsSL https://sh.meteroid.com/perseid | sh` or as the `ghcr.io/meteroid-oss/perseid` image;
+Linux and macOS, x64 and arm64.
 
 What your users get:
 
@@ -60,7 +69,8 @@ It powers the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients),
 ## In your CI
 
 `perseid setup` writes the workflow for you: it runs the `meteroid-oss/perseid@v0` Action
-on every spec change (or on each release of your API), and `perseid status` tells how it fares. To set it up by hand, or on self-hosted runners and other CIs with the
+on every spec change (pushed by `perseid connect` on each release of your API, or each change),
+and `perseid status` tells how it fares, from either repository. To set it up by hand, or on self-hosted runners and other CIs with the
 `ghcr.io/meteroid-oss/perseid` image, see [CI and releases](docs/ci.md).
 
 ## Docs

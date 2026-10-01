@@ -56,7 +56,7 @@ jobs:
           LANGUAGE: ${{ matrix.language }}
         run: |
           mkdir sdk && cd sdk
-          "$RUNNER_TEMP/perseid/bin/perseid" init --no-release --spec "$SPEC_URL" "$LANGUAGE"
+          "$RUNNER_TEMP/perseid/bin/perseid" init --spec "$SPEC_URL" --sdks "$LANGUAGE"
           sed -i "1i exclude = [$EXCLUDE]" perseid.toml
           "$RUNNER_TEMP/perseid/bin/perseid" generate --no-format
           "$RUNNER_TEMP/perseid/bin/perseid" generate --no-format --check

@@ -5,6 +5,7 @@ mod api;
 mod app;
 mod auth;
 mod bootstrap;
+mod connect;
 mod layout;
 mod link;
 mod plan;
@@ -19,8 +20,9 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 
-pub use layout::spec_repo;
-pub use link::{Push, push_workflow};
+pub use connect::{Connect, connect};
+pub use layout::origin_repo;
+pub use link::{Push, PushOn, push_workflow};
 pub use status::status;
 
 use crate::config::{Config, Sdk, Source};
@@ -139,6 +141,9 @@ pub fn setup(config_path: &Path, options: &Options) -> Result<ExitCode> {
     if pending == 0 {
         println!();
         ui.ok("In sync: nothing to change");
+        if plan.awaits_spec {
+            connect_hint(&plan);
+        }
         return Ok(ExitCode::SUCCESS);
     }
     if options.dry_run {
@@ -155,11 +160,7 @@ pub fn setup(config_path: &Path, options: &Options) -> Result<ExitCode> {
     let mut plan = plan;
     let pulls = plan::apply(&api, &mut plan, &ui)?;
     println!("\n✓ {}", plan.diagram);
-    let link = plan
-        .link
-        .as_ref()
-        .map(|l| (l.api_repo.clone(), l.sdks_repo.clone()));
-    checklist(plan.config(), &plan.hub, link.as_ref(), &pulls, &ui)?;
+    checklist(&plan, &pulls, &ui)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -336,10 +337,10 @@ fn join(dir: &str, path: &str) -> String {
     }
 }
 
-/// The new files of this checkout a setup commits: spec, SDK skeletons, release files.
+/// The new files of this checkout a setup commits: spec, release files, SDKs generated here.
 fn local_files(top: &Path, dir: &str, config: &Config, sdks: &[Sdk]) -> Result<Vec<String>> {
-    let mut specs = vec![join(dir, link::SOURCE)];
-    if sdks.iter().any(|s| s.repo.is_none()) {
+    let mut specs = Vec::new();
+    if config.release != Some(false) && sdks.iter().any(|s| s.repo.is_none()) {
         specs.extend(
             [
                 "release-please-config.json",
@@ -350,10 +351,8 @@ fn local_files(top: &Path, dir: &str, config: &Config, sdks: &[Sdk]) -> Result<V
             .map(|p| join(dir, p)),
         );
     }
-    match config.source() {
-        Source::File(file) => specs.push(join(dir, file)),
-        Source::GitHub { path, .. } => specs.push(join(dir, &crate::config::snapshot(path))),
-        Source::Url(_) => {}
+    if let Source::File(file) = config.source() {
+        specs.push(join(dir, file));
     }
     specs.extend(
         sdks.iter()
@@ -400,13 +399,15 @@ fn stage(top: &Path, paths: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn checklist(
-    config: &Config,
-    hub: &str,
-    link: Option<&(String, String)>,
-    pulls: &[String],
-    ui: &Ui,
-) -> Result<()> {
+fn connect_hint(plan: &plan::Plan) {
+    println!(
+        "\nNext: in the repository that holds your OpenAPI spec, run `npx perseid connect {}`",
+        plan.hub
+    );
+}
+
+fn checklist(plan: &plan::Plan, pulls: &[String], ui: &Ui) -> Result<()> {
+    let (config, hub) = (plan.config(), plan.hub.as_str());
     println!("\nNext steps");
     let mut step = 0;
     let mut item = |text: String| {
@@ -455,14 +456,16 @@ fn checklist(
             _ => format!("Go: nothing to set up, {repo} tags publish through the module proxy"),
         });
     }
-    item(match (config.source(), link) {
-        (_, Some((api, _))) => format!(
-            "Push a spec change to {api}: it reaches {hub}, which opens the SDK pull requests"
-        ),
-        (Source::Url(_), None) => {
+    item(match (config.source(), plan.awaits_spec) {
+        (Source::Url(_), _) => {
             "Nothing else: perseid checks the spec every day, or when you run sdks.yml".to_owned()
         }
-        _ => "Push a spec change: perseid opens the SDK pull requests".to_owned(),
+        (_, true) => format!(
+            "In the repository that holds your OpenAPI spec, run `npx perseid connect {hub}`: it pushes the spec here, which opens the SDK pull requests"
+        ),
+        (Source::File(file), false) => {
+            format!("Change {file}: perseid opens the SDK pull requests")
+        }
     });
     Ok(())
 }

@@ -22,9 +22,12 @@ fn project_from(fixture: &str, languages: &[&str]) -> tempfile::TempDir {
         dir.path().join("openapi.yaml"),
     )
     .unwrap();
-    let args = [&["init"], languages].concat();
-    let (ok, out) = perseid(dir.path(), &args);
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", &languages.join(",")]);
     assert!(ok, "{out}");
+    let tables: String = languages.iter().map(|l| format!("\n[{l}]\n")).collect();
+    let config = dir.path().join("perseid.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, text + &tables).unwrap();
     dir
 }
 
@@ -34,11 +37,85 @@ fn init_derives_names_from_the_spec() {
     let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
     assert!(config.contains("name = \"Petstore\""), "{config}");
     assert!(
+        config
+            .contains("spec = \"openapi.yaml\"\nname = \"Petstore\"\nsdks = [\"rust\", \"go\"]\n"),
+        "{config}"
+    );
+    assert!(
         config.contains("base_url = \"https://petstore.example.com\""),
         "{config}"
     );
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
     assert!(dir.path().join("rust/src/error.rs").exists());
     assert!(dir.path().join("go/go.mod").exists());
+}
+
+#[test]
+fn init_writes_perseid_toml_only_and_asks_for_the_sdks() {
+    let dir = tempfile::tempdir().unwrap();
+    let nested = dir.path().join("spec/api/v1");
+    fs::create_dir_all(&nested).unwrap();
+    fs::copy("tests/fixtures/petstore.yaml", nested.join("openapi.yaml")).unwrap();
+    fs::write(dir.path().join("notes.yaml"), "openapi: not a spec name\n").unwrap();
+    let (ok, out) = perseid(dir.path(), &["init"]);
+    assert!(!ok && out.contains("pass --sdks"), "{out}");
+    let (ok, out) = perseid(
+        dir.path(),
+        &[
+            "init",
+            "--sdks",
+            "go,typescript",
+            "--repo",
+            "acme/petstore-{lang}",
+        ],
+    );
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("acme/petstore-typescript, acme/petstore-go"),
+        "{out}"
+    );
+    let mut entries: Vec<_> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    entries.sort();
+    assert_eq!(entries, ["notes.yaml", "perseid.toml", "spec"]);
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(
+        config.contains("spec = \"spec/api/v1/openapi.yaml\"\nname = \"Petstore\"\nsdks = [\"typescript\", \"go\"]\nrepo = \"acme/petstore-{lang}\"\n"),
+        "{config}"
+    );
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "go"]);
+    assert!(!ok && out.contains("perseid.toml already exists"), "{out}");
+}
+
+#[test]
+fn without_a_spec_init_points_to_connect_and_generate_previews() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "go", "--name", "Petstore"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("perseid connect") && out.contains("--spec"),
+        "{out}"
+    );
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(config.contains("spec = \"openapi.json\"\n"), "{config}");
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(
+        !ok && out.contains("openapi.json doesn't exist yet"),
+        "{out}"
+    );
+    assert!(
+        out.contains("--spec") && out.contains("perseid connect"),
+        "{out}"
+    );
+    let spec = std::path::absolute("tests/fixtures/petstore.yaml").unwrap();
+    let args = ["generate", "--spec", spec.to_str().unwrap(), "--no-format"];
+    let (ok, out) = perseid(dir.path(), &args);
+    assert!(ok, "{out}");
+    assert!(dir.path().join("go/go.mod").exists());
+    assert!(dir.path().join("go/client.go").exists());
 }
 
 #[test]
@@ -243,7 +320,7 @@ fn openapi_3_0_generates_the_same_sdks_as_the_3_1_equivalent() {
 fn swagger_2_is_rejected_with_a_hint() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("openapi.yaml"), "swagger: '2.0'\n").unwrap();
-    let (ok, out) = perseid(dir.path(), &["init", "rust"]);
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "rust"]);
     assert!(!ok);
     assert!(out.contains("swagger2openapi"), "{out}");
 }
@@ -256,15 +333,14 @@ fn csharp_init_and_generate_lay_out_a_dotnet_project() {
         dir.path().join("openapi.yaml"),
     )
     .unwrap();
-    let (ok, out) = perseid(dir.path(), &["init", "csharp"]);
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "csharp"]);
+    assert!(ok, "{out}");
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
     let sdk = dir.path().join("csharp");
     let project = fs::read_to_string(sdk.join("Petstore/Petstore.csproj")).unwrap();
     assert!(project.contains("<Version>0.1.0</Version>"), "{project}");
     assert!(sdk.join("Petstore.sln").exists());
-
-    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
-    assert!(ok, "{out}");
     for file in [
         "PetstoreClient.cs",
         "Api/PetsApi.cs",
@@ -329,50 +405,6 @@ fn csharp_extension_snippets_are_included_in_resource_classes() {
         class < method && method < pets.rfind('}').unwrap(),
         "{pets}"
     );
-}
-
-fn json(path: &Path) -> serde_json::Value {
-    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
-}
-
-#[test]
-fn init_configures_release_please_per_sdk() {
-    let dir = project();
-    let config = json(&dir.path().join("release-please-config.json"));
-    assert_eq!(config["packages"]["rust"]["release-type"], "rust");
-    assert_eq!(config["packages"]["go"]["version-file"], "version.go");
-    assert_eq!(config["tag-separator"], "/");
-    assert_eq!(
-        json(&dir.path().join(".release-please-manifest.json")),
-        serde_json::json!({}),
-        "never released SDKs start at initial-version"
-    );
-    assert!(
-        dir.path()
-            .join(".github/workflows/sdk-release.yml")
-            .exists()
-    );
-
-    fs::create_dir(dir.path().join("python")).unwrap();
-    fs::write(
-        dir.path().join("python/pyproject.toml"),
-        "[project]\nname = \"petstore\"\nversion = \"1.4.0\"\n",
-    )
-    .unwrap();
-    let (ok, out) = perseid(dir.path(), &["init", "python", "java"]);
-    assert!(ok, "{out}");
-    let config = json(&dir.path().join("release-please-config.json"));
-    assert_eq!(config["packages"]["python"]["release-type"], "python");
-    assert_eq!(
-        config["packages"]["java"]["extra-files"][1],
-        "src/main/java/com/petstore/Version.java"
-    );
-    assert_eq!(
-        json(&dir.path().join(".release-please-manifest.json")),
-        serde_json::json!({ "python": "1.4.0" })
-    );
-    let properties = fs::read_to_string(dir.path().join("java/gradle.properties")).unwrap();
-    assert!(properties.contains("VERSION_NAME=0.1.0"), "{properties}");
 }
 
 #[test]
@@ -445,7 +477,7 @@ fn open_pull_requests_keep_their_largest_bump() {
 }
 
 #[test]
-fn empty_sdk_repositories_get_a_skeleton_releasing_from_their_root() {
+fn empty_sdk_repositories_get_a_skeleton() {
     let dir = project();
     let remote = dir.path().join("go-sdk.git");
     let git = |args: &[&str]| {
@@ -490,42 +522,17 @@ fn empty_sdk_repositories_get_a_skeleton_releasing_from_their_root() {
         .join("go-sdk");
     assert!(checkout.join("go.mod").exists());
     assert!(checkout.join("client.go").exists());
-    let release = json(&checkout.join("release-please-config.json"));
-    assert_eq!(release["packages"]["."]["include-component-in-tag"], false);
-    assert!(checkout.join(".github/workflows/sdk-release.yml").exists());
-}
-
-#[test]
-fn init_no_release_skips_release_files() {
-    let dir = tempfile::tempdir().unwrap();
-    fs::copy(
-        "tests/fixtures/petstore.yaml",
-        dir.path().join("openapi.yaml"),
-    )
-    .unwrap();
-    let (ok, out) = perseid(dir.path(), &["init", "rust", "--no-release"]);
-    assert!(ok, "{out}");
-    assert!(dir.path().join("rust/Cargo.toml").exists());
-    assert!(!dir.path().join("release-please-config.json").exists());
-    assert!(!dir.path().join(".release-please-manifest.json").exists());
-    assert!(!dir.path().join(".github").exists());
+    assert!(
+        !checkout.join("release-please-config.json").exists(),
+        "`perseid setup` adds the release files"
+    );
 }
 
 #[test]
 fn csharp_releases_bump_the_csproj_version() {
-    let dir = tempfile::tempdir().unwrap();
-    fs::copy(
-        "tests/fixtures/petstore.yaml",
-        dir.path().join("openapi.yaml"),
-    )
-    .unwrap();
-    let (ok, out) = perseid(dir.path(), &["init", "csharp"]);
+    let dir = project_from("petstore.yaml", &["csharp"]);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
-    let release = json(&dir.path().join("release-please-config.json"));
-    assert_eq!(
-        release["packages"]["csharp"]["extra-files"][0],
-        "Petstore/Petstore.csproj"
-    );
     let csproj = fs::read_to_string(dir.path().join("csharp/Petstore/Petstore.csproj")).unwrap();
     assert!(csproj.contains("x-release-please-version"), "{csproj}");
 }
@@ -563,7 +570,8 @@ components:
 fn inspect_with(pagination: &str) -> (bool, String) {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("openapi.yaml"), LIST_SPEC).unwrap();
-    let config = format!("spec = \"openapi.yaml\"\nname = \"Shop\"\n{pagination}\n[go]\n");
+    let config =
+        format!("spec = \"openapi.yaml\"\nname = \"Shop\"\nsdks = [\"go\"]\n{pagination}\n");
     fs::write(dir.path().join("perseid.toml"), config).unwrap();
     perseid(dir.path(), &["inspect"])
 }
@@ -847,7 +855,7 @@ components:
     Token: { type: string, format: uuid }
 "##;
     fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
-    let (ok, out) = perseid(dir.path(), &["init", "java"]);
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "java"]);
     assert!(ok, "{out}");
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
@@ -898,7 +906,7 @@ components:
       properties: { type: { type: string }, "@type": { type: string } }
 "##;
     fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
-    let (ok, out) = perseid(dir.path(), &["init", "rust"]);
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "rust"]);
     assert!(ok, "{out}");
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(!ok);
@@ -1147,8 +1155,12 @@ fn init_fills_package_metadata_from_the_spec() {
         1,
     );
     fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
-    let langs = ["rust", "typescript", "python", "java", "csharp"];
-    let (ok, out) = perseid(dir.path(), &[&["init"], &langs[..]].concat());
+    let (ok, out) = perseid(
+        dir.path(),
+        &["init", "--sdks", "rust,typescript,python,java,csharp"],
+    );
+    assert!(ok, "{out}");
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
     let read = |path: &str| fs::read_to_string(dir.path().join(path)).unwrap();
     let config = read("perseid.toml");

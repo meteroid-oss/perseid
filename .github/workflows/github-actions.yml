@@ -66,7 +66,7 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: |
           mkdir sdk && cd sdk
-          perseid init --spec "${{ startsWith(matrix.spec, 'https') && matrix.spec || format('{0}/{1}', github.workspace, matrix.spec) }}"
+          perseid init --sdks rust,typescript,python,go,java,csharp --spec "${{ startsWith(matrix.spec, 'https') && matrix.spec || format('{0}/{1}', github.workspace, matrix.spec) }}"
           perseid generate
           perseid generate --check
       - working-directory: ${{ runner.temp }}/sdk/rust

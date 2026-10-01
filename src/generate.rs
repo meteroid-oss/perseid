@@ -357,21 +357,18 @@ pub fn sdk(
     Ok(changes)
 }
 
-pub fn load_spec(config: &Config, root: &Path) -> Result<String> {
-    ensure!(
-        config.push.to.is_none(),
-        "the SDKs are generated in {}, which receives the spec ([push] `to`)",
-        config.push.to.as_deref().unwrap_or_default()
-    );
-    match config.source() {
-        Source::GitHub { repo, path } => {
-            let snapshot = crate::config::snapshot(path);
-            spec::read(&snapshot, root).with_context(|| {
-                format!("{snapshot} holds the spec {repo} pushes: run `perseid setup` to fetch it")
-            })
-        }
-        _ => spec::read(&config.spec, root),
+pub fn load_spec(config: &Config, root: &Path, over: Option<&str>) -> Result<String> {
+    let location = over.unwrap_or(&config.spec);
+    if let Source::File(file) = Source::parse(location)
+        && !root.join(file).exists()
+    {
+        let here =
+            crate::github::origin_repo(root).unwrap_or_else(|| "<owner/this-repository>".into());
+        bail!(
+            "{file} doesn't exist yet: preview with `perseid generate --spec <path|url>`, or run `npx perseid connect {here}` in the repository holding the spec to push it here"
+        );
     }
+    spec::read(location, root)
 }
 
 /// The paths generating `sdk` writes, relative to its directory.

@@ -10,6 +10,7 @@ pub mod github;
 pub mod init;
 mod postprocessing;
 pub mod pr;
+pub mod scaffold;
 pub mod spec;
 mod template;
 mod value_vec;

@@ -13,12 +13,14 @@ use serde_json::Value;
 use super::{
     Options, Ui,
     api::GitHub,
-    auth, git, layout,
+    auth,
+    connect::{self, Settings},
+    git, layout,
     link::{self, SOURCE},
-    plan::{self, Mark, PUSH_WORKFLOW},
+    plan::{self, Mark, Plan},
     secrets, toplevel,
 };
-use crate::config::{self, Config, PushOn, Source};
+use crate::config::{Config, Source};
 
 struct Report {
     ui: Ui,
@@ -31,6 +33,37 @@ impl Report {
         self.ui.say(fix);
         self.failed = true;
     }
+
+    /// The steps of `plan` left to apply, as a failure.
+    fn pending(&mut self, plan: &Plan, run: &str) {
+        match plan.pending() {
+            0 => self.ui.ok("In sync"),
+            n => {
+                self.ui.fail(&format!(
+                    "{n} change{} pending:",
+                    if n == 1 { "" } else { "s" }
+                ));
+                for step in plan.steps.iter().filter(|s| s.mark != Mark::Keep) {
+                    let mark = if step.mark == Mark::Add { '+' } else { '~' };
+                    println!("    {mark} {}", step.text);
+                }
+                self.ui.say(&format!("run `{run}`"));
+                self.failed = true;
+            }
+        }
+        for warning in &plan.warnings {
+            self.ui.warn(warning);
+        }
+    }
+}
+
+/// A signed-in GitHub client, from stored credentials only.
+fn session() -> Option<(GitHub, String, &'static str)> {
+    auth::stored_token().and_then(|(token, source)| {
+        let api = GitHub::new(Some(token));
+        let user = api.get("/user").ok()?;
+        Some((api, user["login"].as_str()?.to_owned(), source))
+    })
 }
 
 pub fn status(config_path: &Path) -> Result<ExitCode> {
@@ -40,22 +73,30 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
         browser: false,
     });
     let mut report = Report { ui, failed: false };
+    if !config_path.exists() {
+        let dir = std::path::absolute(config_path)?
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let top = toplevel(&dir).unwrap_or(dir);
+        let workflow = std::fs::read_to_string(top.join(link::WORKFLOW)).ok();
+        if let Some(pushed) = workflow.as_deref().and_then(link::pushed) {
+            pushing(&mut report, &top, pushed)?;
+            return Ok(exit(&report));
+        }
+    }
     let (config, root) = match Config::load(config_path) {
         Ok(loaded) => loaded,
         Err(error) => {
             report.fail(
                 &format!("{error:#}"),
-                "fix perseid.toml, or run `perseid init`",
+                "fix perseid.toml, run `perseid init` in the repository holding the SDKs, or `perseid connect <owner/sdks-repository>` in the one holding the spec",
             );
-            return Ok(ExitCode::FAILURE);
+            return Ok(exit(&report));
         }
     };
-    let here = layout::spec_repo(&root);
-    let session = auth::stored_token().and_then(|(token, source)| {
-        let api = GitHub::new(Some(token));
-        let user = api.get("/user").ok()?;
-        Some((api, user["login"].as_str()?.to_owned(), source))
-    });
+    let here = layout::origin_repo(&root);
+    let session = session();
     let planned = match (&session, &here) {
         (Some((api, login, _)), Some(_)) => {
             let cx = plan::Session {
@@ -69,25 +110,14 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
     };
     let diagram = match &planned {
         Some(Ok(plan)) => plan.diagram.clone(),
-        _ => local_diagram(&config, here.as_deref().unwrap_or("this repository"))?,
+        _ => local_diagram(&config, &root, here.as_deref().unwrap_or("this repository"))?,
     };
     println!("{diagram}\n");
     report.ui.ok("perseid.toml is valid");
     local(&mut report, &config, &root);
     let (Some((api, login, source)), Some(_)) = (&session, &here) else {
-        match here {
-            None => report
-                .ui
-                .warn("origin isn't a GitHub repository: only local checks ran"),
-            Some(_) => {
-                report
-                    .ui
-                    .warn("Not signed in to GitHub: only local checks ran");
-                report
-                    .ui
-                    .say("set GH_TOKEN, or run `gh auth login`, to check GitHub too");
-            }
-        }
+        local_spec(&mut report, &root);
+        signed_out(&mut report, here.is_some());
         return Ok(exit(&report));
     };
     report
@@ -96,34 +126,17 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
     let plan = match planned {
         Some(Ok(plan)) => plan,
         Some(Err(error)) => {
-            match error.downcast_ref::<config::PushMismatch>() {
-                Some(mismatch) => report.fail(&mismatch.summary(), &mismatch.fix()),
-                None => report.fail(
-                    &format!("{error:#}"),
-                    "fix what it says, then run `perseid setup`",
-                ),
-            }
+            report.fail(
+                &format!("{error:#}"),
+                "fix what it says, then run `perseid setup`",
+            );
             return Ok(exit(&report));
         }
         None => return Ok(exit(&report)),
     };
-    match plan.pending() {
-        0 => report.ui.ok("In sync with perseid.toml"),
-        n => {
-            report.ui.fail(&format!(
-                "{n} change{} pending:",
-                if n == 1 { "" } else { "s" }
-            ));
-            for step in plan.steps.iter().filter(|s| s.mark != Mark::Keep) {
-                let mark = if step.mark == Mark::Add { '+' } else { '~' };
-                println!("    {mark} {}", step.text);
-            }
-            report.ui.say("run `perseid setup`");
-            report.failed = true;
-        }
-    }
-    for warning in &plan.warnings {
-        report.ui.warn(warning);
+    report.pending(&plan, "perseid setup");
+    if let Source::File(_) = config.source() {
+        last_spec(&mut report, api, &plan, plan.awaits_spec)?;
     }
     health(&mut report, api, &plan)?;
     Ok(exit(&report))
@@ -136,24 +149,87 @@ fn exit(report: &Report) -> ExitCode {
     }
 }
 
-fn local_diagram(config: &Config, here: &str) -> Result<String> {
-    let sdks = config.sdks(&[])?;
-    let targets = layout::targets(&sdks, here);
-    Ok(match (config.source(), &config.push.to) {
-        (_, Some(sdks_repo)) => layout::diagram(Some(here), sdks_repo, &[]),
-        (Source::GitHub { repo, .. }, _) => layout::diagram(Some(&repo), here, &targets),
-        (Source::Url(url), _) => layout::diagram(Some(url), here, &targets),
-        (Source::File(_), None) => layout::diagram(None, here, &targets),
-    })
+fn signed_out(report: &mut Report, github: bool) {
+    match github {
+        false => report
+            .ui
+            .warn("origin isn't a GitHub repository: only local checks ran"),
+        true => {
+            report
+                .ui
+                .warn("Not signed in to GitHub: only local checks ran");
+            report
+                .ui
+                .say("set GH_TOKEN, or run `gh auth login`, to check GitHub too");
+        }
+    }
 }
 
-/// What this checkout tells without GitHub: the spec, the workflow, the last sync.
+/// `perseid status` in a repository whose perseid-push.yml pushes its spec to `pushed.hub`.
+fn pushing(report: &mut Report, top: &Path, pushed: link::Pushed) -> Result<()> {
+    let here = layout::origin_repo(top);
+    println!(
+        "{} ──spec──▶ {}\n",
+        here.as_deref().unwrap_or("this repository"),
+        pushed.hub
+    );
+    report.ui.ok(&format!("{} is here", link::WORKFLOW));
+    match top.join(&pushed.spec).exists() || pushed.build.is_some() {
+        true => report
+            .ui
+            .ok(&format!("{} pushes {}", link::WORKFLOW, pushed.spec)),
+        false => report.fail(
+            &format!("the spec {} is missing", pushed.spec),
+            &format!("run `perseid connect {} --spec <path>`", pushed.hub),
+        ),
+    }
+    let (Some((api, login, source)), Some(here)) = (session(), here) else {
+        signed_out(report, layout::origin_repo(top).is_some());
+        return Ok(());
+    };
+    report
+        .ui
+        .ok(&format!("Signed in to GitHub as {login} ({source})"));
+    let cx = plan::Session {
+        api: &api,
+        login: &login,
+        collisions: false,
+    };
+    let hub = pushed.hub.clone();
+    let settings = Settings {
+        here: here.clone(),
+        top: top.to_owned(),
+        pushed,
+    };
+    let plan = match connect::plan_connect(&cx, &settings) {
+        Ok(plan) => plan,
+        Err(error) => {
+            report.fail(
+                &format!("{error:#}"),
+                &format!("fix what it says, then run `perseid connect {hub}`"),
+            );
+            return Ok(());
+        }
+    };
+    report.pending(&plan, &format!("perseid connect {hub}"));
+    last_spec(report, &api, &plan, true)?;
+    run(report, &api, &here, "perseid-push.yml")
+}
+
+fn local_diagram(config: &Config, root: &Path, here: &str) -> Result<String> {
+    let sdks = config.sdks(&[])?;
+    let targets = layout::targets(&sdks, here);
+    let source = match config.source() {
+        Source::Url(url) => Some(url.to_owned()),
+        Source::File(_) => link::source(root).and_then(|s| s.repo),
+    };
+    Ok(layout::diagram(source.as_deref(), here, &targets))
+}
+
+/// What this checkout tells without GitHub: the spec, the workflow, the last spec pushed.
 fn local(report: &mut Report, config: &Config, root: &Path) {
     let top = toplevel(root).unwrap_or_else(|_| root.to_owned());
-    let workflow = match config.push.to {
-        Some(_) => PUSH_WORKFLOW,
-        None => layout::SDKS_WORKFLOW,
-    };
+    let workflow = layout::SDKS_WORKFLOW;
     match top.join(workflow).exists() {
         true => report.ui.ok(&format!("{workflow} is here")),
         false => report.fail(
@@ -161,35 +237,28 @@ fn local(report: &mut Report, config: &Config, root: &Path) {
             "run `perseid setup`, or merge and pull its perseid/setup pull request",
         ),
     }
-    match config.source() {
-        Source::File(file) if !root.join(file).exists() && config.push.generate.is_none() => report
-            .fail(
-                &format!("the spec {file} is missing"),
-                "point `spec` of perseid.toml to it",
-            ),
-        Source::GitHub { repo, path } => {
-            let snapshot = config::snapshot(path);
-            if !root.join(&snapshot).exists() {
-                report.ui.warn(&format!(
-                    "{snapshot} is missing: {repo} hasn't pushed its spec here yet"
-                ));
-            }
-            if let Some(source) = link::source(root) {
-                let age = git(root, &["log", "-1", "--format=%ct", "--", SOURCE])
-                    .ok()
-                    .and_then(|out| String::from_utf8(out).ok()?.trim().parse::<i64>().ok());
-                synced(report, &source, age);
-            }
-        }
-        _ => {}
+    if let Source::File(file) = config.source()
+        && !root.join(file).exists()
+    {
+        let hub = layout::origin_repo(root).unwrap_or_else(|| "<owner/this-repository>".into());
+        report.ui.warn(&format!(
+            "the spec {file} isn't here yet: run `npx perseid connect {hub}` in the repository holding it"
+        ));
+    }
+}
+
+/// The last spec pushed here, as this checkout's `.perseid/source.json` says.
+fn local_spec(report: &mut Report, root: &Path) {
+    if let Some(source) = link::source(root) {
+        let age = git(root, &["log", "-1", "--format=%ct", "--", SOURCE])
+            .ok()
+            .and_then(|out| String::from_utf8(out).ok()?.trim().parse::<i64>().ok());
+        synced(report, &source, age);
     }
 }
 
 fn synced(report: &mut Report, source: &link::Source, when: Option<i64>) {
     let Some(sha) = &source.sha else {
-        report
-            .ui
-            .warn(&format!("{} hasn't pushed its spec here yet", source.repo));
         return;
     };
     let age = when.map_or_else(String::new, |t| format!(", {}", ago(t)));
@@ -198,9 +267,11 @@ fn synced(report: &mut Report, source: &link::Source, when: Option<i64>) {
         Some(tag) => format!("{tag} ({short})"),
         None => short.to_owned(),
     };
-    report
-        .ui
-        .ok(&format!("Last synced {}@{at}{age}", source.repo));
+    let from = source
+        .repo
+        .as_ref()
+        .map_or_else(String::new, |r| format!(" from {r}"));
+    report.ui.ok(&format!("Last spec{from} at {at}{age}"));
 }
 
 fn now() -> i64 {
@@ -233,31 +304,40 @@ fn timestamp(text: &str) -> Option<i64> {
     Some(days * 86_400 + hh * 3600 + mm * 60 + ss)
 }
 
-fn health(report: &mut Report, api: &GitHub, plan: &plan::Plan) -> Result<()> {
-    let config = plan.config();
-    if plan.link.is_some() {
-        let info = api.find(&format!("/repos/{}", plan.hub))?;
-        let branch = info
-            .as_ref()
-            .map_or_else(|| "main".to_owned(), super::bootstrap::default_branch);
-        let file = super::join(&plan.hub_dir, SOURCE);
-        if let Some(text) = super::bootstrap::read(api, &plan.hub, &branch, &file)?
-            && let Ok(source) = serde_json::from_str::<link::Source>(&text)
-        {
-            let commits = api
-                .find(&format!(
-                    "/repos/{}/commits?path={file}&per_page=1",
-                    plan.hub
-                ))?
-                .unwrap_or_default();
-            let when = commits[0]["commit"]["committer"]["date"]
-                .as_str()
-                .and_then(timestamp);
-            synced(report, &source, when);
-            let on = plan.link.as_ref().map(|l| l.on).unwrap_or_default();
-            behind(report, api, &source, on)?;
+/// The last spec pushed to the hub of `plan`, as its `.perseid/source.json` on GitHub says;
+/// `expected` warns when there is none.
+fn last_spec(report: &mut Report, api: &GitHub, plan: &Plan, expected: bool) -> Result<()> {
+    let info = api.find(&format!("/repos/{}", plan.hub))?;
+    let branch = info
+        .as_ref()
+        .map_or_else(|| "main".to_owned(), super::bootstrap::default_branch);
+    let file = super::join(&plan.hub_dir, SOURCE);
+    let Some(text) = super::bootstrap::read(api, &plan.hub, &branch, &file)? else {
+        if expected {
+            report
+                .ui
+                .warn(&format!("{} hasn't received a spec yet", plan.hub));
         }
-    }
+        return Ok(());
+    };
+    let Ok(source) = serde_json::from_str::<link::Source>(&text) else {
+        return Ok(());
+    };
+    let commits = api
+        .find(&format!(
+            "/repos/{}/commits?path={file}&per_page=1",
+            plan.hub
+        ))?
+        .unwrap_or_default();
+    let when = commits[0]["commit"]["committer"]["date"]
+        .as_str()
+        .and_then(timestamp);
+    synced(report, &source, when);
+    Ok(())
+}
+
+fn health(report: &mut Report, api: &GitHub, plan: &Plan) -> Result<()> {
+    let config = plan.config();
     let mut repos = BTreeSet::new();
     for sdk in config.sdks(&[])? {
         repos.insert(sdk.repo.unwrap_or_else(|| plan.hub.clone()));
@@ -282,52 +362,7 @@ fn health(report: &mut Report, api: &GitHub, plan: &plan::Plan) -> Result<()> {
     if plan.app {
         installation(report, api, &plan.hub)?;
     }
-    run(report, api, &plan.hub, "sdks.yml")?;
-    if let Some(link) = &plan.link {
-        run(report, api, &link.api_repo, "perseid-push.yml")?;
-    }
-    Ok(())
-}
-
-/// Warns when the API repository changed its spec after the commit last synced.
-fn behind(report: &mut Report, api: &GitHub, source: &link::Source, on: PushOn) -> Result<()> {
-    let Some(sha) = &source.sha else {
-        return Ok(());
-    };
-    let Some(commits) = api.find(&format!(
-        "/repos/{}/commits?path={}&per_page=1",
-        source.repo, source.path
-    ))?
-    else {
-        return Ok(());
-    };
-    let Some(latest) = commits[0]["sha"].as_str() else {
-        return Ok(());
-    };
-    if latest == sha {
-        return Ok(());
-    }
-    let compare = api.find(&format!("/repos/{}/compare/{sha}...{latest}", source.repo))?;
-    if compare.is_some_and(|c| c["status"] == "ahead") {
-        let changed = format!(
-            "{}@{} changed the spec after the last sync",
-            source.repo,
-            latest.get(..7).unwrap_or(latest)
-        );
-        match on {
-            PushOn::Change => report.fail(
-                &changed,
-                &format!("check the perseid-push.yml runs of {}", source.repo),
-            ),
-            PushOn::Release => report
-                .ui
-                .info(&format!("{changed}: the next release pushes it")),
-            PushOn::Tag => report
-                .ui
-                .info(&format!("{changed}: the next tag pushes it")),
-        }
-    }
-    Ok(())
+    run(report, api, &plan.hub, "sdks.yml")
 }
 
 fn installation(report: &mut Report, api: &GitHub, hub: &str) -> Result<()> {

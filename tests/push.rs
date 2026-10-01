@@ -1,5 +1,5 @@
-//! The shell of perseid-push.yml, run against local repositories standing for the API repository
-//! and the SDKs repository it pushes its spec to.
+//! The shell of perseid-push.yml, run against local repositories standing for the repository
+//! holding the spec and the SDKs repository it pushes the spec to.
 
 use std::{
     fs,
@@ -7,10 +7,7 @@ use std::{
     process::Command,
 };
 
-use perseid::{
-    config::PushOn,
-    github::{Push, push_workflow},
-};
+use perseid::github::{Push, PushOn, push_workflow};
 use serde_json::Value;
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -74,8 +71,13 @@ fn repos() -> (Repos, Vec<String>) {
     (repos, shas)
 }
 
-/// Seeds the SDKs repository with the spec of `sha`, as `perseid setup` does.
+/// Commits perseid.toml to the SDKs repository, as `perseid init` writes it, and the spec of
+/// `sha` when set, as a push would have.
 fn seed(repos: &Repos, sha: Option<&str>) {
+    seed_with(repos, true, sha);
+}
+
+fn seed_with(repos: &Repos, config: bool, sha: Option<&str>) {
     let work = repos.sdks.with_extension("work");
     git(
         repos.sdks.parent().unwrap(),
@@ -86,16 +88,17 @@ fn seed(repos: &Repos, sha: Option<&str>) {
             work.to_str().unwrap(),
         ],
     );
-    let mut files = vec![(
-        "perseid.toml",
-        "spec = \"github:acme/api/openapi.json\"\n".to_owned(),
-    )];
+    let mut files = vec![("README.md", "SDKs\n".to_owned())];
+    if config {
+        files.push((
+            "perseid.toml",
+            "name = \"Acme\"\nsdks = [\"go\"]\n".to_owned(),
+        ));
+    }
     if let Some(sha) = sha {
         let spec = git(&repos.api, &["show", &format!("{sha}:openapi.json")]) + "\n";
         fs::create_dir_all(work.join(".perseid")).unwrap();
-        let source = format!(
-            "{{\n  \"repo\": \"acme/api\",\n  \"path\": \"openapi.json\",\n  \"sha\": \"{sha}\"\n}}\n"
-        );
+        let source = format!("{{\n  \"repo\": \"acme/api\",\n  \"sha\": \"{sha}\"\n}}\n");
         files.push((".perseid/source.json", source));
         files.push(("openapi.json", spec));
     }
@@ -112,14 +115,23 @@ fn push(repos: &Repos, sha: &str) -> String {
 
 /// Runs the push step at `sha`, triggered by the release or tag `tag` when not empty.
 fn push_at(repos: &Repos, sha: &str, tag: &str) -> String {
+    push_with(repos, sha, tag, false, "")
+}
+
+/// Runs the push step at `sha`, `private` leaving out the name of the repository it runs in,
+/// to an SDKs repository keeping perseid.toml in `dir`.
+fn push_with(repos: &Repos, sha: &str, tag: &str, private: bool, dir: &str) -> String {
+    let (destination, config) = (format!("{dir}openapi.json"), format!("{dir}perseid.toml"));
     let yaml = push_workflow(&Push {
         branch: "main",
         on: PushOn::Release,
         tags: "v*",
         spec: "openapi.json",
-        generate: None,
-        sdks_repo: "acme/api-sdks",
-        snapshot: "openapi.json",
+        build: None,
+        hub: "acme/api-sdks",
+        destination: &destination,
+        config: &config,
+        private,
     });
     let workflow: Value = serde_norway::from_str(&yaml).unwrap();
     let step = workflow["jobs"]["push"]["steps"]
@@ -136,7 +148,15 @@ fn push_at(repos: &Repos, sha: &str, tag: &str) -> String {
         .arg(step["run"].as_str().unwrap())
         .current_dir(&repos.api)
         .env("SPEC", step["env"]["SPEC"].as_str().unwrap())
-        .env("SNAPSHOT", step["env"]["SNAPSHOT"].as_str().unwrap())
+        .env("SDKS_SPEC", step["env"]["SDKS_SPEC"].as_str().unwrap())
+        .env("SDKS_CONFIG", step["env"]["SDKS_CONFIG"].as_str().unwrap())
+        .env(
+            "SOURCE_REPOSITORY",
+            match step["env"]["SOURCE_REPOSITORY"].as_str().unwrap() {
+                "" => "",
+                _ => "acme/api",
+            },
+        )
         .env("REF", tag)
         .env("KNOWN_HOSTS", step["env"]["KNOWN_HOSTS"].as_str().unwrap())
         .env("SDKS_REPO", "acme/api-sdks")
@@ -226,13 +246,62 @@ fn newer_specs_are_pushed_and_older_or_diverged_ones_skipped() {
 }
 
 #[test]
-fn repositories_not_set_up_yet_are_left_alone() {
+fn repositories_without_perseid_toml_are_left_alone() {
     let (repos, shas) = repos();
-    seed(&repos, None);
+    seed_with(&repos, false, None);
     let before = sdks_head(&repos);
     let out = push(&repos, &shas[3]);
-    assert!(out.contains("acme/api-sdks isn't set up yet"), "{out}");
+    assert!(
+        out.contains("acme/api-sdks has no perseid.toml yet"),
+        "{out}"
+    );
     assert_eq!(sdks_head(&repos), before);
+}
+
+#[test]
+fn first_specs_are_pushed_without_a_seed() {
+    let (repos, shas) = repos();
+    seed(&repos, None);
+    let out = push(&repos, &shas[4]);
+    assert!(out.contains("Pushed the spec of acme/api@"), "{out}");
+    assert_eq!(sdks_file(&repos, "openapi.json"), "{\"v\": 3}");
+}
+
+#[test]
+fn specs_reach_a_perseid_toml_in_a_folder() {
+    let (repos, shas) = repos();
+    seed_with(&repos, false, None);
+    let work = repos.sdks.with_extension("folder");
+    let url = repos.sdks.to_str().unwrap();
+    git(
+        repos.sdks.parent().unwrap(),
+        &["clone", "--quiet", url, work.to_str().unwrap()],
+    );
+    fs::create_dir(work.join("sdks")).unwrap();
+    commit(&work, &[("sdks/perseid.toml", "name = \"A\"\n")], "init");
+    git(&work, &["push", "--quiet", "origin", "HEAD:main"]);
+    let out = push_with(&repos, &shas[3], "", false, "sdks/");
+    assert!(out.contains("Pushed the spec of acme/api@"), "{out}");
+    assert_eq!(sdks_file(&repos, "sdks/openapi.json"), "{\"v\": 2}");
+    let source: Value =
+        serde_json::from_str(&sdks_file(&repos, "sdks/.perseid/source.json")).unwrap();
+    assert_eq!(source["sha"], shas[3].as_str());
+}
+
+#[test]
+fn private_sources_leave_their_name_out() {
+    let (repos, shas) = repos();
+    seed(&repos, None);
+    let out = push_with(&repos, &shas[3], "v1.0.0", true, "");
+    let at = format!("v1.0.0 ({})", &shas[3][..7]);
+    assert!(out.contains(&format!("Pushed the spec of {at}")), "{out}");
+    let source: Value = serde_json::from_str(&sdks_file(&repos, ".perseid/source.json")).unwrap();
+    assert_eq!(
+        source,
+        serde_json::json!({ "sha": shas[3], "ref": "v1.0.0" })
+    );
+    let message = git(&repos.sdks, &["log", "-1", "--format=%s", "main"]);
+    assert_eq!(message, format!("spec: {at}"));
 }
 
 #[test]
@@ -249,8 +318,7 @@ fn specs_never_synced_are_pushed() {
             work.to_str().unwrap(),
         ],
     );
-    let pending =
-        "{\n  \"repo\": \"acme/api\",\n  \"path\": \"openapi.json\",\n  \"sha\": null\n}\n";
+    let pending = "{\n  \"repo\": \"acme/api\",\n  \"sha\": null\n}\n";
     commit(
         &work,
         &[(".perseid/source.json", pending)],
@@ -268,9 +336,11 @@ fn generated_specs_are_written_before_being_pushed() {
         on: PushOn::Change,
         tags: "v*",
         spec: "api/openapi.json",
-        generate: Some("cargo run --bin openapi > api/openapi.json"),
-        sdks_repo: "acme/api-sdks",
-        snapshot: "openapi.json",
+        build: Some("cargo run --bin openapi > api/openapi.json"),
+        hub: "acme/api-sdks",
+        destination: "openapi.json",
+        config: "perseid.toml",
+        private: false,
     });
     fs::write(
         Path::new(env!("CARGO_TARGET_TMPDIR")).join("perseid-push-generate.yml"),
@@ -315,16 +385,18 @@ fn releases_push_their_tag_and_record_it() {
     );
 }
 
-/// The workflow of each [push] `on`, also written for actionlint.
+/// The workflow of each `--on`, also written for actionlint.
 fn workflow(on: PushOn, name: &str) -> Value {
     let yaml = push_workflow(&Push {
         branch: "main",
         on,
         tags: "api-v*",
         spec: "openapi.json",
-        generate: None,
-        sdks_repo: "acme/api-sdks",
-        snapshot: "openapi.json",
+        build: None,
+        hub: "acme/api-sdks",
+        destination: "openapi.json",
+        config: "perseid.toml",
+        private: false,
     });
     fs::write(Path::new(env!("CARGO_TARGET_TMPDIR")).join(name), &yaml).unwrap();
     serde_norway::from_str(&yaml).unwrap()

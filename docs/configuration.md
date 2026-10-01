@@ -1,17 +1,18 @@
 # Configuration
 
-`perseid init` writes a `perseid.toml` next to your spec. Every key, annotated (only `spec` and
-`name` are required):
+`perseid init` writes a `perseid.toml` in the repository that will hold the SDKs. Every key,
+annotated (only `name` and `sdks` are required):
 
 ```toml
 #:schema https://raw.githubusercontent.com/meteroid-oss/perseid/main/perseid.schema.json
-spec = "openapi.json"               # path, https:// URL, or github:owner/repo/path (JSON or YAML)
+spec = "openapi.json"               # path or https:// URL (JSON or YAML), what generate reads
 name = "Acme"                       # any case: "acme-api", "Acme API"... gives AcmeApi, acme_api, acme-api
+sdks = ["typescript", "python", "go"] # among rust, typescript, python, go, java, csharp
 
-# Where the SDKs live: here, in a folder per language, unless one of these is set
-repo = "acme/acme-{lang}"           # one repository per SDK ({lang}: rust, node, python, go, java, dotnet),
-                                    # or "acme/acme-sdks": one repository, a folder per SDK,
-                                    # or [push] to send the spec to a repository generating them
+# Where the SDKs live: here, in a folder per language, unless set
+repo = "acme/acme-{lang}"           # one repository per SDK ({lang}: typescript, python, go...),
+                                    # or "acme/acme-sdks": one repository, a folder per SDK
+# release = false                   # no release-please files nor release workflow from setup
 
 # Defaults of every SDK, each also settable in a language table
 base_url = "https://api.acme.com"   # first server of the spec by default
@@ -28,18 +29,12 @@ exclude = ["deleteEverything"]      # operation ids left out
 
 overrides = ".perseid"              # ejected templates and runtime
 
-[package]                           # written into the manifests `perseid init` creates
+[package]                           # written into the manifests `perseid generate` creates
 description = "The Acme API client" # "{name} API client" by default
 license = "MIT"                     # SPDX expression
 homepage = "https://acme.com"
 repository = "https://github.com/acme/acme-sdks"
 authors = ["Acme <dev@acme.com>"]
-
-# [push]                            # with a separate repository generating the SDKs
-# to = "acme/acme-sdks"             # API side only: the repository receiving the spec
-# on = "release"                    # "change" (default), "release" or "tag"
-# tags = "v*"                       # with on = "tag": the tags pushing the spec
-# generate = "make openapi.json"    # how the API repository's CI writes the spec, if not committed
 
 [names]                             # method names by operation id
 listWidgetEvents = "events"
@@ -51,17 +46,13 @@ item_cursor = "id"
 [context]                           # exposed to templates as sdk.*
 tagline = "widgets as a service"
 
-[rust]                              # generated into ./rust, crate acme
-[typescript]
+[typescript]                        # overrides of a listed SDK
 package = "@acme/sdk"
 int64 = "bigint"
 [python]
 flat_unions = true
 [go]
-repo = "acme/acme-go"               # lives in its own repository, module github.com/acme/acme-go
-[java]
-package = "com.acme.sdk"
-[csharp]                            # Acme namespace and NuGet package by default
+repo = "acme/acme-golang"           # its own repository name, over the top-level `repo`
 ```
 
 ## Editor completion
@@ -71,12 +62,13 @@ The first line points editors to [`perseid.schema.json`](../perseid.schema.json)
 IntelliJ and other [Taplo](https://taplo.tamasfe.dev)-based editors complete and check
 `perseid.toml` with it; `taplo check perseid.toml` does it in CI.
 
-## Spec and name
+## Spec, name and SDKs
 
 | Key | |
 |---|---|
-| `spec` | The OpenAPI document (3.0 or 3.1, JSON or YAML): a path relative to `perseid.toml`, an `http(s)` URL, or `github:owner/repo/path` for a spec another repository pushes here (kept as `openapi.json`, or `.yaml` after its extension, with `.perseid/source.json` naming its commit) |
+| `spec` | The OpenAPI document (3.0 or 3.1, JSON or YAML) the SDKs are generated from: a path relative to `perseid.toml`, `openapi.json` by default, or an `http(s)` URL. When another repository holds the spec, `perseid connect` run there pushes it to this path, with `.perseid/source.json` naming its commit. `perseid generate --spec` reads another one |
 | `name` | The client name, in any form: `acme-api`, `acme_api` and `Acme API` all give the `AcmeApi` client, the `acme_api` crate and Python package and the `acme-api` npm package. A name already in UpperCamelCase is kept as written (`AcmeAPI`) |
+| `sdks` | The SDKs generated: `rust`, `typescript`, `python`, `go`, `java`, `csharp`. A [language table](#language-tables) only overrides the settings of a listed SDK |
 
 ## Where the SDKs live
 
@@ -84,22 +76,8 @@ See [repository layouts](ci.md#repository-layouts) for the trade-offs.
 
 | Key | |
 |---|---|
-| `repo` | Default repository of every SDK: `"acme/api-{lang}"` gives each its own (`{lang}` is `rust`, `node`, `python`, `go`, `java` or `dotnet`), `"acme/api-sdks"` holds them all, each in a folder named after its language. Without it, SDKs live next to `perseid.toml` |
-
-### `[push]`
-
-How the spec gets from the API repository to a separate repository generating the SDKs. See
-[spec pushes](ci.md#spec-pushes).
-
-| Key | |
-|---|---|
-| `to` | API side only: `owner/name` of the repository this one sends its spec to, which generates the SDKs from its own `perseid.toml`; the SDK tables here only seed that file when `perseid setup` creates it. The receiving side has a `github:` spec instead, and fails with `to` |
-| `on` | When the spec is pushed: `"change"` (default) on every push to the default branch changing it, `"release"` on every published GitHub release, `"tag"` on every tag matching `tags` |
-| `tags` | With `on = "tag"`: the tags pushing the spec, as a GitHub Actions glob, `"v*"` by default |
-| `generate` | The command writing the spec in the API repository's CI when it isn't committed, run from its root before pushing the spec |
-
-When both repositories have a `perseid.toml`, `on`, `tags` and `generate` may be set in either, and
-`perseid setup` refuses, naming both files, when both set one differently.
+| `repo` | Default repository of every SDK: `"acme/api-{lang}"` gives each its own (`{lang}` is the language, as `sdks` names it), `"acme/api-sdks"` holds them all, each in a folder named after its language. Without it, SDKs live next to `perseid.toml` |
+| `release` | `false` leaves out the release-please files and the `sdk-release.yml` workflow `perseid setup` adds to each repository holding SDKs |
 
 ## SDK defaults
 
@@ -129,8 +107,9 @@ Every operation is generated, except those marked `x-internal: true`.
 
 ## Package metadata
 
-`[package]` holds what the manifests `perseid init` creates say about the packages. `init` fills
-it from the spec's `info` (summary or description, license, contact) and the `origin` git remote.
+`[package]` holds what the manifests `perseid generate` creates say about the packages. `init`
+fills it from the spec's `info` (summary or description, license, contact) and the `origin` git
+remote.
 
 | Key | |
 |---|---|
@@ -145,8 +124,9 @@ version, which [release-please](ci.md#releases) bumps.
 
 ## Language tables
 
-`[rust]`, `[typescript]`, `[python]`, `[go]`, `[java]` and `[csharp]` each add an SDK, generated
-into a folder named after the language unless set otherwise. Every table takes:
+`[rust]`, `[typescript]`, `[python]`, `[go]`, `[java]` and `[csharp]` each override the settings of
+an SDK `sdks` lists, generated into a folder named after the language unless set otherwise. A
+table for an SDK `sdks` doesn't list fails. Every table takes:
 
 | Key | |
 |---|---|
@@ -171,8 +151,10 @@ A key of an earlier version fails with what to write instead:
 
 | Before | Now |
 |---|---|
-| `push_spec` or `sdks_repo = "acme/sdks"` | `[push] to = "acme/sdks"` |
-| `push_on`, `push_tags`, `generate` | `on`, `tags`, `generate` under `[push]` |
+| `[push]`, `push_spec`, `sdks_repo`, `push_on`, `push_tags`, `generate` | `npx perseid connect <owner/sdks-repository>` in the repository holding the spec, whose `--on`, `--tags` and `--build` say when and how it pushes the spec |
+| `spec = "github:acme/api/openapi.json"` | `spec = "openapi.json"`, where `perseid connect` pushes it |
+| language tables alone | `sdks = [...]` listing the SDKs, the tables only overriding their settings |
+| `node` and `dotnet` in `repo = "...-{lang}"` | `typescript` and `csharp`, or a `repo` in the language table |
 | `description`, `license`, `homepage`, `repository`, `authors` | the same keys under `[package]` |
 | `include = "public-and-internal"` | `internal = true` |
 | `include = "only-internal"` | `only = [...]` listing them |

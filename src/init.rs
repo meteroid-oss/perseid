@@ -1,552 +1,330 @@
+//! `perseid init`: perseid.toml, from the spec found here and the SDKs asked for.
+
 use std::{
     io::{BufRead, IsTerminal, Write},
-    path::{Path, PathBuf},
+    path::Path,
+    process::{Command, Stdio},
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use heck::{ToKebabCase, ToUpperCamelCase};
 use serde_json::{Value, json};
 
 use crate::{
-    assets,
-    config::{self, Config, LANGUAGES, Sdk, Source, manifest_version},
+    config::{self, LANGUAGES, Source},
     fsx,
-    generate::tokens,
+    scaffold::manifest_text,
     spec,
 };
 
-const SPECS: [&str; 6] = [
-    "openapi.json",
-    "openapi.yaml",
-    "openapi.yml",
-    "spec/openapi.json",
-    "spec/openapi.yaml",
-    "swagger.json",
-];
-
 pub struct Init {
-    pub languages: Vec<String>,
     pub spec: Option<String>,
     pub name: Option<String>,
+    pub sdks: Vec<String>,
+    pub repo: Option<String>,
     pub base_url: Option<String>,
-    pub release: bool,
 }
 
-/// Writes perseid.toml, then the skeletons and release files of the SDKs it keeps here.
-pub fn run(init: Init, root: &Path) -> Result<Vec<PathBuf>> {
-    let config_path = root.join(config::FILE);
-    let mut created = Vec::new();
-    let (toml, changed) = draft(&init, root)?;
-    if changed {
-        fsx::write(&config_path, toml.as_bytes())?;
-        created.push(config_path.clone());
-    }
-    let (config, root) = Config::load(&config_path)?;
-    let read = |path: &str| Ok(std::fs::read_to_string(root.join(path)).ok());
-    for (path, content) in hub_files(&config, Some(&root), init.release, read)? {
-        let target = root.join(path);
-        fsx::write(&target, &content)?;
-        created.push(target);
-    }
-    Ok(created)
-}
+const FLAGS: &str = "--sdks <rust,typescript,python,go,java,csharp> (required), --repo <owner/name-{lang}>, --spec <path|url>, --name <Name>";
 
-/// The spec `init` starts from: `--spec`, a conventional file, or the user's answer.
-fn locate_spec(init: &Init, root: &Path) -> Result<String> {
-    if let Some(spec) = init.spec.clone().or_else(|| {
-        SPECS
-            .iter()
-            .find(|s| root.join(s).is_file())
-            .map(|s| s.to_string())
-    }) {
-        return Ok(spec);
-    }
-    if std::io::stdin().is_terminal() {
-        print!("? Where is the OpenAPI spec? (a path, an https URL, or github:owner/repo/path) ");
-        std::io::stdout().flush()?;
-        let mut line = String::new();
-        std::io::stdin().lock().read_line(&mut line)?;
-        if !line.trim().is_empty() {
-            return Ok(line.trim().to_owned());
-        }
-    }
-    bail!(
-        "no OpenAPI spec found, pass --spec <path, url, or github:owner/repo/path of a spec pushed from another repository>"
-    )
-}
-
-/// The text of perseid.toml once `init` has added its languages, and whether that is new.
-pub fn draft(init: &Init, root: &Path) -> Result<(String, bool)> {
-    let config_path = root.join(config::FILE);
-    let mut toml = if config_path.exists() {
-        std::fs::read_to_string(&config_path)?
-    } else {
-        let spec = locate_spec(init, root)?;
-        let source = Source::parse(&spec)?;
-        let doc: Value = match &source {
-            Source::GitHub { .. } => json!({}),
-            _ => serde_json::from_str(&spec::read(&spec, root)?)?,
-        };
-        let name = init.name.clone().unwrap_or_else(|| match &source {
-            Source::GitHub { repo, .. } => {
-                name_from_title(&json!({ "info": { "title": repo.rsplit('/').next() } }))
-            }
-            _ => name_from_title(&doc),
-        });
-        let base_url = init.base_url.clone().or_else(|| {
-            doc["servers"][0]["url"]
-                .as_str()
-                .filter(|u| u.starts_with("http"))
-                .map(|u| u.trim_end_matches('/').to_owned())
-        });
-        let mut toml = format!(
-            "#:schema {}\nspec = {spec:?}\nname = {:?}\n",
-            config::SCHEMA_URL,
-            name.to_upper_camel_case()
-        );
-        if let Some(url) = base_url {
-            toml += &format!("base_url = {url:?}\n");
-        }
-        toml += &layouts(&source, &name.to_kebab_case(), root);
-        let package = metadata(&doc, root);
-        if !package.is_empty() {
-            toml += &format!("\n[package]\n{package}");
-        }
-        toml
-    };
-    let existing: toml::Table = toml.parse()?;
-    let languages = match init.languages.is_empty() {
-        true if existing.keys().any(|k| LANGUAGES.contains(&k.as_str())) => vec![],
-        true => LANGUAGES.map(str::to_owned).to_vec(),
-        false => init.languages.clone(),
-    };
-    let mut added = false;
-    for language in languages
-        .iter()
-        .filter(|l| !existing.contains_key(l.as_str()))
-    {
-        toml += &format!("\n[{language}]\n");
-        added = true;
-    }
-    Ok((toml, added || !config_path.exists()))
-}
-
-/// The repository layouts perseid.toml can declare, as comments to uncomment.
-fn layouts(source: &Source, name: &str, root: &Path) -> String {
-    let owner = git_remote(root)
-        .and_then(|url| {
-            Some(
-                url.strip_prefix("https://github.com/")?
-                    .split('/')
-                    .next()?
-                    .to_owned(),
-            )
-        })
-        .unwrap_or_else(|| "acme".into());
-    let mut lines = vec![
-        (
-            format!("repo = \"{owner}/{name}-{{lang}}\""),
-            format!("one repository per SDK: {name}-node, {name}-python…"),
-        ),
-        (
-            format!("repo = \"{owner}/{name}-sdks\""),
-            "one repository holding every SDK, a folder each".to_owned(),
-        ),
-    ];
-    match source {
-        Source::File(_) => lines.extend([
-            (
-                "[push]".to_owned(),
-                "or send the spec to a repository generating the SDKs itself:".to_owned(),
-            ),
-            (
-                format!("to = \"{owner}/{name}-sdks\""),
-                "that repository".to_owned(),
-            ),
-        ]),
-        Source::GitHub { .. } => lines.push((
-            "[push]".to_owned(),
-            "how the API repository pushes its spec here:".to_owned(),
-        )),
-        Source::Url(_) => {}
-    }
-    if !matches!(source, Source::Url(_)) {
-        lines.push((
-            "on = \"release\"".to_owned(),
-            "on each GitHub release, instead of each change".to_owned(),
-        ));
-        lines.push((
-            "generate = \"make openapi.json\"".to_owned(),
-            "how the API repository's CI writes the spec, if not committed".to_owned(),
-        ));
-    }
-    let width = lines
-        .iter()
-        .map(|(s, _)| s.chars().count())
-        .max()
-        .unwrap_or(0);
-    let mut out = String::from(
-        "\n# Where the SDKs live: here, a folder per language, unless one of these is uncommented.\n\
-         # See https://github.com/meteroid-oss/perseid/blob/main/docs/ci.md#repository-layouts\n",
+/// Writes perseid.toml, asking what the flags and the spec here don't tell.
+pub fn run(init: Init, root: &Path) -> Result<()> {
+    let path = root.join(config::FILE);
+    ensure!(
+        !path.exists(),
+        "{} already exists: edit it (`sdks`, `repo`, `spec`…), then run `perseid generate` or `perseid setup`",
+        config::FILE
     );
-    for (setting, comment) in lines {
-        let pad = width - setting.chars().count();
-        out += &format!("# {setting}{}  # {comment}\n", " ".repeat(pad));
+    let interactive = std::io::stdin().is_terminal();
+    if !interactive && init.sdks.is_empty() {
+        bail!("perseid init asks which SDKs to generate: without a terminal, pass {FLAGS}");
     }
-    out
-}
-
-/// The files `init` gives the SDKs kept in the repository of perseid.toml (at `root` when
-/// local): the skeletons and release files `read` lacks.
-pub fn hub_files(
-    config: &Config,
-    root: Option<&Path>,
-    release: bool,
-    read: impl Fn(&str) -> Result<Option<String>>,
-) -> Result<Vec<(String, Vec<u8>)>> {
-    if config.push.to.is_some() {
-        return Ok(vec![]);
-    }
-    let sdks = config.sdks(&[])?;
-    let local: Vec<&Sdk> = sdks.iter().filter(|s| s.repo.is_none()).collect();
-    let mut files = Vec::new();
-    for sdk in &local {
-        let dir = root.map_or_else(|| PathBuf::from("/nonexistent"), |r| r.join(&sdk.path));
-        for (path, content) in skeleton(config, sdk, &dir)? {
-            let path = match sdk.path.as_str() {
-                "." => path,
-                folder => format!("{folder}/{path}"),
-            };
-            if read(&path)?.is_none() {
-                files.push((path, content));
-            }
-        }
-    }
-    if release {
-        files.extend(release_scaffold(config, &local, read)?);
-    }
-    Ok(files)
-}
-
-/// Gives an SDK repository without a package manifest the skeleton `init` gives local SDKs.
-pub fn bootstrap(config: &Config, sdk: &Sdk, repo: &Path) -> Result<Vec<PathBuf>> {
-    let dir = repo.join(&sdk.path);
-    let manifests: &[&str] = match sdk.language {
-        "rust" => &["Cargo.toml"],
-        "typescript" => &["package.json"],
-        "python" => &["pyproject.toml", "setup.py"],
-        "go" => &["go.mod"],
-        "csharp" => &[],
-        _ => &["build.gradle", "build.gradle.kts", "pom.xml"],
+    let spec = match &init.spec {
+        Some(spec) => Some(spec.clone()),
+        None => pick_spec(root, interactive)?,
     };
-    let dotnet = || {
-        std::fs::read_dir(&dir).is_ok_and(|entries| {
-            entries
-                .flatten()
-                .any(|e| e.path().extension().is_some_and(|x| x == "sln"))
-        })
-    };
-    if manifests.iter().any(|m| dir.join(m).exists()) || (sdk.language == "csharp" && dotnet()) {
-        return Ok(vec![]);
-    }
-    let mut created = Vec::new();
-    for (path, content) in skeleton(config, sdk, &dir)? {
-        let target = dir.join(path);
-        if !target.exists() {
-            fsx::write(&target, &content)?;
-            created.push(target);
-        }
-    }
-    created.extend(release(repo, &[package(config, sdk, &dir, None)])?);
-    Ok(created)
-}
-
-/// The skeleton of an SDK checked out at `dir`, relative to it.
-fn skeleton(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
-    let mut context = config.context(sdk, dir);
-    let path = context["java_package"].as_str().unwrap().replace('.', "/");
-    context["java_package_path"] = path.into();
-    package_metadata(config, &mut context);
-    let mut files = Vec::new();
-    for (path, content) in assets::under(&format!("scaffold/{}", sdk.language)) {
-        let content = without_unset_metadata(std::str::from_utf8(content)?, &context);
-        files.push((
-            tokens(path, &context)?,
-            tokens(&content, &context)?.into_bytes(),
-        ));
-    }
-    Ok(files)
-}
-
-/// A release-please package, `released` at its current version or never released.
-struct Package {
-    path: String,
-    released: Option<String>,
-    config: Value,
-}
-
-fn package(config: &Config, sdk: &Sdk, dir: &Path, released: Option<String>) -> Package {
-    let context = config.context(sdk, dir);
-    let java = context["java_package"].as_str().unwrap().replace('.', "/");
-    let mut entry = match sdk.language {
-        "rust" => json!({ "release-type": "rust" }),
-        "typescript" => json!({ "release-type": "node", "extra-files": ["src/request.ts"] }),
-        "python" => json!({ "release-type": "python" }),
-        "go" => json!({ "release-type": "go", "version-file": "version.go" }),
-        "csharp" => {
-            let name = context["package_name"].as_str().unwrap();
-            json!({ "release-type": "simple", "extra-files": [format!("{name}/{name}.csproj")] })
-        }
-        _ => json!({
-            "release-type": "simple",
-            "extra-files": ["gradle.properties", format!("src/main/java/{java}/Version.java")],
-        }),
-    };
-    entry["component"] = sdk.language.into();
-    if sdk.path == "." {
-        entry["include-component-in-tag"] = false.into();
-    }
-    Package {
-        path: sdk.path.clone(),
-        released,
-        config: entry,
-    }
-}
-
-/// Adds missing `packages` to the release-please files of `repo`, and the workflow releasing them.
-fn release(repo: &Path, packages: &[Package]) -> Result<Vec<PathBuf>> {
-    let read = |path: &str| Ok(std::fs::read_to_string(repo.join(path)).ok());
-    let mut created = Vec::new();
-    for (path, content) in release_files(read, packages)? {
-        let target = repo.join(path);
-        fsx::write(&target, &content)?;
-        created.push(target);
-    }
-    Ok(created)
-}
-
-/// The release files of a repository holding `sdks`, as `perseid init` gives them to a new one.
-pub fn release_scaffold(
-    config: &Config,
-    sdks: &[&Sdk],
-    read: impl Fn(&str) -> Result<Option<String>>,
-) -> Result<Vec<(String, Vec<u8>)>> {
-    let mut packages = Vec::new();
-    for sdk in sdks {
-        let dir = tempfile::tempdir()?;
-        for file in [
-            "package.json",
-            "Cargo.toml",
-            "pyproject.toml",
-            "gradle.properties",
-            "version.go",
-        ] {
-            let path = match sdk.path.as_str() {
-                "." => file.to_owned(),
-                sdk => format!("{sdk}/{file}"),
-            };
-            if let Some(text) = read(&path)? {
-                std::fs::write(dir.path().join(file), text)?;
-            }
-        }
-        let released = manifest_version(dir.path());
-        packages.push(package(config, sdk, dir.path(), released));
-    }
-    release_files(read, &packages)
-}
-
-/// The release-please files and workflow `read` lacks or holds without some of `packages`.
-fn release_files(
-    read: impl Fn(&str) -> Result<Option<String>>,
-    packages: &[Package],
-) -> Result<Vec<(String, Vec<u8>)>> {
-    if packages.is_empty() {
-        return Ok(vec![]);
-    }
-    let json = |path: &str| -> Result<Option<Value>> {
-        read(path)?
-            .map(|text| serde_json::from_str(&text).map_err(Into::into))
-            .transpose()
-    };
-    let config_path = "release-please-config.json";
-    let manifest_path = ".release-please-manifest.json";
-    let mut config = json(config_path)?.unwrap_or_else(|| {
-        json!({
-            "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-            "bump-minor-pre-major": true,
-            "bump-patch-for-minor-pre-major": true,
-            "initial-version": "0.1.0",
-            "tag-separator": "/",
-            "packages": {},
-        })
+    let readable = spec.as_deref().is_some_and(|s| match Source::parse(s) {
+        Source::Url(_) => true,
+        Source::File(file) => root.join(file).is_file(),
     });
-    let mut manifest = json(manifest_path)?.unwrap_or_else(|| json!({}));
-    let (Some(entries), Some(versions)) = (
-        config
-            .as_object_mut()
-            .map(|c| c.entry("packages").or_insert_with(|| json!({}))),
-        manifest.as_object_mut(),
-    ) else {
-        bail!("release-please files must hold JSON objects");
+    let doc: Value = match (&spec, readable) {
+        (Some(spec), true) => serde_json::from_str(&spec::read(spec, root)?)?,
+        _ => json!({}),
     };
-    let Some(entries) = entries.as_object_mut() else {
-        bail!("`packages` of release-please-config.json must be an object");
-    };
-    let mut files = Vec::new();
-    let mut added = false;
-    for package in packages {
-        if entries.contains_key(&package.path) {
-            continue;
-        }
-        entries.insert(package.path.clone(), package.config.clone());
-        if let Some(version) = &package.released {
-            versions.insert(package.path.clone(), version.as_str().into());
-        }
-        added = true;
-    }
-    if added {
-        for (path, value) in [(config_path, &config), (manifest_path, &manifest)] {
-            let text = serde_json::to_string_pretty(value)? + "\n";
-            files.push((path.to_owned(), text.into_bytes()));
-        }
-    }
-    for (path, content) in assets::under("scaffold/release") {
-        if read(path)?.is_none() {
-            files.push((path.to_owned(), content.to_vec()));
-        }
-    }
-    Ok(files)
-}
-
-/// Scaffold tokens of the package metadata, which manifests leave out when unset.
-const METADATA: [&str; 10] = [
-    "LICENSE",
-    "LICENSE_URL",
-    "REPOSITORY",
-    "HOMEPAGE",
-    "PROJECT_URL",
-    "AUTHOR",
-    "AUTHOR_ID",
-    "AUTHOR_NAME",
-    "AUTHORS_JSON",
-    "AUTHORS_PYPROJECT",
-];
-
-/// Metadata values fit for any manifest: one line, without quotes, backslashes or markup.
-fn manifest_text(text: &str) -> String {
-    let text: String = text
-        .chars()
-        .map(|c| match c {
-            '"' => '\'',
-            '\\' | '<' | '>' | '&' => ' ',
-            c if c.is_control() => ' ',
-            c => c,
-        })
-        .collect();
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// `Jane Doe <jane@example.com>` as its name and email.
-fn author_parts(author: &str) -> (String, Option<String>) {
-    match author.split_once('<') {
-        Some((name, email)) => (
-            manifest_text(name),
-            Some(manifest_text(email.trim_end_matches('>'))).filter(|e| !e.is_empty()),
-        ),
-        None => (manifest_text(author), None),
-    }
-}
-
-fn package_metadata(config: &Config, context: &mut Value) {
-    let text = |value: &Option<String>| {
-        value
-            .as_deref()
-            .map(manifest_text)
-            .filter(|v| !v.is_empty())
-            .map_or(Value::Null, Value::from)
-    };
-    let license = text(&config.package.license);
-    let project = config
-        .package
-        .homepage
+    let here = crate::github::origin_repo(root);
+    let name = init
+        .name
         .clone()
-        .or_else(|| config.package.repository.clone());
-    context["license_url"] = license
-        .as_str()
-        .filter(|l| {
-            !l.starts_with("LicenseRef-")
-                && l.bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b"-.+".contains(&b))
+        .or_else(|| doc["info"]["title"].as_str().map(|_| name_from_title(&doc)))
+        .unwrap_or_else(|| {
+            let fallback = here
+                .as_deref()
+                .and_then(|r| r.rsplit('/').next())
+                .map(str::to_owned)
+                .or_else(|| Some(root.file_name()?.to_string_lossy().into_owned()))
+                .unwrap_or_default();
+            name_from_title(&json!({ "info": { "title": fallback } }))
         })
-        .map_or(Value::Null, |l| {
-            format!("https://spdx.org/licenses/{l}.html").into()
-        });
-    context["license"] = license;
-    context["repository"] = text(&config.package.repository);
-    context["homepage"] = text(&config.package.homepage);
-    context["project_url"] = text(&project);
-    context["description"] =
-        manifest_text(context["description"].as_str().unwrap_or_default()).into();
-    let authors: Vec<(String, Option<String>)> = config
-        .package
-        .authors
-        .iter()
-        .map(|a| author_parts(a))
-        .filter(|(name, _)| !name.is_empty())
-        .collect();
-    let full = |(name, email): &(String, Option<String>)| match email {
-        Some(email) => format!("{name} <{email}>"),
-        None => name.clone(),
+        .to_upper_camel_case();
+    let sdks = match init.sdks.is_empty() {
+        true => ask_sdks()?,
+        false => checked(&init.sdks)?,
     };
-    context["author"] = authors.first().map_or(Value::Null, |a| full(a).into());
-    context["author_name"] = authors.first().map_or(Value::Null, |a| a.0.clone().into());
-    context["author_id"] = authors
-        .first()
-        .map_or(Value::Null, |a| a.0.to_kebab_case().into());
-    context["authors_names"] = match authors.is_empty() {
-        true => config.name.clone().into(),
-        false => authors
+    let repo = match (&init.repo, interactive) {
+        (Some(repo), _) => Some(repo.clone()),
+        (None, true) => ask_layout(&sdks, &name, here.as_deref())?,
+        (None, false) => None,
+    };
+    if let Some(repo) = &repo {
+        ensure!(
+            repo.split('/').count() == 2 && !repo.starts_with('/') && !repo.ends_with('/'),
+            "`--repo {repo}` must read owner/name, or owner/name-{{lang}} for a repository per SDK"
+        );
+    }
+    let base_url = init.base_url.clone().or_else(|| {
+        doc["servers"][0]["url"]
+            .as_str()
+            .filter(|u| u.starts_with("http"))
+            .map(|u| u.trim_end_matches('/').to_owned())
+    });
+    let quote = |v: &str| toml::Value::String(v.to_owned()).to_string();
+    let spec_path = spec.clone().unwrap_or_else(|| "openapi.json".into());
+    let mut toml = format!(
+        "#:schema {}\nspec = {}\nname = {}\nsdks = [{}]\n",
+        config::SCHEMA_URL,
+        quote(&spec_path),
+        quote(&name),
+        sdks.iter().map(|s| quote(s)).collect::<Vec<_>>().join(", ")
+    );
+    if let Some(repo) = &repo {
+        toml += &format!("repo = {}\n", quote(repo));
+    }
+    if let Some(url) = base_url {
+        toml += &format!("base_url = {}\n", quote(&url));
+    }
+    let package = metadata(&doc, root);
+    if !package.is_empty() {
+        toml += &format!("\n[package]\n{package}");
+    }
+    fsx::write(&path, toml.as_bytes())?;
+    println!("+ {}", config::FILE);
+    let where_ = match &repo {
+        Some(repo) if repo.contains("{lang}") => sdks
             .iter()
-            .map(|a| a.0.as_str())
+            .map(|s| repo.replace("{lang}", s))
             .collect::<Vec<_>>()
-            .join(", ")
-            .into(),
+            .join(", "),
+        Some(repo) => format!("{repo} ({})", folders(&sdks)),
+        None => format!("{} here", folders(&sdks)),
     };
-    context["authors_json"] = match authors.is_empty() {
-        true => Value::Null,
-        false => serde_json::to_string(&authors.iter().map(full).collect::<Vec<_>>())
-            .unwrap_or_default()
-            .into(),
-    };
-    context["authors_pyproject"] = match authors.is_empty() {
-        true => Value::Null,
-        false => {
-            let entries = authors.iter().map(|(name, email)| match email {
-                Some(email) => format!("{{ name = \"{name}\", email = \"{email}\" }}"),
-                None => format!("{{ name = \"{name}\" }}"),
-            });
-            format!("[{}]", entries.collect::<Vec<_>>().join(", ")).into()
+    println!("  {name} SDKs: {where_}");
+    match readable {
+        true => {
+            println!("  from {spec_path}");
+            println!(
+                "\nNext: `perseid generate` to preview the SDKs here, `perseid setup` to automate them on GitHub"
+            );
         }
-    };
-}
-
-/// Drops the lines of `source` holding a metadata token without a value.
-fn without_unset_metadata(source: &str, context: &Value) -> String {
-    let unset = |key: &str| {
-        context
-            .get(key.to_lowercase())
-            .is_none_or(|v| v.is_null() || v.as_str() == Some(""))
-    };
-    let mut out = String::with_capacity(source.len());
-    for line in source.split_inclusive('\n') {
-        let dropped = METADATA
-            .iter()
-            .any(|key| line.contains(&format!("@@{key}@@")) && unset(key));
-        if !dropped {
-            out.push_str(line);
+        false => {
+            let hub = here.unwrap_or_else(|| "<owner/this-repository>".into());
+            println!(
+                "\nNo OpenAPI spec here yet: perseid reads {spec_path}, which `npx perseid connect {hub}`, run in the repository holding the spec, pushes here."
+            );
+            println!(
+                "Next: `perseid generate --spec <path|url>` to preview the SDKs, `perseid setup` to automate them on GitHub"
+            );
         }
     }
-    out
+    Ok(())
+}
+
+fn folders(sdks: &[String]) -> String {
+    sdks.iter()
+        .map(|s| format!("{s}/"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn checked(sdks: &[String]) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for sdk in sdks.iter().map(|s| s.trim().to_lowercase()) {
+        ensure!(
+            LANGUAGES.contains(&sdk.as_str()),
+            "unknown SDK `{sdk}`: pick among {}",
+            LANGUAGES.join(", ")
+        );
+        if !out.contains(&sdk) {
+            out.push(sdk);
+        }
+    }
+    out.sort_by_key(|s| LANGUAGES.iter().position(|l| l == s));
+    Ok(out)
+}
+
+fn ask(question: &str) -> Result<String> {
+    print!("? {question} ");
+    std::io::stdout().flush()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    Ok(line.trim().to_owned())
+}
+
+fn ask_sdks() -> Result<Vec<String>> {
+    let choices: Vec<String> = LANGUAGES
+        .iter()
+        .enumerate()
+        .map(|(i, l)| format!("{} {l}", i + 1))
+        .collect();
+    println!("  {}", choices.join("  "));
+    loop {
+        let answer = ask("Which SDKs? (names or numbers, comma-separated)")?;
+        let picked: Vec<String> = answer
+            .split([',', ' '])
+            .filter(|a| !a.is_empty())
+            .map(|a| match a.parse::<usize>() {
+                Ok(n) if (1..=LANGUAGES.len()).contains(&n) => LANGUAGES[n - 1].to_owned(),
+                _ => a.to_owned(),
+            })
+            .collect();
+        match checked(&picked) {
+            Ok(sdks) if !sdks.is_empty() => return Ok(sdks),
+            Ok(_) => println!("  pick at least one"),
+            Err(error) => println!("  {error}"),
+        }
+    }
+}
+
+fn ask_layout(sdks: &[String], name: &str, here: Option<&str>) -> Result<Option<String>> {
+    let owner = here.and_then(|r| r.split('/').next()).unwrap_or("acme");
+    let pattern = format!("{owner}/{}-{{lang}}", name.to_kebab_case());
+    let repos: Vec<String> = sdks.iter().map(|s| pattern.replace("{lang}", s)).collect();
+    println!("  1 here, a folder each: {}", folders(sdks));
+    println!("  2 a repository each: {}", repos.join(", "));
+    loop {
+        match ask("Where do the SDKs live? [1]")?.as_str() {
+            "" | "1" => return Ok(None),
+            "2" => {
+                let answer = ask(&format!("Repository of each SDK? [{pattern}]"))?;
+                return Ok(Some(match answer.is_empty() {
+                    true => pattern,
+                    false => answer,
+                }));
+            }
+            _ => continue,
+        }
+    }
+}
+
+/// The OpenAPI documents of the repository holding `root`, relative to `root`, shallowest first.
+pub fn find_specs(root: &Path) -> Vec<String> {
+    let listed = Command::new("git")
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
+        .current_dir(root)
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            o.stdout
+                .split(|b| *b == 0)
+                .filter(|p| !p.is_empty())
+                .map(|p| String::from_utf8_lossy(p).into_owned())
+                .collect::<Vec<_>>()
+        });
+    let candidates = listed.unwrap_or_else(|| {
+        let mut found = Vec::new();
+        walk(root, "", 4, &mut found);
+        found
+    });
+    let mut specs: Vec<String> = candidates
+        .into_iter()
+        .filter(|p| named_like_a_spec(p) && is_spec(&root.join(p)))
+        .collect();
+    specs.sort_by_key(|p| (p.matches('/').count(), p.clone()));
+    specs.dedup();
+    specs
+}
+
+fn walk(dir: &Path, prefix: &str, depth: usize, found: &mut Vec<String>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let path = format!("{prefix}{name}");
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => {
+                let skipped =
+                    name.starts_with('.') || ["node_modules", "target"].contains(&name.as_str());
+                if depth > 1 && !skipped {
+                    walk(&entry.path(), &format!("{path}/"), depth - 1, found);
+                }
+            }
+            Ok(_) => found.push(path),
+            Err(_) => {}
+        }
+    }
+}
+
+fn named_like_a_spec(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path).to_lowercase();
+    (name.contains("openapi") || name.contains("swagger"))
+        && [".json", ".yaml", ".yml"].iter().any(|e| name.ends_with(e))
+}
+
+/// Whether `path` holds a document with a top-level `openapi` or `swagger` key.
+fn is_spec(path: &Path) -> bool {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    match text.trim_start().starts_with('{') {
+        true => serde_json::from_str::<Value>(&text)
+            .is_ok_and(|v| v.get("openapi").is_some() || v.get("swagger").is_some()),
+        false => text.lines().any(|line| {
+            let key = line.trim_start_matches(['"', '\'']);
+            ["openapi", "swagger"].iter().any(|k| {
+                key.strip_prefix(k)
+                    .is_some_and(|rest| rest.trim_start_matches(['"', '\'']).starts_with(':'))
+            })
+        }),
+    }
+}
+
+/// The spec found here: the only one, or the one picked among several.
+pub fn pick_spec(root: &Path, interactive: bool) -> Result<Option<String>> {
+    let specs = find_specs(root);
+    match specs.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one.clone())),
+        [first, ..] if !interactive => {
+            println!(
+                "  Using {first}, of {}: pass --spec for another",
+                specs.join(", ")
+            );
+            Ok(Some(first.clone()))
+        }
+        _ => {
+            for (i, spec) in specs.iter().enumerate() {
+                println!("  {} {spec}", i + 1);
+            }
+            loop {
+                let answer = ask("Which OpenAPI spec? [1]")?;
+                let n = match answer.as_str() {
+                    "" => 1,
+                    n => n.parse::<usize>().context("a number")?,
+                };
+                if let Some(spec) = specs.get(n.wrapping_sub(1)) {
+                    return Ok(Some(spec.clone()));
+                }
+            }
+        }
+    }
 }
 
 /// The perseid.toml lines of the package metadata the spec and the git remote tell.
@@ -645,7 +423,10 @@ fn name_from_title(doc: &Value) -> String {
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| {
             !w.is_empty()
-                && !["api", "rest", "openapi", "service"].contains(&w.to_lowercase().as_str())
+                && ![
+                    "api", "rest", "openapi", "service", "sdk", "sdks", "clients",
+                ]
+                .contains(&w.to_lowercase().as_str())
         })
         .collect();
     match words.join(" ").to_upper_camel_case() {
@@ -686,16 +467,6 @@ mod tests {
         assert_eq!(
             toml,
             "description = \"The Acme API.\"\nlicense = \"Apache-2.0\"\nhomepage = \"https://acme.com\"\nauthors = [\"Acme <dev@acme.com>\"]\n"
-        );
-    }
-
-    #[test]
-    fn unset_metadata_lines_are_dropped() {
-        let context = serde_json::json!({ "license": null, "repository": "https://x.dev/r" });
-        let source = "a\nlicense = \"@@LICENSE@@\"\nrepository = \"@@REPOSITORY@@\"\n";
-        assert_eq!(
-            without_unset_metadata(source, &context),
-            "a\nrepository = \"@@REPOSITORY@@\"\n"
         );
     }
 }

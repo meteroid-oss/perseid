@@ -57,7 +57,8 @@ runs:
         export PERSEID_VERSION="${PERSEID_VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' "$GITHUB_ACTION_PATH/Cargo.toml" | head -1)}"
         sh "$GITHUB_ACTION_PATH/install.sh"
         echo "$PERSEID_INSTALL" >> "$GITHUB_PATH"
-        languages=$(grep -oE '^\[(rust|typescript|python|go|java|csharp)[].]' perseid.toml | tr -d '[].' | sort -u | tr '\n' ' ')
+        languages=$(awk '/^sdks *=/ { f = 1 } f { print } f && /]/ { exit }' perseid.toml |
+          grep -oE '"(rust|typescript|python|go|java|csharp)"' | tr -d '"' | sort -u | tr '\n' ' ')
         echo "languages=$languages" >> "$GITHUB_OUTPUT"
 
     - if: contains(steps.setup.outputs.languages, 'rust')
@@ -121,10 +122,7 @@ runs:
       run: |
         if [ "$BUMP" != auto ]; then echo "bump=$BUMP" >> "$GITHUB_OUTPUT"; exit 0; fi
         spec=$(sed -n 's/^spec *= *"\(.*\)".*/\1/p' perseid.toml | head -1)
-        # A spec pushed from another repository is kept as openapi.<its extension>.
-        case "$spec" in github:*)
-          case "${spec##*.}" in json|yaml|yml) spec="openapi.${spec##*.}" ;; *) spec=openapi.json ;; esac ;;
-        esac
+        spec=${spec:-openapi.json}
         if [ -z "$BASE" ] && [ -f "$spec" ] && [ -n "${BEFORE//0/}" ] &&
           git fetch --quiet --depth 1 origin "$BEFORE" && git show "$BEFORE:./$spec" > "$RUNNER_TEMP/base-spec"; then
           BASE=$RUNNER_TEMP/base-spec
