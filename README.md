@@ -2,7 +2,7 @@
 
 # perseid
 
-**Idiomatic SDKs from your OpenAPI spec, shipped as pull requests from your own CI.**
+**Idiomatic SDKs, always in sync with your OpenAPI spec.**
 
 perseid generates Rust, TypeScript, Python, Go, Java and C# SDKs. When the spec changes, a GitHub
 Action regenerates them, opens a pull request, and releases them to their registries once you
