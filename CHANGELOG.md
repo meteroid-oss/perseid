@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/meteroid-oss/perseid/compare/v0.5.0...v0.5.1) (2026-10-01)
+
+
+### Features
+
+* arrow-key and checkbox prompts for init, setup and connect ([#41](https://github.com/meteroid-oss/perseid/issues/41)) ([c57f5a8](https://github.com/meteroid-oss/perseid/commit/c57f5a8bdeb212aadc7ac1703367c16cd8d4055f))
+
 ## [0.5.0](https://github.com/meteroid-oss/perseid/compare/v0.4.0...v0.5.0) (2026-10-01)
 
 
