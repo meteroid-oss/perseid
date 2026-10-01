@@ -33,17 +33,9 @@ pub struct Config {
     /// `rust`, `node`, `python`, `go`, `java` or `dotnet`), `owner/name` holds them all in folders
     /// named after their language. Without it, the SDKs live next to perseid.toml.
     pub repo: Option<String>,
-    /// `owner/name` of a separate repository this one sends its spec to, which generates the
-    /// SDKs from its own perseid.toml.
-    pub sdks_repo: Option<String>,
-    /// When the spec is pushed to the repository generating the SDKs (with `sdks_repo`, or a
-    /// `github:` spec).
-    pub push_on: Option<PushOn>,
-    /// Tags pushing the spec with `push_on = "tag"`, as a GitHub Actions glob: `v*` by default.
-    pub push_tags: Option<String>,
-    /// Command writing the spec in the API repository's CI when it isn't committed, run from its
-    /// root before pushing the spec.
-    pub generate: Option<String>,
+    /// How the spec gets from the API repository to a separate repository generating the SDKs.
+    #[serde(default)]
+    pub push: Push,
     /// Package metadata written into the manifests `perseid init` creates.
     #[serde(default)]
     pub package: Package,
@@ -125,6 +117,121 @@ pub struct Package {
     pub authors: Vec<String>,
 }
 
+/// How the spec gets from the API repository to a separate repository generating the SDKs. When
+/// both have a perseid.toml, either may set `on`, `tags` and `generate`, and both must agree.
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Push {
+    /// `owner/name` of the repository this one sends its spec to, which generates the SDKs from
+    /// its own perseid.toml: on the API side only.
+    pub to: Option<String>,
+    /// When the spec is pushed: `change` by default.
+    pub on: Option<PushOn>,
+    /// Tags pushing the spec with `on = "tag"`, as a GitHub Actions glob: `v*` by default.
+    pub tags: Option<String>,
+    /// Command writing the spec in the API repository's CI when it isn't committed, run from its
+    /// root before pushing the spec.
+    pub generate: Option<String>,
+}
+
+impl Push {
+    /// The `[push]` table of another repository's perseid.toml, whatever else it holds.
+    pub fn of(text: &str) -> Result<Self> {
+        let table: toml::Table = text.parse()?;
+        match table.get("push") {
+            Some(push) => Ok(push.clone().try_into()?),
+            None => Ok(Self::default()),
+        }
+    }
+
+    /// The tags pushing the spec with `on = "tag"`.
+    pub fn tags(&self) -> &str {
+        self.tags.as_deref().unwrap_or("v*")
+    }
+
+    /// These settings, completed by `other`'s: each may be set on either side, but not differ.
+    pub fn agree(&self, here: &str, other: &Self, there: &str) -> Result<Self, PushMismatch> {
+        let quote = |value: Option<&str>| value.map(|v| format!("{v:?}"));
+        let pairs = [
+            (
+                "on",
+                quote(self.on.map(PushOn::name)),
+                quote(other.on.map(PushOn::name)),
+            ),
+            (
+                "tags",
+                quote(self.tags.as_deref()),
+                quote(other.tags.as_deref()),
+            ),
+            (
+                "generate",
+                quote(self.generate.as_deref()),
+                quote(other.generate.as_deref()),
+            ),
+        ];
+        let differences: Vec<_> = pairs
+            .into_iter()
+            .filter_map(|(key, a, b)| match (a, b) {
+                (Some(a), Some(b)) if a != b => Some((key, a, b)),
+                _ => None,
+            })
+            .collect();
+        if !differences.is_empty() {
+            return Err(PushMismatch {
+                here: here.to_owned(),
+                there: there.to_owned(),
+                differences,
+            });
+        }
+        Ok(Self {
+            to: self.to.clone(),
+            on: self.on.or(other.on),
+            tags: self.tags.clone().or_else(|| other.tags.clone()),
+            generate: self.generate.clone().or_else(|| other.generate.clone()),
+        })
+    }
+}
+
+/// The two perseid.toml of a spec push setting `[push]` differently.
+#[derive(Debug)]
+pub struct PushMismatch {
+    pub here: String,
+    pub there: String,
+    /// Each key set differently, with its value here and there.
+    pub differences: Vec<(&'static str, String, String)>,
+}
+
+impl PushMismatch {
+    pub fn summary(&self) -> String {
+        let keys: Vec<_> = self
+            .differences
+            .iter()
+            .map(|(key, a, b)| format!("`{key}` is {a} in {} but {b} in {}", self.here, self.there))
+            .collect();
+        format!("[push] differs: {}", keys.join(", "))
+    }
+
+    pub fn fix(&self) -> String {
+        let keys: Vec<_> = self
+            .differences
+            .iter()
+            .map(|(key, ..)| format!("`{key}`"))
+            .collect();
+        format!(
+            "set {} in one of the two perseid.toml only, or to the same value in both",
+            keys.join(", ")
+        )
+    }
+}
+
+impl std::fmt::Display for PushMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.summary(), self.fix())
+    }
+}
+
+impl std::error::Error for PushMismatch {}
+
 /// When the API repository pushes its spec.
 #[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
@@ -134,8 +241,18 @@ pub enum PushOn {
     Change,
     /// Every published GitHub release, with the spec of its tag.
     Release,
-    /// Every tag matching `push_tags`.
+    /// Every tag matching `tags`.
     Tag,
+}
+
+impl PushOn {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Change => "change",
+            Self::Release => "release",
+            Self::Tag => "tag",
+        }
+    }
 }
 
 /// One SDK, as its language table sets it up; the shared settings default to the top-level ones.
@@ -421,29 +538,35 @@ impl Config {
                 path.display()
             )
         })?;
-        let table: toml::Table =
-            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-        removed_keys(&table).with_context(|| format!("in {}", path.display()))?;
-        let config: Self =
-            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-        config.validate()?;
+        let config = Self::parse(&text, &path.display().to_string())?;
         let root = std::path::absolute(path)?.parent().unwrap().to_owned();
         Ok((config, root))
     }
 
+    /// perseid.toml's `text`, read from `origin`.
+    pub fn parse(text: &str, origin: &str) -> Result<Self> {
+        let table: toml::Table =
+            toml::from_str(text).with_context(|| format!("parsing {origin}"))?;
+        removed_keys(&table).with_context(|| format!("in {origin}"))?;
+        let config: Self = toml::from_str(text).with_context(|| format!("parsing {origin}"))?;
+        config.validate().with_context(|| format!("in {origin}"))?;
+        Ok(config)
+    }
+
     fn validate(&self) -> Result<()> {
         let source = Source::parse(&self.spec)?;
+        let push = &self.push;
         ensure!(
-            self.sdks_repo.is_none() || matches!(source, Source::File(_)),
-            "`sdks_repo` sends a spec file of this repository: `spec` must be its path"
+            push.to.is_none() || matches!(source, Source::File(_)),
+            "[push] `to` names the repository the spec is sent to, from a file of this one: delete it here, the `github:` spec says where the spec comes from"
         );
         ensure!(
-            self.push_on.is_none() || self.pushed(),
-            "`push_on` says when the spec is pushed: set `sdks_repo`, or a `github:` spec"
+            *push == Push::default() || self.pushed(),
+            "[push] says how the spec is pushed: set its `to`, or a `github:` spec"
         );
         ensure!(
-            self.push_tags.is_none() || self.push_on == Some(PushOn::Tag),
-            "`push_tags` needs `push_on = \"tag\"`"
+            push.tags.is_none() || push.on == Some(PushOn::Tag),
+            "[push] `tags` needs `on = \"tag\"`"
         );
         ensure!(
             !self.internal || self.only.is_empty(),
@@ -454,12 +577,7 @@ impl Config {
 
     /// Whether another repository than this one's receives or sends the spec.
     fn pushed(&self) -> bool {
-        self.sdks_repo.is_some() || matches!(self.source(), Source::GitHub { .. })
-    }
-
-    /// The tags pushing the spec with `push_on = "tag"`.
-    pub fn push_tags(&self) -> &str {
-        self.push_tags.as_deref().unwrap_or("v*")
+        self.push.to.is_some() || matches!(self.source(), Source::GitHub { .. })
     }
 
     pub fn overrides_dir(&self, root: &Path) -> PathBuf {
@@ -621,7 +739,7 @@ impl Config {
 }
 
 /// Keys of earlier versions, and what replaces them.
-const OUTDATED: [(&str, &str); 15] = [
+const OUTDATED: [(&str, &str); 19] = [
     (
         "method_names",
         "was removed (methods are named after their resource; `[names]` renames one): delete it",
@@ -646,7 +764,11 @@ const OUTDATED: [(&str, &str); 15] = [
         "version",
         "was removed (each SDK's package manifest owns its version, which release-please bumps): delete it",
     ),
-    ("push_spec", "was renamed: write `sdks_repo = …` instead"),
+    ("push_spec", "moved to [push] as `to`"),
+    ("sdks_repo", "moved to [push] as `to`"),
+    ("push_on", "moved to [push] as `on`"),
+    ("push_tags", "moved to [push] as `tags`"),
+    ("generate", "moved to [push] as `generate`"),
     (
         "include",
         "was removed: `internal = true` also generates x-internal operations, `only = [...]` lists the operations to generate",
@@ -671,7 +793,7 @@ fn removed_keys(table: &toml::Table) -> Result<()> {
             let own = matches!(
                 (language, key),
                 ("typescript", "int64") | ("python", "flat_unions")
-            );
+            ) || !language.is_empty() && why.contains("[push]");
             if table.contains_key(key) && !own {
                 let at = match language {
                     "" => String::new(),
@@ -1050,7 +1172,23 @@ mod tests {
         assert!(removed_keys(&"[go]\nmodule = \"m\"".parse().unwrap()).is_ok());
         assert_eq!(
             error("push_spec = \"acme/sdks\""),
-            "`push_spec` was renamed: write `sdks_repo = …` instead"
+            "`push_spec` moved to [push] as `to`"
+        );
+        assert_eq!(
+            error("sdks_repo = \"acme/sdks\""),
+            "`sdks_repo` moved to [push] as `to`"
+        );
+        assert_eq!(
+            error("push_on = \"release\""),
+            "`push_on` moved to [push] as `on`"
+        );
+        assert_eq!(
+            error("push_tags = \"v*\""),
+            "`push_tags` moved to [push] as `tags`"
+        );
+        assert_eq!(
+            error("generate = \"make\""),
+            "`generate` moved to [push] as `generate`"
         );
         assert_eq!(
             error("repository = \"https://github.com/acme/api\""),
@@ -1095,22 +1233,42 @@ mod tests {
 
     #[test]
     fn spec_pushes_need_another_repository() {
-        let pushed = "spec = \"openapi.json\"\nname = \"A\"\nsdks_repo = \"a/sdks\"\n";
-        assert_eq!(load(pushed).unwrap().push_on, None);
-        let tags = format!("{pushed}push_on = \"tag\"\npush_tags = \"api-v*\"\n");
-        assert_eq!(load(&tags).unwrap().push_tags(), "api-v*");
-        let received =
-            "spec = \"github:a/api/openapi.json\"\nname = \"A\"\npush_on = \"release\"\n";
-        assert_eq!(load(received).unwrap().push_on, Some(PushOn::Release));
+        let pushed = "spec = \"openapi.json\"\nname = \"A\"\n[push]\nto = \"a/sdks\"\n";
+        assert_eq!(load(pushed).unwrap().push.on, None);
+        let tags = format!("{pushed}on = \"tag\"\ntags = \"api-v*\"\n");
+        assert_eq!(load(&tags).unwrap().push.tags(), "api-v*");
+        let received = "spec = \"github:a/api/openapi.json\"\nname = \"A\"\n[push]\n";
+        let release = format!("{received}on = \"release\"\n");
+        assert_eq!(load(&release).unwrap().push.on, Some(PushOn::Release));
         let error = |toml: &str| format!("{:#}", load(toml).err().unwrap());
         assert!(
-            error("spec = \"openapi.json\"\nname = \"A\"\npush_on = \"release\"\n")
-                .contains("set `sdks_repo`")
+            error("spec = \"openapi.json\"\nname = \"A\"\n[push]\non = \"release\"\n")
+                .contains("set its `to`")
         );
-        assert!(
-            error(&format!("{pushed}push_tags = \"v*\"\n")).contains("needs `push_on = \"tag\"`")
+        assert!(error(&format!("{received}to = \"a/sdks\"\n")).contains("[push] `to` names"));
+        assert!(error(&format!("{pushed}tags = \"v*\"\n")).contains("needs `on = \"tag\"`"));
+        assert!(error(&format!("{pushed}on = \"merge\"\n")).contains("unknown variant"));
+    }
+
+    #[test]
+    fn both_sides_of_a_push_agree() {
+        let api =
+            Push::of("spec = \"a.json\"\n[push]\nto = \"a/sdks\"\non = \"release\"\n").unwrap();
+        let sdks = Push::of("spec = \"github:a/api/a.json\"\n").unwrap();
+        let both = api.agree("a/api", &sdks, "a/sdks").unwrap();
+        assert_eq!(both.on, Some(PushOn::Release));
+        let sdks = Push::of("[push]\ngenerate = \"make\"\n").unwrap();
+        let both = sdks.agree("a/sdks", &api, "a/api").unwrap();
+        assert_eq!(
+            (both.on, both.generate.as_deref()),
+            (Some(PushOn::Release), Some("make"))
         );
-        assert!(error(&format!("{pushed}push_on = \"merge\"\n")).contains("unknown variant"));
+        let sdks = Push::of("[push]\non = \"change\"\n").unwrap();
+        let error = api.agree("a/api", &sdks, "a/sdks").unwrap_err().to_string();
+        assert_eq!(
+            error,
+            "[push] differs: `on` is \"release\" in a/api but \"change\" in a/sdks: set `on` in one of the two perseid.toml only, or to the same value in both"
+        );
     }
 
     #[test]

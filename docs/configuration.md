@@ -10,11 +10,8 @@ name = "Acme"                       # any case: "acme-api", "Acme API"... gives 
 
 # Where the SDKs live: here, in a folder per language, unless one of these is set
 repo = "acme/acme-{lang}"           # one repository per SDK ({lang}: rust, node, python, go, java, dotnet),
-                                    # or "acme/acme-sdks": one repository, a folder per SDK
-# sdks_repo = "acme/acme-sdks"      # or send the spec to a repository generating the SDKs itself
-# push_on = "release"               # with sdks_repo or a github: spec: "change" (default), "release" or "tag"
-# push_tags = "v*"                  # with push_on = "tag": the tags pushing the spec
-# generate = "make openapi.json"    # how the API repository's CI writes the spec, if not committed
+                                    # or "acme/acme-sdks": one repository, a folder per SDK,
+                                    # or [push] to send the spec to a repository generating them
 
 # Defaults of every SDK, each also settable in a language table
 base_url = "https://api.acme.com"   # first server of the spec by default
@@ -37,6 +34,12 @@ license = "MIT"                     # SPDX expression
 homepage = "https://acme.com"
 repository = "https://github.com/acme/acme-sdks"
 authors = ["Acme <dev@acme.com>"]
+
+# [push]                            # with a separate repository generating the SDKs
+# to = "acme/acme-sdks"             # API side only: the repository receiving the spec
+# on = "release"                    # "change" (default), "release" or "tag"
+# tags = "v*"                       # with on = "tag": the tags pushing the spec
+# generate = "make openapi.json"    # how the API repository's CI writes the spec, if not committed
 
 [names]                             # method names by operation id
 listWidgetEvents = "events"
@@ -82,10 +85,21 @@ See [repository layouts](ci.md#repository-layouts) for the trade-offs.
 | Key | |
 |---|---|
 | `repo` | Default repository of every SDK: `"acme/api-{lang}"` gives each its own (`{lang}` is `rust`, `node`, `python`, `go`, `java` or `dotnet`), `"acme/api-sdks"` holds them all, each in a folder named after its language. Without it, SDKs live next to `perseid.toml` |
-| `sdks_repo` | `owner/name` of a separate repository this one sends its spec to, which generates the SDKs from its own `perseid.toml`; the SDK tables here only seed that file when `perseid setup` creates it |
-| `push_on` | When the spec is pushed, with `sdks_repo` here or a `github:` spec in the receiving repository: `"change"` (default) on every push to the default branch changing it, `"release"` on every published GitHub release, `"tag"` on every tag matching `push_tags`. See [spec pushes](ci.md#spec-pushes) |
-| `push_tags` | With `push_on = "tag"`: the tags pushing the spec, as a GitHub Actions glob, `"v*"` by default |
+
+### `[push]`
+
+How the spec gets from the API repository to a separate repository generating the SDKs. See
+[spec pushes](ci.md#spec-pushes).
+
+| Key | |
+|---|---|
+| `to` | API side only: `owner/name` of the repository this one sends its spec to, which generates the SDKs from its own `perseid.toml`; the SDK tables here only seed that file when `perseid setup` creates it. The receiving side has a `github:` spec instead, and fails with `to` |
+| `on` | When the spec is pushed: `"change"` (default) on every push to the default branch changing it, `"release"` on every published GitHub release, `"tag"` on every tag matching `tags` |
+| `tags` | With `on = "tag"`: the tags pushing the spec, as a GitHub Actions glob, `"v*"` by default |
 | `generate` | The command writing the spec in the API repository's CI when it isn't committed, run from its root before pushing the spec |
+
+When both repositories have a `perseid.toml`, `on`, `tags` and `generate` may be set in either, and
+`perseid setup` refuses, naming both files, when both set one differently.
 
 ## SDK defaults
 
@@ -157,7 +171,8 @@ A key of an earlier version fails with what to write instead:
 
 | Before | Now |
 |---|---|
-| `push_spec = "acme/sdks"` | `sdks_repo = "acme/sdks"` |
+| `push_spec` or `sdks_repo = "acme/sdks"` | `[push] to = "acme/sdks"` |
+| `push_on`, `push_tags`, `generate` | `on`, `tags`, `generate` under `[push]` |
 | `description`, `license`, `homepage`, `repository`, `authors` | the same keys under `[package]` |
 | `include = "public-and-internal"` | `internal = true` |
 | `include = "only-internal"` | `only = [...]` listing them |

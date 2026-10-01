@@ -153,19 +153,28 @@ fn layouts(source: &Source, name: &str, root: &Path) -> String {
             "one repository holding every SDK, a folder each".to_owned(),
         ),
     ];
-    if let Source::File(_) = source {
-        lines.push((
-            format!("sdks_repo = \"{owner}/{name}-sdks\""),
-            "or send the spec to a repository that generates the SDKs itself".to_owned(),
-        ));
+    match source {
+        Source::File(_) => lines.extend([
+            (
+                "[push]".to_owned(),
+                "or send the spec to a repository generating the SDKs itself:".to_owned(),
+            ),
+            (
+                format!("to = \"{owner}/{name}-sdks\""),
+                "that repository".to_owned(),
+            ),
+        ]),
+        Source::GitHub { .. } => lines.push((
+            "[push]".to_owned(),
+            "how the API repository pushes its spec here:".to_owned(),
+        )),
+        Source::Url(_) => {}
     }
     if !matches!(source, Source::Url(_)) {
         lines.push((
-            "push_on = \"release\"".to_owned(),
-            "with sdks_repo or a github: spec, push it on each GitHub release".to_owned(),
+            "on = \"release\"".to_owned(),
+            "on each GitHub release, instead of each change".to_owned(),
         ));
-    }
-    if !matches!(source, Source::Url(_)) {
         lines.push((
             "generate = \"make openapi.json\"".to_owned(),
             "how the API repository's CI writes the spec, if not committed".to_owned(),
@@ -195,7 +204,7 @@ pub fn hub_files(
     release: bool,
     read: impl Fn(&str) -> Result<Option<String>>,
 ) -> Result<Vec<(String, Vec<u8>)>> {
-    if config.sdks_repo.is_some() {
+    if config.push.to.is_some() {
         return Ok(vec![]);
     }
     let sdks = config.sdks(&[])?;

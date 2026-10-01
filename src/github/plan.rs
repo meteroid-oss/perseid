@@ -190,14 +190,10 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
         hub_config: toml::from_str(&text)?,
     };
     let spec = config.spec.clone();
-    let hub = match (Source::parse(&spec)?, config.sdks_repo.clone()) {
+    let hub = match (Source::parse(&spec)?, config.push.to.clone()) {
         (Source::File(file), Some(sdks_repo)) => {
             let spec_path = join(&dir, file);
             let tracked = git(&top, &["ls-files", "--error-unmatch", "--", &spec_path]).is_ok();
-            ensure!(
-                tracked || config.generate.is_some(),
-                "{spec_path} isn't committed: set `generate` in perseid.toml to the command writing it in CI"
-            );
             admin(&here_info, &here, &sdks_repo, cx.login)?;
             let info = api.find(&format!("/repos/{sdks_repo}"))?;
             if let Some(info) = &info
@@ -224,6 +220,16 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
                 }
                 None => seed(&text, &expected, &sdks_repo),
             };
+            let hub_config = Config::parse(&toml, &format!("{sdks_repo}/{}", config::FILE))?;
+            let settings = config.push.agree(
+                &format!("{here}/{config_file}"),
+                &hub_config.push,
+                &format!("{sdks_repo}/{}", config::FILE),
+            )?;
+            ensure!(
+                tracked || settings.generate.is_some(),
+                "{spec_path} isn't committed: set [push] `generate` in perseid.toml to the command writing it in CI"
+            );
             let snapshot = config::snapshot(&spec_path);
             let received = match &info {
                 Some(_) => bootstrap::read(api, &sdks_repo, &base, link::SOURCE)?.is_some(),
@@ -249,12 +255,12 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
             plan.link = Some(Link {
                 api_repo: here.clone(),
                 sdks_repo: sdks_repo.clone(),
-                on: config.push_on.unwrap_or_default(),
+                on: settings.on.unwrap_or_default(),
             });
             let hub = Hub {
                 repo: sdks_repo.clone(),
                 info,
-                config: toml::from_str(&toml).context("the SDKs repository's perseid.toml")?,
+                config: hub_config,
                 toml,
                 dir: String::new(),
                 local: None,
@@ -264,10 +270,10 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
             plan_hub(cx, &mut plan, hub, &here_info)?;
             let push = Push {
                 branch: &here_base,
-                on: config.push_on.unwrap_or_default(),
-                tags: config.push_tags(),
+                on: settings.on.unwrap_or_default(),
+                tags: settings.tags(),
                 spec: &spec_path,
-                generate: config.generate.as_deref(),
+                generate: settings.generate.as_deref(),
                 sdks_repo: &sdks_repo,
                 snapshot: &snapshot,
             };
@@ -295,10 +301,23 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
             })?;
             admin(&api_info, &api_repo, &here, cx.login)?;
             let api_base = bootstrap::default_branch(&api_info);
+            let api_file = format!("{api_repo}/{}", config::FILE);
+            let theirs = match bootstrap::read(api, &api_repo, &api_base, config::FILE)? {
+                Some(text) => config::Push::of(&text).with_context(|| format!("in {api_file}"))?,
+                None => config::Push::default(),
+            };
+            let settings = match &theirs.to {
+                Some(to) if same(to, &here) => {
+                    config
+                        .push
+                        .agree(&format!("{here}/{config_file}"), &theirs, &api_file)?
+                }
+                _ => config.push.clone(),
+            };
             let content = api.raw(&api_repo, &api_base, path)?;
             ensure!(
-                content.is_some() || config.generate.is_some(),
-                "{api_repo} doesn't commit {path}: set `generate` in perseid.toml to the command writing it in its CI"
+                content.is_some() || settings.generate.is_some(),
+                "{api_repo} doesn't commit {path}: set [push] `generate` in perseid.toml to the command writing it in its CI"
             );
             let snapshot = join(&dir, &config::snapshot(path));
             let seeds = match link::source(&root) {
@@ -316,12 +335,8 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
             plan.link = Some(Link {
                 api_repo: api_repo.clone(),
                 sdks_repo: here.clone(),
-                on: config.push_on.unwrap_or_default(),
+                on: settings.on.unwrap_or_default(),
             });
-            let (on, tags) = (
-                config.push_on.unwrap_or_default(),
-                config.push_tags().to_owned(),
-            );
             let hub = Hub {
                 repo: here.clone(),
                 info: Some(here_info.clone()),
@@ -332,14 +347,13 @@ pub fn plan(cx: &Session, config_path: &Path) -> Result<Plan> {
                 trigger: Trigger::Received(snapshot.clone()),
                 seeds,
             };
-            let generate = hub.config.generate.clone();
             plan_hub(cx, &mut plan, hub, &here_info)?;
             let push = Push {
                 branch: &api_base,
-                on,
-                tags: &tags,
+                on: settings.on.unwrap_or_default(),
+                tags: settings.tags(),
                 spec: path,
-                generate: generate.as_deref(),
+                generate: settings.generate.as_deref(),
                 sdks_repo: &here,
                 snapshot: &snapshot,
             };
@@ -387,7 +401,7 @@ fn unused_folders(plan: &mut Plan, config: &Config, root: &Path) -> Result<()> {
     let unused: Vec<String> = config
         .sdks(&[])?
         .iter()
-        .filter(|s| config.sdks_repo.is_some() || s.repo.is_some())
+        .filter(|s| config.push.to.is_some() || s.repo.is_some())
         .filter(|s| root.join(s.language).is_dir())
         .map(|s| format!("{}/", s.language))
         .collect();
@@ -440,7 +454,7 @@ fn visibility(info: &Value) -> String {
 fn admin(info: &Value, repo: &str, sdks: &str, login: &str) -> Result<()> {
     if info["permissions"]["admin"] == false {
         bail!(
-            "{login} isn't an admin of {repo}, which must get a secret, a variable and a workflow pushing its spec to {sdks}: ask an admin of {repo} to run `perseid setup` here, or in {repo} with `sdks_repo = \"{sdks}\"` in its perseid.toml"
+            "{login} isn't an admin of {repo}, which must get a secret, a variable and a workflow pushing its spec to {sdks}: ask an admin of {repo} to run `perseid setup` here, or in {repo} with `to = \"{sdks}\"` in [push] of its perseid.toml"
         );
     }
     Ok(())
@@ -449,22 +463,26 @@ fn admin(info: &Value, repo: &str, sdks: &str, login: &str) -> Result<()> {
 /// perseid.toml of the SDKs repository, from the API repository's: the same SDKs, receiving `spec`.
 fn seed(api_toml: &str, spec: &str, sdks_repo: &str) -> String {
     let mut out = String::new();
-    let mut top = true;
+    let (mut top, mut push) = (true, false);
     for line in api_toml.lines() {
-        top &= !line.trim_start().starts_with('[');
-        let key = line.split('=').next().unwrap_or_default().trim();
+        if line.trim_start().starts_with('[') {
+            top = false;
+            push = line.trim_start().starts_with("[push]");
+        }
         let example = [
             "# Where the SDKs live",
             "# See https://github.com/meteroid-oss",
             "# repo =",
-            "# sdks_repo =",
-            "# push_on =",
+            "# [push]",
+            "# to =",
+            "# on =",
+            "# tags =",
             "# generate =",
         ]
         .iter()
         .any(|e| line.starts_with(e));
         let blank = line.trim().is_empty() && (out.is_empty() || out.ends_with("\n\n"));
-        if blank || top && (example || key == "sdks_repo") {
+        if blank || push || top && example {
             continue;
         }
         out += line;

@@ -96,10 +96,13 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
     let plan = match planned {
         Some(Ok(plan)) => plan,
         Some(Err(error)) => {
-            report.fail(
-                &format!("{error:#}"),
-                "fix what it says, then run `perseid setup`",
-            );
+            match error.downcast_ref::<config::PushMismatch>() {
+                Some(mismatch) => report.fail(&mismatch.summary(), &mismatch.fix()),
+                None => report.fail(
+                    &format!("{error:#}"),
+                    "fix what it says, then run `perseid setup`",
+                ),
+            }
             return Ok(exit(&report));
         }
         None => return Ok(exit(&report)),
@@ -136,7 +139,7 @@ fn exit(report: &Report) -> ExitCode {
 fn local_diagram(config: &Config, here: &str) -> Result<String> {
     let sdks = config.sdks(&[])?;
     let targets = layout::targets(&sdks, here);
-    Ok(match (config.source(), &config.sdks_repo) {
+    Ok(match (config.source(), &config.push.to) {
         (_, Some(sdks_repo)) => layout::diagram(Some(here), sdks_repo, &[]),
         (Source::GitHub { repo, .. }, _) => layout::diagram(Some(&repo), here, &targets),
         (Source::Url(url), _) => layout::diagram(Some(url), here, &targets),
@@ -147,7 +150,7 @@ fn local_diagram(config: &Config, here: &str) -> Result<String> {
 /// What this checkout tells without GitHub: the spec, the workflow, the last sync.
 fn local(report: &mut Report, config: &Config, root: &Path) {
     let top = toplevel(root).unwrap_or_else(|_| root.to_owned());
-    let workflow = match config.sdks_repo {
+    let workflow = match config.push.to {
         Some(_) => PUSH_WORKFLOW,
         None => layout::SDKS_WORKFLOW,
     };
@@ -159,7 +162,7 @@ fn local(report: &mut Report, config: &Config, root: &Path) {
         ),
     }
     match config.source() {
-        Source::File(file) if !root.join(file).exists() && config.generate.is_none() => report
+        Source::File(file) if !root.join(file).exists() && config.push.generate.is_none() => report
             .fail(
                 &format!("the spec {file} is missing"),
                 "point `spec` of perseid.toml to it",

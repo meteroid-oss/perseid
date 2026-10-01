@@ -315,7 +315,7 @@ fn releases_push_their_tag_and_record_it() {
     );
 }
 
-/// The workflow of each `push_on`, also written for actionlint.
+/// The workflow of each [push] `on`, also written for actionlint.
 fn workflow(on: PushOn, name: &str) -> Value {
     let yaml = push_workflow(&Push {
         branch: "main",

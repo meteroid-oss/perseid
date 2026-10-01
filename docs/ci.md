@@ -45,15 +45,22 @@ acme/api ──spec──▶ acme/api-sdks ──PRs──▶ acme/api-node, acm
 ```toml
 # acme/api: perseid.toml
 spec = "openapi.json"
-sdks_repo = "acme/api-sdks"
-push_on = "release"            # optional: on each GitHub release instead of each change
+
+[push]
+to = "acme/api-sdks"
+on = "release"                 # optional: on each GitHub release instead of each change
 generate = "npm run openapi"   # only when the spec isn't committed: how CI writes it
 
 # acme/api-sdks: perseid.toml, which `perseid setup` writes when it creates the repository
 spec = "github:acme/api/openapi.json"   # kept here as openapi.json, with .perseid/source.json
-push_on = "release"                     # the same, when set up from this side
 repo = "acme/api-{lang}"                # only for one repository per language
+
+[push]                                  # or here, without `to`, when set up from this side
+on = "release"
 ```
+
+`on`, `tags` and `generate` may be set on either side: `perseid setup` and `perseid status` read
+both `perseid.toml` and refuse settings that both set differently.
 
 `perseid setup` works from either side: in the API repository it creates or completes the SDKs
 repository from the SDK tables of its own `perseid.toml`; in the SDKs repository it sets up the
@@ -137,12 +144,13 @@ it exits with 1 when something needs you. Without GitHub credentials it checks t
 
 ### Spec pushes
 
-`perseid-push.yml` runs when `push_on` says, set in the `perseid.toml` of either side:
+`perseid-push.yml` runs when `[push] on` says, set in the `perseid.toml` of either side (or both,
+alike):
 
 - `"change"` (the default): on the API repository's default branch when the spec changes (on
   every push with `generate`, after running it);
 - `"release"`: when a GitHub release is published;
-- `"tag"`: when a tag matching `push_tags` (`"v*"` by default) is pushed.
+- `"tag"`: when a tag matching `[push] tags` (`"v*"` by default) is pushed.
 
 It can also be run by hand, from the default branch or a tag. It takes the spec of the commit that
 triggered it, clones the SDKs repository over SSH, pinned to GitHub's published host keys, and
@@ -161,11 +169,11 @@ one at a time and in order. The deploy key reaches the SDKs repository only, and
 side can read or write the API repository.
 
 **Push the spec on release.** To ship SDKs for what you released rather than for every merged
-change, set `push_on = "release"` and run `perseid setup` again: it rewrites `perseid-push.yml` to
+change, set `on = "release"` in `[push]` and run `perseid setup` again: it rewrites `perseid-push.yml` to
 run on `release: published`. Each release pushes its spec, the SDKs repository opens its
 `perseid/update` pull request naming the release ("Generated from acme/api@v1.4.0 (a1b2c3d)"),
 and `perseid status` reports spec changes made since as waiting for the next release instead of
-as a failure. With `push_on = "tag"`, any matching tag does the same, release or not.
+as a failure. With `on = "tag"`, any matching tag does the same, release or not.
 
 The rest of this page is the setup by hand.
 

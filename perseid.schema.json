@@ -34,10 +34,6 @@
         "type": "string"
       }
     },
-    "generate": {
-      "description": "Command writing the spec in the API repository's CI when it isn't committed, run from its root before pushing the spec.",
-      "type": "string"
-    },
     "go": {
       "description": "The Go SDK, a module.",
       "allOf": [
@@ -103,17 +99,13 @@
         }
       ]
     },
-    "push_on": {
-      "description": "When the spec is pushed to the repository generating the SDKs (with `sdks_repo`, or a `github:` spec).",
+    "push": {
+      "description": "How the spec gets from the API repository to a separate repository generating the SDKs.",
       "allOf": [
         {
-          "$ref": "#/definitions/PushOn"
+          "$ref": "#/definitions/Push"
         }
       ]
-    },
-    "push_tags": {
-      "description": "Tags pushing the spec with `push_on = \"tag\"`, as a GitHub Actions glob: `v*` by default.",
-      "type": "string"
     },
     "python": {
       "description": "The Python SDK, a PyPI package.",
@@ -134,10 +126,6 @@
           "$ref": "#/definitions/Rust"
         }
       ]
-    },
-    "sdks_repo": {
-      "description": "`owner/name` of a separate repository this one sends its spec to, which generates the SDKs from its own perseid.toml.",
-      "type": "string"
     },
     "spec": {
       "description": "The OpenAPI document (3.0 or 3.1, JSON or YAML): a path relative to perseid.toml, an http(s) URL, or `github:owner/repo/path` for a spec another repository pushes here.",
@@ -518,6 +506,33 @@
       },
       "additionalProperties": false
     },
+    "Push": {
+      "description": "How the spec gets from the API repository to a separate repository generating the SDKs. When both have a perseid.toml, either may set `on`, `tags` and `generate`, and both must agree.",
+      "type": "object",
+      "properties": {
+        "generate": {
+          "description": "Command writing the spec in the API repository's CI when it isn't committed, run from its root before pushing the spec.",
+          "type": "string"
+        },
+        "on": {
+          "description": "When the spec is pushed: `change` by default.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/PushOn"
+            }
+          ]
+        },
+        "tags": {
+          "description": "Tags pushing the spec with `on = \"tag\"`, as a GitHub Actions glob: `v*` by default.",
+          "type": "string"
+        },
+        "to": {
+          "description": "`owner/name` of the repository this one sends its spec to, which generates the SDKs from its own perseid.toml: on the API side only.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "PushOn": {
       "description": "When the API repository pushes its spec.",
       "oneOf": [
@@ -536,7 +551,7 @@
           ]
         },
         {
-          "description": "Every tag matching `push_tags`.",
+          "description": "Every tag matching `tags`.",
           "type": "string",
           "enum": [
             "tag"
