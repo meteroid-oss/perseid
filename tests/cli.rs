@@ -339,12 +339,18 @@ fn openapi_3_0_generates_the_same_sdks_as_the_3_1_equivalent() {
 }
 
 #[test]
-fn swagger_2_is_rejected_with_a_hint() {
+fn swagger_2_still_gets_a_perseid_toml_and_a_hint() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("openapi.yaml"), "swagger: '2.0'\n").unwrap();
     let (ok, out) = perseid(dir.path(), &["init", "--sdks", "rust"]);
-    assert!(!ok);
-    assert!(out.contains("swagger2openapi"), "{out}");
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("! openapi.yaml can't be read") && out.contains("swagger2openapi"),
+        "{out}"
+    );
+    assert!(dir.path().join("perseid.toml").exists());
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(!ok && out.contains("swagger2openapi"), "{out}");
 }
 
 #[test]
