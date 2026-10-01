@@ -26,7 +26,7 @@ pub struct Init {
     pub base_url: Option<String>,
 }
 
-const FLAGS: &str = "--sdks <rust,typescript,python,go,java,csharp> (required), --repo <owner/name-{lang}>, --spec <path|url>, --name <Name>";
+const FLAGS: &str = "--sdks <rust,typescript,python,go,java,csharp> (required), --repo <owner/name-{lang}|owner/name>, --spec <path|url>, --name <Name>, --base-url <url>";
 
 /// Writes perseid.toml, asking what the flags and the spec here don't tell.
 pub fn run(init: Init, root: &Path) -> Result<()> {
@@ -279,15 +279,21 @@ fn ask_layout(sdks: &[String], name: &str, here: Option<&str>) -> Result<Option<
     let owner = here.and_then(|r| r.split('/').next()).unwrap_or("acme");
     let pattern = format!("{owner}/{}-{{lang}}", name.to_kebab_case());
     let repos: Vec<String> = sdks.iter().map(|s| pattern.replace("{lang}", s)).collect();
+    let shared = format!("{owner}/{}-sdks", name.to_kebab_case());
     let choices = [
         format!("Here, a folder each: {}", folders(sdks)),
         format!("A repository each: {}", repos.join(", ")),
+        format!("One other repository, a folder each: {shared}"),
     ];
     match crate::prompt::pick_one("Where do the SDKs live?", &choices, 0)? {
         0 => Ok(None),
-        _ => Ok(Some(crate::prompt::text(
+        1 => Ok(Some(crate::prompt::text(
             "Repository of each SDK",
             &pattern,
+        )?)),
+        _ => Ok(Some(crate::prompt::text(
+            "Repository of the SDKs",
+            &shared,
         )?)),
     }
 }

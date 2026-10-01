@@ -191,6 +191,48 @@ fn ejected_templates_override_the_built_ins() {
 }
 
 #[test]
+fn eject_lists_and_copies_single_files() {
+    let dir = project();
+    let (ok, out) = perseid(dir.path(), &["eject", "go", "--list"]);
+    assert!(
+        ok && out.contains("templates/api_summary.go.jinja\n"),
+        "{out}"
+    );
+    let (ok, out) = perseid(
+        dir.path(),
+        &["eject", "go", "templates/api_summary.go.jinja"],
+    );
+    assert!(ok, "{out}");
+    let ejected = dir.path().join(".perseid/templates/go");
+    assert_eq!(fs::read_dir(&ejected).unwrap().count(), 1, "{out}");
+    let (ok, out) = perseid(dir.path(), &["eject", "go", "templates/nope.jinja"]);
+    assert!(
+        !ok && out.contains("`perseid eject go --list` lists them"),
+        "{out}"
+    );
+}
+
+#[test]
+fn commands_find_perseid_toml_from_a_subfolder_and_inspect_one_language() {
+    let dir = project();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let (ok, out) = perseid(&dir.path().join("go"), &["inspect", "go"]);
+    assert!(ok, "{out}");
+    let api: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(
+        api["resources"].is_object() || api["resources"].is_array(),
+        "{out}"
+    );
+    let empty = tempfile::tempdir().unwrap();
+    let (ok, out) = perseid(empty.path(), &["generate"]);
+    assert!(
+        !ok && out.contains("no perseid.toml in") && out.contains("its parents"),
+        "{out}"
+    );
+}
+
+#[test]
 fn stale_generated_files_are_removed_from_directories_without_output() {
     let dir = project();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);

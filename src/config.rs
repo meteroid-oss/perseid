@@ -436,16 +436,42 @@ static DEFAULT_TARGET: std::sync::LazyLock<Target> = std::sync::LazyLock::new(Ta
 
 impl Config {
     pub fn load(path: &Path) -> Result<(Self, PathBuf)> {
-        let text = std::fs::read_to_string(path).with_context(|| {
-            format!(
-                "reading {} (run `perseid init` to create one)",
-                path.display()
-            )
-        })?;
+        if !path.exists() {
+            anyhow::bail!(
+                "no {} in {} or its parents: run `perseid init` to create one",
+                path.file_name().unwrap_or_default().to_string_lossy(),
+                std::path::absolute(path)?
+                    .parent()
+                    .map_or_else(String::new, |p| p.display().to_string())
+            );
+        }
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
         let mut config = Self::parse(&text, &path.display().to_string())?;
         let root = std::path::absolute(path)?.parent().unwrap().to_owned();
         config.home = Home::of(&root);
         Ok((config, root))
+    }
+
+    /// `path` when it exists, else the closest file of the same name in a parent directory, up to
+    /// the repository root: commands run from an SDK folder find perseid.toml.
+    pub fn locate(path: &Path) -> PathBuf {
+        if path.exists() || path.components().count() != 1 {
+            return path.to_owned();
+        }
+        let Ok(start) = std::env::current_dir() else {
+            return path.to_owned();
+        };
+        for dir in start.ancestors() {
+            let candidate = dir.join(path);
+            if candidate.exists() {
+                return candidate;
+            }
+            if dir.join(".git").exists() {
+                break;
+            }
+        }
+        path.to_owned()
     }
 
     /// perseid.toml's `text`, read from `origin`.
@@ -795,7 +821,7 @@ pub(crate) fn manifest_version(dir: &Path) -> Option<String> {
     read("version.txt").map(|v| v.trim().to_owned())
 }
 
-/// `<Version>` of the first `.csproj` in `dir` or one level below, as `perseid init csharp` lays out.
+/// `<Version>` of the first `.csproj` in `dir` or one level below, as `perseid generate` lays out C# SDKs.
 fn csproj_version(dir: &Path) -> Option<String> {
     let entries = |dir: &Path| {
         let mut paths: Vec<_> = std::fs::read_dir(dir)
