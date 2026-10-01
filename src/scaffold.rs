@@ -238,11 +238,8 @@ fn package_metadata(config: &Config, context: &mut Value) {
             .map_or(Value::Null, Value::from)
     };
     let license = text(&config.package.license);
-    let project = config
-        .package
-        .homepage
-        .clone()
-        .or_else(|| config.package.repository.clone());
+    let repository = context["repository"].as_str().map(str::to_owned);
+    let project = config.package.homepage.clone().or(repository.clone());
     context["license_url"] = license
         .as_str()
         .filter(|l| {
@@ -254,7 +251,7 @@ fn package_metadata(config: &Config, context: &mut Value) {
             format!("https://spdx.org/licenses/{l}.html").into()
         });
     context["license"] = license;
-    context["repository"] = text(&config.package.repository);
+    context["repository"] = text(&repository);
     context["homepage"] = text(&config.package.homepage);
     context["project_url"] = text(&project);
     context["description"] =
@@ -366,6 +363,54 @@ mod tests {
         let files = release_scaffold(&config, &[&sdks[0]], |_| Ok(None)).unwrap();
         let release: Value = serde_json::from_slice(&files[0].1).unwrap();
         assert_eq!(release["packages"]["."]["include-component-in-tag"], false);
+    }
+
+    #[test]
+    fn each_manifest_names_the_repository_its_sdk_lives_in() {
+        let toml = "name = \"Acme\"\nsdks = [\"rust\", \"typescript\", \"python\", \"go\", \"java\", \"csharp\"]\n\
+                    [rust]\nrepo = \"acme/acme-rust\"\n[typescript]\nrepo = \"acme/acme-node\"\n\
+                    [python]\nrepo = \"acme/acme-python\"\n[csharp]\nrepo = \"acme/acme-dotnet\"\n";
+        let mut config: Config = toml::from_str(toml).unwrap();
+        config.home = crate::config::Home {
+            url: Some("https://github.com/acme/api".into()),
+            dir: "sdks".into(),
+        };
+        let file = |config: &Config, language: &str, path: &str| {
+            let sdk = config.sdks(&[language.to_owned()]).unwrap().remove(0);
+            let files = skeleton(config, &sdk, Path::new("/nonexistent")).unwrap();
+            let (_, content) = files.into_iter().find(|(p, _)| p == path).unwrap();
+            String::from_utf8(content).unwrap()
+        };
+        assert!(
+            file(&config, "rust", "Cargo.toml")
+                .contains("repository = \"https://github.com/acme/acme-rust\"\n")
+        );
+        let package: Value =
+            serde_json::from_str(&file(&config, "typescript", "package.json")).unwrap();
+        assert_eq!(
+            package["repository"]["url"],
+            "git+https://github.com/acme/acme-node.git"
+        );
+        assert!(
+            file(&config, "python", "pyproject.toml")
+                .contains("Repository = \"https://github.com/acme/acme-python\"\n")
+        );
+        assert!(
+            file(&config, "csharp", "Acme/Acme.csproj")
+                .contains("<RepositoryUrl>https://github.com/acme/acme-dotnet</RepositoryUrl>")
+        );
+        assert!(
+            file(&config, "java", "gradle.properties")
+                .contains("POM_SCM_URL=https://github.com/acme/api\n")
+        );
+        assert!(file(&config, "go", "go.mod").starts_with("module github.com/acme/api/sdks/go\n"));
+        assert!(
+            file(&config, "go", "README.md").contains("- Source: https://github.com/acme/api\n")
+        );
+
+        config.package.repository = Some("https://git.acme.dev/api".into());
+        assert!(file(&config, "go", "go.mod").starts_with("module git.acme.dev/api/sdks/go\n"));
+        assert!(file(&config, "rust", "Cargo.toml").contains("https://github.com/acme/acme-rust"));
     }
 
     #[test]

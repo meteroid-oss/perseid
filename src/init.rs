@@ -105,7 +105,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     if let Some(url) = base_url {
         toml += &format!("base_url = {}\n", quote(&url));
     }
-    let package = metadata(&doc, root);
+    let package = metadata(&doc);
     if !package.is_empty() {
         toml += &format!("\n[package]\n{package}");
     }
@@ -301,8 +301,8 @@ pub fn pick_spec(root: &Path, interactive: bool) -> Result<Option<String>> {
     }
 }
 
-/// The perseid.toml lines of the package metadata the spec and the git remote tell.
-fn metadata(doc: &Value, root: &Path) -> String {
+/// The perseid.toml lines of the package metadata the spec tells.
+fn metadata(doc: &Value) -> String {
     let info = &doc["info"];
     let text = |v: &Value| {
         v.as_str()
@@ -327,7 +327,6 @@ fn metadata(doc: &Value, root: &Path) -> String {
     let license = text(&info["license"]["identifier"])
         .or_else(|| text(&info["license"]["name"]).and_then(|n| spdx(&n)));
     line("license", license);
-    line("repository", git_remote(root));
     line(
         "homepage",
         text(&info["contact"]["url"]).filter(|u| u.starts_with("http")),
@@ -437,7 +436,7 @@ mod tests {
             "license": { "name": "Apache 2.0" },
             "contact": { "name": "Acme", "email": "dev@acme.com", "url": "https://acme.com" }
         }});
-        let toml = metadata(&doc, Path::new("/"));
+        let toml = metadata(&doc);
         assert_eq!(
             toml,
             "description = \"The Acme API.\"\nlicense = \"Apache-2.0\"\nhomepage = \"https://acme.com\"\nauthors = [\"Acme <dev@acme.com>\"]\n"

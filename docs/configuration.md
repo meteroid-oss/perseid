@@ -33,7 +33,7 @@ overrides = ".perseid"              # ejected templates and runtime
 description = "The Acme API client" # "{name} API client" by default
 license = "MIT"                     # SPDX expression
 homepage = "https://acme.com"
-repository = "https://github.com/acme/acme-sdks"
+# repository = "https://git.acme.dev/api" # SDKs without `repo`: the `origin` remote by default
 authors = ["Acme <dev@acme.com>"]
 
 [names]                             # method names by operation id
@@ -108,15 +108,18 @@ Every operation is generated, except those marked `x-internal: true`.
 ## Package metadata
 
 `[package]` holds what the manifests `perseid generate` creates say about the packages. `init`
-fills it from the spec's `info` (summary or description, license, contact) and the `origin` git
-remote.
+fills it from the spec's `info` (summary or description, license, contact).
+
+Each manifest names the repository its SDK lives in: `https://github.com/{repo}` for an SDK with a
+`repo`, else the `origin` remote of the repository holding `perseid.toml`. npm publishes with
+provenance, which needs `package.json` to name the repository publishing it.
 
 | Key | |
 |---|---|
 | `description` | One line, `"{name} API client"` by default |
 | `license` | SPDX license expression |
 | `homepage` | Project website |
-| `repository` | URL of the source repository |
+| `repository` | URL of the source repository of the SDKs without a `repo`, over the `origin` remote |
 | `authors` | `"Name <email>"` of each author |
 
 Versions aren't configured: each SDK's own manifest (`Cargo.toml`, `package.json`...) holds its
@@ -143,7 +146,7 @@ And their own keys:
 | `[typescript]` | `exports` | Modules re-exported from the entry point |
 | `[typescript]` | `int64` | TypeScript type of int64 values: `"number"` (default, exact up to 2^53), `"bigint"` or `"string"` |
 | `[python]` | `flat_unions` | `true` types discriminated unions as `Circle \| Square` instead of a wrapper model |
-| `[go]` | `module` | Module path, `github.com/{repo}/{path}` of the repository the SDK lives in by default |
+| `[go]` | `module` | Module path, `github.com/{repo}/{path}` of the repository the SDK lives in by default (the `origin` remote, or `[package] repository`, for an SDK without `repo`); without either, `generate` warns and falls back to the kebab-case `name` |
 
 ## Renamed and removed keys
 

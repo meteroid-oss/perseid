@@ -1238,6 +1238,21 @@ fn init_fills_package_metadata_from_the_spec() {
         1,
     );
     fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let git = |args: &[&str]| {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    };
+    git(&["init", "--quiet"]);
+    git(&[
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:acme/petstore.git",
+    ]);
     let (ok, out) = perseid(
         dir.path(),
         &["init", "--sdks", "rust,typescript,python,java,csharp"],
@@ -1259,6 +1274,7 @@ fn init_fills_package_metadata_from_the_spec() {
         Some("MIT"),
         "{config}"
     );
+    assert!(!config.contains("repository"), "{config}");
     for line in [
         "description = \"The Petstore API.\"",
         "license = \"MIT\"",
@@ -1274,7 +1290,8 @@ fn init_fills_package_metadata_from_the_spec() {
         "{cargo}"
     );
     assert!(
-        !cargo.contains("repository") && !cargo.contains("@@"),
+        cargo.contains("repository = \"https://github.com/acme/petstore\"")
+            && !cargo.contains("@@"),
         "{cargo}"
     );
     let package: serde_json::Value =
@@ -1282,6 +1299,10 @@ fn init_fills_package_metadata_from_the_spec() {
     assert_eq!(
         (package["license"].as_str(), package["author"].as_str()),
         (Some("MIT"), Some("Pet Team <pets@example.com>"))
+    );
+    assert_eq!(
+        package["repository"]["url"],
+        "git+https://github.com/acme/petstore.git"
     );
     let pyproject = read("python/pyproject.toml");
     assert!(
@@ -1291,7 +1312,7 @@ fn init_fills_package_metadata_from_the_spec() {
     let properties = read("java/gradle.properties");
     assert!(
         properties.contains("POM_LICENSE_URL=https://spdx.org/licenses/MIT.html")
-            && !properties.contains("POM_SCM_URL"),
+            && properties.contains("POM_SCM_URL=https://github.com/acme/petstore\n"),
         "{properties}"
     );
     let csproj = read("csharp/Petstore/Petstore.csproj");
@@ -1452,6 +1473,10 @@ fn go_types_unions_initialisms_and_error_bodies() {
     let config = dir.path().join("perseid.toml");
     let (ok, out) = perseid(dir.path(), &["generate", "go", "--no-format"]);
     assert!(ok, "{out}");
+    assert!(
+        out.contains("warning: the Go module path is `real-world`"),
+        "{out}"
+    );
     let read = |path: &str| fs::read_to_string(dir.path().join("go").join(path)).unwrap();
     let charge = read("charge.go");
     assert!(
@@ -1466,7 +1491,7 @@ fn go_types_unions_initialisms_and_error_bodies() {
             && client.contains("//\tresult, err := client.Charges().List(ctx)"),
         "{client}"
     );
-    assert!(read("README.md").contains("go get github.com/real-world/real-world-go"));
+    assert!(read("README.md").contains("go get real-world\n"));
 
     let text = fs::read_to_string(&config).unwrap();
     fs::write(&config, text.replace("[go]\n", "[go]\ntimeout = 15\n")).unwrap();

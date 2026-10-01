@@ -96,10 +96,8 @@ runs:
         if [ -f package-lock.json ]; then npm ci; else npm install; fi
         npm run build --if-present
         # Provenance requires the package to name the repository it is built from.
-        if [ "$(npm pkg get repository)" = "{}" ]; then
-          npm pkg set repository.type=git "repository.url=git+$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
-          [ "$SDK_PATH" = . ] || npm pkg set "repository.directory=$SDK_PATH"
-        fi
+        npm pkg set repository.type=git "repository.url=git+$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+        if [ "$SDK_PATH" = . ]; then npm pkg delete repository.directory; else npm pkg set "repository.directory=$SDK_PATH"; fi
         case "$version" in *-*) dist_tag=next ;; *) dist_tag=latest ;; esac
         npm publish --access public --provenance --tag "$dist_tag"
 

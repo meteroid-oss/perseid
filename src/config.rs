@@ -101,9 +101,39 @@ pub struct Config {
     #[serde(default, deserialize_with = "target::<CSharp, _>")]
     #[schemars(with = "Option<CSharp>")]
     pub csharp: Option<Target>,
-    /// `owner/name` of the repository holding perseid.toml, where SDKs without `repo` live.
     #[serde(skip)]
-    pub here: Option<String>,
+    pub home: Home,
+}
+
+/// The repository holding perseid.toml: the web URL of its `origin`, and perseid.toml's folder.
+#[derive(Default)]
+pub struct Home {
+    pub url: Option<String>,
+    pub dir: String,
+}
+
+impl Home {
+    fn of(root: &Path) -> Self {
+        let prefix = crate::pr::git(root, &["rev-parse", "--show-prefix"]).unwrap_or_default();
+        Home {
+            url: crate::init::git_remote(root),
+            dir: prefix.trim_end_matches('/').to_owned(),
+        }
+    }
+
+    /// The home of perseid.toml at `path` in the GitHub repository `repo`.
+    pub fn github(repo: &str, path: &str) -> Self {
+        let dir = Path::new(path).parent().unwrap_or(Path::new(""));
+        Home {
+            url: Some(format!("https://github.com/{repo}")),
+            dir: dir.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// `owner/name` of the origin, when on github.com.
+    pub fn repo(&self) -> Option<&str> {
+        self.url.as_deref()?.strip_prefix("https://github.com/")
+    }
 }
 
 /// Package metadata written into the manifests `perseid generate` creates.
@@ -116,7 +146,8 @@ pub struct Package {
     pub license: Option<String>,
     /// Project website.
     pub homepage: Option<String>,
-    /// URL of the source repository.
+    /// URL of the source repository of the SDKs without a `repo`: the `origin` remote of the
+    /// repository holding perseid.toml by default. An SDK with a `repo` names that one.
     pub repository: Option<String>,
     /// `Name <email>` of each author.
     #[serde(default)]
@@ -238,7 +269,7 @@ language!(Python, "Python package name: the snake_case `name` by default." {
     flat_unions: bool,
 });
 language!(Go, "Go package name: the snake_case `name` by default." {
-    /// Module path: `github.com/{repo}/{path}` of the repository the SDK lives in by default.
+    /// Module path: that of the repository and folder the SDK lives in by default.
     module: Option<String>,
 });
 language!(Java, "Java package: `com.{name}` by default." {});
@@ -413,7 +444,7 @@ impl Config {
         })?;
         let mut config = Self::parse(&text, &path.display().to_string())?;
         let root = std::path::absolute(path)?.parent().unwrap().to_owned();
-        config.here = crate::github::origin_repo(&root);
+        config.home = Home::of(&root);
         Ok((config, root))
     }
 
@@ -530,7 +561,7 @@ impl Config {
                 });
                 let local = repo
                     .as_deref()
-                    .is_none_or(|r| self.here.as_deref().is_some_and(|here| same_repo(r, here)));
+                    .is_none_or(|r| self.home.repo().is_some_and(|home| same_repo(r, home)));
                 (language, target, repo, local)
             })
             .collect();
@@ -561,20 +592,32 @@ impl Config {
         Source::parse(&self.spec)
     }
 
-    /// The Go module path of the repository and folder the SDK lives in.
-    fn go_module(&self, sdk: &Sdk) -> String {
-        let repo = sdk.repo.clone().or_else(|| {
-            let url = self.package.repository.as_deref()?;
-            Some(url.strip_prefix("https://github.com/")?.to_owned())
-        });
-        match (repo, sdk.path.as_str()) {
-            (Some(repo), ".") => format!("github.com/{repo}"),
-            (Some(repo), path) => format!("github.com/{repo}/{path}"),
-            (None, _) => {
-                let name = self.name.to_kebab_case();
-                format!("github.com/{name}/{name}-go")
-            }
+    /// The web URL of the repository `sdk` lives in, and its folder there (`.` at the top).
+    pub fn repository(&self, sdk: &Sdk) -> Option<(String, String)> {
+        if let Some(repo) = sdk.remote() {
+            return Some((format!("https://github.com/{repo}"), sdk.path.clone()));
         }
+        let url = self.package.repository.clone().or(self.home.url.clone())?;
+        let path = match (self.home.dir.as_str(), sdk.path.as_str()) {
+            ("", path) => path.to_owned(),
+            (dir, ".") => dir.to_owned(),
+            (dir, path) => format!("{dir}/{path}"),
+        };
+        Some((url, path))
+    }
+
+    /// The Go module path: `[go] module`, or the repository and folder the SDK lives in.
+    pub fn go_module(&self, sdk: &Sdk) -> Option<String> {
+        if let Some(module) = &sdk.target.module {
+            return Some(module.clone());
+        }
+        let (url, path) = self.repository(sdk)?;
+        let url = url.split_once("://").map_or(url.as_str(), |(_, rest)| rest);
+        let base = url.trim_end_matches('/').trim_end_matches(".git");
+        Some(match path.trim_start_matches("./") {
+            "." | "" => base.to_owned(),
+            path => format!("{base}/{path}"),
+        })
     }
 
     /// Values exposed to templates as `sdk`, for an SDK checked out at `dir`.
@@ -600,7 +643,7 @@ impl Config {
             "rust_crate": if language == "rust" { package.replace('-', "_") } else { snake.clone() },
             "java_package": if language == "java" { package.clone() } else { format!("com.{snake}") },
             "npm_package": if language == "typescript" { &package } else { &kebab },
-            "go_module": target.module.clone().unwrap_or_else(|| self.go_module(sdk)),
+            "go_module": self.go_module(sdk).unwrap_or_else(|| kebab.clone()),
             "default_base_url": pick(&target.base_url, &self.base_url, "http://localhost"),
             "user_agent_prefix": pick(&target.user_agent, &self.user_agent, &kebab),
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
@@ -618,7 +661,7 @@ impl Config {
                 UntaggedUnions::BestMatch => "best-match",
             },
             "license": self.package.license,
-            "repository": self.package.repository,
+            "repository": self.repository(sdk).map(|(url, _)| url),
             "homepage": self.package.homepage,
             "description": self.package.description.clone().unwrap_or_else(|| format!("{} API client", self.name)),
             "authors": self.package.authors,
@@ -1010,6 +1053,34 @@ mod tests {
     }
 
     #[test]
+    fn the_go_module_follows_the_repository_holding_the_sdk() {
+        let context = |toml: &str, origin: Option<&str>| {
+            let mut config: Config = toml::from_str(toml).unwrap();
+            config.home.url = origin.map(str::to_owned);
+            let go = config.sdks(&[]).unwrap().remove(0);
+            let context = config.context(&go, Path::new("/nonexistent"));
+            (context["go_module"].clone(), context["repository"].clone())
+        };
+        let local = "name = \"Acme\"\nsdks = [\"go\"]\n";
+        assert_eq!(context(local, None), (json!("acme"), Value::Null));
+        assert_eq!(
+            context(local, Some("https://github.com/acme/api")),
+            (
+                json!("github.com/acme/api/go"),
+                json!("https://github.com/acme/api")
+            )
+        );
+        let own = "name = \"Acme\"\nsdks = [\"go\"]\n[go]\nrepo = \"acme/acme-go\"\n";
+        assert_eq!(
+            context(own, Some("https://github.com/acme/api")),
+            (
+                json!("github.com/acme/acme-go"),
+                json!("https://github.com/acme/acme-go")
+            )
+        );
+    }
+
+    #[test]
     fn a_shared_repo_holds_each_sdk_in_a_folder_unless_overridden() {
         let toml = "spec = \"s\"\nname = \"Acme\"\nsdks = [\"rust\", \"typescript\", \"python\", \"go\"]\nrepo = \"acme/sdks\"\n\
                     [typescript]\nrepo = \"acme/js\"\n[rust]\npath = \"crates/acme\"\n";
@@ -1038,7 +1109,7 @@ mod tests {
         let toml = "name = \"Acme\"\nsdks = [\"go\", \"rust\"]\n[go]\nrepo = \"Acme/SDKs\"\n\
                     [rust]\nrepo = \"acme/rust\"\n";
         let mut config: Config = toml::from_str(toml).unwrap();
-        config.here = Some("acme/sdks".into());
+        config.home.url = Some("https://github.com/acme/sdks".into());
         let sdks = config.sdks(&[]).unwrap();
         assert_eq!(
             sdks.iter()
@@ -1049,6 +1120,9 @@ mod tests {
                 ("go", None, "go".into())
             ]
         );
+        let go = config.context(&sdks[1], Path::new("/nonexistent"));
+        assert_eq!(go["go_module"], "github.com/acme/sdks/go");
+        assert_eq!(go["repository"], "https://github.com/acme/sdks");
         assert!(same_repo("https://github.com/acme/sdks.git", "ACME/sdks"));
         assert!(!same_repo("acme/sdks", "other/sdks"));
     }
