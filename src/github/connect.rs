@@ -50,7 +50,7 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
     );
     ensure!(
         !hub.eq_ignore_ascii_case(&here),
-        "{here} holds perseid.toml: `perseid setup` there regenerates the SDKs when the spec changes, nothing to connect"
+        "{here} holds perseid.toml: its sdks.yml regenerates the SDKs when the spec changes, nothing to connect"
     );
     let existing = std::fs::read_to_string(top.join(link::WORKFLOW))
         .ok()
@@ -82,7 +82,7 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
 
     let (token, source) = auth::token(&ui)?;
     let api = GitHub::new(Some(token));
-    let login = auth::whoami(&api, source)?;
+    let login = auth::whoami(&api, source, false)?;
     ui.ok(&format!("Signed in to GitHub as {login} ({source})"));
     let on = match (connect.on, &existing) {
         (Some(on), _) => on,
@@ -119,6 +119,7 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
     let cx = Session {
         api: &api,
         login: &login,
+        app: true,
         collisions: false,
     };
     let mut plan = plan_connect(&cx, &settings)?;
@@ -225,7 +226,7 @@ fn ask_on(proposed: PushOn) -> Result<PushOn> {
 }
 
 /// The perseid.toml of `hub`, and its path: at the root, or the only one.
-fn hub_config(api: &GitHub, hub: &str, branch: &str) -> Result<(Config, String)> {
+fn hub_config(api: &GitHub, hub: &str, branch: &str) -> Result<Option<(Config, String)>> {
     let path = match bootstrap::read(api, hub, branch, config::FILE)? {
         Some(_) => config::FILE.to_owned(),
         None => {
@@ -236,16 +237,7 @@ fn hub_config(api: &GitHub, hub: &str, branch: &str) -> Result<(Config, String)>
                 .collect();
             match found.as_slice() {
                 [one] => one.clone(),
-                [] => match bootstrap::open_pull(api, hub, super::SETUP_BRANCH)? {
-                    Some(url) => bail!(
-                        "{hub}'s {} waits in {url}: merge it, then run this again",
-                        config::FILE
-                    ),
-                    None => bail!(
-                        "{hub} has no {} on `{branch}`: run `npx perseid init` there and push it, then run this again",
-                        config::FILE
-                    ),
-                },
+                [] => return Ok(None),
                 many => bail!("{hub} holds several {}: {}", config::FILE, many.join(", ")),
             }
         }
@@ -253,7 +245,7 @@ fn hub_config(api: &GitHub, hub: &str, branch: &str) -> Result<(Config, String)>
     let text = bootstrap::read(api, hub, branch, &path)?.unwrap_or_default();
     let mut config = Config::parse(&text, &format!("{hub}/{path}"))?;
     config.home = config::Home::github(hub, &path);
-    Ok((config, path))
+    Ok(Some((config, path)))
 }
 
 fn admin(info: &Value) -> bool {
@@ -280,25 +272,34 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
         )
     })?;
     let hub_base = bootstrap::default_branch(&hub_info);
-    let (config, config_path) = hub_config(api, hub, &hub_base)?;
-    let dir = config_path
-        .strip_suffix(config::FILE)
-        .unwrap_or_default()
-        .trim_end_matches('/');
-    let Source::File(file) = config.source() else {
-        bail!(
-            "{hub}/{config_path} reads its spec from {}: set its `spec` to a file, which this repository then pushes",
-            config.spec
-        );
-    };
-    let destination = join(dir, file);
     let mut plan = Plan::new();
     plan.hub = hub.to_owned();
-    plan.hub_dir = dir.to_owned();
-    plan.diagram = format!("{here} ──spec──▶ {hub} ({destination})");
+    match hub_config(api, hub, &hub_base)? {
+        Some((config, config_path)) => {
+            let dir = config_path
+                .strip_suffix(config::FILE)
+                .unwrap_or_default()
+                .trim_end_matches('/');
+            let Source::File(file) = config.source() else {
+                bail!(
+                    "{hub}/{config_path} reads its spec from {}: set its `spec` to a file, which this repository then pushes",
+                    config.spec
+                );
+            };
+            plan.hub_dir = dir.to_owned();
+            plan.diagram = format!("{here} ──spec──▶ {hub} ({})", join(dir, file));
+        }
+        None => {
+            plan.diagram = format!("{here} ──spec──▶ {hub}");
+            plan.warnings.push(format!(
+                "{hub} has no {} on `{hub_base}` yet: pushes skip until it does. Run `npx perseid init` there, then commit and push",
+                config::FILE
+            ));
+        }
+    }
     if bootstrap::read(api, hub, &hub_base, layout::SDKS_WORKFLOW)?.is_none() {
         plan.warnings.push(format!(
-            "{hub} doesn't regenerate its SDKs yet: run `npx perseid setup` there, or the specs pushed to it wait unused"
+            "{hub} doesn't regenerate its SDKs yet: its sdks.yml, which `npx perseid init` writes there, isn't on `{hub_base}`"
         ));
     }
 

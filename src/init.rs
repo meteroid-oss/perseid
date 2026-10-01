@@ -1,4 +1,5 @@
-//! `perseid init`: perseid.toml, from the spec found here and the SDKs asked for.
+//! `perseid init`: perseid.toml, from the spec found here and the SDKs asked for, and the
+//! workflows regenerating and releasing the SDKs. Nothing leaves this checkout.
 
 use std::{
     io::IsTerminal,
@@ -11,7 +12,7 @@ use heck::{ToKebabCase, ToUpperCamelCase};
 use serde_json::{Value, json};
 
 use crate::{
-    config::{self, LANGUAGES, Source},
+    config::{self, Config, LANGUAGES, Source},
     fsx,
     scaffold::manifest_text,
     spec,
@@ -30,11 +31,22 @@ const FLAGS: &str = "--sdks <rust,typescript,python,go,java,csharp> (required), 
 /// Writes perseid.toml, asking what the flags and the spec here don't tell.
 pub fn run(init: Init, root: &Path) -> Result<()> {
     let path = root.join(config::FILE);
-    ensure!(
-        !path.exists(),
-        "{} already exists: edit it (`sdks`, `repo`, `spec`…), then run `perseid generate` or `perseid setup`",
-        config::FILE
-    );
+    if path.exists() {
+        ensure!(
+            init.spec.is_none()
+                && init.name.is_none()
+                && init.sdks.is_empty()
+                && init.repo.is_none(),
+            "{} already exists: edit it (`sdks`, `repo`, `spec`…), then run `perseid init` again",
+            config::FILE
+        );
+        let (config, _) = Config::load(&path)?;
+        if !write_files(&config, root)? {
+            println!("✓ the workflows match {}", config::FILE);
+        }
+        next_steps(&config, root);
+        return Ok(());
+    }
     let interactive = std::io::stdin().is_terminal();
     if !interactive && init.sdks.is_empty() {
         bail!("perseid init asks which SDKs to generate: without a terminal, pass {FLAGS}");
@@ -55,10 +67,9 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         _ => json!({}),
     };
     let here = crate::github::origin_repo(root);
-    let name = init
-        .name
-        .clone()
-        .or_else(|| doc["info"]["title"].as_str().map(|_| name_from_title(&doc)))
+    let derived = doc["info"]["title"]
+        .as_str()
+        .map(|_| name_from_title(&doc))
         .unwrap_or_else(|| {
             let fallback = here
                 .as_deref()
@@ -69,6 +80,13 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             name_from_title(&json!({ "info": { "title": fallback } }))
         })
         .to_upper_camel_case();
+    let name = match (&init.name, interactive) {
+        (Some(name), _) => name.clone(),
+        (None, true) => {
+            crate::prompt::text("Client name, as the SDKs' class names start", &derived)?
+        }
+        (None, false) => derived,
+    };
     let sdks = match init.sdks.is_empty() {
         true => ask_sdks()?,
         false => checked(&init.sdks)?,
@@ -111,6 +129,8 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     }
     fsx::write(&path, toml.as_bytes())?;
     println!("+ {}", config::FILE);
+    let (config, _) = Config::load(&path)?;
+    write_files(&config, root)?;
     let where_ = match &repo {
         Some(repo) if repo.contains("{lang}") => sdks
             .iter()
@@ -120,25 +140,81 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         Some(repo) => format!("{repo} ({})", folders(&sdks)),
         None => format!("{} here", folders(&sdks)),
     };
-    println!("  {name} SDKs: {where_}");
-    match readable {
-        true => {
-            println!("  from {spec_path}");
-            println!(
-                "\nNext: `perseid generate` to preview the SDKs here, `perseid setup` to automate them on GitHub"
-            );
-        }
-        false => {
-            let hub = here.unwrap_or_else(|| "<owner/this-repository>".into());
-            println!(
-                "\nNo OpenAPI spec here yet: perseid reads {spec_path}, which `npx perseid connect {hub}`, run in the repository holding the spec, pushes here."
-            );
-            println!(
-                "Next: `perseid generate --spec <path|url>` to preview the SDKs, `perseid setup` to automate them on GitHub"
-            );
+    println!("\n  {name} SDKs: {where_}");
+    if readable {
+        println!("  from {spec_path}");
+    }
+    println!("  Packages: {}", packages(&config)?);
+    println!(
+        "  (rename one with `package = \"…\"` under its [language] in {}, before its first release)",
+        config::FILE
+    );
+    next_steps(&config, root);
+    Ok(())
+}
+
+/// Writes the workflows `config` calls for, saying which: whether any was written.
+fn write_files(config: &Config, root: &Path) -> Result<bool> {
+    let written = crate::github::write_files(config, root)?;
+    for file in &written {
+        match file {
+            crate::github::Written::Added(path) => println!("+ {path}"),
+            crate::github::Written::Updated(path) => println!("~ {path}"),
+            crate::github::Written::Kept(message) => println!("! {message}"),
         }
     }
-    Ok(())
+    Ok(written
+        .iter()
+        .any(|w| !matches!(w, crate::github::Written::Kept(_))))
+}
+
+/// The package each SDK publishes, as registries will know it.
+fn packages(config: &Config) -> Result<String> {
+    let mut names = Vec::new();
+    for sdk in config.sdks(&[])? {
+        let context = config.context(&sdk, Path::new("/nonexistent"));
+        let text = |key: &str| context[key].as_str().unwrap_or_default().to_owned();
+        names.push(match sdk.language {
+            "typescript" => format!("npm {}", text("npm_package")),
+            "python" => format!("PyPI {}", text("package_name")),
+            "rust" => format!("crates.io {}", text("rust_crate")),
+            "go" => format!("Go {}", text("go_module")),
+            "java" => format!("Maven {}", text("java_package")),
+            _ => format!("NuGet {}", text("package_name")),
+        });
+    }
+    Ok(names.join(", "))
+}
+
+fn next_steps(config: &Config, root: &Path) {
+    let here = crate::github::origin_repo(root);
+    let hub = here.as_deref().unwrap_or("<owner/this-repository>");
+    let spec = match config.source() {
+        Source::File(file) if !root.join(file).exists() => Some(file),
+        _ => None,
+    };
+    if let Some(file) = spec {
+        println!(
+            "\nNo OpenAPI spec here yet: perseid reads {file}, which `npx perseid connect {hub}`, run in the repository holding the spec, pushes here."
+        );
+    }
+    println!("\nNext steps");
+    let mut steps = vec![
+        "Review and commit what perseid wrote, then push: the workflows run from the default branch".to_owned(),
+        match spec {
+            Some(_) => "`perseid generate --spec <path|url>` previews the SDKs meanwhile".to_owned(),
+            None => "`perseid generate` previews the SDKs (`--out <dir>` for those living in other repositories)".to_owned(),
+        },
+        "`perseid setup-github` creates what GitHub needs and files can't hold (SDK repositories, the GitHub App opening the SDK pull requests), once you agree".to_owned(),
+    ];
+    if spec.is_some() {
+        steps.push(format!(
+            "In the repository holding the spec: `npx perseid connect {hub}`. It writes a workflow there and, once you agree, a deploy key letting that repository push its spec here, and nothing else"
+        ));
+    }
+    for (i, step) in steps.iter().enumerate() {
+        println!("  {}. {step}", i + 1);
+    }
 }
 
 fn folders(sdks: &[String]) -> String {

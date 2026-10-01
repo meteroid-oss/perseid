@@ -102,10 +102,12 @@ fn device_flow(client_id: &str, ui: &Ui) -> Result<String> {
     }
 }
 
-/// The login of the token's user, after checking a classic token may push workflow files.
-pub fn whoami(api: &GitHub, source: &str) -> Result<String> {
+/// The login of the token's user, after checking a classic token may push workflow files when
+/// `workflows` says perseid commits some.
+pub fn whoami(api: &GitHub, source: &str, workflows: bool) -> Result<String> {
     let reply = api.send("GET", "/user", None)?;
     if let Some(scopes) = &reply.scopes
+        && workflows
         && !scopes.split(',').any(|s| s.trim() == "workflow")
     {
         let fix = match source {

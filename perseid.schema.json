@@ -107,7 +107,7 @@
       ]
     },
     "release": {
-      "description": "`false` leaves out the release-please files and the release workflow `perseid setup` adds.",
+      "description": "`false` leaves out the release-please files and the release workflow `perseid init` writes.",
       "type": "boolean"
     },
     "repo": {
