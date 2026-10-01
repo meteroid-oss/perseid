@@ -7,9 +7,9 @@ Status: proposal. Nothing here is deployed.
 Today every cross-repository write needs a credential that someone creates and stores:
 
 - the spec repository pushes with a deploy key, a personal token or its own App key;
-- `sdks.yml` opens pull requests in other repositories with the `SDK_APP_*` App key;
-- in a single repository, the default `GITHUB_TOKEN` opens pull requests on which CI doesn't run,
-  and needs the "Allow GitHub Actions to create and approve pull requests" setting.
+- `sdks.yml` opens pull requests with the `PERSEID_TOKEN` secret, a fine-grained token that
+  expires, or with the `SDK_APP_*` key of an App that `perseid app` creates;
+- `sdk-release.yml` runs release-please with the same credentials.
 
 A perseid GitHub App would cover all three cases. Users can't be handed its private key, though, so
 tokens have to come from a service. That service never stores user secrets: it trusts GitHub's
@@ -62,14 +62,15 @@ other file perseid writes, the user commits it.
   `--to`. GitHub needs nothing else: there is no key and no secret.
 - `sdks.yml` and `sdk-release.yml` do the same for the SDK repositories. App tokens trigger
   workflows, so CI runs on SDK and release pull requests with no setting to change.
-- `setup-github` shrinks to "install the perseid App on these repositories". That is a link to
-  `github.com/apps/perseid/installations/new`.
+- `perseid app` shrinks to "install the perseid App on these repositories". That is a link to
+  `github.com/apps/perseid/installations/new`, and `PERSEID_TOKEN` is no longer needed.
 
 ## App permissions
 
-The App asks for repository Contents (read and write), Pull requests (read and write) and
-Metadata (read). It needs no Workflows permission: perseid never pushes workflow files, the user
-commits them. Every token is narrowed further, to the policy's permissions and one repository.
+The App asks for repository Contents, Pull requests and Workflows (read and write) and Metadata
+(read). Workflows is there because the first pull request in an SDK repository adds its
+`sdk-release.yml`. Every token is narrowed further, to the policy's permissions and one
+repository.
 
 ## Risks and mitigations
 

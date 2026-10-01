@@ -12,7 +12,7 @@ sdks = ["typescript", "python", "go"] # among rust, typescript, python, go, java
 # Where the SDKs live: here, in a folder per language, unless set
 repo = "acme/acme-{lang}"           # one repository per SDK ({lang}: typescript, python, go...),
                                     # or "acme/acme-sdks": one repository, a folder per SDK
-# release = false                   # no release-please files nor release workflow from setup
+# release = false                   # no release-please files nor sdk-release.yml
 
 # Defaults of every SDK, each also settable in a language table
 base_url = "https://api.acme.com"   # first server of the spec by default
@@ -77,7 +77,7 @@ See [repository layouts](ci.md#repository-layouts) for the trade-offs.
 | Key | |
 |---|---|
 | `repo` | Default repository of every SDK: `"acme/api-{lang}"` gives each its own (`{lang}` is the language, as `sdks` names it), `"acme/api-sdks"` holds them all, each in a folder named after its language. Without it, SDKs live next to `perseid.toml` |
-| `release` | `false` leaves out the release-please files and the `sdk-release.yml` workflow `perseid init` writes, and SDK pull requests carry, to each repository holding SDKs |
+| `release` | `false` leaves out the release-please files and `sdk-release.yml`. Otherwise `perseid init` writes them for the SDKs kept next to `perseid.toml`, and the first pull request in each SDK repository carries them |
 
 ## SDK defaults
 
