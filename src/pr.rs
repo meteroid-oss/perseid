@@ -8,9 +8,14 @@ use anyhow::{Context, Result, bail, ensure};
 
 pub const BRANCH: &str = "perseid/update";
 
+/// Marks pull requests whose release PR the scaffolded sdk-release.yml auto-merges.
+pub const AUTO_RELEASE: &str = "perseid:auto-release";
+
 /// Semver bump requested from release tooling through the conventional-commit type of the PR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum Bump {
+    /// Sized by oasdiff, comparing the spec with its previous version.
+    Auto,
     Patch,
     Minor,
     Major,
@@ -20,7 +25,7 @@ impl Bump {
     pub fn title(self, subject: &str) -> String {
         let kind = match self {
             Bump::Patch => "fix(api)",
-            Bump::Minor => "feat(api)",
+            Bump::Minor | Bump::Auto => "feat(api)",
             Bump::Major => "feat(api)!",
         };
         format!("{kind}: {subject}")
@@ -349,9 +354,72 @@ pub fn open(
     run(dir, "gh", &create).map(Some)
 }
 
+/// `owner/name` of a GitHub pull request URL.
+fn repo_of(url: &str) -> Option<String> {
+    let path: Vec<&str> = url.strip_prefix("https://")?.split('/').collect();
+    match path[..] {
+        [_, owner, name, "pull", _] => Some(format!("{owner}/{name}")),
+        _ => None,
+    }
+}
+
+/// `gh` in `dir`, for the repository of the pull request at `url`.
+fn gh_for(dir: &Path, url: &str, args: &[&str]) -> Result<String> {
+    let repo = repo_of(url);
+    let mut args = args.to_vec();
+    if let Some(repo) = &repo {
+        args.extend(["--repo", repo]);
+    }
+    run(dir, "gh", &args)
+}
+
+/// Enables auto-merge (squash) on the pull request at `url`, labelled so its release PR follows.
+pub fn auto_merge(dir: &Path, url: &str) -> Result<()> {
+    let description = "Auto-merge the release PR this change leads to";
+    let label = [
+        "label",
+        "create",
+        AUTO_RELEASE,
+        "--force",
+        "--color",
+        "6f42c1",
+    ];
+    gh_for(
+        dir,
+        url,
+        &[&label[..], &["--description", description]].concat(),
+    )?;
+    run(dir, "gh", &["pr", "edit", url, "--add-label", AUTO_RELEASE])?;
+    run(dir, "gh", &["pr", "merge", url, "--auto", "--squash"])?;
+    Ok(())
+}
+
+/// Runs `workflows` on the update branch of the pull request at `url`: pushes made with the
+/// default `GITHUB_TOKEN` start none.
+pub fn dispatch(dir: &Path, url: &str, workflows: &[String]) -> Result<()> {
+    for workflow in workflows {
+        gh_for(dir, url, &["workflow", "run", workflow, "--ref", BRANCH])?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Bump, SOURCE, origin};
+    use super::{AUTO_RELEASE, Bump, SOURCE, origin, repo_of};
+
+    #[test]
+    fn the_release_workflow_reads_the_auto_release_label() {
+        let workflow = include_str!("../scaffold/release/.github/workflows/sdk-release.yml");
+        assert!(
+            workflow.contains(&format!(" {AUTO_RELEASE} ")),
+            "{workflow}"
+        );
+        assert_eq!(
+            repo_of("https://github.com/acme/api-go/pull/12").as_deref(),
+            Some("acme/api-go")
+        );
+        assert_eq!(repo_of("https://pr/2"), None);
+    }
 
     #[test]
     fn pull_requests_name_where_the_spec_comes_from() {

@@ -20,6 +20,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      - name: Install oasdiff, for the release sizing tests
+        run: |
+          cargo run --locked --quiet -- tools install rust --dir "$RUNNER_TEMP/tools"
+          echo "$RUNNER_TEMP/tools" >> "$GITHUB_PATH"
       - run: cargo test --locked
       - name: Lint the scaffolded release workflow
         run: |
@@ -58,10 +62,7 @@ jobs:
       - run: cargo install --locked --path . --root "$RUNNER_TEMP/perseid"
       - run: |
           echo "$RUNNER_TEMP/perseid/bin" >> "$GITHUB_PATH"
-          curl -fsSL -o "$RUNNER_TEMP/gjf.jar" https://github.com/google/google-java-format/releases/download/v1.25.2/google-java-format-1.25.2-all-deps.jar
-          printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$RUNNER_TEMP/gjf.jar" > "$RUNNER_TEMP/perseid/bin/google-java-format"
-          chmod +x "$RUNNER_TEMP/perseid/bin/google-java-format"
-          dotnet tool install csharpier --version 1.3.0 --tool-path "$RUNNER_TEMP/perseid/bin"
+          "$RUNNER_TEMP/perseid/bin/perseid" tools install typescript python java csharp
       - name: Generate
         working-directory: ${{ runner.temp }}
         run: |
@@ -122,11 +123,7 @@ jobs:
       - run: cargo install --locked --path . --root "$RUNNER_TEMP/perseid"
       - run: |
           echo "$RUNNER_TEMP/perseid/bin" >> "$GITHUB_PATH"
-          curl -fsSL -o "$RUNNER_TEMP/gjf.jar" https://github.com/google/google-java-format/releases/download/v1.25.2/google-java-format-1.25.2-all-deps.jar
-          printf '#!/bin/sh\nexec java -jar %s "$@"\n' "$RUNNER_TEMP/gjf.jar" > "$RUNNER_TEMP/perseid/bin/google-java-format"
-          chmod +x "$RUNNER_TEMP/perseid/bin/google-java-format"
-      - if: matrix.language == 'csharp'
-        run: dotnet tool install csharpier --version 1.3.0 --tool-path "$RUNNER_TEMP/perseid/bin"
+          "$RUNNER_TEMP/perseid/bin/perseid" tools install ${{ matrix.language }}
       - run: tests/sdk/run.sh ${{ matrix.language }}
 
   image:

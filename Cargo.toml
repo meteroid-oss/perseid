@@ -15,7 +15,7 @@ aide = "0.14.1"
 anyhow = "1.0.94"
 base64 = "0.22"
 camino = "1.1.9"
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.23", features = ["derive", "env"] }
 cliclack = "0.5.6"
 crypto_box = { version = "0.9", features = ["seal"] }
 fs-err = "3.0.0"

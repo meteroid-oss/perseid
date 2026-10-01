@@ -7,14 +7,34 @@ use anyhow::{Result, bail};
 
 type Pass = (&'static [&'static [&'static str]], &'static [&'static str]);
 
+/// Pinned versions of the tools perseid runs, which `perseid tools install` downloads.
+macro_rules! biome {
+    () => {
+        "2.1.4"
+    };
+}
+macro_rules! ruff {
+    () => {
+        "0.14.10"
+    };
+}
+pub const BIOME: &str = biome!();
+pub const RUFF: &str = ruff!();
+pub const GOOGLE_JAVA_FORMAT: &str = "1.25.2";
+pub const CSHARPIER: &str = "1.3.0";
+pub const OASDIFF: &str = "1.32.1";
+
 /// Formatter passes per language: candidate commands (first found wins), then arguments.
 /// Pinned fallbacks keep output reproducible when the formatter isn't installed globally.
 fn passes(language: &str) -> (&'static str, &'static [Pass]) {
-    const BIOME: &[&[&str]] = &[&["biome"], &["npx", "--yes", "@biomejs/biome@2.1.4"]];
+    const BIOME: &[&[&str]] = &[
+        &["biome"],
+        &["npx", "--yes", concat!("@biomejs/biome@", biome!())],
+    ];
     const RUFF: &[&[&str]] = &[
         &["ruff"],
-        &["uvx", "ruff@0.14.10"],
-        &["pipx", "run", "ruff==0.14.10"],
+        &["uvx", concat!("ruff@", ruff!())],
+        &["pipx", "run", concat!("ruff==", ruff!())],
     ];
     match language {
         "rust" => ("rs", &[(&[&["rustfmt"]], &["--edition", "2021"])]),

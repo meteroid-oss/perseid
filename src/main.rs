@@ -5,14 +5,14 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
 use perseid::{
     config::{self, Config, LANGUAGES},
     generate::{self, Options},
     github::{Auth, PushOn},
     init,
     pr::{self, Bump},
-    scaffold,
+    scaffold, sizing, tools,
 };
 
 /// OpenAPI in, idiomatic SDKs out: Rust, TypeScript, Python, Go, Java and C#.
@@ -91,11 +91,30 @@ enum Command {
         #[arg(long)]
         pr: bool,
         /// Release size the pull request asks for, as its conventional-commit type.
-        #[arg(long, value_enum, requires = "pr", default_value = "minor")]
+        #[arg(
+            long,
+            value_enum,
+            requires = "pr",
+            default_value = "auto",
+            env = "PERSEID_BUMP"
+        )]
         bump: Bump,
-        /// Markdown file appended to the pull request description, e.g. an API changelog.
-        #[arg(long, requires = "pr")]
-        notes: Option<PathBuf>,
+        /// Previous OpenAPI document `--bump auto` compares with (default: the spec file at
+        /// `GITHUB_EVENT_BEFORE`, else at the previous commit).
+        #[arg(long, requires = "pr", env = "PERSEID_BASE_SPEC")]
+        base_spec: Option<PathBuf>,
+        /// Count enum values added to responses as minor changes, not breaking ones: right while
+        /// the SDKs accept unknown enum values, as generated ones do.
+        #[arg(long, action = ArgAction::Set, default_value_t = true, env = "PERSEID_RELAX_ENUM_ADDITIONS")]
+        relax_enum_additions: bool,
+        /// Enable auto-merge (squash) on each pull request, labelled `perseid:auto-release` so
+        /// the scaffolded sdk-release.yml auto-merges the release PR it leads to.
+        #[arg(long, requires = "pr", env = "PERSEID_AUTO_MERGE")]
+        auto_merge: bool,
+        /// Workflow files to run on `perseid/update` once its pull request is opened or updated
+        /// in this repository: pushes made with the default `GITHUB_TOKEN` start none.
+        #[arg(long, requires = "pr", num_args = 1.., value_delimiter = ' ', env = "PERSEID_DISPATCH")]
+        dispatch: Vec<String>,
         /// Skip formatters.
         #[arg(long)]
         no_format: bool,
@@ -171,9 +190,37 @@ enum Command {
         #[arg(long)]
         spec: Option<String>,
     },
+    /// The pinned formatters the SDKs need, and oasdiff sizing their releases.
+    Tools {
+        #[command(subcommand)]
+        command: Tools,
+    },
     /// Print the JSON Schema of perseid.toml.
     #[command(hide = true)]
     Schema,
+}
+
+#[derive(Subcommand)]
+enum Tools {
+    /// Print the tools the SDKs need, with their pinned versions.
+    List {
+        /// Languages to list the tools of (default: all configured).
+        #[arg(value_parser = LANGUAGES)]
+        languages: Vec<String>,
+        /// Also append `languages`, and the `owner` and `repositories` a GitHub App token for
+        /// the pull requests covers, to `$GITHUB_OUTPUT`.
+        #[arg(long)]
+        github_output: bool,
+    },
+    /// Download the tools the SDKs need, at their pinned versions, and check each runs.
+    Install {
+        /// Languages to install the tools of (default: all configured).
+        #[arg(value_parser = LANGUAGES)]
+        languages: Vec<String>,
+        /// Where to install them (default: next to perseid).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -243,11 +290,15 @@ fn run(cli: Cli) -> Result<ExitCode> {
             out,
             pr,
             bump,
-            notes,
+            base_spec,
+            relax_enum_additions,
+            auto_merge,
+            dispatch,
             no_format,
         } => {
             let (config, root) = Config::load(&config_path)?;
-            let spec = generate::load_spec(&config, &root, spec.as_deref())?;
+            let location = spec.unwrap_or_else(|| config.spec.clone());
+            let spec = generate::load_spec(&config, &root, Some(&location))?;
             let options = Options {
                 check,
                 format: !no_format,
@@ -318,14 +369,32 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 return Ok(ExitCode::FAILURE);
             }
             if pr {
-                let notes = notes
-                    .map(|path| std::fs::read_to_string(&path).context("reading --notes"))
-                    .transpose()?;
-                let origin = pr::origin(&config, &root, &spec);
+                let base = base_spec.map(|b| cwd.join(b));
+                let (bump, notes) = match bump {
+                    Bump::Auto => sizing::size(&sizing::Comparison {
+                        root: &root,
+                        spec: &location,
+                        base: base.as_deref(),
+                        relax_enum_additions,
+                    })?,
+                    bump => (bump, None),
+                };
+                let request = Request {
+                    bump,
+                    notes,
+                    origin: pr::origin(&config, &root, &spec),
+                    auto_merge,
+                    dispatch: dispatch
+                        .iter()
+                        .flat_map(|d| d.split_whitespace())
+                        .map(str::to_owned)
+                        .collect(),
+                    hub: pr::toplevel(&root).ok(),
+                };
                 if let config::Source::File(file) = config.source() {
                     files.push(root.join(file));
                 }
-                deliver(&dirs, &files, &spec, &changes, bump, notes, origin)?;
+                deliver(&dirs, &files, &spec, &changes, &request)?;
             }
         }
         Command::Eject {
@@ -349,6 +418,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             );
         }
         Command::Schema => print!("{}", config::json_schema()),
+        Command::Tools { command } => tools_command(&config_path, &cwd, command)?,
         Command::Inspect { language, spec } => {
             let (config, root) = Config::load(&config_path)?;
             let spec = generate::load_spec(&config, &root, spec.as_deref())?;
@@ -363,6 +433,57 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn tools_command(config_path: &Path, cwd: &Path, command: Tools) -> Result<()> {
+    let configured = |config: &Config| -> Result<Vec<String>> {
+        let sdks = config.sdks(&[])?;
+        Ok(sdks.iter().map(|s| s.language.to_owned()).collect())
+    };
+    match command {
+        Tools::List {
+            languages,
+            github_output,
+        } => {
+            let loaded = (languages.is_empty() || github_output)
+                .then(|| Config::load(config_path))
+                .transpose()?;
+            let languages = match &loaded {
+                Some((config, _)) if languages.is_empty() => configured(config)?,
+                _ => languages,
+            };
+            for tool in tools::needed(languages.iter().map(String::as_str)) {
+                println!("{} {}", tool.name(), tool.version());
+            }
+            if let Some((config, _)) = loaded.filter(|_| github_output) {
+                let hub = config
+                    .home
+                    .repo()
+                    .map(str::to_owned)
+                    .or_else(|| std::env::var("GITHUB_REPOSITORY").ok());
+                let (owner, repositories) = tools::app_scope(hub.as_deref(), &config.sdks(&[])?);
+                tools::github_output(&[
+                    ("languages", languages.join(" ")),
+                    ("owner", owner.unwrap_or_default()),
+                    ("repositories", repositories.join(",")),
+                ])?;
+            }
+        }
+        Tools::Install { languages, dir } => {
+            let languages = match languages.is_empty() {
+                true => configured(&Config::load(config_path)?.0)?,
+                false => languages,
+            };
+            let dir = match dir {
+                Some(dir) => cwd.join(dir),
+                None => tools::default_dir()?,
+            };
+            for tool in tools::needed(languages.iter().map(String::as_str)) {
+                tools::install(tool, &dir)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `dir` relative to `cwd` when under it.
@@ -381,14 +502,26 @@ struct Delivery {
     files: Vec<String>,
 }
 
+/// What `--pr` asks of each pull request.
+struct Request {
+    bump: Bump,
+    /// Appended to the description.
+    notes: Option<String>,
+    /// Where the spec comes from.
+    origin: Option<String>,
+    auto_merge: bool,
+    /// Workflows run on the update branch of `hub`'s pull request.
+    dispatch: Vec<String>,
+    /// The repository holding perseid.toml.
+    hub: Option<PathBuf>,
+}
+
 fn deliver(
     dirs: &[PathBuf],
     files: &[PathBuf],
     spec: &str,
     changes: &BTreeMap<String, Vec<generate::Change>>,
-    bump: Bump,
-    notes: Option<String>,
-    origin: Option<String>,
+    request: &Request,
 ) -> Result<()> {
     let spec: serde_json::Value = serde_json::from_str(spec)?;
     let mut repos: BTreeMap<PathBuf, Delivery> = BTreeMap::new();
@@ -420,23 +553,34 @@ fn deliver(
     );
     let mut body = format!(
         "Generated by [perseid](https://github.com/meteroid-oss/perseid){}.\n\n```\n{}\n```",
-        origin.map_or_else(String::new, |o| format!(" from {o}")),
+        request
+            .origin
+            .as_ref()
+            .map_or_else(String::new, |o| format!(" from {o}")),
         generate::summary(changes, &BTreeMap::new())
     );
-    if let Some(notes) = notes {
+    if let Some(notes) = &request.notes {
         body += &format!("\n\n{}", notes.trim());
     }
     for (repo, delivery) in repos {
-        match pr::open(
+        let opened = pr::open(
             &repo,
             &delivery.dirs,
             &delivery.files,
-            bump,
+            request.bump,
             subject.trim(),
             &body,
-        )? {
-            Some(url) => println!("{url}"),
-            None => println!("{}: nothing to update", repo.display()),
+        )?;
+        let Some(url) = opened else {
+            println!("{}: nothing to update", repo.display());
+            continue;
+        };
+        println!("{url}");
+        if request.auto_merge {
+            pr::auto_merge(&repo, &url)?;
+        }
+        if request.hub.as_ref() == Some(&repo) {
+            pr::dispatch(&repo, &url, &request.dispatch)?;
         }
     }
     Ok(())

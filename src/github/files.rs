@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use super::{AppToken, Workflow, git, join, layout, relative, workflow};
+use super::{Workflow, git, join, layout, relative, workflow};
 use crate::{
     config::{self, Config, Source},
     scaffold::RELEASE_WORKFLOW,
@@ -47,19 +47,6 @@ pub fn expected(config: &Config, root: &Path) -> Result<Expected> {
         ],
         Source::Url(_) => vec![join(&dir, config::FILE)],
     };
-    let mut remote: Vec<&str> = sdks.iter().filter_map(|s| s.remote()).collect();
-    remote.sort_unstable();
-    remote.dedup();
-    let owner = remote.first().and_then(|r| r.split('/').next());
-    let hub_owner = here.as_deref().and_then(|h| h.split('/').next());
-    let mut repositories: Vec<String> = here
-        .iter()
-        .map(String::as_str)
-        .chain(remote.iter().copied())
-        .filter(|r| r.split('/').next() == owner)
-        .map(|r| r.rsplit('/').next().unwrap_or(r).to_owned())
-        .collect();
-    repositories.dedup();
     let spec = match config.source() {
         Source::File(spec) => Some(join(&dir, spec)),
         Source::Url(_) => None,
@@ -68,10 +55,6 @@ pub fn expected(config: &Config, root: &Path) -> Result<Expected> {
     let yaml = workflow(&Workflow {
         branch: &branch,
         paths: &triggers,
-        app: (!remote.is_empty()).then(|| AppToken {
-            owner: owner.filter(|o| Some(*o) != hub_owner),
-            repositories: &repositories,
-        }),
         dir: &dir,
         daily: matches!(config.source(), Source::Url(_)).then_some(daily.as_str()),
         requires: spec.as_deref(),
