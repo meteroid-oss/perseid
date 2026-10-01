@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.6.0](https://github.com/meteroid-oss/perseid/compare/v0.5.1...v0.6.0) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* the action's logic moves into the binary; sdks.yml hands the App credentials to the action ([#54](https://github.com/meteroid-oss/perseid/issues/54))
+* rename [package] to [metadata] and names to methods in perseid.toml ([#53](https://github.com/meteroid-oss/perseid/issues/53))
+* init writes the workflows locally, setup becomes setup-github ([#52](https://github.com/meteroid-oss/perseid/issues/52))
+* perseid-push.yml calls `perseid push-spec`; connect writes it locally, with --auth ([#43](https://github.com/meteroid-oss/perseid/issues/43))
+
+### Features
+
+* init writes the workflows locally, setup becomes setup-github ([#52](https://github.com/meteroid-oss/perseid/issues/52)) ([c388cd8](https://github.com/meteroid-oss/perseid/commit/c388cd89d7b8599f7afb6e65fcae7287be89f482))
+* meteroid-oss/perseid/release action, shrinking sdk-release.yml ([#56](https://github.com/meteroid-oss/perseid/issues/56)) ([418eed3](https://github.com/meteroid-oss/perseid/commit/418eed3bfa16b8171670960104d5e313d90d7d7a))
+* perseid-push.yml calls `perseid push-spec`; connect writes it locally, with --auth ([#43](https://github.com/meteroid-oss/perseid/issues/43)) ([0159ea2](https://github.com/meteroid-oss/perseid/commit/0159ea217307b8ee5ee36811883d7f76cd0996b2))
+* rename [package] to [metadata] and names to methods in perseid.toml ([#53](https://github.com/meteroid-oss/perseid/issues/53)) ([13eb21e](https://github.com/meteroid-oss/perseid/commit/13eb21e817136e1ae54ec9b255603186ab91062a))
+* the action's logic moves into the binary; sdks.yml hands the App credentials to the action ([#54](https://github.com/meteroid-oss/perseid/issues/54)) ([2dfabf4](https://github.com/meteroid-oss/perseid/commit/2dfabf427fa7e3a467d27acdb166c586ed822e43))
+
+
+### Bug Fixes
+
+* commit generate --pr from a temporary worktree ([#48](https://github.com/meteroid-oss/perseid/issues/48)) ([b1946e0](https://github.com/meteroid-oss/perseid/commit/b1946e07039d5a030b01b16eec87c5174df6a2bf))
+* **generate:** one rule for local SDKs, --out preview, guarded checkouts ([#50](https://github.com/meteroid-oss/perseid/issues/50)) ([5f9bdbc](https://github.com/meteroid-oss/perseid/commit/5f9bdbcff676185c034b7032d23bbb667603fe8a))
+* init keeps going on bad specs, Java package from the homepage, inspect/eject per language ([#55](https://github.com/meteroid-oss/perseid/issues/55)) ([fe83ac2](https://github.com/meteroid-oss/perseid/commit/fe83ac2e347be4502016a45619846c3c71ea3016))
+* name each SDK's own repository in its manifests ([#47](https://github.com/meteroid-oss/perseid/issues/47)) ([e2decfa](https://github.com/meteroid-oss/perseid/commit/e2decfa8b3f2b725283147017384d92495945775))
+* pin generated workflows to the release line, not [@v0](https://github.com/v0) ([#51](https://github.com/meteroid-oss/perseid/issues/51)) ([974a104](https://github.com/meteroid-oss/perseid/commit/974a10414df7a49b87a3419185d2a652a985fe73))
+* **push-spec:** fail on diverged history instead of skipping every later push ([#46](https://github.com/meteroid-oss/perseid/issues/46)) ([47ddeb8](https://github.com/meteroid-oss/perseid/commit/47ddeb8a112b067abd1d399df2d36621518d2360))
+* **release:** sdk-release.yml template error, default branch, root placement, publish hardening ([#49](https://github.com/meteroid-oss/perseid/issues/49)) ([cac0ec6](https://github.com/meteroid-oss/perseid/commit/cac0ec6b9a0460936ed1e5e94d50b44541179e6d))
+
 ## [0.5.1](https://github.com/meteroid-oss/perseid/compare/v0.5.0...v0.5.1) (2026-10-01)
 
 
