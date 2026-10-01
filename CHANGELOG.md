@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.0](https://github.com/meteroid-oss/perseid/compare/v0.4.0...v0.5.0) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* init writes perseid.toml only, `perseid connect` pushes the spec ([#39](https://github.com/meteroid-oss/perseid/issues/39))
+
+### Features
+
+* init writes perseid.toml only, `perseid connect` pushes the spec ([#39](https://github.com/meteroid-oss/perseid/issues/39)) ([d7d9f74](https://github.com/meteroid-oss/perseid/commit/d7d9f7412f8474b08e1d3ab7a6fc5694aa16c6b7))
+
 ## [0.4.0](https://github.com/meteroid-oss/perseid/compare/v0.3.2...v0.4.0) (2026-10-01)
 
 
