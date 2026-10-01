@@ -77,7 +77,8 @@ enum Command {
         /// Fail if generated files are out of date, without writing anything.
         #[arg(long, conflicts_with = "pr")]
         check: bool,
-        /// Commit the result to the `perseid/update` branch and open a pull request (needs `gh`).
+        /// Commit the generated files on top of the upstream branch to `perseid/update`, in a
+        /// temporary worktree, and open a pull request (needs `gh`).
         #[arg(long)]
         pr: bool,
         /// Release size the pull request asks for, as its conventional-commit type.
@@ -198,6 +199,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 format: !no_format,
             };
             let sdks = config.sdks(&languages)?;
+            let mut files = vec![];
             let dirs = sdks
                 .iter()
                 .map(|sdk| {
@@ -206,7 +208,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         None => root.clone(),
                     };
                     if !check {
-                        scaffold::bootstrap(&config, sdk, &repo)?;
+                        files.extend(scaffold::bootstrap(&config, sdk, &repo)?);
                     }
                     Ok(repo.join(&sdk.path))
                 })
@@ -241,7 +243,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 let notes = notes
                     .map(|path| std::fs::read_to_string(&path).context("reading --notes"))
                     .transpose()?;
-                deliver(&config, &root, &dirs, &spec, &changes, bump, notes)?;
+                let origin = pr::origin(&config, &root, &spec);
+                if let config::Source::File(file) = config.source() {
+                    files.push(root.join(file));
+                }
+                deliver(&dirs, &files, &spec, &changes, bump, notes, origin)?;
             }
         }
         Command::Eject { language } => {
@@ -264,36 +270,44 @@ fn run(cli: Cli) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// SDK directories and other files (spec, skeleton) to commit, relative to their repository.
+#[derive(Default)]
+struct Delivery {
+    dirs: Vec<String>,
+    files: Vec<String>,
+}
+
 fn deliver(
-    config: &Config,
-    root: &std::path::Path,
     dirs: &[PathBuf],
+    files: &[PathBuf],
     spec: &str,
     changes: &BTreeMap<String, Vec<generate::Change>>,
     bump: Bump,
     notes: Option<String>,
+    origin: Option<String>,
 ) -> Result<()> {
-    let origin = pr::origin(config, root, spec);
     let spec: serde_json::Value = serde_json::from_str(spec)?;
-    let mut repos: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+    let mut repos: BTreeMap<PathBuf, Delivery> = BTreeMap::new();
     for dir in dirs {
         let top = pr::toplevel(dir)?;
         let path = std::path::absolute(dir)?;
         let relative = path
             .strip_prefix(&top)
-            .context("SDK outside its repository")?;
-        repos
-            .entry(top)
-            .or_default()
-            .push(relative.to_str().unwrap_or(".").to_owned());
+            .context("SDK outside its repository")?
+            .to_str()
+            .filter(|p| !p.is_empty())
+            .unwrap_or(".");
+        repos.entry(top).or_default().dirs.push(relative.to_owned());
     }
-    if let Ok(top) = pr::toplevel(root)
-        && let Some(paths) = repos.get_mut(&top)
-        && let config::Source::File(file) = config.source()
-        && let Ok(spec_path) = std::path::absolute(root.join(file))
-        && let Ok(relative) = spec_path.strip_prefix(&top)
-    {
-        paths.push(relative.to_string_lossy().into_owned());
+    for file in files {
+        if let Ok(path) = std::path::absolute(file)
+            && let Some(parent) = path.parent()
+            && let Ok(top) = pr::toplevel(parent)
+            && let Some(delivery) = repos.get_mut(&top)
+            && let Ok(relative) = path.strip_prefix(&top)
+        {
+            delivery.files.push(relative.to_string_lossy().into_owned());
+        }
     }
     let subject = format!(
         "update SDKs to {} {}",
@@ -308,12 +322,15 @@ fn deliver(
     if let Some(notes) = notes {
         body += &format!("\n\n{}", notes.trim());
     }
-    for (repo, mut paths) in repos {
-        paths
-            .iter_mut()
-            .filter(|p| p.is_empty())
-            .for_each(|p| *p = ".".into());
-        match pr::open(&repo, &paths, bump, subject.trim(), &body)? {
+    for (repo, delivery) in repos {
+        match pr::open(
+            &repo,
+            &delivery.dirs,
+            &delivery.files,
+            bump,
+            subject.trim(),
+            &body,
+        )? {
             Some(url) => println!("{url}"),
             None => println!("{}: nothing to update", repo.display()),
         }

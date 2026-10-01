@@ -85,9 +85,16 @@ jobs:
 ```
 
 The Action installs the perseid version matching its own ref and runs `generate --pr`: it commits
-to `perseid/update` and opens or updates a pull request, in this repository or in the SDK
-repositories named by `repo`. For pull request checks, pass `command: generate --check`, which
-fails on drift. See [Tokens](#tokens) for which `token` to pass.
+the generated files on top of the branch it runs on to `perseid/update` and opens or updates a
+pull request, in this repository or in the SDK repositories named by `repo`. For pull request
+checks, pass `command: generate --check`, which fails on drift. See [Tokens](#tokens) for which
+`token` to pass.
+
+`generate --pr` also works locally: it copies the generated files, the spec and a new SDK's
+skeleton into a temporary worktree of `origin/<your branch>` (the default branch when yours isn't
+pushed) and commits there, so your branch, index, handwritten changes and unpushed commits stay
+out of the pull request. Without a git identity configured, commits are
+authored by `github-actions[bot]`.
 
 ## Quick setup: `perseid setup` and `perseid connect`
 

@@ -415,23 +415,32 @@ fn bump_needs_a_pull_request() {
 }
 
 #[cfg(unix)]
-#[test]
-fn open_pull_requests_keep_their_largest_bump() {
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// A project committed and pushed to a local `origin`, with a fake `gh` answering `pr list`
+/// with `listed` and logging its calls to `gh.log`.
+#[cfg(unix)]
+fn pull_request_project(listed: &str) -> tempfile::TempDir {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = project();
-    let git = |args: &[&str]| {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(dir.path())
-            .status()
-            .unwrap();
-        assert!(status.success(), "git {args:?}");
-    };
+    let git = |args: &[&str]| git_in(dir.path(), args);
     git(&["init", "--quiet", "--initial-branch", "main"]);
     git(&["init", "--quiet", "--bare", "origin.git"]);
     git(&["remote", "add", "origin", "origin.git"]);
-    fs::write(dir.path().join(".gitignore"), "origin.git\nbin\n").unwrap();
+    fs::write(dir.path().join(".gitignore"), "origin.git\nbin\nhome\n").unwrap();
     git(&["add", "--all"]);
     git(&[
         "-c",
@@ -442,38 +451,159 @@ fn open_pull_requests_keep_their_largest_bump() {
         "-qm",
         "init",
     ]);
+    git(&["push", "--quiet", "origin", "main"]);
 
     let bin = dir.path().join("bin");
     fs::create_dir(&bin).unwrap();
     let gh = bin.join("gh");
     fs::write(
         &gh,
-        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\ncase \"$2\" in\n  list) printf 'https://pr/1\\tfeat(api)!: update SDKs to Petstore 1\\n' ;;\nesac\n",
+        format!(
+            "#!/bin/sh\necho \"$@\" >> \"$GH_LOG\"\ncase \"$2\" in\n  list) printf '{listed}' ;;\n  create) echo https://pr/2 ;;\nesac\n"
+        ),
     )
     .unwrap();
     fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
-    let log = dir.path().join("gh.log");
+    fs::create_dir(dir.path().join("home")).unwrap();
+    dir
+}
+
+/// Runs `generate rust --pr` with the fake `gh` and no git identity configured.
+#[cfg(unix)]
+fn generate_pr(dir: &Path, bump: &str) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_perseid"))
-        .args(["generate", "rust", "--pr", "--bump", "patch", "--no-format"])
-        .current_dir(dir.path())
+        .args(["generate", "rust", "--pr", "--bump", bump, "--no-format"])
+        .current_dir(dir)
         .env(
             "PATH",
-            format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()),
+            format!(
+                "{}:{}",
+                dir.join("bin").display(),
+                std::env::var("PATH").unwrap()
+            ),
         )
-        .env("GH_LOG", &log)
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .env("GH_LOG", dir.join("gh.log"))
+        .env("HOME", dir.join("home"))
+        .env("XDG_CONFIG_HOME", dir.join("home"))
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env_remove("GIT_AUTHOR_NAME")
+        .env_remove("GIT_AUTHOR_EMAIL")
+        .env_remove("GIT_COMMITTER_NAME")
+        .env_remove("GIT_COMMITTER_EMAIL")
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{text}");
-    let calls = fs::read_to_string(&log).unwrap();
+    fs::read_to_string(dir.join("gh.log")).unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn open_pull_requests_keep_their_largest_bump() {
+    let dir = pull_request_project("https://pr/1\\tfeat(api)!: update SDKs to Petstore 1\\n");
+    let calls = generate_pr(dir.path(), "patch");
     assert!(
         calls.contains("pr edit perseid/update --title feat(api)!: update SDKs to"),
         "{calls}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn pull_requests_leave_the_checkout_alone() {
+    let dir = pull_request_project("");
+    let git = |args: &[&str]| git_in(dir.path(), args);
+    let origin = |args: &[&str]| git_in(&dir.path().join("origin.git"), args);
+    fs::write(dir.path().join("unpushed.txt"), "local").unwrap();
+    git(&["add", "unpushed.txt"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-qm",
+        "unpushed",
+    ]);
+    fs::create_dir_all(dir.path().join("rust")).unwrap();
+    fs::write(dir.path().join("rust/NOTES.md"), "draft").unwrap();
+    fs::write(dir.path().join("scratch.txt"), "draft").unwrap();
+
+    let calls = generate_pr(dir.path(), "minor");
+    assert!(
+        calls.contains("pr create --head perseid/update --title feat(api): update SDKs to"),
+        "{calls}"
+    );
+    assert!(calls.contains("--base main"), "{calls}");
+
+    assert_eq!(git(&["symbolic-ref", "--short", "HEAD"]), "main");
+    assert_eq!(git(&["log", "-1", "--format=%s"]), "unpushed");
+    let status = git(&["status", "--porcelain"]);
+    assert!(status.contains("?? rust/"), "{status}");
+    assert!(status.contains("?? scratch.txt"), "{status}");
+    assert!(!status.lines().any(|l| !l.starts_with("??")), "{status}");
+    assert_eq!(git(&["worktree", "list"]).lines().count(), 1);
+
+    assert_eq!(
+        origin(&["rev-parse", "perseid/update^"]),
+        origin(&["rev-parse", "main"])
+    );
+    assert_eq!(
+        origin(&["log", "-1", "--format=%an <%ae>", "perseid/update"]),
+        "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+    );
+    let files = origin(&["ls-tree", "-r", "--name-only", "perseid/update"]);
+    assert!(files.contains("rust/Cargo.toml"), "{files}");
+    assert!(files.contains("rust/src/lib.rs"), "{files}");
+    for local in ["unpushed.txt", "rust/NOTES.md", "scratch.txt"] {
+        assert!(!files.lines().any(|f| f == local), "{local} in {files}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sdk_repository_pull_requests_target_its_default_branch() {
+    let dir = pull_request_project("");
+    let git = |args: &[&str]| git_in(dir.path(), args);
+    let remote = dir.path().join("rust-sdk.git");
+    git(&[
+        "init",
+        "--quiet",
+        "--bare",
+        "--initial-branch",
+        "trunk",
+        "rust-sdk.git",
+    ]);
+    git(&["clone", "--quiet", "rust-sdk.git", "seed"]);
+    fs::write(dir.path().join("seed/README.md"), "handwritten").unwrap();
+    git(&["-C", "seed", "add", "README.md"]);
+    git(&[
+        "-C",
+        "seed",
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-qm",
+        "init",
+    ]);
+    git(&["-C", "seed", "push", "--quiet", "origin", "HEAD:trunk"]);
+    edit_config(dir.path(), |config| {
+        config.replace(
+            "[rust]\n",
+            &format!("[rust]\nrepo = \"file://{}\"\n", remote.display()),
+        )
+    });
+
+    let calls = generate_pr(dir.path(), "minor");
+    assert!(calls.contains("pr create --head perseid/update"), "{calls}");
+    assert!(calls.contains("--base trunk"), "{calls}");
+    let files = git_in(&remote, &["ls-tree", "-r", "--name-only", "perseid/update"]);
+    for file in ["README.md", "Cargo.toml", "src/lib.rs"] {
+        assert!(files.lines().any(|f| f == file), "{file} not in {files}");
+    }
+    assert!(!files.contains("openapi.yaml"), "{files}");
 }
 
 #[test]

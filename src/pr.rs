@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -127,18 +128,113 @@ pub fn toplevel(dir: &Path) -> Result<PathBuf> {
         .context("`--pr` needs the SDK to live in a git repository")
 }
 
-/// Commits `paths` of the repository at `dir` to the update branch and opens (or refreshes) its PR.
+const BOT_NAME: &str = "github-actions[bot]";
+const BOT_EMAIL: &str = "41898282+github-actions[bot]@users.noreply.github.com";
+
+/// A detached worktree of `repo`, removed on drop, so the user's checkout is never touched.
+struct Worktree {
+    repo: PathBuf,
+    path: PathBuf,
+    _dir: tempfile::TempDir,
+}
+
+impl Worktree {
+    fn add(repo: &Path, commit: &str) -> Result<Self> {
+        let dir = tempfile::Builder::new().prefix("perseid-pr-").tempdir()?;
+        let path = dir.path().join("tree");
+        let target = path.to_str().context("non UTF-8 temporary path")?;
+        git(
+            repo,
+            &["worktree", "add", "--quiet", "--detach", target, commit],
+        )?;
+        Ok(Worktree {
+            repo: repo.to_owned(),
+            path,
+            _dir: dir,
+        })
+    }
+}
+
+impl Drop for Worktree {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.to_str() {
+            let _ = git(&self.repo, &["worktree", "remove", "--force", path]);
+        }
+    }
+}
+
+/// Files under `paths` that `ls-files` lists with `args` and carry perseid's marker.
+fn generated(dir: &Path, args: &[&str], paths: &[String]) -> Result<BTreeSet<String>> {
+    let mut ls = vec!["ls-files", "-z"];
+    ls.extend(args);
+    ls.push("--");
+    ls.extend(paths.iter().map(String::as_str));
+    Ok(git(dir, &ls)?
+        .split('\0')
+        .filter(|p| {
+            let path = dir.join(p);
+            !p.is_empty()
+                && std::fs::read_to_string(&path)
+                    .is_ok_and(|text| crate::generate::marked(&path, &text))
+        })
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Brings the generated files under `paths`, and `files`, from the checkout `from` to the
+/// worktree `to`. Other files under `paths` keep their content in `to`.
+fn mirror(from: &Path, to: &Path, paths: &[String], files: &[String]) -> Result<()> {
+    let ours = generated(from, &["--cached", "--others", "--exclude-standard"], paths)?;
+    for stale in generated(to, &[], paths)?.difference(&ours) {
+        std::fs::remove_file(to.join(stale))?;
+    }
+    for path in ours.iter().chain(files) {
+        let target = to.join(path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(from.join(path), &target).with_context(|| format!("copying {path}"))?;
+    }
+    Ok(())
+}
+
+/// Commits the generated files under `paths`, and `files`, of the repository at `dir` on top of
+/// its upstream branch to the update branch, and opens (or refreshes) its PR. The commit is made
+/// in a temporary worktree: the checkout at `dir` keeps its branch, index and files.
 /// An open PR keeps its bump if larger: it releases every spec change since the last merge.
 pub fn open(
     dir: &Path,
     paths: &[String],
+    files: &[String],
     bump: Bump,
     subject: &str,
     body: &str,
 ) -> Result<Option<String>> {
-    let mut status = vec!["status", "--porcelain", "--"];
-    status.extend(paths.iter().map(String::as_str));
-    if git(dir, &status)?.is_empty() {
+    let shallow = git(dir, &["rev-parse", "--is-shallow-repository"])? == "true";
+    let fetch = |refspec: &str| {
+        let mut args = vec!["fetch", "--quiet"];
+        if shallow {
+            args.extend(["--depth", "1"]);
+        }
+        args.extend(["origin", refspec]);
+        git(dir, &args)?;
+        git(dir, &["rev-parse", "FETCH_HEAD"])
+    };
+    let branch = git(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    let (base, start) = match branch.map(|b| fetch(&b).map(|sha| (b, sha))) {
+        Some(Ok((branch, sha))) => (Some(branch), sha),
+        _ => (
+            None,
+            fetch("HEAD").context("fetching the default branch of `origin`")?,
+        ),
+    };
+    let tree = Worktree::add(dir, &start)?;
+    let work = tree.path.as_path();
+    mirror(dir, work, paths, files)?;
+    let mut add = vec!["add", "--all", "--"];
+    add.extend(paths.iter().chain(files).map(String::as_str));
+    git(work, &add)?;
+    if git(work, &["status", "--porcelain"])?.is_empty() {
         return Ok(None);
     }
     let existing = run(
@@ -161,28 +257,24 @@ pub fn open(
     let title = bump
         .max(Bump::of_title(previous).unwrap_or(bump))
         .title(subject);
-    let base = git(dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    git(dir, &["switch", "--quiet", "-C", BRANCH])?;
-    let mut add = vec!["add", "--all", "--"];
-    add.extend(paths.iter().map(String::as_str));
-    git(dir, &add)?;
-    let identity = git(dir, &["config", "user.email"]).is_ok();
+    let name = format!("user.name={BOT_NAME}");
+    let email = format!("user.email={BOT_EMAIL}");
     let mut commit = vec![];
-    if !identity {
-        commit.extend([
-            "-c",
-            "user.name=perseid[bot]",
-            "-c",
-            "user.email=perseid@users.noreply.github.com",
-        ]);
+    if git(dir, &["config", "user.name"]).is_err() {
+        commit.extend(["-c", &name]);
+    }
+    if git(dir, &["config", "user.email"]).is_err() {
+        commit.extend(["-c", &email]);
     }
     commit.extend(["commit", "--quiet", "-m", &title]);
-    git(dir, &commit)?;
-    let unchanged = git(dir, &["fetch", "--quiet", "--depth", "1", "origin", BRANCH]).is_ok()
-        && git(dir, &["rev-parse", "HEAD^{tree}"])?
-            == git(dir, &["rev-parse", "FETCH_HEAD^{tree}"])?;
+    git(work, &commit)?;
+    let head = git(work, &["rev-parse", "HEAD"])?;
+    drop(tree);
+    let tree_of = |sha: &str| git(dir, &["rev-parse", &format!("{sha}^{{tree}}")]);
+    let unchanged = fetch(BRANCH).is_ok_and(|sha| tree_of(&sha).ok() == tree_of(&head).ok());
     if !unchanged {
-        git(dir, &["push", "--quiet", "--force", "origin", BRANCH])?;
+        let refspec = format!("{head}:refs/heads/{BRANCH}");
+        git(dir, &["push", "--quiet", "--force", "origin", &refspec])?;
     }
     if !existing.is_empty() {
         run(
@@ -195,8 +287,8 @@ pub fn open(
     let mut create = vec![
         "pr", "create", "--head", BRANCH, "--title", &title, "--body", body,
     ];
-    if base != "HEAD" {
-        create.extend(["--base", &base]);
+    if let Some(base) = &base {
+        create.extend(["--base", base]);
     }
     run(dir, "gh", &create).map(Some)
 }
