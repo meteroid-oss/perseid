@@ -470,8 +470,14 @@ fn pull_request_project(listed: &str) -> tempfile::TempDir {
 /// Runs `generate rust --pr` with the fake `gh` and no git identity configured.
 #[cfg(unix)]
 fn generate_pr(dir: &Path, bump: &str) -> String {
+    generate_pr_with(dir, &["--bump", bump])
+}
+
+#[cfg(unix)]
+fn generate_pr_with(dir: &Path, args: &[&str]) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_perseid"))
-        .args(["generate", "rust", "--pr", "--bump", bump, "--no-format"])
+        .args(["generate", "rust", "--pr", "--no-format"])
+        .args(args)
         .current_dir(dir)
         .env(
             "PATH",
@@ -489,11 +495,228 @@ fn generate_pr(dir: &Path, bump: &str) -> String {
         .env_remove("GIT_AUTHOR_EMAIL")
         .env_remove("GIT_COMMITTER_NAME")
         .env_remove("GIT_COMMITTER_EMAIL")
+        .env_remove("GITHUB_EVENT_BEFORE")
+        .env_remove("GITHUB_ACTIONS")
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{text}");
     fs::read_to_string(dir.join("gh.log")).unwrap()
+}
+
+#[cfg(unix)]
+fn executable(path: &Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(path, script).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_bumps_are_sized_by_oasdiff_against_the_previous_commit() {
+    let dir = pull_request_project("");
+    let spec = dir.path().join("openapi.yaml");
+    let changed = fs::read_to_string(&spec)
+        .unwrap()
+        .replace("title:", "description: Pets\n  title:");
+    fs::write(&spec, changed).unwrap();
+    let commit = [
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-qam",
+    ];
+    git_in(dir.path(), &[&commit[..], &["spec"]].concat());
+    executable(
+        &dir.path().join("bin/oasdiff"),
+        "#!/bin/sh\necho \"$@\" >> \"$GH_LOG.oasdiff\"\ncase \"$*\" in\n  breaking*) exit 1 ;;\n  *markdown*) echo '- removed GET /pets/{id}' ;;\nesac\n",
+    );
+
+    let calls = generate_pr_with(dir.path(), &[]);
+    assert!(
+        calls.contains("pr create --head perseid/update --title feat(api)!: update SDKs to"),
+        "{calls}"
+    );
+    assert!(
+        calls.contains("### API changes\n\n- removed GET /pets/{id}"),
+        "{calls}"
+    );
+    let runs = fs::read_to_string(dir.path().join("gh.log.oasdiff")).unwrap();
+    let first = runs.lines().next().unwrap();
+    assert!(
+        first.starts_with("breaking --fail-on ERR --severity-levels ")
+            && first.ends_with("/openapi.yaml"),
+        "{runs}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_bumps_without_a_previous_spec_are_minor() {
+    let dir = pull_request_project("");
+    let calls = generate_pr_with(dir.path(), &[]);
+    assert!(
+        calls.contains("pr create --head perseid/update --title feat(api): update SDKs to"),
+        "{calls}"
+    );
+    assert!(!calls.contains("API changes"), "{calls}");
+}
+
+#[cfg(unix)]
+#[test]
+fn pull_requests_can_auto_merge_and_dispatch_ci() {
+    let dir = pull_request_project("");
+    let calls = generate_pr_with(
+        dir.path(),
+        &[
+            "--bump",
+            "patch",
+            "--auto-merge",
+            "--dispatch",
+            "ci.yml lint.yml",
+        ],
+    );
+    for call in [
+        "label create perseid:auto-release --force --color 6f42c1 --description Auto-merge the release PR this change leads to\n",
+        "pr edit https://pr/2 --add-label perseid:auto-release\n",
+        "pr merge https://pr/2 --auto --squash\n",
+        "workflow run ci.yml --ref perseid/update\n",
+        "workflow run lint.yml --ref perseid/update\n",
+    ] {
+        assert!(calls.contains(call), "{call} not in {calls}");
+    }
+}
+
+#[test]
+fn tools_list_what_the_sdks_need_and_the_app_token_scope() {
+    let dir = project_from("petstore.yaml", &["go", "python", "typescript"]);
+    edit_config(dir.path(), |config| {
+        config.replace("[python]\n", "[python]\nrepo = \"acme/petstore-python\"\n")
+    });
+    let output_file = dir.path().join("github-output");
+    let output = Command::new(env!("CARGO_BIN_EXE_perseid"))
+        .args(["tools", "list", "--github-output"])
+        .current_dir(dir.path())
+        .env("GITHUB_OUTPUT", &output_file)
+        .env("GITHUB_REPOSITORY", "acme/petstore")
+        .output()
+        .unwrap();
+    let listed = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{listed}");
+    let names: Vec<_> = listed
+        .lines()
+        .map(|l| l.split(' ').next().unwrap())
+        .collect();
+    assert_eq!(names, ["biome", "ruff", "oasdiff"], "{listed}");
+    assert_eq!(
+        fs::read_to_string(output_file).unwrap(),
+        "languages=typescript python go\nowner=acme\nrepositories=petstore,petstore-python\n"
+    );
+}
+
+/// Serves `files` by path over HTTP, as GitHub release downloads, until the test ends.
+#[cfg(unix)]
+fn serve(files: Vec<(String, Vec<u8>)>) -> u16 {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut request = String::new();
+            BufReader::new(&stream).read_line(&mut request).unwrap();
+            let path = request.split(' ').nth(1).unwrap_or_default();
+            let (status, body) = match files.iter().find(|(p, _)| p == path) {
+                Some((_, body)) => ("200 OK", body.as_slice()),
+                None => ("404 Not Found", &b""[..]),
+            };
+            let head = format!(
+                "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body);
+        }
+    });
+    port
+}
+
+#[cfg(unix)]
+#[test]
+fn tools_install_downloads_the_pinned_tools_and_checks_they_run() {
+    let dir = project_from("petstore.yaml", &["typescript"]);
+    let (ok, listed) = perseid(dir.path(), &["tools", "list"]);
+    assert!(ok, "{listed}");
+    let version = |tool: &str| {
+        let line = listed.lines().find(|l| l.starts_with(tool)).unwrap();
+        line.split(' ').nth(1).unwrap().to_owned()
+    };
+    let (biome, oasdiff) = (version("biome"), version("oasdiff"));
+    let release = dir.path().join("release");
+    fs::create_dir(&release).unwrap();
+    executable(
+        &release.join("oasdiff"),
+        &format!("#!/bin/sh\necho oasdiff version {oasdiff}\n"),
+    );
+    let archive = release.join("oasdiff.tar.gz");
+    let tar = Command::new("tar")
+        .arg("-czf")
+        .arg(&archive)
+        .arg("-C")
+        .arg(&release)
+        .arg("oasdiff")
+        .status()
+        .unwrap();
+    assert!(tar.success());
+    let (os, arch, platform) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "x86_64") => ("darwin", "x64", "darwin_all"),
+        ("macos", _) => ("darwin", "arm64", "darwin_all"),
+        (_, "x86_64") => ("linux", "x64", "linux_amd64"),
+        _ => ("linux", "arm64", "linux_arm64"),
+    };
+    let port = serve(vec![
+        (
+            format!(
+                "/biomejs/biome/releases/download/%40biomejs%2Fbiome%40{biome}/biome-{os}-{arch}"
+            ),
+            format!("#!/bin/sh\necho Version: {biome}\n").into_bytes(),
+        ),
+        (
+            format!(
+                "/oasdiff/oasdiff/releases/download/v{oasdiff}/oasdiff_{oasdiff}_{platform}.tar.gz"
+            ),
+            fs::read(&archive).unwrap(),
+        ),
+    ]);
+    let install = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_perseid"))
+            .args(["tools", "install", "--dir", "tools"])
+            .current_dir(dir.path())
+            .env("PERSEID_GITHUB_WEB", format!("http://127.0.0.1:{port}"))
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout).to_string()
+            + &String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{text}");
+        text
+    };
+    let text = install();
+    assert!(text.contains(&format!("✓ biome {biome}\n")), "{text}");
+    let ran = Command::new(dir.path().join("tools/oasdiff"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout),
+        format!("oasdiff version {oasdiff}\n")
+    );
+    let text = install();
+    assert!(
+        text.contains(&format!("✓ oasdiff {oasdiff} (already installed)")),
+        "{text}"
+    );
 }
 
 #[cfg(unix)]

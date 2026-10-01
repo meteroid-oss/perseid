@@ -12,8 +12,10 @@ mod postprocessing;
 pub mod pr;
 mod prompt;
 pub mod scaffold;
+pub mod sizing;
 pub mod spec;
 mod template;
+pub mod tools;
 mod value_vec;
 
 pub use crate::{
