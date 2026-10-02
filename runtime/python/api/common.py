@@ -392,7 +392,14 @@ class ApiBase:
         schemes = chosen_schemes(
             self._cfg, self._cfg.security if spec.security is None else spec.security
         )
-        apply_auth(self._cfg, schemes, token, headers, params)
+        credentials = httpx.Headers()
+        apply_auth(self._cfg, schemes, token, credentials, params)
+        for key, value in credentials.items():
+            # Headers of the client or of the call win over its credentials.
+            if key == "cookie" and key in headers:
+                headers[key] = f"{headers[key]}; {value}"
+            elif key not in headers:
+                headers[key] = value
 
         # Passed per request, so it also applies to a caller-supplied `httpx` client.
         timeout = self._cfg.timeout if isinstance(spec.timeout, Unset) else spec.timeout

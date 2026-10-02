@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -392,6 +393,36 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(request.headers["x-extra"], "1")
         self.assertEqual(request.headers["authorization"], "Bearer token")
         self.assertEqual(request.extensions["timeout"]["read"], 2)
+
+    def test_headers_of_the_call_or_client_win_over_its_credentials(self) -> None:
+        with client(self.respond(httpx.Response(200, json=THING))) as api:
+            api.things.retrieve("t", extra_headers={"Authorization": "Bearer call"})
+            api.with_options(default_headers={"authorization": "Bearer client"}).things.retrieve("t")
+            api.things.retrieve("t")
+        auth = [r.headers.get_list("authorization") for r in self.requests]
+        self.assertEqual(auth, [["Bearer call"], ["Bearer client"], ["Bearer token"]])
+
+    def test_the_old_constructor_arguments_still_work(self) -> None:
+        def http() -> httpx.Client:
+            return httpx.Client(transport=httpx.MockTransport(self.respond(httpx.Response(200, json=THING))))
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            clients = [
+                Torture(token="old", http_client=http()),
+                Torture("old", TortureOptions(), http()),
+                Torture("old", None, httpx_client=http()),
+            ]
+        self.assertEqual([w.category for w in caught], [DeprecationWarning] * 3)
+        self.assertEqual(caught[0].filename, __file__)
+        for api in clients:
+            with api:
+                api.things.retrieve("t")
+        self.assertEqual([r.headers["authorization"] for r in self.requests], ["Bearer old"] * 3)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with self.assertRaises(TypeError):
+                Torture("new", token="old")
 
     def test_query_and_header_params(self) -> None:
         with client(self.respond(httpx.Response(200, json={"data": [], "total": 0}))) as api:

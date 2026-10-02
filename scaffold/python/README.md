@@ -33,7 +33,8 @@ async with Async@@CLIENT_NAME@@() as client:
     ...
 ```
 
-Every method also takes `extra_headers=` and `timeout=` for that request only.
+Every method also takes `extra_headers=` and `timeout=` for that request only; these
+headers, like `default_headers`, win over the client's credentials.
 
 ## Models
 
