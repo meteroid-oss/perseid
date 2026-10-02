@@ -20,6 +20,13 @@ public final class @@CLIENT_NAME@@Auth {
         final String location;
         final String param;
 
+        /**
+         * A scheme.
+         *
+         * @param kind {@code bearer}, {@code basic} or {@code api_key}
+         * @param location where an API key goes: {@code header}, {@code query} or {@code cookie}
+         * @param param the name of the API key header, parameter or cookie
+         */
         public Scheme(String kind, String location, String param) {
             this.kind = kind;
             this.location = location;
@@ -35,6 +42,14 @@ public final class @@CLIENT_NAME@@Auth {
     private final String password;
     private final Map<String, String> apiKeys;
 
+    /**
+     * Credentials for {@code schemes}.
+     *
+     * @param schemes the security schemes by name
+     * @param defaultSecurity the API-wide security requirement
+     * @param token the API key or bearer token, or null
+     * @param options the client options, with the other credentials
+     */
     public @@CLIENT_NAME@@Auth(
             Map<String, Scheme> schemes,
             List<List<String>> defaultSecurity,
@@ -43,10 +58,10 @@ public final class @@CLIENT_NAME@@Auth {
         this.schemes = schemes;
         this.defaultSecurity = defaultSecurity;
         this.token = token;
-        this.tokenProvider = options.getTokenProvider();
-        this.username = options.getUsername();
-        this.password = options.getPassword();
-        this.apiKeys = options.getApiKeys();
+        this.tokenProvider = options.tokenProvider().orElse(null);
+        this.username = options.username().orElse(null);
+        this.password = options.password().orElse(null);
+        this.apiKeys = options.apiKeys();
     }
 
     private boolean configured(String name) {

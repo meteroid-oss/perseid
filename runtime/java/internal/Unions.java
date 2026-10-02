@@ -9,7 +9,14 @@ import java.io.UncheckedIOException;
 public final class Unions {
     private Unions() {}
 
-    /** {@code value} converted to a {@code type} through its JSON form. */
+    /**
+     * {@code value} converted to a {@code type} through its JSON form.
+     *
+     * @param <T> the type
+     * @param value the value
+     * @param type the class
+     * @return the converted value
+     */
     public static <T> T convert(Object value, Class<T> type) {
         return Utils.objectMapper().convertValue(value, type);
     }
@@ -17,6 +24,11 @@ public final class Unions {
     /**
      * Whether the JSON object {@code node} has {@code property}, equal to the JSON text {@code
      * expected} unless null.
+     *
+     * @param node the JSON object
+     * @param property the property name
+     * @param expected the JSON text of the expected value, or null
+     * @return whether it matches
      */
     public static boolean has(JsonNode node, String property, String expected) {
         JsonNode value = node.get(property);
@@ -34,6 +46,10 @@ public final class Unions {
      * The index of the candidate, as its required then known properties, whose required
      * properties the JSON object {@code node} all has and which knows the most of its
      * properties, the first one on ties; -1 when none fits.
+     *
+     * @param node the JSON object
+     * @param candidates per variant, its required then known properties
+     * @return the index of the variant, or -1
      */
     public static int bestMatch(JsonNode node, String[][]... candidates) {
         int best = -1;

@@ -11,6 +11,14 @@ public final class SseEvent {
     private final String id;
     private final Duration retry;
 
+    /**
+     * An event.
+     *
+     * @param event the event name, {@code message} by default
+     * @param data the data lines, joined with a newline
+     * @param id the last event ID, or null
+     * @param retry the reconnection delay, or null
+     */
     public SseEvent(String event, String data, String id, Duration retry) {
         this.event = event;
         this.data = data;
@@ -18,20 +26,82 @@ public final class SseEvent {
         this.retry = retry;
     }
 
+    /**
+     * The event name.
+     *
+     * @return the name, {@code message} when the server sent none
+     */
+    public String event() {
+        return event;
+    }
+
+    /**
+     * The data lines, joined with a newline.
+     *
+     * @return the data
+     */
+    public String data() {
+        return data;
+    }
+
+    /**
+     * The last event ID, including updates from events with no data.
+     *
+     * @return the ID, or null
+     */
+    public String id() {
+        return id;
+    }
+
+    /**
+     * The server-provided reconnection delay. The SDK does not reconnect.
+     *
+     * @return the delay, or null
+     */
+    public Duration retry() {
+        return retry;
+    }
+
+    /**
+     * The event name.
+     *
+     * @return the name
+     * @deprecated use {@link #event()}
+     */
+    @Deprecated
     public String getEvent() {
         return event;
     }
 
+    /**
+     * The data.
+     *
+     * @return the data
+     * @deprecated use {@link #data()}
+     */
+    @Deprecated
     public String getData() {
         return data;
     }
 
-    /** The last event ID, including updates from events with no data, or null. */
+    /**
+     * The last event ID.
+     *
+     * @return the ID, or null
+     * @deprecated use {@link #id()}
+     */
+    @Deprecated
     public String getId() {
         return id;
     }
 
-    /** The server-provided reconnection delay, or null. The SDK does not reconnect. */
+    /**
+     * The reconnection delay.
+     *
+     * @return the delay, or null
+     * @deprecated use {@link #retry()}
+     */
+    @Deprecated
     public Duration getRetry() {
         return retry;
     }
