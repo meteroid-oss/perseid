@@ -4,14 +4,13 @@
 Authentication, an automatic ``idempotency-key`` on POST, retries with jittered
 exponential backoff, per-request timeouts and headers, and typed errors.
 
-Retries: a request is retried when it never reached the server (connection
-failure), on HTTP 429 (honouring ``Retry-After``), and, when replaying it is
-safe, on 5xx statuses (503 honouring ``Retry-After`` too), 408 and transport
-errors such as timeouts.
-Replaying is safe for GET, HEAD, OPTIONS, PUT and DELETE, and for any request
-carrying an ``idempotency-key`` -- which every POST gets automatically. A
-timed-out request can therefore take up to ``timeout * (1 + len(retry_schedule))``
-plus the backoff delays before :class:`NetworkException` is raised.
+Retries: a request is retried on connection errors, timeouts, 408, 429 and 5xx
+responses, honouring ``Retry-After`` (or ``retry-after-ms``) up to a minute,
+but only when replaying it is safe: for GET, HEAD, OPTIONS, PUT and DELETE, and
+for any request carrying an ``idempotency-key``, which every POST gets
+automatically. A timed-out request can therefore take up to
+``timeout * (1 + max_retries)`` plus the backoff delays before
+:class:`APITimeoutError` is raised.
 """
 
 from __future__ import annotations
@@ -30,10 +29,11 @@ from decimal import Decimal
 
 import httpx
 
+from .._exceptions import APIResponseValidationError, connection_error
 from .._version import __version__
-from ..errors import ApiException, NetworkException, ResponseDecodeError
 from ..serialization import (
     UNSET,
+    JSONValue,
     Unset,
     format_datetime,
     format_decimal,
@@ -50,24 +50,31 @@ from ._auth import (
     needs_token_provider,
     sync_token,
 )
-from ._errors import ApiStatusError, error_class
+from ._errors import error_class
+from ._response import capture_response
 from ._streaming import (
+    MultipartField,
     UploadContent,
     is_event_stream,
     multipart_files,
     not_an_event_stream,
+    replayable,
 )
-from ._streaming import replayable as _body_replayable
 from .middleware import AsyncMiddleware, SyncMiddleware, chain_async, chain_sync
 
 __all__ = [
-    "ApiBase",
-    "ApiBaseAsync",
-    "ApiBaseSync",
-    "Configuration",
+    "DEFAULT_MAX_RETRIES",
     "DEFAULT_NUM_RETRIES",
     "DEFAULT_SERVER_URL",
     "DEFAULT_TIMEOUT",
+    "ApiBase",
+    "ApiBaseAsync",
+    "ApiBaseSync",
+    "ApiRequest",
+    "Configuration",
+    "ErrorTypes",
+    "QueryParams",
+    "Timeout",
     "decode_response",
     "default_retry_schedule",
     "serialize_form_body",
@@ -76,17 +83,20 @@ __all__ = [
 
 DEFAULT_SERVER_URL = "@@DEFAULT_BASE_URL@@"
 DEFAULT_TIMEOUT: float = @@TIMEOUT@@
-DEFAULT_NUM_RETRIES = 2
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_NUM_RETRIES = DEFAULT_MAX_RETRIES
 _MAX_BACKOFF = 8.0
 _MAX_RETRY_AFTER = 60.0
 _REPLAYABLE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
-_UNSENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
-QueryParams = list[tuple[str, str]]
+QueryParams: t.TypeAlias = "list[tuple[str, str]]"
+Timeout: t.TypeAlias = "float | httpx.Timeout | None"
+"""Seconds, an ``httpx.Timeout`` for finer control, or ``None`` to wait forever."""
+
 _T = t.TypeVar("_T")
 
 
-def _serialize_scalar(value: t.Any) -> str:
+def _serialize_scalar(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, enum.Enum):
@@ -101,7 +111,7 @@ def _serialize_scalar(value: t.Any) -> str:
 
 
 def serialize_query_params(
-    params: t.Mapping[str, t.Any],
+    params: t.Mapping[str, object],
     comma_joined: t.Collection[str] = (),
     structured: t.Collection[str] = (),
     deep_object: t.Collection[str] = (),
@@ -118,11 +128,10 @@ def serialize_query_params(
         if value is None or value is UNSET:
             continue
         if key in structured:
-            encode_param(
-                key, to_json_value(value), key in deep_object, key not in comma_joined, out
-            )
+            explode = key not in comma_joined
+            encode_param(key, to_json_value(value), key in deep_object, explode, out)
         elif isinstance(value, (list, tuple, set, frozenset)):
-            items = [_serialize_scalar(v) for v in value]
+            items = [_serialize_scalar(v) for v in t.cast("t.Iterable[object]", value)]
             if key in comma_joined:
                 out.append((key, ",".join(items)))
             else:
@@ -133,7 +142,7 @@ def serialize_query_params(
 
 
 def serialize_form_body(
-    body: t.Mapping[str, t.Any] | None,
+    body: t.Mapping[str, JSONValue] | None,
     deep_object: t.Collection[str] = (),
     unexploded: t.Collection[str] = (),
 ) -> QueryParams | None:
@@ -146,12 +155,12 @@ def serialize_form_body(
     return out
 
 
-def _nested(value: t.Any) -> bool:
+def _nested(value: object) -> bool:
     return isinstance(value, (dict, list))
 
 
 def encode_param(
-    name: str, value: t.Any, deep_object: bool, explode: bool, out: QueryParams
+    name: str, value: JSONValue, deep_object: bool, explode: bool, out: QueryParams
 ) -> None:
     """One JSON value as pairs, the way Stripe-style APIs read nested values.
 
@@ -169,7 +178,7 @@ def encode_param(
     _flatten_param(name, value, out)
 
 
-def _flatten_param(prefix: str, value: t.Any, out: QueryParams) -> None:
+def _flatten_param(prefix: str, value: JSONValue, out: QueryParams) -> None:
     if value is None:
         return
     if isinstance(value, dict):
@@ -200,57 +209,72 @@ class Configuration:
     bearer_access_token: str | None = None
     token_provider: TokenProvider | None = None
     basic_auth: tuple[str, str] | None = None
-    api_keys: t.Mapping[str, str] = dataclasses.field(default_factory=dict)
-    security_schemes: t.Mapping[str, SecurityScheme] = dataclasses.field(default_factory=dict)
+    api_keys: t.Mapping[str, str] = dataclasses.field(default_factory=dict[str, str])
+    security_schemes: t.Mapping[str, SecurityScheme] = dataclasses.field(
+        default_factory=dict[str, SecurityScheme]
+    )
     security: Security = ()
     user_agent: str = f"@@USER_AGENT_PREFIX@@-python/{__version__}"
-    timeout: float | None = DEFAULT_TIMEOUT
+    timeout: Timeout = DEFAULT_TIMEOUT
     retry_schedule: list[float] = dataclasses.field(
-        default_factory=lambda: default_retry_schedule(DEFAULT_NUM_RETRIES)
+        default_factory=lambda: default_retry_schedule(DEFAULT_MAX_RETRIES)
     )
-    middleware: list[SyncMiddleware] = dataclasses.field(default_factory=list)
-    async_middleware: list[AsyncMiddleware] = dataclasses.field(default_factory=list)
+    default_headers: t.Mapping[str, str] = dataclasses.field(default_factory=dict[str, str])
+    middleware: list[SyncMiddleware] = dataclasses.field(default_factory=list[SyncMiddleware])
+    async_middleware: list[AsyncMiddleware] = dataclasses.field(default_factory=list[AsyncMiddleware])
 
     def headers(self) -> httpx.Headers:
-        return httpx.Headers({"user-agent": self.user_agent, "accept": "application/json"})
+        headers = httpx.Headers({"user-agent": self.user_agent, "accept": "application/json"})
+        headers.update(self.default_headers)
+        return headers
 
 
-ErrorTypes = t.Mapping[str, t.Any]
+ErrorTypes: t.TypeAlias = "t.Mapping[str, object]"
 """The schema of each error response by status: ``"404"``, ``"4XX"`` or ``"default"``."""
 
 
-def _raise_for_status(response: httpx.Response, error_types: ErrorTypes | None) -> httpx.Response:
+@dataclasses.dataclass(frozen=True)
+class ApiRequest:
+    """One operation call, as the generated methods describe it."""
+
+    method: str
+    path: str
+    path_params: t.Mapping[str, str] | None = None
+    query_params: QueryParams | None = None
+    header_params: t.Mapping[str, str | None] | None = None
+    json_body: object = None
+    form_body: QueryParams | None = None
+    upload_body: UploadContent | None = None
+    upload_content_type: str = "application/octet-stream"
+    multipart: t.Sequence[MultipartField] | None = None
+    security: Security | None = None
+    error_types: ErrorTypes | None = None
+    extra_headers: t.Mapping[str, str] | None = None
+    timeout: Timeout | Unset = UNSET
+    stream: bool = False
+
+
+def _raise_for_status(response: httpx.Response, error_types: ErrorTypes | None) -> None:
     if response.is_success:
-        return response
+        return
     # Any other status -- 4xx, 5xx, or a 3xx left unfollowed -- is an error.
-    error = error_class(response.status_code).from_response(
-        response.status_code, response.content, response.headers
-    )
-    if isinstance(error, ApiStatusError):
-        error.body = _error_body(response, error_types)
-    raise error
+    raise error_class(response.status_code)(response, _error_body(response, error_types))
 
 
-def _error_body(response: httpx.Response, error_types: ErrorTypes | None) -> t.Any:
-    """The error response as its declared schema, or its JSON when the API declares none."""
-    status = response.status_code
-    if error_types is None:
-        type_: t.Any = t.Any
-    else:
-        type_ = next(
-            (
-                error_types[key]
-                for key in (str(status), f"{status // 100}XX", "default")
-                if key in error_types
-            ),
-            None,
-        )
-        if type_ is None:
-            return None
+def _error_body(response: httpx.Response, error_types: ErrorTypes | None) -> object:
+    """The error response as its declared schema, else its JSON, else ``None``."""
     try:
-        return from_json_value(type_, response.json())
-    except (ValueError, TypeError):
+        data = response.json()
+    except ValueError:
         return None
+    status = response.status_code
+    for key in (str(status), f"{status // 100}XX", "default"):
+        if error_types is not None and key in error_types:
+            try:
+                return from_json_value(error_types[key], data)
+            except (ValueError, TypeError):
+                break
+    return t.cast(object, data)
 
 
 @t.overload
@@ -258,26 +282,26 @@ def decode_response(response: httpx.Response, type_: type[_T]) -> _T: ...
 
 
 @t.overload
-def decode_response(response: httpx.Response, type_: t.Any) -> t.Any: ...
+def decode_response(response: httpx.Response, type_: object) -> t.Any: ...
 
 
-def decode_response(response: httpx.Response, type_: t.Any) -> t.Any:
+def decode_response(response: httpx.Response, type_: object) -> object:
     """Decode a 2xx JSON body into ``type_``.
 
     Any failure -- invalid JSON or UTF-8, or a body that does not match the
-    type -- raises :class:`ResponseDecodeError`, so a client call only ever
-    raises :class:`@@CLIENT_NAME@@Error` subclasses.
+    type -- raises :class:`APIResponseValidationError`, so a client call only
+    ever raises :class:`@@CLIENT_NAME@@Error` subclasses.
     """
     try:
-        return from_json_value(type_, response.json())
+        return t.cast(object, from_json_value(type_, response.json()))
     # `json.JSONDecodeError`, `UnicodeDecodeError` and `ModelParseError` are
     # `ValueError`s; `TypeError` covers a JSON shape the model code trips on.
     except (ValueError, TypeError) as exc:
-        raise ResponseDecodeError(response.status_code, response.content, str(exc)) from exc
+        raise APIResponseValidationError(response, str(exc)) from exc
 
 
 def _retry_after(response: httpx.Response) -> float | None:
-    """The delay a 429 or 503 response asks for, in seconds, if any."""
+    """The delay a response asks for before a retry, in seconds, if any."""
     header = response.headers.get("retry-after-ms")
     if header is not None:
         try:
@@ -298,6 +322,10 @@ def _retry_after(response: httpx.Response) -> float | None:
     return (date - _datetime.datetime.now(_datetime.timezone.utc)).total_seconds()
 
 
+def _retryable_status(status: int) -> bool:
+    return status in (408, 429) or status >= 500
+
+
 class ApiBase:
     """Turns one operation into ``httpx`` requests and decides on retries."""
 
@@ -306,106 +334,95 @@ class ApiBase:
     def __init__(self, cfg: Configuration) -> None:
         self._cfg = cfg
 
-    def _request_kwargs(
-        self,
-        method: str,
-        path: str,
-        path_params: t.Mapping[str, str] | None = None,
-        query_params: QueryParams | None = None,
-        header_params: t.Mapping[str, str | None] | None = None,
-        json_body: t.Any = None,
-        form_body: QueryParams | None = None,
-        extra_headers: t.Mapping[str, str] | None = None,
-        timeout: float | None | Unset = UNSET,
-        upload_body: UploadContent | None = None,
-        upload_content_type: str = "application/octet-stream",
-        multipart: t.Sequence[tuple[str, t.Any, bool]] | None = None,
-        security: Security | None = None,
-    ) -> dict[str, t.Any]:
-        if path_params:
+    def _build(
+        self, client: httpx.Client | httpx.AsyncClient, spec: ApiRequest, token: str | None
+    ) -> tuple[httpx.Request, bool]:
+        """The ``httpx`` request of ``spec``, and whether it is safe to send again."""
+        path = spec.path
+        if spec.path_params:
             path = path.format(
                 **{
                     key: urllib.parse.quote(str(value), safe="")
-                    for key, value in path_params.items()
+                    for key, value in spec.path_params.items()
                 }
             )
 
         headers = self._cfg.headers()
         headers["@@HEADER_PREFIX@@-req-id"] = str(random.getrandbits(32))
-        for key, value in (header_params or {}).items():
+        for key, value in (spec.header_params or {}).items():
             if value is not None:
                 headers[key] = value
-        headers.update(extra_headers or {})
-        if method.upper() == "POST" and "idempotency-key" not in headers:
+        headers.update(spec.extra_headers or {})
+        method = spec.method.upper()
+        if method == "POST" and "idempotency-key" not in headers:
             headers["idempotency-key"] = f"auto_{uuid.uuid4()}"
+        if spec.stream:
+            headers["accept"] = "text/event-stream"
 
-        kwargs: dict[str, t.Any] = {
-            "method": method.upper(),
-            "url": f"{self._cfg.base_path}{path}",
-            "headers": headers,
-            # Passed per request, so it also applies to a caller-supplied
-            # `httpx` client. `None` disables it.
-            "timeout": self._cfg.timeout if timeout is UNSET else timeout,
-        }
         # `httpx` replaces the query of the URL by `params`, so a path's own query goes first.
         path, _, own_query = path.partition("?")
-        kwargs["url"] = f"{self._cfg.base_path}{path}"
         params = urllib.parse.parse_qsl(own_query, keep_blank_values=True)
-        params.extend(query_params or [])
-        if params:
-            kwargs["params"] = params
-        if json_body is not None:
-            kwargs["json"] = json_body
-        elif form_body is not None:
-            kwargs["content"] = urllib.parse.urlencode(form_body)
+        params.extend(spec.query_params or [])
+
+        content: str | UploadContent | None = None
+        files = multipart_files(spec.multipart) if spec.multipart is not None else []
+        if spec.form_body is not None:
+            content = urllib.parse.urlencode(spec.form_body)
             headers["content-type"] = "application/x-www-form-urlencoded"
-        elif upload_body is not None:
-            kwargs["content"] = upload_body
-            headers["content-type"] = upload_content_type
-        elif multipart is not None:
-            kwargs["files"] = multipart_files(multipart)
-        kwargs["auth_schemes"] = chosen_schemes(
-            self._cfg, self._cfg.security if security is None else security
+        elif spec.upload_body is not None:
+            content = spec.upload_body
+            headers["content-type"] = spec.upload_content_type
+
+        schemes = chosen_schemes(
+            self._cfg, self._cfg.security if spec.security is None else spec.security
         )
-        return kwargs
+        apply_auth(self._cfg, schemes, token, headers, params)
 
-    def _authenticate(self, kwargs: dict[str, t.Any], token: str | None) -> None:
-        apply_auth(self._cfg, kwargs.pop("auth_schemes"), token, kwargs)
+        # Passed per request, so it also applies to a caller-supplied `httpx` client.
+        timeout = self._cfg.timeout if isinstance(spec.timeout, Unset) else spec.timeout
+        if spec.stream and timeout is not None:
+            # The timeout only covers opening an event stream, not reading it.
+            limits = httpx.Timeout(timeout)
+            timeout = httpx.Timeout(
+                connect=limits.connect, read=None, write=limits.write, pool=limits.pool
+            )
+        request = client.build_request(
+            method,
+            f"{self._cfg.base_path}{path}",
+            params=tuple(params) or None,
+            headers=headers,
+            content=content,
+            json=spec.json_body,
+            files=files or None,
+            timeout=timeout,
+        )
+        safe = method in _REPLAYABLE_METHODS or "idempotency-key" in headers
+        return request, safe and replayable(content, files)
 
-    @staticmethod
-    def _stream_kwargs(kwargs: dict[str, t.Any]) -> dict[str, t.Any]:
-        """Build-request arguments of an event stream, whose timeout only covers opening it."""
-        kwargs["headers"]["accept"] = "text/event-stream"
-        if kwargs["timeout"] is not None:
-            kwargs["timeout"] = httpx.Timeout(kwargs["timeout"], read=None)
-        return kwargs
+    def _needs_token(self, spec: ApiRequest) -> bool:
+        security = self._cfg.security if spec.security is None else spec.security
+        return needs_token_provider(self._cfg, chosen_schemes(self._cfg, security))
 
     def _retry_delay(
-        self,
-        attempt: int,
-        kwargs: t.Mapping[str, t.Any],
-        response: httpx.Response | None = None,
-        error: httpx.RequestError | None = None,
+        self, attempt: int, replayable: bool, response: httpx.Response | None
     ) -> float | None:
         """Seconds to wait before retrying, or ``None`` to give up."""
-        if attempt >= len(self._cfg.retry_schedule) or not _body_replayable(kwargs):
+        if attempt >= len(self._cfg.retry_schedule) or not replayable:
             return None
-        replayable = (
-            kwargs["method"] in _REPLAYABLE_METHODS or "idempotency-key" in kwargs["headers"]
-        )
         if response is not None:
-            status = response.status_code
-            if status != 429 and not (replayable and (status == 408 or status >= 500)):
+            if not _retryable_status(response.status_code):
                 return None
-            if status in (429, 503):
-                retry_after = _retry_after(response)
-                if retry_after is not None and 0 <= retry_after <= _MAX_RETRY_AFTER:
-                    return retry_after
-        elif not isinstance(error, httpx.TransportError) or (
-            not replayable and not isinstance(error, _UNSENT_ERRORS)
-        ):
-            return None
+            retry_after = _retry_after(response)
+            if retry_after is not None and 0 <= retry_after <= _MAX_RETRY_AFTER:
+                return retry_after
         return self._cfg.retry_schedule[attempt] * (1 - 0.25 * random.random())
+
+    @staticmethod
+    def _finish(response: httpx.Response, spec: ApiRequest) -> None:
+        _raise_for_status(response, spec.error_types)
+        if spec.stream and not is_event_stream(response):
+            raise not_an_event_stream(response)
+        capture_response(response)
 
 
 class ApiBaseSync(ApiBase):
@@ -415,10 +432,7 @@ class ApiBaseSync(ApiBase):
         super().__init__(cfg)
         self._httpx_client = httpx_client
 
-    def _send(self, kwargs: dict[str, t.Any], stream: bool) -> httpx.Response:
-        if not stream and not self._cfg.middleware:
-            return self._httpx_client.request(**kwargs)
-        request = self._httpx_client.build_request(**kwargs)
+    def _send(self, request: httpx.Request, stream: bool) -> httpx.Response:
         send = chain_sync(
             lambda request: self._httpx_client.send(request, stream=stream), self._cfg.middleware
         )
@@ -427,34 +441,30 @@ class ApiBaseSync(ApiBase):
             response.read()
         return response
 
-    def _request_sync(
-        self, stream: bool = False, error_types: ErrorTypes | None = None, **options: t.Any
-    ) -> httpx.Response:
-        kwargs = self._request_kwargs(**options)
-        needs_token = needs_token_provider(self._cfg, kwargs["auth_schemes"])
-        self._authenticate(kwargs, sync_token(self._cfg) if needs_token else None)
-        if stream:
-            kwargs = self._stream_kwargs(kwargs)
+    def _request(self, spec: ApiRequest) -> httpx.Response:
+        token = sync_token(self._cfg) if self._needs_token(spec) else None
+        request, replayable = self._build(self._httpx_client, spec, token)
         attempt = 0
         while True:
             try:
-                response = self._send(kwargs, stream)
+                response = self._send(request, spec.stream)
             except httpx.RequestError as exc:
-                delay = self._retry_delay(attempt, kwargs, error=exc)
+                delay = self._retry_delay(attempt, replayable, None)
                 if delay is None:
-                    raise NetworkException(str(exc)) from exc
+                    raise connection_error(exc) from exc
             else:
-                delay = self._retry_delay(attempt, kwargs, response=response)
+                delay = self._retry_delay(attempt, replayable, response)
                 if delay is None:
-                    _raise_for_status(response, error_types)
-                    if stream and not is_event_stream(response):
+                    try:
+                        self._finish(response, spec)
+                    except BaseException:
                         response.close()
-                        raise not_an_event_stream(response)
+                        raise
                     return response
                 response.close()
             time.sleep(delay)
             attempt += 1
-            kwargs["headers"]["@@HEADER_PREFIX@@-retry-count"] = str(attempt)
+            request.headers["@@HEADER_PREFIX@@-retry-count"] = str(attempt)
 
 
 class ApiBaseAsync(ApiBase):
@@ -464,10 +474,7 @@ class ApiBaseAsync(ApiBase):
         super().__init__(cfg)
         self._httpx_client = httpx_client
 
-    async def _send(self, kwargs: dict[str, t.Any], stream: bool) -> httpx.Response:
-        if not stream and not self._cfg.async_middleware:
-            return await self._httpx_client.request(**kwargs)
-        request = self._httpx_client.build_request(**kwargs)
+    async def _send(self, request: httpx.Request, stream: bool) -> httpx.Response:
         send = chain_async(
             lambda request: self._httpx_client.send(request, stream=stream),
             self._cfg.async_middleware,
@@ -477,31 +484,27 @@ class ApiBaseAsync(ApiBase):
             await response.aread()
         return response
 
-    async def _request_asyncio(
-        self, stream: bool = False, error_types: ErrorTypes | None = None, **options: t.Any
-    ) -> httpx.Response:
-        kwargs = self._request_kwargs(**options)
-        needs_token = needs_token_provider(self._cfg, kwargs["auth_schemes"])
-        self._authenticate(kwargs, await async_token(self._cfg) if needs_token else None)
-        if stream:
-            kwargs = self._stream_kwargs(kwargs)
+    async def _request(self, spec: ApiRequest) -> httpx.Response:
+        token = await async_token(self._cfg) if self._needs_token(spec) else None
+        request, replayable = self._build(self._httpx_client, spec, token)
         attempt = 0
         while True:
             try:
-                response = await self._send(kwargs, stream)
+                response = await self._send(request, spec.stream)
             except httpx.RequestError as exc:
-                delay = self._retry_delay(attempt, kwargs, error=exc)
+                delay = self._retry_delay(attempt, replayable, None)
                 if delay is None:
-                    raise NetworkException(str(exc)) from exc
+                    raise connection_error(exc) from exc
             else:
-                delay = self._retry_delay(attempt, kwargs, response=response)
+                delay = self._retry_delay(attempt, replayable, response)
                 if delay is None:
-                    _raise_for_status(response, error_types)
-                    if stream and not is_event_stream(response):
+                    try:
+                        self._finish(response, spec)
+                    except BaseException:
                         await response.aclose()
-                        raise not_an_event_stream(response)
+                        raise
                     return response
                 await response.aclose()
             await asyncio.sleep(delay)
             attempt += 1
-            kwargs["headers"]["@@HEADER_PREFIX@@-retry-count"] = str(attempt)
+            request.headers["@@HEADER_PREFIX@@-retry-count"] = str(attempt)

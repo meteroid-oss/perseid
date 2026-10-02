@@ -33,9 +33,8 @@
 
 @dataclasses.dataclass(kw_only=True)
 class {{ type.name | to_upper_camel_case }}(BaseModel):
-    {% if type.description is defined -%}
-        {{ docstring(type.description) | indent(4) }}
-    {% endif %}
+    {{ docstring(type.description if type.description is defined else "The `" ~ type.name ~ "` object.") | indent(4) }}
+
 
     {%- if json_keys | trim %}
     _JSON_KEYS: t.ClassVar[t.Mapping[str, str]] = { {{ json_keys | trim }} }

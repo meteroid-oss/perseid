@@ -10,13 +10,16 @@ import typing as t
 
 import httpx
 
-from ..errors import ResponseDecodeError
-from ..serialization import to_json_value
+from .._exceptions import APIResponseValidationError, connection_error
+from ..serialization import JSONValue, from_json_value, to_json_value
 
 __all__ = [
     "AsyncEventStream",
+    "AsyncStream",
     "EventStream",
     "FileInput",
+    "MultipartField",
+    "Stream",
     "SseEvent",
     "Upload",
     "UploadContent",
@@ -26,7 +29,11 @@ __all__ = [
     "replayable",
 ]
 
-UploadContent = t.Union[bytes, t.IO[bytes], t.Iterable[bytes], t.AsyncIterable[bytes]]
+_T = t.TypeVar("_T")
+
+UploadContent: t.TypeAlias = (
+    "bytes | t.IO[bytes] | t.Iterable[bytes] | t.AsyncIterable[bytes]"
+)
 """A raw body. Only ``bytes`` are retried; streams and files are sent once."""
 
 
@@ -38,7 +45,11 @@ class Upload(t.NamedTuple):
     content_type: str = "application/octet-stream"
 
 
-FileInput = t.Union[bytes, t.IO[bytes], Upload]
+FileInput: t.TypeAlias = "bytes | t.IO[bytes] | Upload"
+"""A multipart file: its content, or an :class:`Upload` naming it."""
+
+MultipartField: t.TypeAlias = "tuple[str, object, bool]"
+"""A multipart field: its name, its value and whether it is a file."""
 
 
 @dataclasses.dataclass
@@ -58,8 +69,8 @@ def is_event_stream(response: httpx.Response) -> bool:
     return content_type.split(";")[0].strip().lower() == "text/event-stream"
 
 
-def not_an_event_stream(response: httpx.Response) -> ResponseDecodeError:
-    return ResponseDecodeError(response.status_code, b"", "expected a text/event-stream response")
+def not_an_event_stream(response: httpx.Response) -> APIResponseValidationError:
+    return APIResponseValidationError(response, "expected a text/event-stream response")
 
 
 class _Parser:
@@ -73,7 +84,7 @@ class _Parser:
         self._first_line = True
 
     def push(self, text: str) -> list[SseEvent]:
-        events = []
+        events: list[SseEvent] = []
         for char in text:
             if self._after_cr:
                 self._after_cr = False
@@ -114,82 +125,178 @@ class _Parser:
         return None
 
 
-class EventStream:
+class _EventSource:
     """A live ``text/event-stream`` response. Close it, or use it as a context manager."""
 
+    response: httpx.Response
+    """The ``httpx`` response, whose body is read as the stream is iterated."""
+
     def __init__(self, response: httpx.Response) -> None:
-        self._response = response
+        self.response = response
         self._parser = _Parser()
 
     @property
     def last_event_id(self) -> str | None:
+        """The id of the last event, to resume from with a ``Last-Event-ID`` header."""
         return self._parser.id
 
-    def __iter__(self) -> t.Iterator[SseEvent]:
+    def _events(self) -> t.Iterator[SseEvent]:
         try:
-            for text in self._response.iter_text():
+            for text in self.response.iter_text():
                 yield from self._parser.push(text)
+        except httpx.RequestError as exc:
+            raise connection_error(exc) from exc
         finally:
             self.close()
 
     def close(self) -> None:
-        self._response.close()
-
-    def __enter__(self) -> EventStream:
-        return self
-
-    def __exit__(self, *exc_info: t.Any) -> None:
-        self.close()
+        """Stops reading the stream and releases the connection."""
+        self.response.close()
 
 
-class AsyncEventStream:
+class _AsyncEventSource:
     """A live ``text/event-stream`` response, iterated with ``async for``."""
 
+    response: httpx.Response
+    """The ``httpx`` response, whose body is read as the stream is iterated."""
+
     def __init__(self, response: httpx.Response) -> None:
-        self._response = response
+        self.response = response
         self._parser = _Parser()
 
     @property
     def last_event_id(self) -> str | None:
+        """The id of the last event, to resume from with a ``Last-Event-ID`` header."""
         return self._parser.id
 
-    async def __aiter__(self) -> t.AsyncIterator[SseEvent]:
+    async def _events(self) -> t.AsyncIterator[SseEvent]:
         try:
-            async for text in self._response.aiter_text():
+            async for text in self.response.aiter_text():
                 for event in self._parser.push(text):
                     yield event
+        except httpx.RequestError as exc:
+            raise connection_error(exc) from exc
         finally:
             await self.aclose()
 
     async def aclose(self) -> None:
-        await self._response.aclose()
+        """Stops reading the stream and releases the connection."""
+        await self.response.aclose()
+
+
+class EventStream(_EventSource):
+    """The server-sent events of a response, as received."""
+
+    def __iter__(self) -> t.Iterator[SseEvent]:
+        return self._events()
+
+    def __enter__(self) -> EventStream:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+
+class AsyncEventStream(_AsyncEventSource):
+    """The server-sent events of a response, as received, iterated with ``async for``."""
+
+    def __aiter__(self) -> t.AsyncIterator[SseEvent]:
+        return self._events()
 
     async def __aenter__(self) -> AsyncEventStream:
         return self
 
-    async def __aexit__(self, *exc_info: t.Any) -> None:
+    async def __aexit__(self, *exc_info: object) -> None:
         await self.aclose()
 
 
-def _scalar(value: t.Any) -> str:
+def _decode(event: SseEvent, type_: type[_T], response: httpx.Response) -> _T:
+    try:
+        return t.cast(_T, from_json_value(type_, json.loads(event.data)))
+    except (ValueError, TypeError) as exc:
+        raise APIResponseValidationError(response, f"event {event.data!r}: {exc}") from exc
+
+
+class Stream(_EventSource, t.Generic[_T]):
+    """The JSON ``data`` of each server-sent event, decoded until a ``[DONE]`` event.
+
+    :attr:`last_event` is the raw event of the latest item, with its ``event`` and ``id``.
+    """
+
+    last_event: SseEvent | None = None
+    """The event the latest item was decoded from."""
+
+    def __init__(self, response: httpx.Response, type_: type[_T]) -> None:
+        super().__init__(response)
+        self._type = type_
+
+    def __iter__(self) -> t.Iterator[_T]:
+        for event in self._events():
+            if event.data == "[DONE]":
+                self.close()
+                return
+            self.last_event = event
+            yield _decode(event, self._type, self.response)
+
+    def __enter__(self) -> Stream[_T]:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
+
+
+class AsyncStream(_AsyncEventSource, t.Generic[_T]):
+    """The JSON ``data`` of each server-sent event, decoded until a ``[DONE]`` event.
+
+    :attr:`last_event` is the raw event of the latest item, with its ``event`` and ``id``.
+    """
+
+    last_event: SseEvent | None = None
+    """The event the latest item was decoded from."""
+
+    def __init__(self, response: httpx.Response, type_: type[_T]) -> None:
+        super().__init__(response)
+        self._type = type_
+
+    async def __aiter__(self) -> t.AsyncIterator[_T]:
+        async for event in self._events():
+            if event.data == "[DONE]":
+                await self.aclose()
+                return
+            self.last_event = event
+            yield _decode(event, self._type, self.response)
+
+    async def __aenter__(self) -> AsyncStream[_T]:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.aclose()
+
+
+def _scalar(value: object) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
 
 
-def multipart_files(fields: t.Sequence[tuple[str, t.Any, bool]]) -> list[t.Any]:
-    """Renders ``(name, value, is_file)`` fields as ``httpx`` multipart files, skipping ``None``."""
-    files: list[t.Any] = []
+_File: t.TypeAlias = (
+    "tuple[str, tuple[str | None, bytes | t.IO[bytes] | str, str | None]]"
+)
+
+
+def multipart_files(fields: t.Sequence[MultipartField]) -> list[_File]:
+    """Renders multipart fields as ``httpx`` files, skipping ``None``."""
+    files: list[_File] = []
     for name, value, is_file in fields:
         if value is None:
             continue
         if is_file:
-            upload = value if isinstance(value, Upload) else Upload(value)
+            upload = value if isinstance(value, Upload) else Upload(t.cast("bytes", value))
             filename = upload.filename or os.path.basename(getattr(upload.content, "name", "file"))
             files.append((name, (filename, upload.content, upload.content_type)))
             continue
-        value = to_json_value(value)
-        for item in value if isinstance(value, list) else [value]:
+        json_value: JSONValue = to_json_value(value)
+        for item in json_value if isinstance(json_value, list) else [json_value]:
             if isinstance(item, (dict, list)):
                 files.append((name, (None, json.dumps(item), "application/json")))
             elif item is not None:
@@ -197,10 +304,8 @@ def multipart_files(fields: t.Sequence[tuple[str, t.Any, bool]]) -> list[t.Any]:
     return files
 
 
-def replayable(kwargs: t.Mapping[str, t.Any]) -> bool:
+def replayable(content: object, files: t.Sequence[_File]) -> bool:
     """Whether a request body can be sent again, for retries."""
-    content = kwargs.get("content")
-    if content is not None and not isinstance(content, bytes):
+    if content is not None and not isinstance(content, (bytes, str)):
         return False
-    files = kwargs.get("files") or []
     return all(isinstance(file[1], (bytes, str)) for _, file in files)

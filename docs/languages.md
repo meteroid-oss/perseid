@@ -58,16 +58,33 @@ Node.js imports, so it runs in browsers, Workers and edge runtimes.
 
 ## Python
 
-Needs Python 3.10+. Models are keyword-only dataclasses; an optional field that accepts `null`
-defaults to `UNSET`, so `None` sends `null`. Methods take `extra_headers=` and `timeout=`, in sync
-and async clients. Unions are models holding the discriminator and the variant
+Needs Python 3.10+; generated code passes `mypy --strict`, pyright and ruff. Clients take keyword
+arguments, Stainless style: `Acme(api_key=..., base_url=..., timeout=..., max_retries=...,
+default_headers=..., http_client=...)`, and `client.with_options(max_retries=0)` changes them for
+one call. `AsyncAcme` is the asyncio client. Methods take `extra_headers=` and `timeout=`.
+Models are keyword-only dataclasses; an optional field that accepts `null` defaults to `UNSET`, so
+`None` sends `null`, and properties the SDK does not know are kept in `extra_fields` (read as
+attributes at runtime) and sent back. Unions are models holding the discriminator and the variant
 (`Shape(content=Circle(radius=1))`, both tags filled in); `flat_unions = true` in `[python]`
 types them as `Circle | Square` instead. Values told apart by their JSON type, such as expandable
-ids, are `str | Customer` (`expandable_id(value)` gives the id either way). A union of objects is annotated `t.Annotated[Customer | DeletedCustomer | UnknownVariant,
-ObjectUnion(...)]`: unmatched objects are an `UnknownVariant`, and `as_variant(value, Customer)`
-reads a value as another variant. API errors are `ApiException` subclasses by
-status (`NotFoundError`, `RateLimitError`...) exported from `api`, with the error body decoded into
-its schema as `body` and a `request_id`. Generated code is `mypy --strict` clean.
+ids and query parameters taking a value or a list, are `str | Customer` (`expandable_id(value)`
+gives the id either way). A union of objects is annotated `t.Annotated[Customer |
+DeletedCustomer | UnknownVariant, ObjectUnion(...)]`: unmatched objects are an `UnknownVariant`,
+and `as_variant(value, Customer)` reads a value as another variant.
+
+List methods return a `SyncPage` (`items`, `body`, `has_next_page()`, `get_next_page()`,
+`iter_pages()`) whose iteration walks every item of every page; the async ones an
+`AsyncPaginator` to `await` for the page or `async for` the items. Event streams with a documented
+event schema are `Stream[Chunk]`s yielding models until `[DONE]`, with `last_event` the raw event.
+`client.with_raw_response.items.retrieve(...)` returns an `APIResponse` (`status_code`,
+`headers`, `request_id`, `parse()`).
+
+Every error derives from `AcmeError`. API errors are `APIStatusError` subclasses by status
+(`NotFoundError`, `RateLimitError`, `InternalServerError`...) with `body`, the error response
+decoded into its schema (else its JSON), and `request_id`. No response raises
+`APIConnectionError`, or its subclass `APITimeoutError`; an undecodable 2xx body
+`APIResponseValidationError`. The former `ApiException`, `ApiStatusError`, `NetworkException`,
+`ResponseDecodeError`, `AcmeOptions` and `AcmeAsync` names remain as deprecated aliases.
 
 ## Go
 

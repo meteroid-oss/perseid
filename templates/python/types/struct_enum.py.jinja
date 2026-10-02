@@ -60,9 +60,8 @@ from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
 
 @dataclasses.dataclass(kw_only=True)
 class {{ class_name }}(TaggedUnionModel):
-    {% if type.description is defined -%}
-        {{ docstring(type.description) | indent(4) }}
-    {% endif %}
+    {{ docstring(type.description if type.description is defined else "One of the `" ~ type.name ~ "` variants, told apart by `" ~ type.discriminator_field ~ "`.") | indent(4) }}
+
     _DISCRIMINATOR: t.ClassVar[str] = {{ py_str(type.discriminator_field) }}
     _DISCRIMINATOR_ATTR: t.ClassVar[str] = "{{ discriminator_attr }}"
     _CONTENT_ATTR: t.ClassVar[str] = "{{ content_attr }}"

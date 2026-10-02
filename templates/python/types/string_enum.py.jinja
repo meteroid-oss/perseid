@@ -3,9 +3,8 @@ from ..serialization import StrEnum
 
 
 class {{ type.name | to_upper_camel_case }}(StrEnum):
-    {% if type.description is defined -%}
-        {{ docstring(type.description) | indent(4) }}
-    {% endif %}
+    {{ docstring(type.description if type.description is defined else "The values of `" ~ type.name ~ "`; others are kept as received.") | indent(4) }}
+
     {%- set members = type.values | idents("shouty", "python", "schema `" ~ type.name ~ "`") %}
     {%- for value in type.values %}
     {{ members[loop.index0] }} = {{ py_str(value) }}

@@ -6,7 +6,18 @@ from __future__ import annotations
 import base64
 import typing as t
 
-__all__ = ["SecurityScheme", "Security", "TokenProvider", "chosen_schemes", "apply_auth"]
+import httpx
+
+__all__ = [
+    "Security",
+    "SecurityScheme",
+    "TokenProvider",
+    "apply_auth",
+    "async_token",
+    "chosen_schemes",
+    "needs_token_provider",
+    "sync_token",
+]
 
 TokenProvider = t.Callable[[], str | t.Awaitable[str]]
 """Returns a fresh bearer token; the async client also accepts coroutine functions."""
@@ -16,6 +27,8 @@ Security = t.Sequence[t.Sequence[str]]
 
 
 class SecurityScheme(t.NamedTuple):
+    """How the API reads one kind of credentials."""
+
     kind: str
     """``bearer``, ``basic`` or ``api_key``."""
     location: str = ""
@@ -42,6 +55,7 @@ def _configured(cfg: _Credentials, name: str) -> bool:
 
 
 def chosen_schemes(cfg: _Credentials, security: Security) -> list[str]:
+    """The schemes of the first alternative of ``security`` whose credentials are all set."""
     for names in security:
         if names and all(_configured(cfg, name) for name in names):
             return list(names)
@@ -49,12 +63,14 @@ def chosen_schemes(cfg: _Credentials, security: Security) -> list[str]:
 
 
 def needs_token_provider(cfg: _Credentials, names: t.Sequence[str]) -> bool:
+    """Whether the token provider must be called for the schemes ``names``."""
     return cfg.token_provider is not None and any(
         cfg.security_schemes[name].kind == "bearer" for name in names
     )
 
 
 def sync_token(cfg: _Credentials) -> str:
+    """A token from the provider, which must not be a coroutine function."""
     assert cfg.token_provider is not None
     token = cfg.token_provider()
     if not isinstance(token, str):
@@ -63,6 +79,7 @@ def sync_token(cfg: _Credentials) -> str:
 
 
 async def async_token(cfg: _Credentials) -> str:
+    """A token from the provider, awaited when it returns an awaitable."""
     assert cfg.token_provider is not None
     token = cfg.token_provider()
     return token if isinstance(token, str) else await token
@@ -72,9 +89,10 @@ def apply_auth(
     cfg: _Credentials,
     names: t.Sequence[str],
     provided_token: str | None,
-    request_kwargs: dict[str, t.Any],
+    headers: httpx.Headers,
+    params: list[tuple[str, str]],
 ) -> None:
-    headers: dict[str, str] = request_kwargs["headers"]
+    """Sets the credentials of the schemes ``names`` on a request's headers and query."""
     for name in names:
         scheme = cfg.security_schemes[name]
         if scheme.kind == "bearer":
@@ -87,9 +105,10 @@ def apply_auth(
         else:
             key = cfg.api_keys.get(name) or cfg.bearer_access_token or ""
             if scheme.location == "query":
-                request_kwargs.setdefault("params", []).append((scheme.param, key))
+                params.append((scheme.param, key))
             elif scheme.location == "cookie":
                 cookie = f"{scheme.param}={key}"
-                headers["cookie"] = f"{headers['cookie']}; {cookie}" if "cookie" in headers else cookie
+                previous = headers.get("cookie")
+                headers["cookie"] = cookie if previous is None else f"{previous}; {cookie}"
             else:
                 headers[scheme.param.lower()] = key
