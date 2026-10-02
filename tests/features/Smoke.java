@@ -205,7 +205,7 @@ public class Smoke {
                 .filter(Filter.builder().status("open").amount(FilterAmount.builder().gte(5L).build()).build())
                 .expand(List.of("a", "b"))
                 .metadata(Map.of("k", "v"))
-                .ids(WireSearchOptions.Ids.ofList(List.of("x", "y")))
+                .ids(WireSearchOptions.Ids.ofArrayOfStrings(List.of("x", "y")))
                 .tags(List.of("t1", "t2"))
                 .range(SearchRange.builder().gte(1L).lt(9L).build())
                 .build();
