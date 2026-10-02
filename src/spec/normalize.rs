@@ -30,6 +30,7 @@ pub(super) fn normalize(doc: &mut Value) -> Result<()> {
     let root = doc.clone();
     inline_operation_refs(doc, &root)?;
     open_enums(doc);
+    nullable_references(doc);
     lower_base_discriminators(doc);
     infer_discriminators(doc);
     Promoter::run(doc);
@@ -1373,7 +1374,8 @@ impl Promoter {
             let Some(mut schema) = self.schemas.get_mut(&name).map(Value::take) else {
                 continue;
             };
-            // A nullable component is typed as its object: the references carry nullability.
+            // A nullable component promoted here is typed as its object: the references carry
+            // nullability.
             if let Some((key, index)) = nullable_wrapper(&schema)
                 && is_structured(&schema[key][index])
             {
@@ -1667,6 +1669,76 @@ fn discriminator_values_at<'a>(
         .map(|base| discriminator_values_at(base, property, resolve, depth - 1))
         .find(|values| !values.is_empty())
         .unwrap_or_default()
+}
+
+/// Moves the nullability of components to their references: `null` is dropped from a nullable
+/// component, which SDKs type as its plain value, and the properties, items and map values
+/// referencing it become `oneOf: [X, {type: null}]`, the nullable `X` fields read. Aliases of a nullable component
+/// count as nullable too.
+fn nullable_references(doc: &mut Value) {
+    let Some(Value::Object(schemas)) = doc.pointer_mut("/components/schemas") else {
+        return;
+    };
+    let mut nullable = BTreeSet::new();
+    for (name, schema) in schemas.iter_mut() {
+        if let Some((key, index)) = nullable_wrapper(schema) {
+            let mut inner = schema[key][index].take();
+            if let (Some(outer), Some(inner)) = (schema.as_object(), inner.as_object_mut()) {
+                for (k, v) in outer.iter().filter(|(k, _)| *k != key) {
+                    inner.entry(k.clone()).or_insert_with(|| v.clone());
+                }
+            }
+            *schema = inner;
+            nullable.insert(format!("{SCHEMA_PREFIX}{name}"));
+        } else if drop_null_type(schema) {
+            nullable.insert(format!("{SCHEMA_PREFIX}{name}"));
+        }
+    }
+    if nullable.is_empty() {
+        return;
+    }
+    loop {
+        let aliases: Vec<String> = schemas
+            .iter()
+            .filter(|(name, schema)| {
+                schema.as_object().is_some_and(|s| s.len() == 1)
+                    && schema
+                        .get("$ref")
+                        .and_then(Value::as_str)
+                        .is_some_and(|r| nullable.contains(r))
+                    && !nullable.contains(&format!("{SCHEMA_PREFIX}{name}"))
+            })
+            .map(|(name, _)| format!("{SCHEMA_PREFIX}{name}"))
+            .collect();
+        if aliases.is_empty() {
+            break;
+        }
+        nullable.extend(aliases);
+    }
+    let mark = |slot: &mut Value| {
+        if let Value::Object(slot) = slot
+            && slot
+                .get("$ref")
+                .and_then(Value::as_str)
+                .is_some_and(|r| nullable.contains(r))
+        {
+            let target = slot.remove("$ref").unwrap_or_default();
+            slot.insert(
+                "oneOf".into(),
+                json!([{ "$ref": target }, { "type": "null" }]),
+            );
+        }
+    };
+    upgrade::each_schema(doc, &mut |map: &mut Map<String, Value>| {
+        if let Some(Value::Object(properties)) = map.get_mut("properties") {
+            properties.values_mut().for_each(mark);
+        }
+        for key in ["items", "additionalProperties"] {
+            if let Some(slot) = map.get_mut(key) {
+                mark(slot);
+            }
+        }
+    });
 }
 
 /// Turns `type: [X, "null"]` into `type: X`, returning whether `null` was allowed.
@@ -2728,6 +2800,33 @@ mod tests {
         assert_eq!(s["Value"], json!({ "type": "string" }));
     }
 
+    #[test]
+    fn references_to_nullable_components_are_nullable() {
+        let s = schemas_of(json!({
+            "Count": { "type": ["integer", "null"] },
+            "Name": { "oneOf": [{ "type": "string" }, { "type": "null" }], "description": "n" },
+            "Obj": { "type": ["object", "null"], "properties": { "a": { "type": "string" } } },
+            "Alias": { "$ref": "#/components/schemas/Count" },
+            "Thing": { "type": "object", "properties": {
+                "count": { "$ref": "#/components/schemas/Count", "description": "c" },
+                "name": { "$ref": "#/components/schemas/Name" },
+                "objs": { "type": "array", "items": { "$ref": "#/components/schemas/Obj" } },
+                "alias": { "$ref": "#/components/schemas/Alias" }
+            } }
+        }));
+        assert_eq!(s["Count"], json!({ "type": "integer" }));
+        assert_eq!(s["Name"], json!({ "type": "string", "description": "n" }));
+        assert_eq!(s["Obj"]["type"], "object");
+        let nullable =
+            |name: &str| json!([{ "$ref": format!("{SCHEMA_PREFIX}{name}") }, { "type": "null" }]);
+        let thing = &s["Thing"]["properties"];
+        assert_eq!(thing["count"]["oneOf"], nullable("Count"));
+        assert_eq!(thing["count"]["description"], "c");
+        assert_eq!(thing["name"]["oneOf"], nullable("Name"));
+        assert_eq!(thing["objs"]["items"]["oneOf"], nullable("Obj"));
+        assert_eq!(thing["alias"]["oneOf"], nullable("Alias"));
+    }
+
     fn schemas_of(doc: Value) -> Value {
         normalized(json!({ "paths": {}, "components": { "schemas": doc } }))["components"]
             ["schemas"]
@@ -2747,7 +2846,7 @@ mod tests {
         }));
         assert_eq!(
             s["Model"],
-            json!({ "description": "d", "type": ["string", "null"], "enum": ["a", "b", "c"] })
+            json!({ "description": "d", "type": "string", "enum": ["a", "b", "c"] })
         );
         // The referenced enum stays a type of its own.
         assert_eq!(s["Known"], json!({ "type": "string", "enum": ["b", "c"] }));
@@ -2786,7 +2885,8 @@ mod tests {
         let doc = json!({
             "Dated": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "string" }] },
             "Mixed": { "anyOf": [{ "type": "string" }, { "type": "integer" }] },
-            "Wrapped": { "anyOf": [{ "type": "string", "enum": ["a", "b"] }, { "type": "null" }] },
+            "Wrapped": { "type": "object", "properties": { "w": {
+                "anyOf": [{ "type": "string", "enum": ["a", "b"] }, { "type": "null" }] } } },
             "Tagged": { "oneOf": [{ "const": "a" }, { "const": "b" }], "x-perseid-union": "json" }
         });
         assert_eq!(schemas_of(doc.clone()), doc);
@@ -2800,10 +2900,8 @@ mod tests {
             "More": { "anyOf": [{ "type": "integer" }, { "type": "number" }, { "type": "string" }] }
         }));
         assert_eq!(s["Both"], json!({ "description": "d", "type": "number" }));
-        assert_eq!(
-            s["Nullable"],
-            json!({ "anyOf": [{ "type": "number" }, { "type": "null" }] })
-        );
+        // The references to a nullable component carry its nullability.
+        assert_eq!(s["Nullable"], json!({ "type": "number" }));
         assert_eq!(
             s["More"],
             json!({ "anyOf": [{ "type": "number" }, { "type": "string" }] })
