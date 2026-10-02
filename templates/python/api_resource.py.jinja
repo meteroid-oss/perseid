@@ -51,13 +51,14 @@ from __future__ import annotations
         {% endfor -%}
     {% endif -%}
     {% if op.event_schema_name is defined and op.response_is_event_stream -%}
-        {% set extra_models.names = extra_models.names + [op.event_schema_name] -%}
+        {% set extra_models.names = extra_models.names + [op.event_schema_name | to_upper_camel_case] -%}
     {% endif -%}
     {% for p in op.query_params if p.typed_union is defined -%}
         {% set extra_models.names = extra_models.names + (union_refs(p.typed_union) | trim | split(" ") | reject("equalto", "") | list) -%}
     {% endfor -%}
 {% endfor -%}
-{% set models = ((referenced_components | list) + extra_models.names) | map("to_upper_camel_case") | unique | sort | list -%}
+{#- `extra_models` holds class names already: camel-casing `AB` again would make it `Ab`. -#}
+{% set models = ((referenced_components | map("to_upper_camel_case") | list) + extra_models.names) | unique | sort | list -%}
 {% if "multipart" in body_kinds %}import dataclasses
 {% endif -%}
 import typing as t
