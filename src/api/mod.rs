@@ -123,14 +123,17 @@ impl Api {
     fn collect_errors(&mut self) {
         let mut stack: Vec<&Resource> = self.resources.values().collect();
         let mut uses = std::collections::BTreeMap::<&str, usize>::new();
+        let mut successes = std::collections::BTreeMap::<&str, usize>::new();
         let mut declaring = 0;
         while let Some(resource) = stack.pop() {
             stack.extend(resource.subresources.values());
-            for op in resource
-                .operations
-                .iter()
-                .filter(|op| !op.errors.is_empty())
-            {
+            for op in &resource.operations {
+                if let Some(schema) = op.response_schema() {
+                    *successes.entry(schema).or_default() += 1;
+                }
+                if op.errors.is_empty() {
+                    continue;
+                }
                 declaring += 1;
                 let schemas: std::collections::BTreeSet<&str> =
                     op.errors.values().map(String::as_str).collect();
@@ -140,12 +143,7 @@ impl Api {
             }
         }
         self.error_schemas = uses.keys().map(|s| (*s).to_owned()).collect();
-        self.default_error = uses
-            .iter()
-            .rev()
-            .max_by_key(|(_, count)| **count)
-            .filter(|(_, count)| **count * 10 >= declaring * 9)
-            .map(|(schema, _)| (*schema).to_owned());
+        self.default_error = infer_default_error(&uses, &successes, declaring);
     }
 
     pub(crate) fn inline_aliases(&mut self) -> anyhow::Result<()> {
@@ -177,6 +175,29 @@ impl Api {
         }
         Ok(())
     }
+}
+
+/// Fewest operations that must share an error schema for it to type every API error.
+const MIN_DEFAULT_ERROR_USES: usize = 3;
+
+/// The error schema shared by a clear majority of the operations declaring errors, and by at
+/// least a few of them, so that one operation declaring `404: Item` never types the errors of
+/// the others. A schema that is also a success body must beat those uses clearly.
+fn infer_default_error(
+    uses: &std::collections::BTreeMap<&str, usize>,
+    successes: &std::collections::BTreeMap<&str, usize>,
+    declaring: usize,
+) -> Option<String> {
+    uses.iter()
+        .rev()
+        .max_by_key(|(_, count)| **count)
+        .filter(|(schema, count)| {
+            let success = successes.get(**schema).copied().unwrap_or(0);
+            **count >= MIN_DEFAULT_ERROR_USES
+                && **count * 10 >= declaring * 9
+                && (success == 0 || **count > success * 2)
+        })
+        .map(|(schema, _)| (*schema).to_owned())
 }
 
 pub(crate) fn get_schema_name(maybe_ref: Option<&str>) -> Option<String> {
@@ -238,5 +259,45 @@ pub(crate) mod toplevel_resources_serde {
         }
 
         deserializer.deserialize_seq(ToplevelResourcesVisitor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::infer_default_error;
+
+    #[test]
+    fn a_lone_error_schema_is_not_the_default() {
+        let uses = BTreeMap::from([("Item", 1)]);
+        assert_eq!(infer_default_error(&uses, &BTreeMap::new(), 1), None);
+        let uses = BTreeMap::from([("Error", 2)]);
+        assert_eq!(infer_default_error(&uses, &BTreeMap::new(), 2), None);
+    }
+
+    #[test]
+    fn a_shared_error_schema_is_the_default() {
+        let uses = BTreeMap::from([("Error", 5)]);
+        let none = BTreeMap::new();
+        assert_eq!(
+            infer_default_error(&uses, &none, 5).as_deref(),
+            Some("Error")
+        );
+        // One of the operations declaring errors uses another schema.
+        let uses = BTreeMap::from([("Error", 5), ("Other", 1)]);
+        assert_eq!(infer_default_error(&uses, &none, 6), None);
+    }
+
+    #[test]
+    fn a_success_body_is_not_the_default_unless_clearly_an_error() {
+        let uses = BTreeMap::from([("Item", 4)]);
+        let successes = BTreeMap::from([("Item", 3)]);
+        assert_eq!(infer_default_error(&uses, &successes, 4), None);
+        let successes = BTreeMap::from([("Item", 1)]);
+        assert_eq!(
+            infer_default_error(&uses, &successes, 4).as_deref(),
+            Some("Item")
+        );
     }
 }

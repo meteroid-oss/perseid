@@ -541,6 +541,11 @@ pub(crate) struct Operation {
 }
 
 impl Operation {
+    /// The schema of the JSON success body, if it is a named one.
+    pub(crate) fn response_schema(&self) -> Option<&str> {
+        self.response_body_schema_name.as_deref()
+    }
+
     /// Whether the response is a list of items: an array, a paginated or `*List` schema, or an
     /// operation id saying so.
     pub(crate) fn returns_list(&self) -> bool {

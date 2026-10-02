@@ -14,15 +14,24 @@ pub(crate) fn apply(
     resources: &mut Resources,
     names: &BTreeMap<String, String>,
 ) -> anyhow::Result<()> {
+    let mut errors = Vec::new();
     for resource in resources.values_mut() {
-        name_resource(resource, names)?;
+        name_resource(resource, names, &mut errors);
     }
-    Ok(())
+    match errors.len() {
+        0 => Ok(()),
+        1 => bail!("{}", errors[0]),
+        n => bail!("{n} method names clash:\n  - {}", errors.join("\n  - ")),
+    }
 }
 
-fn name_resource(resource: &mut Resource, names: &BTreeMap<String, String>) -> anyhow::Result<()> {
+fn name_resource(
+    resource: &mut Resource,
+    names: &BTreeMap<String, String>,
+    errors: &mut Vec<String>,
+) {
     for sub in resource.subresources.values_mut() {
-        name_resource(sub, names)?;
+        name_resource(sub, names, errors);
     }
     let key = |name: &str| name.to_snake_case();
     let overrides: Vec<Option<String>> = resource
@@ -45,6 +54,7 @@ fn name_resource(resource: &mut Resource, names: &BTreeMap<String, String>) -> a
                 &op.method,
                 &op.path,
                 is_collection(resource, op),
+                is_single_object(op),
             ),
         })
         .collect();
@@ -97,22 +107,27 @@ fn name_resource(resource: &mut Resource, names: &BTreeMap<String, String>) -> a
         .collect();
     let mut seen = BTreeMap::new();
     for (op, name) in ops.iter().zip(&chosen) {
-        if let Some(other) = seen.insert(key(name), &op.id)
-            && *other != op.id
+        if let Some(other) = seen.insert(key(name), op)
+            && other.id != op.id
         {
-            bail!(
-                "operations `{other}` and `{}` are both named `{}` in resource `{}`: rename one \
-                 in the `[methods]` table of perseid.toml",
+            errors.push(format!(
+                "operations `{}` ({} {}) and `{}` ({} {}) are both named `{}` in resource `{}`: \
+                 set `x-perseid-name` on one of them or rename it in the `[methods]` table of \
+                 perseid.toml",
+                other.id,
+                other.method.to_uppercase(),
+                other.path,
                 op.id,
+                op.method.to_uppercase(),
+                op.path,
                 key(name),
                 resource.name
-            );
+            ));
         }
     }
     for (op, name) in resource.operations.iter_mut().zip(chosen) {
         op.name = name;
     }
-    Ok(())
 }
 
 fn base_name(op: &Operation, own: &Option<String>, derived: &Option<String>) -> String {
@@ -146,10 +161,37 @@ fn is_collection(resource: &Resource, op: &Operation) -> bool {
         })
 }
 
+/// Whether a `GET` returns one named object rather than something that could be a page: a
+/// schema that is not a list and is not named like a list wrapper.
+fn is_single_object(op: &Operation) -> bool {
+    const WRAPPERS: [&str; 10] = [
+        "Response",
+        "Result",
+        "Results",
+        "Collection",
+        "Envelope",
+        "Data",
+        "Items",
+        "Paged",
+        "Page",
+        "List",
+    ];
+    !op.returns_list()
+        && op
+            .response_schema()
+            .is_some_and(|name| !WRAPPERS.iter().any(|w| name.ends_with(w)))
+}
+
 /// `GET /customers` is `list`, `POST /customers/{id}/sources` `create_source` and
 /// `POST /invoices/{id}/finalize` `finalize`, in the resources named after their first segment.
 /// A `GET` of a singular noun with no items below it (`collection`) retrieves rather than lists.
-pub(crate) fn derive(resource: &str, method: &str, path: &str, collection: bool) -> Option<String> {
+pub(crate) fn derive(
+    resource: &str,
+    method: &str,
+    path: &str,
+    collection: bool,
+    single_object: bool,
+) -> Option<String> {
     let segments: Vec<&str> = path
         .split('/')
         .filter(|s| !s.is_empty())
@@ -162,10 +204,11 @@ pub(crate) fn derive(resource: &str, method: &str, path: &str, collection: bool)
     let is_param = |s: &str| s.starts_with('{');
     let own = singular(&resource.to_snake_case()).replace('_', "");
     let singleton = !collection
-        && segments
-            .iter()
-            .rfind(|s| !is_param(s) && !is_prefix(s))
-            .is_some_and(|s| !is_plural(&s.to_snake_case()));
+        && (single_object
+            || segments
+                .iter()
+                .rfind(|s| !is_param(s) && !is_prefix(s))
+                .is_some_and(|s| !is_plural(&s.to_snake_case())));
     let rest: Vec<&str> = match segments
         .iter()
         .position(|s| !is_param(s) && singular(&s.to_snake_case()).replace('_', "") == own)
@@ -173,7 +216,8 @@ pub(crate) fn derive(resource: &str, method: &str, path: &str, collection: bool)
         Some(i) => segments[i + 1..].to_vec(),
         None => segments
             .into_iter()
-            .filter(|s| is_param(s) || !is_prefix(s))
+            // A one or two letter fragment (`/a/{id}`) names nothing worth a method name.
+            .filter(|s| is_param(s) || (!is_prefix(s) && s.chars().count() > 2))
             .collect(),
     };
     let literals: Vec<String> = rest
@@ -290,8 +334,12 @@ mod tests {
 
     #[test]
     fn crud_paths_get_resource_method_names() {
-        let name = |method, path| derive("customers", method, path, false);
+        let name = |method, path| derive("customers", method, path, false, false);
         assert_eq!(name("get", "/v1/customers").as_deref(), Some("list"));
+        assert_eq!(
+            derive("customers", "get", "/v1/customers", false, true).as_deref(),
+            Some("retrieve")
+        );
         assert_eq!(name("post", "/v1/customers").as_deref(), Some("create"));
         assert_eq!(
             name("get", "/v1/customers/{id}").as_deref(),
@@ -314,7 +362,7 @@ mod tests {
 
     #[test]
     fn sub_paths_name_their_action_and_noun() {
-        let name = |method, path| derive("customers", method, path, false).unwrap();
+        let name = |method, path| derive("customers", method, path, false, false).unwrap();
         assert_eq!(name("get", "/v1/customers/search"), "search");
         assert_eq!(name("get", "/v1/customers/{c}/sources"), "list_sources");
         assert_eq!(name("post", "/v1/customers/{c}/sources"), "create_source");
@@ -346,16 +394,16 @@ mod tests {
         assert_eq!(name("get", "/v1/customers/{c}/download"), "download");
         assert_eq!(name("post", "/v1/customers/{c}/add_lines"), "add_lines");
         assert_eq!(
-            derive("add_ons", "get", "/addons/{id}", false).unwrap(),
+            derive("add_ons", "get", "/addons/{id}", false, false).unwrap(),
             "retrieve"
         );
         assert_eq!(name("post", "/customers/{c}/archive"), "archive");
         assert_eq!(
-            derive("pet", "get", "/pet/findByStatus", false).unwrap(),
+            derive("pet", "get", "/pet/findByStatus", false, false).unwrap(),
             "find_by_status"
         );
         assert_eq!(
-            derive("store", "get", "/store/order/{id}", false).unwrap(),
+            derive("store", "get", "/store/order/{id}", false, false).unwrap(),
             "retrieve_order"
         );
     }
@@ -363,33 +411,45 @@ mod tests {
     #[test]
     fn resources_missing_from_the_path_name_its_nouns() {
         assert_eq!(
-            derive("billing", "get", "/api/v1/invoices", false).unwrap(),
+            derive("billing", "get", "/api/v1/invoices", false, false).unwrap(),
             "list_invoices"
         );
         assert_eq!(
-            derive("billing", "post", "/invoices", false).unwrap(),
+            derive("billing", "post", "/invoices", false, false).unwrap(),
             "create_invoice"
         );
         assert_eq!(
-            derive("billing", "get", "/invoices/{id}", false).unwrap(),
+            derive("billing", "get", "/invoices/{id}", false, false).unwrap(),
             "retrieve_invoice"
         );
         assert_eq!(
-            derive("billing", "get", "/{id}", false),
+            derive("billing", "get", "/{id}", false, false),
             Some("retrieve".into())
         );
     }
 
     #[test]
     fn singular_paths_without_items_are_retrieved() {
-        let name = |path, collection| derive("balance", "get", path, collection).unwrap();
+        let name = |path, collection| derive("balance", "get", path, collection, false).unwrap();
         assert_eq!(name("/v1/balance", false), "retrieve");
         assert_eq!(name("/v1/balance", true), "list");
         assert_eq!(name("/v1/balance/history", false), "retrieve_history");
         assert_eq!(name("/v1/balance/history", true), "list_history");
         assert_eq!(
-            derive("usage", "get", "/v1/usage/costs", false).unwrap(),
+            derive("usage", "get", "/v1/usage/costs", false, false).unwrap(),
             "list_costs"
+        );
+    }
+
+    #[test]
+    fn fragments_of_foreign_paths_are_not_nouns() {
+        assert_eq!(
+            derive("collide", "get", "/a/{id}", false, false).unwrap(),
+            "retrieve"
+        );
+        assert_eq!(
+            derive("collide", "post", "/ab/{id}/cancel", false, false).unwrap(),
+            "cancel"
         );
     }
 
