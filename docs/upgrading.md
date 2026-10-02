@@ -24,7 +24,9 @@ Old names stay as deprecated aliases where noted, so most code keeps compiling w
 - **Every language**: list methods return pages that also iterate every item; streams with a
   declared event schema yield models; raw responses, unknown properties and
   `<PREFIX>_API_KEY`/`<PREFIX>_BASE_URL` are new (see [features](features.md)). A 429 on a
-  non-idempotent request without an `Idempotency-Key` is no longer retried.
+  non-idempotent request without an `Idempotency-Key` is no longer retried. An operation whose
+  spec also declares a bodiless 2xx returns "no value" for it (`undefined`, `None`, `nil`,
+  `Option`, `Optional`, `T?`) instead of failing to decode.
 - **TypeScript**: errors are `<Client>Error` subclasses (`APIError`, `APIConnectionError`...);
   `ApiError`, `ApiException` and `ApiTimeoutError` stay as aliases. `list()` returns a
   `PagePromise`, `listIter()` stays.
