@@ -1,32 +1,35 @@
-{#- Properties of `fields`, inside a type named `owner`, their unions named after `union_owner`. -#}
-{% for field in fields -%}
-{% set ty = m.field_type(field, m.union_class(field, union_owner, type_names), readonly=true) -%}
-{% set tags = type.discriminator_defaults | default({}) if owner == type_name else {} -%}
-{% set tag_default = tags[field.name] if field.required and field.name in tags else none -%}
-{% set patch = (patch_body | default(false) or owner is endingwith "Patch") and field.nullable -%}
-{% if field.description is defined %}
+{#- Properties of `fields`, inside a type named `owner`, their unions named after `union_owner`;
+    each line starts with a newline, a blank line between properties and before the first with `lead`. -#}
+{%- for field in fields %}
+{%- set ty = m.field_type(field, m.union_class(field, union_owner, type_names), readonly=true) %}
+{%- set tags = type.discriminator_defaults | default({}) if owner == type_name else {} %}
+{%- set tag_default = tags[field.name] if field.required and field.name in tags else none %}
+{%- set patch = (patch_body | default(false) or owner is endingwith "Patch") and field.nullable %}
+{%- if lead | default(true) or not loop.first %}{{ "\n" }}{% endif %}
+{%- if field.description is defined %}
 {{ m.doc(field.description) }}
 {%- else %}
 /// <summary>The <c>{{ field.name | replace("&", "&amp;") | replace("<", "&lt;") }}</c> property.</summary>
 {%- endif %}
 [JsonPropertyName("{{ field.name }}")]
-{% if patch -%}
+{%- if patch %}
 [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
 [JsonConverter(typeof(MaybeUnsetConverter<{{ ty }}>))]
-{% elif field.required and field.nullable -%}
+{%- elif field.required and field.nullable %}
 [JsonIgnore(Condition = JsonIgnoreCondition.Never)]
-{% endif -%}
-{% if "decimal" in ty -%}
+{%- endif %}
+{%- if "decimal" in ty %}
 [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString | JsonNumberHandling.WriteAsString)]
-{% endif -%}
+{%- endif %}
 {#- C# rejects `[Obsolete]` on required members. #}
-{% if field.deprecated and (patch or not field.required) %}[Obsolete("Deprecated by the API.")]
-{% endif -%}
-{% if patch -%}
+{%- if field.deprecated and (patch or not field.required) %}
+[Obsolete("Deprecated by the API.")]
+{%- endif %}
+{%- if patch %}
 public MaybeUnset<{{ ty }}> {{ m.member(field.name, owner) }} { get; init; }
-{% elif tag_default is not none -%}
+{%- elif tag_default is not none %}
 public {{ ty }} {{ m.member(field.name, owner) }} { get; init; } = {{ tag_default | tojson }};
-{% else -%}
+{%- else %}
 public {% if field.required %}required {% endif %}{{ ty }} {{ m.member(field.name, owner) }} { get; init; }
-{% endif %}
-{% endfor -%}
+{%- endif %}
+{%- endfor %}

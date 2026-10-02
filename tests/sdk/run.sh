@@ -55,6 +55,6 @@ GRADLE
   csharp)
     rm -rf _torture && dotnet test Tests
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
-    cd "$work/torture" && perseid init --sdks csharp && perseid generate csharp
+    cd "$work/torture" && perseid init --sdks csharp && sed -i '/^base_url/d' perseid.toml && perseid generate csharp
     cp -r "$here/csharp/_torture/." csharp/ && cd csharp && dotnet test Tests ;;
 esac

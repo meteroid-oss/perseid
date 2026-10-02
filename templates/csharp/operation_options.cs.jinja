@@ -9,13 +9,13 @@
 #pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
 using System;
 using System.Collections.Generic;
-{% if unions.fields -%}
+{%- if unions.fields %}
 using System.Text.Json;
-{% endif -%}
+{%- endif %}
 using System.Text.Json.Nodes;
-{% if unions.fields -%}
+{%- if unions.fields %}
 using System.Text.Json.Serialization;
-{% endif -%}
+{%- endif %}
 using {{ sdk.package_name }}.Models;
 
 namespace {{ sdk.package_name }};
@@ -23,28 +23,25 @@ namespace {{ sdk.package_name }};
 /// <summary>Query and header parameters of <see cref="{{ m.resource_class(resource.name) }}.{{ operation.name | to_upper_camel_case }}Async"/>{% if operation | has_required_query_or_header_params %}; the <c>required</c> ones must be set{% endif %}.</summary>
 public sealed record {{ class_name }}
 {
-{% for p in operation.query_params -%}
-{% if not loop.first %}
-
-{% endif -%}
-{% if p.description is defined -%}
-    {{ m.doc(p.description) }}
-{% else -%}
+{%- for p in operation.query_params %}
+{%- if not loop.first %}{{ "\n" }}{% endif %}
+{%- if p.description is defined %}
+    {{ m.doc(p.description) | indent(4) }}
+{%- else %}
     /// <summary>The <c>{{ p.name | replace("&", "&amp;") | replace("<", "&lt;") }}</c> query parameter.</summary>
-{% endif -%}
-{% set ty = (class_name ~ (p.name | to_rust_variant)) if p.typed_union is defined else p.type.to_csharp() -%}
+{%- endif %}
+{%- set ty = (class_name ~ (p.name | to_rust_variant)) if p.typed_union is defined else p.type.to_csharp() %}
     public {% if p.required %}required {% endif %}{{ ty }}{% if not p.required %}?{% endif %} {{ m.member(p.name, class_name) }} { get; init; }
-{% endfor -%}
-{% for p in operation.header_params -%}
-{% if operation.query_params or not loop.first %}
-
-{% endif -%}
-{% if p.description is defined -%}
-    {{ m.doc(p.description) }}
-{% else -%}
+{%- endfor %}
+{%- for p in operation.header_params %}
+{%- if operation.query_params or not loop.first %}{{ "\n" }}{% endif %}
+{%- if p.description is defined %}
+    {{ m.doc(p.description) | indent(4) }}
+{%- else %}
     /// <summary>The <c>{{ p.name | replace("&", "&amp;") | replace("<", "&lt;") }}</c> header.</summary>
-{% endif -%}
+{%- endif %}
     public {% if p.required %}required {% endif %}string{% if not p.required %}?{% endif %} {{ m.member(p.name, class_name) }} { get; init; }
-{% endfor -%}
+{%- endfor %}
 }
-{% with fields = unions.fields, union_owner = class_name, type_names = [] %}{% include "types/unions.cs.jinja" %}{% endwith %}
+{%- with fields = unions.fields, union_owner = class_name, type_names = [] %}{% include "types/unions.cs.jinja" %}{% endwith %}
+

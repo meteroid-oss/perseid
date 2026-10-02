@@ -1330,6 +1330,16 @@ mod tests {
     }
 
     #[test]
+    fn base_url_is_empty_unless_configured() {
+        let toml = "name = \"A\"\nsdks = [\"go\"]\n";
+        assert_eq!(context(toml, "go")["has_default_base_url"], false);
+        assert_eq!(context(toml, "go")["default_base_url"], "");
+        let toml = format!("base_url = \"https://a.test\"\n{toml}");
+        assert_eq!(context(&toml, "go")["has_default_base_url"], true);
+        assert_eq!(context(&toml, "go")["default_base_url"], "https://a.test");
+    }
+
+    #[test]
     fn language_keys_belong_to_their_table() {
         let toml =
             "name = \"A\"\nsdks = [\"typescript\", \"python\"]\n[typescript]\nint64 = \"bigint\"\n";

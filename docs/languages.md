@@ -224,7 +224,9 @@ bodiless 2xx returns an `Optional`. The HTTP plumbing lives in an
 
 Targets .NET 8 with nullable reference types and System.Text.Json source generation (trimming and
 AOT safe); generated code builds clean with `AnalysisLevel` `latest-recommended` and documents every
-public member. `new AcmeClient()` reads `ACME_API_KEY` and `ACME_BASE_URL`. Every method is async
+public member. `new AcmeClient()` reads `ACME_API_KEY` and `ACME_BASE_URL`, and throws an
+`AcmeException` when neither the options nor `ACME_BASE_URL` set a base URL and the spec declares
+no server (`AcmeClientOptions.DefaultBaseUrl` otherwise). Every method is async
 and takes a `RequestOptions` (`Headers`, `Timeout`, `MaxRetries`, `IdempotencyKey`) then a
 `CancellationToken`. Each resource implements an interface (`IAcmeClient.Customers` is an
 `ICustomersApi`) to mock in tests, and `client.Customers.WithRawResponse.RetrieveAsync(id)` returns
@@ -239,7 +241,8 @@ timeout of its own, leaving it to the SDK's. Each call is an
 Models are `sealed record`s with `init` properties and read-only collections, compared by value
 (collections and JSON included); properties the SDK does not know are kept in
 `AdditionalProperties` and sent back. Unknown enum values expose `IsKnown`, and the known ones are
-also constants in `Status.Values` to `switch` on `status.Value`. Nullable optional PATCH
+also constants in `Status.Values` to `switch` on `status.Value`; a string (or `new Status("x")`)
+converts to any value. Nullable optional PATCH
 fields are `MaybeUnset<T>`: assign `null` to send `null`, leave them unset to omit them. Dates are
 `DateTimeOffset`s, so fractions of a second beyond 100 nanoseconds are rounded. A union is an
 abstract record with a nested record per variant (`StringValue`, `ListValue`... for JSON types),
@@ -250,12 +253,11 @@ same way.
 
 `ListAutoPagingAsync()` returns an `AsyncPager` to `await foreach` over every item, whose
 `AsPagesAsync()` and `GetFirstPageAsync()` give `Page`s with `Items`, `Response`, `HasNextPage` and
-`GetNextPageAsync()` (`ListIterAsync()` is its deprecated name). Event streams whose events the
-spec types are `EventStream<T>`s of models, ending at `[DONE]`, with `LastEvent` for the raw event.
+`GetNextPageAsync()`. Event streams whose events the spec types are `EventStream<T>`s of models,
+ending at `[DONE]`, with `LastEvent` for the raw event.
 
 Everything the SDK throws derives from `AcmeException`: `ApiException` subclasses by status
 (`NotFoundException`, `RateLimitException`, `ServerErrorException`...),
 `ApiConnectionException` and its `ApiTimeoutException`, and `ApiDecodeException`. An
 `ApiException` has the `Body` (truncated in the message), `Error`, the body parsed as the schema
-the operation declares for its status (else a `JsonElement`), `GetError<T>()` and `RequestId`
-(`GetDeclaredError()` and `GetRequestId()` in projects scaffolded by earlier versions).
+the operation declares for its status (else a `JsonElement`), `GetError<T>()` and `RequestId`.

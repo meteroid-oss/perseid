@@ -50,6 +50,16 @@ public class ClientTests
     }
 
     [Fact]
+    public async Task TheServerOfTheSpecIsTheDefaultBaseUrl()
+    {
+        Assert.Equal("https://petstore.example.com", PetstoreClientOptions.DefaultBaseUrl);
+        var origin = new Origin();
+        using var client = new PetstoreClient("tok", new() { HttpMessageHandler = origin });
+        await client.Pets.RetrieveAsync("1");
+        Assert.Equal("https://petstore.example.com/pets/1", origin.Seen[0].RequestUri!.ToString());
+    }
+
+    [Fact]
     public void TheFactoryHttpClientLeavesTimeoutsToTheSdk()
     {
         var services = new ServiceCollection();

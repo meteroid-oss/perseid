@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Http.Headers;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 
@@ -45,11 +44,9 @@ public class RateLimitException(HttpStatusCode statusCode, string body, HttpResp
 public class ServerErrorException(HttpStatusCode statusCode, string body, HttpResponseHeaders headers)
     : ApiException(statusCode, body, headers);
 
-/// <summary>Typed access to the body and headers of an <see cref="ApiException"/>.</summary>
+/// <summary>Typed access to the body of an <see cref="ApiException"/>.</summary>
 public static partial class ApiExceptionExtensions
 {
-    private static readonly ConditionalWeakTable<ApiException, DeclaredError> s_declared = new();
-
     /// <summary>
     /// The body parsed as the model <typeparamref name="T"/>, or <c>default</c> when it is not one.
     /// </summary>
@@ -67,24 +64,6 @@ public static partial class ApiExceptionExtensions
         }
     }
 
-    /// <summary>
-    /// The body parsed as the error schema the operation declares for the status (exact status, then
-    /// <c>4XX</c>, then <c>default</c>), else as a <see cref="JsonElement"/>; <c>null</c> when it is
-    /// not JSON. Parsed once, on first use.
-    /// </summary>
-    public static object? GetDeclaredError(this ApiException exception)
-    {
-        ArgumentNullException.ThrowIfNull(exception);
-        return s_declared.GetValue(exception, e => new DeclaredError(e.Body, null)).Value;
-    }
-
-    /// <summary>The <c>x-request-id</c> (or <c>request-id</c>) response header, to quote to support.</summary>
-    public static string? GetRequestId(this ApiException exception)
-    {
-        ArgumentNullException.ThrowIfNull(exception);
-        return RequestId(exception.Headers);
-    }
-
     internal static string? RequestId(HttpHeaders headers)
     {
         foreach (var name in (string[])["x-request-id", "request-id"])
@@ -95,6 +74,29 @@ public static partial class ApiExceptionExtensions
             }
         }
         return null;
+    }
+
+    /// <summary>The body parsed as <paramref name="typeInfo"/>, else as a <see cref="JsonElement"/>;
+    /// <c>null</c> when it is not JSON.</summary>
+    internal static object? DecodeError(string body, JsonTypeInfo? typeInfo)
+    {
+        if (typeInfo is not null)
+        {
+            try
+            {
+                return JsonSerializer.Deserialize(body, typeInfo);
+            }
+            catch (JsonException) { }
+        }
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return document.RootElement.Clone();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// <summary>The exception of an error response: the <see cref="ApiException.FromResponse"/> hook,
@@ -111,7 +113,7 @@ public static partial class ApiExceptionExtensions
         {
             error = ForStatus(statusCode, body, headers);
         }
-        s_declared.AddOrUpdate(error, new DeclaredError(body, ErrorType((int)statusCode, errorTypes)));
+        error.ErrorType = ErrorType((int)statusCode, errorTypes);
         return error;
     }
 
@@ -153,32 +155,4 @@ public static partial class ApiExceptionExtensions
             >= 500 and < 600 => new ServerErrorException(statusCode, body, headers),
             _ => new ApiException(statusCode, body, headers),
         };
-
-    private sealed class DeclaredError(string body, JsonTypeInfo? typeInfo)
-    {
-        private readonly Lazy<object?> _value = new(() => Decode(body, typeInfo));
-
-        public object? Value => _value.Value;
-
-        private static object? Decode(string body, JsonTypeInfo? typeInfo)
-        {
-            if (typeInfo is not null)
-            {
-                try
-                {
-                    return JsonSerializer.Deserialize(body, typeInfo);
-                }
-                catch (JsonException) { }
-            }
-            try
-            {
-                using var document = JsonDocument.Parse(body);
-                return document.RootElement.Clone();
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
-        }
-    }
 }

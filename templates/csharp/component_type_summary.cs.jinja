@@ -114,7 +114,7 @@ namespace {{ sdk.package_name }}.Models;
 {% endfor -%}
 {% endfor -%}
 public sealed partial class {{ sdk.client_name }}JsonContext : JsonSerializerContext { }
-{% for union, cases in expandables.list %}
+{%- for union, cases in expandables.list %}
 
 public abstract partial record {{ union }}
 {
@@ -122,8 +122,11 @@ public abstract partial record {{ union }}
     public string? Id =>
         this switch
         {
-{% for case in cases %}            {{ case }},
-{% endfor %}            _ => null,
+{%- for case in cases %}
+            {{ case }},
+{%- endfor %}
+            _ => null,
         };
 }
-{% endfor -%}
+{%- endfor %}
+
