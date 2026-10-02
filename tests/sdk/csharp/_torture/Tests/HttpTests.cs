@@ -121,6 +121,7 @@ public class HttpTests
     [InlineData(HttpStatusCode.TooManyRequests, 3)]
     [InlineData(HttpStatusCode.RequestTimeout, 3)]
     [InlineData(HttpStatusCode.BadGateway, 3)]
+    [InlineData(HttpStatusCode.NotImplemented, 3)]
     [InlineData(HttpStatusCode.Conflict, 1)]
     [InlineData(HttpStatusCode.BadRequest, 1)]
     public async Task RetriesTransientFailures(HttpStatusCode status, int attempts)
@@ -159,17 +160,55 @@ public class HttpTests
     }
 
     [Fact]
-    public async Task DoesNotWaitForAFarRetryAfter()
+    public async Task BacksOffInsteadOfAFarRetryAfter()
     {
-        var (client, server) = Client(_ =>
+        var (client, server) = Client(n =>
         {
-            var response = Reply(HttpStatusCode.ServiceUnavailable);
-            response.Headers.TryAddWithoutValidation("Retry-After", "3600");
+            var response = n > 2 ? Reply(HttpStatusCode.OK, ThingJson) : Reply(HttpStatusCode.ServiceUnavailable);
+            response.Headers.TryAddWithoutValidation("Retry-After", n == 1 ? "3600" : "-5");
             return response;
         });
         using var _ = client;
-        await Assert.ThrowsAsync<ServerErrorException>(() => client.Things.RetrieveAsync("t1"));
-        Assert.Single(server.Seen);
+        var clock = Stopwatch.StartNew();
+        await client.Things.RetrieveAsync("t1");
+        Assert.Equal(3, server.Seen.Count);
+        Assert.InRange(clock.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task StreamTwinsSetStreamWithoutTouchingTheBody()
+    {
+        var (client, server) = Client(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("data: {\"text\":\"hi\"}\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream"),
+            }
+        );
+        using var _ = client;
+        var texts = new List<string>();
+        await foreach (var reply in await client.Chats.CreateStreamAsync())
+        {
+            texts.Add(reply.Text);
+        }
+        var body = new ChatRequest { Model = "m" };
+        await using (await client.Chats.CreateStreamAsync(body)) { }
+        Assert.Equal(["hi"], texts);
+        Assert.Equal("""{"stream":true}""", server.Seen[0].Body);
+        Assert.Equal("""{"model":"m","stream":true}""", server.Seen[1].Body);
+        Assert.Null(body.Stream);
+    }
+
+    [Fact]
+    public async Task ABodilessSuccessIsNullWhereTheSpecAllowsIt()
+    {
+        var (client, _) = Client(n =>
+            n == 1
+                ? new HttpResponseMessage(HttpStatusCode.Accepted)
+                : Reply(HttpStatusCode.OK, """{"id":"j1"}""")
+        );
+        using var _ = client;
+        Assert.Null(await client.Jobs.RetrieveAsync("j1"));
+        Assert.Equal("j1", (await client.Jobs.RetrieveAsync("j1"))?.Id);
     }
 
     [Fact]

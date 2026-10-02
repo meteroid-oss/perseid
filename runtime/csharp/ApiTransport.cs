@@ -99,17 +99,37 @@ internal sealed class ApiTransport : IDisposable
                 null
             );
         }
+        return new ApiResponse<T>(result.Response, Decode(result.Body, typeInfo));
+    }
+
+    private static T Decode<T>(byte[] body, JsonTypeInfo<T> typeInfo)
+    {
         try
         {
-            var value =
-                JsonSerializer.Deserialize(result.Body, typeInfo)
+            return JsonSerializer.Deserialize(body, typeInfo)
                 ?? throw new JsonException($"expected a {typeof(T).Name} body, got null");
-            return new ApiResponse<T>(result.Response, value);
         }
         catch (JsonException e)
         {
             throw new ApiDecodeException($"the response is not a valid {typeof(T).Name}: {e.Message}", e);
         }
+    }
+
+    /// <summary>Like <see cref="SendJsonAsync"/>, with the default <typeparamref name="TResult"/>
+    /// (<c>null</c>) for an empty body.</summary>
+    public async Task<ApiResponse<TResult>> SendJsonOrDefaultAsync<T, TResult>(
+        ApiRequest request,
+        JsonTypeInfo<T> typeInfo,
+        RequestOptions? options,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = await SendWithRetriesAsync(request, options, false, cancellationToken)
+            .ConfigureAwait(false);
+        return new(
+            result.Response,
+            result.Body.Length == 0 ? default! : (TResult)(object)Decode(result.Body, typeInfo)!
+        );
     }
 
     public async Task<ApiResponse<byte[]>> SendBytesAsync(
@@ -270,8 +290,7 @@ internal sealed class ApiTransport : IDisposable
                     {
                         return new(meta, body, null);
                     }
-                    var delay = RetryDelay(attempt, response);
-                    if (last || !ShouldRetry((int)response.StatusCode) || delay is null)
+                    if (last || !ShouldRetry((int)response.StatusCode))
                     {
                         activity?.SetStatus(ActivityStatusCode.Error);
                         throw ApiExceptionExtensions.ForResponse(
@@ -281,7 +300,7 @@ internal sealed class ApiTransport : IDisposable
                             request.ErrorTypes
                         );
                     }
-                    wait = delay;
+                    wait = RetryDelay(attempt, response);
                 }
                 catch (Exception e) when (e is HttpRequestException or IOException)
                 {
@@ -319,15 +338,14 @@ internal sealed class ApiTransport : IDisposable
 
     private static bool ShouldRetry(int status) => status is 408 or 429 or >= 500;
 
-    /// <summary>The server's <c>Retry-After</c> or the backoff; <c>null</c> when the server asks for
-    /// longer than a minute, which is not waited for.</summary>
-    private TimeSpan? RetryDelay(int attempt, HttpResponseMessage response) =>
-        RetryAfter(response, DateTimeOffset.UtcNow) switch
-        {
-            { } delay when delay > MaxRetryAfter => null,
-            { } delay => delay,
-            null => Backoff(attempt),
-        };
+    /// <summary>The server's <c>retry-after-ms</c> or <c>Retry-After</c> when within a minute, else
+    /// the backoff.</summary>
+    private TimeSpan RetryDelay(int attempt, HttpResponseMessage response) =>
+        RetryAfter(response, DateTimeOffset.UtcNow) is { } delay
+        && delay >= TimeSpan.Zero
+        && delay <= MaxRetryAfter
+            ? delay
+            : Backoff(attempt);
 
     /// <summary>The scheduled delay, else 0.5s doubling up to 8s, with jitter between half and all of it.</summary>
     private TimeSpan Backoff(int attempt)
@@ -341,7 +359,7 @@ internal sealed class ApiTransport : IDisposable
         return capped * (0.5 + Random.Shared.NextDouble() / 2);
     }
 
-    /// <summary><c>Retry-After</c> in seconds or as an HTTP date, or <c>retry-after-ms</c>.</summary>
+    /// <summary><c>retry-after-ms</c>, else <c>Retry-After</c> in seconds or as an HTTP date.</summary>
     internal static TimeSpan? RetryAfter(HttpResponseMessage? response, DateTimeOffset now)
     {
         if (response is null)
@@ -356,15 +374,15 @@ internal sealed class ApiTransport : IDisposable
                 CultureInfo.InvariantCulture,
                 out var millis
             )
-            && millis >= 0
+            && double.IsFinite(millis)
         )
         {
-            return TimeSpan.FromMilliseconds(millis);
+            return TimeSpan.FromMilliseconds(Math.Clamp(millis, -1, int.MaxValue));
         }
         return response.Headers.RetryAfter switch
         {
             { Delta: { } delta } => delta,
-            { Date: { } date } => date > now ? date - now : TimeSpan.Zero,
+            { Date: { } date } => date - now,
             _ => null,
         };
     }

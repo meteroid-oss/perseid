@@ -107,6 +107,8 @@ internal sealed class ApiRequest(HttpMethod method, string path, string operatio
     public void SetJsonBody<T>(T body, JsonTypeInfo<T> typeInfo) =>
         _json = JsonSerializer.SerializeToUtf8Bytes(body, typeInfo);
 
+    public void SetJsonBody(JsonObject body) => _json = Encoding.UTF8.GetBytes(body.ToJsonString());
+
     /// <summary>Sets an <c>application/x-www-form-urlencoded</c> body from the JSON form of
     /// <paramref name="body"/>, so wire names come from the model's attributes. Lists of the
     /// <paramref name="deepObject"/> properties are sent as <c>name[]=item</c>, those of the
