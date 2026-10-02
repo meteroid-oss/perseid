@@ -778,28 +778,33 @@ impl Request {
 }
 
 /// The access token of the OAuth2 scheme with token URL `url`: the cached one, else a new one.
-async fn oauth_token(
-    conf: &Configuration,
+///
+/// Fetching a token sends a request, which may fetch a token: the future is boxed behind a named
+/// type so the compiler proves it `Send` without following that cycle.
+fn oauth_token<'a>(
+    conf: &'a Configuration,
     url: &'static str,
     scope: &'static str,
-) -> Result<OAuthUse, Error> {
-    let client = conf
-        .credentials
-        .oauth
-        .as_ref()
-        .ok_or_else(|| request_error("no OAuth2 client credentials"))?;
-    let key = if url.contains("://") {
-        url.to_owned()
-    } else {
-        format!("{}{url}", conf.base_path.trim_end_matches('/'))
-    };
-    let fetch = SyncFuture::new(fetch_token(conf, url, scope));
-    let token = client.token(&key, fetch).await?;
-    Ok(OAuthUse {
-        url,
-        scope,
-        key,
-        token,
+) -> SyncFuture<'a, Result<OAuthUse, Error>> {
+    SyncFuture::new(async move {
+        let client = conf
+            .credentials
+            .oauth
+            .as_ref()
+            .ok_or_else(|| request_error("no OAuth2 client credentials"))?;
+        let key = if url.contains("://") {
+            url.to_owned()
+        } else {
+            format!("{}{url}", conf.base_path.trim_end_matches('/'))
+        };
+        let fetch = SyncFuture::new(fetch_token(conf, url, scope));
+        let token = client.token(&key, fetch).await?;
+        Ok(OAuthUse {
+            url,
+            scope,
+            key,
+            token,
+        })
     })
 }
 
