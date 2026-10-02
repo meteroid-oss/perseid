@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// Gives the SDK at `dir` its skeleton when it has no package manifest: manifest, README, error
-/// types. With a manifest, only restores the deleted skeleton files of [`UPGRADES`].
+/// types.
 pub fn bootstrap(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<PathBuf>> {
     let manifests: &[&str] = match sdk.language {
         "rust" => &["Cargo.toml"],
@@ -31,20 +31,12 @@ pub fn bootstrap(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<PathBuf>>
                 .any(|e| e.path().extension().is_some_and(|x| x == "sln"))
         })
     };
-    let existing =
-        manifests.iter().any(|m| dir.join(m).exists()) || (sdk.language == "csharp" && dotnet());
-    let context = scaffold_context(config, sdk, dir);
-    let restored: Vec<String> = UPGRADES
-        .iter()
-        .filter(|u| u.language == sdk.language && u.restore)
-        .map(|u| tokens(u.path, &context))
-        .collect::<Result<_>>()?;
+    if manifests.iter().any(|m| dir.join(m).exists()) || (sdk.language == "csharp" && dotnet()) {
+        return Ok(vec![]);
+    }
     let mut created = Vec::new();
     for (path, content) in skeleton(config, sdk, dir)? {
-        let target = dir.join(&path);
-        if existing && !restored.contains(&path) {
-            continue;
-        }
+        let target = dir.join(path);
         if !target.exists() {
             fsx::write(&target, &content)?;
             created.push(target);
@@ -53,120 +45,11 @@ pub fn bootstrap(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<PathBuf>>
     Ok(created)
 }
 
-/// A scaffold file written by an earlier perseid that the current runtime no longer builds with.
-struct Upgrade {
-    language: &'static str,
-    path: &'static str,
-    stale: fn(&str, &Value) -> bool,
-    fix: &'static str,
-    /// Deleting the file is the fix: `generate` writes the current one.
-    restore: bool,
-}
-
-fn client(context: &Value) -> &str {
-    context["client_name"].as_str().unwrap_or_default()
-}
-
-const UPGRADES: &[Upgrade] = &[
-    Upgrade {
-        language: "rust",
-        path: "Cargo.toml",
-        stale: |text, _| text.contains("package = \"http\""),
-        fix: "replace the `http1 = { package = \"http\", ... }` dependency by `http = \"1\"`",
-        restore: false,
-    },
-    Upgrade {
-        language: "rust",
-        path: "src/error.rs",
-        stale: |text, _| text.contains("http1::"),
-        fix: "replace `http1::` by `http::`",
-        restore: false,
-    },
-    Upgrade {
-        language: "go",
-        path: "go.mod",
-        stale: |text, _| {
-            text.lines().any(|line| {
-                line.strip_prefix("go 1.")
-                    .and_then(|minor| minor.split('.').next()?.parse::<u32>().ok())
-                    .is_some_and(|minor| minor < 23)
-            })
-        },
-        fix: "raise the `go` directive to 1.23, the runtime ranges over iterators",
-        restore: false,
-    },
-    Upgrade {
-        language: "go",
-        path: "errors.go",
-        stale: |text, _| {
-            text.contains("type APIError struct")
-                && !text.lines().any(|l| l.trim_start().starts_with("Body "))
-        },
-        fix: "add a `Body any` field to `APIError`: the error body decoded as its schema",
-        restore: false,
-    },
-    Upgrade {
-        language: "python",
-        path: "@@PACKAGE_NAME@@/errors.py",
-        stale: |text, _| !text.contains("APIStatusError"),
-        fix: "move your changes aside and delete it: the runtime raises the errors the new one \
-              exports, so `except` clauses on the old classes would no longer match",
-        restore: true,
-    },
-    Upgrade {
-        language: "csharp",
-        path: "@@PACKAGE_NAME@@/ApiException.cs",
-        stale: |text, context| !text.contains(&format!(": {}Exception", client(context))),
-        fix: "move your changes aside and delete it: `ApiException` must derive from the \
-              SDK's base exception",
-        restore: true,
-    },
-    Upgrade {
-        language: "csharp",
-        path: "@@PACKAGE_NAME@@/@@PACKAGE_NAME@@.csproj",
-        stale: |text, context| {
-            context["dependency_injection"] == true && !text.contains("Microsoft.Extensions.Http")
-        },
-        fix: "reference the `Microsoft.Extensions.Http` package, which `dependency_injection` needs",
-        restore: false,
-    },
-    Upgrade {
-        language: "java",
-        path: "src/main/java/@@JAVA_PACKAGE_PATH@@/exceptions/ApiException.java",
-        stale: |text, context| !text.contains(&format!("extends {}Exception", client(context))),
-        fix: "move your changes aside and delete it: `ApiException` must extend the SDK's base \
-              exception",
-        restore: true,
-    },
-];
-
-/// The scaffold files an earlier perseid wrote at `dir` that need changes the current runtime
-/// relies on, with what to change.
-pub fn stale_files(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<String>> {
-    let context = scaffold_context(config, sdk, dir);
-    let mut stale = Vec::new();
-    for upgrade in UPGRADES.iter().filter(|u| u.language == sdk.language) {
-        let path = tokens(upgrade.path, &context)?;
-        let Ok(text) = std::fs::read_to_string(dir.join(&path)) else {
-            continue;
-        };
-        if (upgrade.stale)(&text, &context) {
-            stale.push(format!("{}: {}", dir.join(&path).display(), upgrade.fix));
-        }
-    }
-    Ok(stale)
-}
-
-fn scaffold_context(config: &Config, sdk: &Sdk, dir: &Path) -> Value {
+/// The skeleton of an SDK checked out at `dir`, relative to it.
+fn skeleton(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
     let mut context = config.context(sdk, dir);
     let path = context["java_package"].as_str().unwrap().replace('.', "/");
     context["java_package_path"] = path.into();
-    context
-}
-
-/// The skeleton of an SDK checked out at `dir`, relative to it.
-fn skeleton(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
-    let mut context = scaffold_context(config, sdk, dir);
     package_metadata(config, &mut context);
     let mut files = Vec::new();
     for (path, content) in assets::under(&format!("scaffold/{}", sdk.language)) {
@@ -473,62 +356,6 @@ fn without_unset_metadata(source: &str, context: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fresh_skeletons_are_not_stale_and_old_ones_are() {
-        let toml = "name = \"Pet Store\"\nsdks = [\"rust\", \"typescript\", \"python\", \"go\", \
-                    \"java\", \"csharp\"]\n[csharp.context]\ndependency_injection = true\n";
-        let config: Config = toml::from_str(toml).unwrap();
-        for sdk in config.sdks(&[]).unwrap() {
-            let dir = tempfile::tempdir().unwrap();
-            for (path, content) in skeleton(&config, &sdk, dir.path()).unwrap() {
-                fsx::write(&dir.path().join(path), &content).unwrap();
-            }
-            let stale = stale_files(&config, &sdk, dir.path()).unwrap();
-            assert!(stale.is_empty(), "{}: {stale:?}", sdk.language);
-        }
-
-        let old = [
-            (
-                "rust",
-                "src/error.rs",
-                "use http1::{HeaderMap, StatusCode};",
-            ),
-            ("go", "go.mod", "module m\n\ngo 1.22\n"),
-            (
-                "go",
-                "errors.go",
-                "type APIError struct {\n\tStatusCode int\n}\n",
-            ),
-            (
-                "python",
-                "pet_store/errors.py",
-                "class ApiException(PetStoreError): ...",
-            ),
-            (
-                "java",
-                "src/main/java/com/petstore/exceptions/ApiException.java",
-                "extends RuntimeException",
-            ),
-            (
-                "csharp",
-                "PetStore/ApiException.cs",
-                "public class ApiException : Exception",
-            ),
-            ("csharp", "PetStore/PetStore.csproj", "<Project></Project>"),
-        ];
-        for (language, path, content) in old {
-            let sdk = config
-                .sdks(&[])
-                .unwrap()
-                .into_iter()
-                .find(|s| s.language == language);
-            let dir = tempfile::tempdir().unwrap();
-            fsx::write(&dir.path().join(path), content.as_bytes()).unwrap();
-            let stale = stale_files(&config, &sdk.unwrap(), dir.path()).unwrap();
-            assert_eq!(stale.len(), 1, "{path}");
-        }
-    }
 
     #[test]
     fn release_please_releases_each_sdk_from_its_folder() {

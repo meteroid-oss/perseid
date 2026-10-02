@@ -328,19 +328,6 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 for (sdk, dir) in sdks.iter().zip(&dirs) {
                     files.extend(scaffold::bootstrap(&config, sdk, dir)?);
                 }
-            }
-            let mut stale = Vec::new();
-            for (sdk, dir) in sdks.iter().zip(&dirs) {
-                stale.extend(scaffold::stale_files(&config, sdk, dir)?);
-            }
-            if !stale.is_empty() {
-                bail!(
-                    "SDKs started by an earlier perseid need these changes to their skeleton \
-                     (docs/upgrading.md), then generate again:\n  - {}",
-                    stale.join("\n  - ")
-                );
-            }
-            if !check {
                 for (repo, checkout) in checkouts.iter().filter(|_| config.release != Some(false)) {
                     let held: Vec<&config::Sdk> =
                         sdks.iter().filter(|s| s.remote() == Some(repo)).collect();

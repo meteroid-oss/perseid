@@ -655,7 +655,7 @@ impl Config {
             "java" => format!("com.{}", snake.replace('_', "")),
             "typescript" => kebab.clone(),
             "csharp" => self.name.clone(),
-            "go" => go_package(dir).unwrap_or_else(|| snake.replace('_', "")),
+            "go" => snake.replace('_', ""),
             _ => snake.clone(),
         });
         let version = manifest_version(dir).unwrap_or_else(|| "0.1.0".into());
@@ -821,33 +821,6 @@ pub(crate) fn manifest_version(dir: &Path) -> Option<String> {
         });
     }
     read("version.txt").map(|v| v.trim().to_owned())
-}
-
-/// The `package` clause of the Go files already in `dir`, so regenerating an SDK made before the
-/// default lost its underscores (`pet_store` → `petstore`) keeps one package name.
-fn go_package(dir: &Path) -> Option<String> {
-    let mut files: Vec<_> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|e| Some(e.ok()?.path()))
-        .filter(|p| {
-            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or_default();
-            name.ends_with(".go") && !name.ends_with("_test.go")
-        })
-        .collect();
-    files.sort();
-    files.iter().find_map(|file| {
-        let text = std::fs::read_to_string(file).ok()?;
-        text.lines().find_map(|line| {
-            let name = line
-                .trim()
-                .strip_prefix("package ")?
-                .split("//")
-                .next()?
-                .trim();
-            (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_'))
-                .then(|| name.to_owned())
-        })
-    })
 }
 
 /// `<Version>` of the first `.csproj` in `dir` or one level below, as `perseid generate` lays out C# SDKs.
@@ -1148,32 +1121,6 @@ mod tests {
         let go = config.sdks(&["go".into()]).unwrap().remove(0);
         let module = config.context(&go, Path::new("/nonexistent"))["go_module"].clone();
         assert_eq!(module, "github.com/acme/api-go");
-    }
-
-    #[test]
-    fn go_keeps_the_package_name_of_an_existing_sdk() {
-        let config: Config = toml::from_str("name = \"Pet Store\"\nsdks = [\"go\"]\n").unwrap();
-        let go = config.sdks(&[]).unwrap().remove(0);
-        let dir = tempfile::tempdir().unwrap();
-        let package = |dir: &Path| config.context(&go, dir)["package_name"].clone();
-        assert_eq!(package(dir.path()), "petstore");
-        std::fs::write(
-            dir.path().join("errors_test.go"),
-            "package pet_store_test\n",
-        )
-        .unwrap();
-        assert_eq!(package(dir.path()), "petstore");
-        std::fs::write(
-            dir.path().join("errors.go"),
-            "// Package doc.\npackage pet_store // import \"x\"\n",
-        )
-        .unwrap();
-        assert_eq!(package(dir.path()), "pet_store");
-        let pinned: Config =
-            toml::from_str("name = \"Pet Store\"\nsdks = [\"go\"]\n[go]\npackage = \"pets\"\n")
-                .unwrap();
-        let go = pinned.sdks(&[]).unwrap().remove(0);
-        assert_eq!(pinned.context(&go, dir.path())["package_name"], "pets");
     }
 
     #[test]
