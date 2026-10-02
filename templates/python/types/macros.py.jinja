@@ -45,18 +45,28 @@
     {{- py_field(field.type.to_python() if field.flatten else field.name) -}}
 {%- endmacro %}
 
+{#- The annotation of one variant of a union: its `""` variant is `t.Literal[""]`, a free-form
+    object `dict[str, t.Any]`. -#}
+{% macro variant_type(variant) -%}
+    {%- if variant.empty %}t.Literal[""]
+    {%- elif variant.type.is_json_object() and not variant.type.is_union() %}dict[str, t.Any]
+    {%- else %}{{ py_type(variant.type) }}{% endif -%}
+{%- endmacro %}
+
 {#- The Python annotation for a field type. An any-JSON schema (`{}`) is
     `t.Any`, as its value may be a list, a scalar or `null` too. A union told
-    apart by JSON type is `str | Customer`, its `""` variant `t.Literal[""]`. -#}
+    apart by JSON type is `str | Customer`, its `""` variant `t.Literal[""]`; one whose
+    variants share a JSON type (`str | list[str] | list[int]`) lists them in the order they are
+    tried. -#}
 {% macro py_type(ty) -%}
     {%- if ty.is_nullable() -%}
         {%- if ty.inner_type().is_json_object() and not ty.inner_type().is_union() -%}t.Any{%- else -%}{{ py_type(ty.inner_type()) }} | None{%- endif -%}
     {%- elif ty.is_union() and ty.union_mode() != "json" -%}
-        t.Annotated[{% for variant in ty.union_variants() %}{% if variant.empty %}t.Literal[""]{% else %}{{ py_type(variant.type) }}{% endif %} | {% endfor %}UnknownVariant, {{ object_union(ty) }}]
+        t.Annotated[{% for variant in (ty.try_variants() if ty.union_decode() == "try" else ty.union_variants()) %}{{ variant_type(variant) }} | {% endfor %}UnknownVariant, {{ object_union(ty) }}]
     {%- elif ty.is_union() -%}
-        {%- for variant in ty.union_variants() -%}
+        {%- for variant in (ty.try_variants() if ty.union_decode() == "try" else ty.union_variants()) -%}
             {%- if not loop.first %} | {% endif -%}
-            {%- if variant.empty %}t.Literal[""]{% else %}{{ py_type(variant.type) }}{% endif -%}
+            {{ variant_type(variant) }}
         {%- endfor -%}
     {%- elif ty.is_json_object() -%}
         t.Any
@@ -69,14 +79,29 @@
     {%- endif -%}
 {%- endmacro %}
 
+{#- The annotation of `ty`, a body or field type holding a union, with the union written as `name`. -#}
+{% macro named_type(ty, name) -%}
+    {%- if ty.is_union() -%}{{ name }}
+    {%- elif ty.is_nullable() -%}{{ named_type(ty.inner_type(), name) }} | None
+    {%- elif ty.is_list() or ty.is_set() -%}list[{{ named_type(ty.inner_type(), name) }}]
+    {%- elif ty.is_map() -%}dict[str, {{ named_type(ty.value_type(), name) }}]
+    {%- else -%}{{ py_type(ty) }}{% endif -%}
+{%- endmacro %}
+
+{#- The annotation of the union inside the body type `ty`, which `named_type` names. -#}
+{% macro union_type(ty) -%}
+    {%- if ty.is_union() -%}{{ py_type(ty) }}
+    {%- elif ty.is_nullable() or ty.is_list() or ty.is_set() -%}{{ union_type(ty.inner_type()) }}
+    {%- elif ty.is_map() -%}{{ union_type(ty.value_type()) }}
+    {%- endif -%}
+{%- endmacro %}
+
 {#- The annotation of a query parameter: a union of scalars or lists of them is typed. -#}
 {% macro param_type(p) -%}
     {%- if p.typed_union is defined -%}
-        {%- for variant in p.typed_union.union_variants() -%}
+        {%- for variant in (p.typed_union.try_variants() if p.typed_union.union_decode() == "try" else p.typed_union.union_variants()) -%}
             {%- if not loop.first %} | {% endif -%}
-            {%- if variant.empty %}t.Literal[""]
-            {%- elif variant.type.is_json_object() %}dict[str, t.Any]
-            {%- else %}{{ py_type(variant.type) }}{% endif -%}
+            {{ variant_type(variant) }}
         {%- endfor -%}
     {%- else -%}
         {{ py_type(p.type) }}
@@ -99,16 +124,16 @@
         {%- if j == "true" %}True{% elif j == "false" %}False{% else %}{{ j }}{% endif -%}
     {%- endmacro -%}
     {%- set others -%}
-        {%- for variant in ty.union_variants() if variant.json_type != "object" -%}
+        {%- for variant in (ty.try_variants() if ty.union_decode() == "try" else ty.union_variants()) if variant.json_type != "object" -%}
             {%- if not loop.first %} | {% endif -%}
-            {%- if variant.empty %}t.Literal[""]{% else %}{{ py_type(variant.type) }}{% endif -%}
+            {{ variant_type(variant) }}
         {%- endfor -%}
     {%- endset -%}
     {%- set others = others ~ ", " if others else "" -%}
     {%- if ty.union_mode() == "rules" -%}
-        ObjectUnion({{ others }}when=[{% for v in ty.object_variants() %}({{ py_type(v.type) }}, { {%- for c in v.when %}{{ c.property | tojson }}: {% if c.value is defined %}{{ literal(c.value) }}{% else %}...{% endif %}{% if not loop.last %}, {% endif %}{% endfor -%} }){% if not loop.last %}, {% endif %}{% endfor %}])
+        ObjectUnion({{ others }}when=[{% for v in ty.object_variants() %}({{ variant_type(v) }}, { {%- for c in v.when %}{{ c.property | tojson }}: {% if c.value is defined %}{{ literal(c.value) }}{% else %}...{% endif %}{% if not loop.last %}, {% endif %}{% endfor -%} }){% if not loop.last %}, {% endif %}{% endfor %}])
     {%- else -%}
-        ObjectUnion({{ others }}best_match=[{% for v in ty.object_variants() %}({{ py_type(v.type) }}, ({% for p in v.required %}{{ p | tojson }}{% if not loop.last %}, {% elif loop.length == 1 %},{% endif %}{% endfor %}), ({% for p in v.properties %}{{ p | tojson }}{% if not loop.last %}, {% elif loop.length == 1 %},{% endif %}{% endfor %})){% if not loop.last %}, {% endif %}{% endfor %}])
+        ObjectUnion({{ others }}best_match=[{% for v in ty.object_variants() %}({{ variant_type(v) }}, ({% for p in v.required %}{{ p | tojson }}{% if not loop.last %}, {% elif loop.length == 1 %},{% endif %}{% endfor %}), ({% for p in v.properties %}{{ p | tojson }}{% if not loop.last %}, {% elif loop.length == 1 %},{% endif %}{% endfor %})){% if not loop.last %}, {% endif %}{% endfor %}])
     {%- endif -%}
 {%- endmacro %}
 

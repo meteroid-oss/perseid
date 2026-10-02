@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import field_ident, field_type, param_type, py_ident, py_type -%}
+{% from "types/macros.py.jinja" import field_ident, field_type, named_type, param_type, py_ident, py_type -%}
 {% import "docs.jinja" as docs -%}
 {% set _ = set_summary_filename("api.md") -%}
 {% macro model(name) -%}
@@ -44,7 +44,7 @@
         {%- endfor -%}
     {%- else -%}
         {%- if op.request_body_json_type is defined -%}
-            {%- set body_type = py_type(op.request_body_json_type) -%}
+            {%- set body_type = named_type(op.request_body_json_type, op.request_body_union | to_upper_camel_case) if op.request_body_union is defined else py_type(op.request_body_json_type) -%}
         {%- elif op.request_body_schema_name is defined -%}
             {%- set body_type = op.request_body_schema_name | to_upper_camel_case -%}
             {%- if op.request_body_is_list %}{% set body_type = "list[" ~ body_type ~ "]" %}{% endif -%}
@@ -67,7 +67,7 @@
     {%- endfor -%}
     {%- if args.required or args.optional %}{% set args.list = args.list + ["*"] + args.required + args.optional %}{% endif -%}
     {%- if op.response_body_json_type is defined -%}
-        {%- set response = py_type(op.response_body_json_type) -%}
+        {%- set response = named_type(op.response_body_json_type, op.response_body_union | to_upper_camel_case) if op.response_body_union is defined else py_type(op.response_body_json_type) -%}
     {%- elif op.response_body_schema_name is defined -%}
         {%- set response = op.response_body_schema_name | to_upper_camel_case -%}
         {%- if op.response_body_is_list %}{% set response = "list[" ~ response ~ "]" %}{% endif -%}
@@ -95,7 +95,7 @@
     {%- elif op.response_is_binary %}bytes
     {%- elif op.response_is_text %}text
     {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
-    {%- elif op.response_body_json_type is defined %}`{{ py_type(op.response_body_json_type) | replace("|", "\\|") }}`
+    {%- elif op.response_body_json_type is defined %}`{{ (named_type(op.response_body_json_type, op.response_body_union | to_upper_camel_case) if op.response_body_union is defined else py_type(op.response_body_json_type)) | replace("|", "\\|") }}`
     {%- else %}nothing{% endif -%}
 {%- endmacro -%}
 {% macro table(resource) -%}

@@ -211,7 +211,7 @@ def to_json_value(value: t.Any, annotation: t.Any = t.Any) -> t.Any:
         members = [a for a in t.get_args(annotation) if a not in (_NoneType, Unset)]
         if len(members) == 1:
             return to_json_value(value, members[0])
-        return to_json_value(value, _union_member(members, _value_kind(value)) or t.Any)
+        return to_json_value(value, _union_member(members, value) or t.Any)
     if isinstance(value, enum.Enum):
         return to_json_value(value.value)
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -368,10 +368,20 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
         members = [a for a in args if a not in (_NoneType, Unset)]
         if len(members) == 1:
             return _from_json_value(members[0], value, ctx)
-        member = _union_member(members, _value_kind(value))
-        if member is None:
+        candidates = _union_candidates(members, _value_kind(value))
+        if not candidates:
             raise ModelParseError(f"{ctx}: {value!r} matches no member of {annotation!r}")
-        return _from_json_value(member, value, ctx)
+        # Members sharing a JSON type (`str | list[str] | list[int]`, `datetime | str`) are tried
+        # in order: the first that decodes the value wins.
+        failure: ModelParseError | None = None
+        for member in candidates:
+            if t.get_origin(member) is t.Literal and value not in t.get_args(member):
+                continue
+            try:
+                return _from_json_value(member, value, ctx)
+            except ModelParseError as exc:
+                failure = exc
+        raise failure or ModelParseError(f"{ctx}: {value!r} matches no member of {annotation!r}")
 
     if origin in (list, set, frozenset, tuple):
         inner = args[0] if args else t.Any
@@ -476,19 +486,58 @@ def _value_kind(value: t.Any) -> str | None:
     return None
 
 
-def _union_member(members: list[t.Any], kind: str | None) -> t.Any:
-    """The member of an untagged union whose JSON type is ``kind``.
+def _union_candidates(members: list[t.Any], kind: str | None) -> list[t.Any]:
+    """The members of an untagged union whose JSON type is ``kind``, in declaration order.
 
-    Such unions are only generated when every member has a distinct JSON type.
+    The members that take any JSON value come last, as a fallback.
     """
-    fallback = None
+    exact: list[t.Any] = []
+    fallback: list[t.Any] = []
     for member in members:
         member_kind = _json_kind(member)
         if member_kind == kind:
+            exact.append(member)
+        elif member_kind is None:
+            fallback.append(member)
+    return exact + fallback
+
+
+def _fits(annotation: t.Any, value: t.Any) -> bool:
+    """Whether ``value``, a value held by the caller, is of ``annotation``, looking at the
+    first item of a list: how members sharing a JSON type are told apart."""
+    origin = t.get_origin(annotation)
+    args = t.get_args(annotation)
+    if annotation is t.Any:
+        return True
+    if origin is t.Annotated:
+        return _fits(args[0], value)
+    if origin in _UNION_TYPES:
+        return any(_fits(a, value) for a in args)
+    if origin is t.Literal:
+        return value in args
+    if origin in (list, set, frozenset, tuple):
+        if not isinstance(value, (list, tuple, set, frozenset)):
+            return False
+        first = next(iter(value), None)
+        return first is None or not args or _fits(args[0], first)
+    if origin is dict:
+        return isinstance(value, (t.Mapping, BaseModel))
+    if isinstance(annotation, type):
+        if annotation is float:
+            return isinstance(value, (int, float)) and not isinstance(value, bool)
+        if annotation is int:
+            return isinstance(value, int) and not isinstance(value, bool)
+        return isinstance(value, annotation)
+    return True
+
+
+def _union_member(members: list[t.Any], value: t.Any) -> t.Any:
+    """The member of an untagged union that ``value``, held by the caller, is an instance of."""
+    candidates = _union_candidates(members, _value_kind(value))
+    for member in candidates:
+        if _fits(member, value):
             return member
-        if member_kind is None:
-            fallback = member
-    return fallback
+    return candidates[0] if candidates else None
 
 
 # --------------------------------------------------------------------------

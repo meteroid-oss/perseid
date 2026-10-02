@@ -26,7 +26,9 @@ class ObjectUnion(Discriminator):
     ``when``, an object is the first model whose properties it has, equal to
     the given values (any value for ``...``). With ``best_match``, it is the
     model whose required properties are all present and which has the most of
-    its known properties, the first one on ties. An object that no model
+    its known properties, the first one on ties. A member that is not a model
+    (a free-form ``dict``) matches any object and comes last. When a member
+    fails to decode the next one is tried. An object that no member
     decodes is kept as an :class:`UnknownVariant` with an empty tag.
     """
 
@@ -34,40 +36,47 @@ class ObjectUnion(Discriminator):
         self,
         others: t.Any = None,
         *,
-        when: t.Sequence[tuple[type[BaseModel], t.Mapping[str, t.Any]]] = (),
-        best_match: t.Sequence[tuple[type[BaseModel], tuple[str, ...], tuple[str, ...]]] = (),
+        when: t.Sequence[tuple[t.Any, t.Mapping[str, t.Any]]] = (),
+        best_match: t.Sequence[tuple[t.Any, tuple[str, ...], tuple[str, ...]]] = (),
     ) -> None:
         super().__init__("", {})
         self.others = others
         self.when = [(model, dict(conditions)) for model, conditions in when]
         self.best_match = list(best_match)
 
-    def pick(self, value: t.Mapping[str, t.Any]) -> type[BaseModel] | None:
-        for model, conditions in self.when:
+    def candidates(self, value: t.Mapping[str, t.Any]) -> list[t.Any]:
+        """The members ``value`` may be, the likeliest first: the ones to try in order."""
+        found: list[t.Any] = [
+            model
+            for model, conditions in self.when
             if all(
                 key in value and (want is ... or _same_json(value[key], want))
                 for key, want in conditions.items()
-            ):
-                return model
-        best, top = None, -1
-        for model, required, known in self.best_match:
-            if all(key in value for key in required):
-                score = sum(key in value for key in known)
-                if score > top:
-                    best, top = model, score
-        return best
+            )
+        ]
+        scored = [
+            (sum(key in value for key in known), model)
+            for model, required, known in self.best_match
+            if all(key in value for key in required)
+        ]
+        # Stable: the most known properties first, the declaration (rank) order on ties.
+        found.extend(model for _, model in sorted(scored, key=lambda pair: -pair[0]))
+        return found
+
+    def pick(self, value: t.Mapping[str, t.Any]) -> t.Any:
+        found = self.candidates(value)
+        return found[0] if found else None
 
     def parse(self, value: t.Any, ctx: str) -> t.Any:
         if not isinstance(value, t.Mapping):
             if self.others is None:
                 raise ModelParseError(f"{ctx}: expected an object, got {type(value).__name__}")
             return from_json_value(self.others, value)
-        model = self.pick(value)
-        if model is not None:
+        for model in self.candidates(value):
             try:
-                return model.from_dict(value)
+                return from_json_value(model, dict(value))
             except ModelParseError:
-                pass
+                continue
         return UnknownVariant("", dict(value))
 
     def serialize(self, value: t.Any) -> t.Any:
