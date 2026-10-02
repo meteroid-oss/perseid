@@ -118,8 +118,8 @@
                 {% set pp.field = f ~ "_" if f in ["builder", "toBuilder", "hashCode", "toString", "getClass", "build"] else f -%}
             {% endif -%}
         {% endfor -%}
-        {% set zero = "0L" if pp.type == "Long" else "0" -%}
-        {% set first = (pg.first_page ~ "L") if pp.type == "Long" else (pg.first_page | string) -%}
+        {% set zero = "0L" if pp.type == "Long" else "BigInteger.ZERO" if pp.type == "BigInteger" else "0" -%}
+        {% set first = (pg.first_page ~ "L") if pp.type == "Long" else ("BigInteger.valueOf(" ~ pg.first_page ~ ")") if pp.type == "BigInteger" else (pg.first_page | string) -%}
         {% set start = {"cursor": "null", "page": first, "offset": zero}[pg.style] -%}
         {% if pp.positional >= 0 -%}
             {% set current = arg_names[pp.positional] -%}
@@ -314,6 +314,7 @@ import {{ sdk.java_internal_package }}.Utils;
 {% if has_streams and SSE == "SseEvent" %}import {{ sdk.java_package }}.streaming.SseEvent;
 {% endif -%}
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -404,6 +405,7 @@ import {{ sdk.java_internal_package }}.Utils;
 {% endif -%}
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -772,16 +774,20 @@ public final class {{ resource_type_name }} {
         {% elif pg.style == "page" -%}
         {% if pg.total_pages is defined -%}
         long pages = {{ path_expr("response", pg.total_pages) }}.map(Number::longValue).orElse(Long.MAX_VALUE);
+        {% if T == "BigInteger" -%}
+        if (current.subtract({{ o.page.first }}).add(BigInteger.ONE).compareTo(BigInteger.valueOf(pages)) >= 0) {
+        {% else -%}
         if (current - {{ o.page.first }} + 1 >= pages) {
+        {% endif -%}
             return null;
         }
         {% endif -%}
-        return {{ narrow(T, "current + 1") }};
+        return {{ "current.add(BigInteger.ONE)" if T == "BigInteger" else narrow(T, "current + 1") }};
         {% else -%}
-        {{ T }} next = {{ narrow(T, "current + items.size()") }};
+        {{ T }} next = {{ "current.add(BigInteger.valueOf(items.size()))" if T == "BigInteger" else narrow(T, "current + items.size()") }};
         {% if pg.total is defined -%}
         long total = {{ path_expr("response", pg.total) }}.map(Number::longValue).orElse(Long.MAX_VALUE);
-        if (next >= total) {
+        if ({{ "next.compareTo(BigInteger.valueOf(total)) >= 0" if T == "BigInteger" else "next >= total" }}) {
             return null;
         }
         {% endif -%}

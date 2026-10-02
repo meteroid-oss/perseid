@@ -2576,7 +2576,9 @@ impl FieldType {
             // _ => "String".into(),
             FieldType::Bool => "Boolean".into(),
             FieldType::Int16 => "Short".into(),
-            FieldType::UInt16 | FieldType::UInt64 | FieldType::Int64 => "Long".into(),
+            FieldType::UInt16 | FieldType::Int64 => "Long".into(),
+            // A `long` cannot hold the upper half of the unsigned 64-bit range.
+            FieldType::UInt64 => "BigInteger".into(),
             FieldType::Int32 => "Integer".into(),
             FieldType::Float => "Float".into(),
             FieldType::Double => "Double".into(),

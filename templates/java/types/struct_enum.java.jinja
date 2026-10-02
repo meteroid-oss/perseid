@@ -12,7 +12,7 @@
 {#- A nested class shadows the types of the same name that the union itself uses. -#}
 {% for cls in (ns.names + ["unrecognized"]) | idents("pascal", "java", owner) -%}
 {% set shadowed = cls in ["String", "Object", "Override", "Deprecated", "Utils", "Objects", "List",
-    "Map", "Set", "Optional", "ArrayList", "HashMap", "LinkedHashMap", "LinkedHashSet", "BigDecimal",
+    "Map", "Set", "Optional", "ArrayList", "HashMap", "LinkedHashMap", "LinkedHashSet", "BigDecimal", "BigInteger",
     "OffsetDateTime", "URI", "Visibility", "JsonAnyGetter", "JsonAnySetter", "JsonAutoDetect",
     "JsonIgnoreProperties", "JsonInclude", "JsonProperty", "JsonSubTypes", "JsonTypeInfo",
     "JsonTypeName", "JsonUnwrapped", "JsonProcessingException", "JsonValue", "TypeReference",
@@ -64,6 +64,7 @@ import {{ sdk.java_internal_package }}.JsonField;
 import {{ sdk.java_internal_package }}.Unions;
 import {{ sdk.java_internal_package }}.Utils;
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;

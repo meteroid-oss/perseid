@@ -145,7 +145,8 @@ fn json_body(types: &Value, op: &Value) -> Option<Value> {
             return None;
         }
         let example = &field["example"];
-        let (kind, int64, value) = match field["type"]["id"].as_str()? {
+        let id = field["type"]["id"].as_str()?;
+        let (kind, int64, value) = match id {
             "String" => match example.as_str().filter(|s| plain_text(s)) {
                 Some(example) => ("string", false, json!(example)),
                 None => ("string", false, text(name)),
@@ -157,7 +158,12 @@ fn json_body(types: &Value, op: &Value) -> Option<Value> {
             "Bool" => ("boolean", false, json!(example.as_bool().unwrap_or(true))),
             _ => return None,
         };
-        fields.push(literal(name, kind, int64, value));
+        let mut lit = literal(name, kind, int64, value);
+        if id == "UInt64" {
+            // Java holds an unsigned 64-bit integer in a `BigInteger`.
+            lit["unsigned64"] = json!(true);
+        }
+        fields.push(lit);
     }
     Some(json!({ "schema": name, "fields": fields }))
 }

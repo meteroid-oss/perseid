@@ -32,7 +32,8 @@
 {%- endmacro %}
 
 {% macro literal(arg) -%}
-    {{ arg.value | tojson }}{% if arg.kind == "integer" and arg.int64 %}L{% endif %}
+    {%- if arg.unsigned64 -%}java.math.BigInteger.valueOf({{ arg.value | tojson }}L)
+    {%- else -%}{{ arg.value | tojson }}{% if arg.kind == "integer" and arg.int64 %}L{% endif %}{% endif %}
 {%- endmacro %}
 
 {#- The `import` of the model an example's body needs, with its line break. -#}
