@@ -713,6 +713,44 @@ paths:
           $ref: '#/components/responses/ItemResponse'
         '400':
           $ref: '#/components/responses/Failure'
+  # Value-type bodies and path parameters (no null check in C#), empty descriptions.
+  /scalar-bodies/{kind}/{level}:
+    put:
+      operationId: put_scalar_bodies
+      tags: [bodies]
+      description: ""
+      parameters:
+        - {name: kind, in: path, required: true, description: "", schema: {$ref: '#/components/schemas/Kind'}}
+        - {name: level, in: path, required: true, schema: {$ref: '#/components/schemas/Level'}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Kind'}}}
+      responses: {'204': {description: ""}}
+  /scalar-bodies/level:
+    post:
+      operationId: post_level_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Level'}}}
+      responses: {'204': {description: ok}}
+  /scalar-bodies/when:
+    post:
+      operationId: post_date_time_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: string, format: date-time}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: string, format: date-time}}}}
+  /scalar-bodies/flag:
+    post:
+      operationId: post_bool_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: boolean}}}
+      responses: {'204': {description: ok}}
 webhooks:
   itemCreated:
     post:
@@ -755,6 +793,13 @@ components:
           schema: {$ref: '#/components/schemas/Problem'}
   schemas:
     Kind: {type: string, enum: [a, b]}
+    Level: {type: integer, enum: [1, 2, 3], description: ""}
+    Described:
+      type: object
+      description: ""
+      properties:
+        blank: {type: string, description: ""}
+        spaces: {type: string, description: "   "}
     Item:
       type: object
       required: [id]
