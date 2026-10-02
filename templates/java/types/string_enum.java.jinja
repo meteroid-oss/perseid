@@ -3,8 +3,7 @@
 {% set ty_name = type.name | to_upper_camel_case -%}
 {{- m.check_name(ty_name) -}}
 {% set owner = "schema `" ~ type.name ~ "`" -%}
-{% set unknown = "UNRECOGNIZED_VALUE" if "UNRECOGNIZED" in (type.values | idents("shouty", "java", owner)) else "UNRECOGNIZED" -%}
-{% set members = (type.values + [unknown | lower]) | idents("shouty", "java", owner) -%}
+{% set members = type.values | idents("shouty", "java", owner) -%}
 {% set ns = namespace(values=[]) -%}
 {% for value in type.values %}{% set ns.values = ns.values + [value | tojson] %}{% endfor -%}
 {% set values = ns.values -%}

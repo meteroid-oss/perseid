@@ -62,50 +62,6 @@ public final class SseEvent {
         return retry;
     }
 
-    /**
-     * The event name.
-     *
-     * @return the name
-     * @deprecated use {@link #event()}
-     */
-    @Deprecated
-    public String getEvent() {
-        return event;
-    }
-
-    /**
-     * The data.
-     *
-     * @return the data
-     * @deprecated use {@link #data()}
-     */
-    @Deprecated
-    public String getData() {
-        return data;
-    }
-
-    /**
-     * The last event ID.
-     *
-     * @return the ID, or null
-     * @deprecated use {@link #id()}
-     */
-    @Deprecated
-    public String getId() {
-        return id;
-    }
-
-    /**
-     * The reconnection delay.
-     *
-     * @return the delay, or null
-     * @deprecated use {@link #retry()}
-     */
-    @Deprecated
-    public Duration getRetry() {
-        return retry;
-    }
-
     @Override
     public boolean equals(Object other) {
         if (!(other instanceof SseEvent)) {

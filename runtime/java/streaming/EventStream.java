@@ -75,17 +75,6 @@ public final class EventStream<T> implements Iterable<T>, AutoCloseable {
     }
 
     /**
-     * The ID of the last event read.
-     *
-     * @return the event ID, or null
-     * @deprecated use {@link #lastEventId()}
-     */
-    @Deprecated
-    public String getLastEventId() {
-        return id;
-    }
-
-    /**
      * The raw event of the last item returned, with its name, ID and data.
      *
      * @return the event, or null before the first item
