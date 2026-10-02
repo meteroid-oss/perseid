@@ -247,7 +247,7 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
             pages: {{ "true" if pg.style == "page" else "false" }},
             (param, ct) => {{ method_name }}({% for p in op.path_params %}{{ m.param(p) }}, {% endfor %}{% if f.takes_body %}{{ f.body }}, {% endif %}{{ first }} with { {{ property }} = ({{ param.type.to_csharp() }})param }, requestOptions, ct),
 {%- endif %}
-            page => {{ path_expr("page", pg.items, response_class) }}{% if pg.items | length > 1 %} ?? []{% endif %},
+            page => {{ path_expr("page", pg.items, response_class) }},
             {% if pg.has_more is defined %}page => {{ path_expr("page", pg.has_more, response_class) }}{% else %}null{% endif %},
 {%- if pg.style == "cursor" %}
 {%- if pg.next_cursor is defined %}

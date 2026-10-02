@@ -97,7 +97,7 @@ internal static class Paging
     public static AsyncPager<TResponse, TItem> Cursor<TResponse, TItem>(
         string? start,
         Func<string?, CancellationToken, Task<TResponse>> fetch,
-        Func<TResponse, IReadOnlyList<TItem>> items,
+        Func<TResponse, IReadOnlyList<TItem>?> items,
         Func<TResponse, bool?>? hasMore,
         Func<TResponse, IReadOnlyList<TItem>, string?> next
     )
@@ -105,7 +105,7 @@ internal static class Paging
         async Task<Page<TResponse, TItem>> Fetch(string? cursor, CancellationToken cancellationToken)
         {
             var response = await fetch(cursor, cancellationToken).ConfigureAwait(false);
-            var list = items(response);
+            var list = items(response) ?? [];
             var following = list.Count == 0 || hasMore?.Invoke(response) == false
                 ? null
                 : next(response, list);
@@ -126,7 +126,7 @@ internal static class Paging
         long firstPage,
         bool pages,
         Func<long, CancellationToken, Task<TResponse>> fetch,
-        Func<TResponse, IReadOnlyList<TItem>> items,
+        Func<TResponse, IReadOnlyList<TItem>?> items,
         Func<TResponse, bool?>? hasMore,
         Func<TResponse, long?>? total
     )
@@ -134,7 +134,7 @@ internal static class Paging
         async Task<Page<TResponse, TItem>> Fetch(long param, CancellationToken cancellationToken)
         {
             var response = await fetch(param, cancellationToken).ConfigureAwait(false);
-            var list = items(response);
+            var list = items(response) ?? [];
             var following = pages ? param + 1 : param + list.Count;
             var done =
                 list.Count == 0
