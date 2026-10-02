@@ -147,8 +147,51 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         }
         options.interceptors().forEach(builder::addInterceptor);
         builder.addInterceptor(logger(options.debug() ? System.Logger.Level.INFO : System.Logger.Level.DEBUG));
+        builder.addInterceptor(RESTORE_RETRY_AFTER);
+        builder.addNetworkInterceptor(HIDE_RETRY_AFTER);
         return builder.build();
     }
+
+    /** The header holding the {@code Retry-After} values that {@link #HIDE_RETRY_AFTER} hid. */
+    private static final String HIDDEN_RETRY_AFTER = "x-@@HEADER_PREFIX@@-hidden-retry-after";
+
+    /**
+     * OkHttp silently repeats a request answered 408 without {@code Retry-After}, or 503 with
+     * {@code Retry-After: 0}. To leave every retry to the client's own loop, which honors
+     * {@code maxRetries} and idempotency, the {@code Retry-After} of these responses reads
+     * "never" to OkHttp, its values set aside until {@link #RESTORE_RETRY_AFTER} puts them back.
+     */
+    private static final Interceptor HIDE_RETRY_AFTER =
+            chain -> {
+                Response response = chain.proceed(chain.request());
+                if (response.code() != 408 && response.code() != 503) {
+                    return response;
+                }
+                Headers.Builder headers = response.headers().newBuilder().removeAll("Retry-After");
+                headers.add(HIDDEN_RETRY_AFTER, "-");
+                for (String value : response.headers("Retry-After")) {
+                    headers.add(HIDDEN_RETRY_AFTER, ":" + value);
+                }
+                return response.newBuilder().headers(headers.set("Retry-After", "never").build()).build();
+            };
+
+    /** Puts back the {@code Retry-After} values that {@link #HIDE_RETRY_AFTER} set aside. */
+    private static final Interceptor RESTORE_RETRY_AFTER =
+            chain -> {
+                Response response = chain.proceed(chain.request());
+                List<String> hidden = response.headers(HIDDEN_RETRY_AFTER);
+                if (hidden.isEmpty()) {
+                    return response;
+                }
+                Headers.Builder headers =
+                        response.headers().newBuilder().removeAll(HIDDEN_RETRY_AFTER).removeAll("Retry-After");
+                for (String value : hidden) {
+                    if (value.startsWith(":")) {
+                        headers.add("Retry-After", value.substring(1));
+                    }
+                }
+                return response.newBuilder().headers(headers.build()).build();
+            };
 
     private static Interceptor logger(System.Logger.Level level) {
         return chain -> {
