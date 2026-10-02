@@ -113,7 +113,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- set body_type = py_type(op.request_body_json_type) %}
 {%- elif op.request_body_schema_name is defined %}
 {%- set body_param = py_ident(op.request_body_schema_name) %}
-{%- set taken = (op.path_params | list) + (op.query_params | map(attribute="name") | list) + (op.header_params | map(attribute="name") | list) %}
+{%- set taken = (op.path_params | list) + (op.query_params | map(attribute="ident") | list) + (op.header_params | map(attribute="ident") | list) %}
 {%- if body_param in ["self", "extra_headers", "timeout"] or body_param in (taken | map("ident", "snake", "python") | list) %}{% set body_param = "body" %}{% endif %}
 {%- set body_type = op.request_body_schema_name | to_upper_camel_case %}
 {%- if op.request_body_is_list %}{% set body_type = "list[" ~ body_type ~ "]" %}{% endif %}
@@ -128,7 +128,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- set return_type = return_type | replace("list[", "t.List[") | replace("dict[", "t.Dict[") %}
 {%- if body_type is not none %}{% set body_type = body_type | replace("list[", "t.List[") | replace("dict[", "t.Dict[") %}{% endif %}
 {%- endif %}
-{%- set param_names = (op.path_params | list) + (op.query_params | map(attribute="name") | list) + (op.header_params | map(attribute="name") | list) %}
+{%- set param_names = (op.path_params | list) + (op.query_params | map(attribute="ident") | list) + (op.header_params | map(attribute="ident") | list) %}
 {%- set param_idents = param_names | map("ident", "snake", "python") | list %}
 {%- set timeout_kw = "request_timeout" if "timeout" in param_idents else "timeout" %}
 {%- set headers_kw = "request_extra_headers" if "extra_headers" in param_idents else "extra_headers" %}
@@ -146,10 +146,10 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- for p in op.query_params if p.required == required_pass %}
 {%- set param_type = py_type(p.type) %}
 {%- if shadows_builtins %}{% set param_type = param_type | replace("list[", "t.List[") | replace("dict[", "t.Dict[") %}{% endif %}
-        {{ py_ident(p.name) }}: {{ param_type }}{% if not p.required %} | None = None{% endif %},
+        {{ py_ident(p.ident) }}: {{ param_type }}{% if not p.required %} | None = None{% endif %},
 {%- endfor %}
 {%- for p in op.header_params if p.required == required_pass %}
-        {{ py_ident(p.name) }}: {% if p.required %}str,{% else %}str | None = None,{% endif %}
+        {{ py_ident(p.ident) }}: {% if p.required %}str,{% else %}str | None = None,{% endif %}
 {%- endfor %}
 {%- endfor %}
         {{ headers_kw }}: t.Mapping[str, str] | None = None,
@@ -158,8 +158,8 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- set forwarded %}
 {%- for p in op.path_params %}{{ py_ident(p) }}, {% endfor %}
 {%- if body_param is not none %}{{ body_param }}, {% endif %}
-{%- for p in op.query_params %}{{ py_ident(p.name) }}={% if op.pagination is defined and p.name == op.pagination.param %}param{% else %}{{ py_ident(p.name) }}{% endif %}, {% endfor %}
-{%- for p in op.header_params %}{{ py_ident(p.name) }}={{ py_ident(p.name) }}, {% endfor %}
+{%- for p in op.query_params %}{{ py_ident(p.ident) }}={% if op.pagination is defined and p.name == op.pagination.param %}param{% else %}{{ py_ident(p.ident) }}{% endif %}, {% endfor %}
+{%- for p in op.header_params %}{{ py_ident(p.ident) }}={{ py_ident(p.ident) }}, {% endfor %}
 {{- headers_kw }}={{ headers_kw }}, {{ timeout_kw }}={{ timeout_kw }}
 {%- endset %}
 
@@ -168,7 +168,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
     ) -> {{ return_type }}:
 {%- set params_doc %}
 {%- for p in op.query_params if p.description is defined %}
-:param {{ py_ident(p.name) }}: {{ p.description | replace("\n", " ") }}
+:param {{ py_ident(p.ident) }}: {{ p.description | replace("\n", " ") }}
 {%- endfor %}
 {%- endset %}
 {%- set doc %}
@@ -197,7 +197,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
             query_params=serialize_query_params(
                 {
 {%- for p in op.query_params %}
-                    {{ py_str(p.name) }}: {{ py_ident(p.name) }},
+                    {{ py_str(p.name) }}: {{ py_ident(p.ident) }},
 {%- endfor %}
                 },
 {%- set comma_joined %}
@@ -229,7 +229,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- if op.header_params | length > 0 %}
             header_params={
 {%- for p in op.header_params %}
-                {{ py_str(p.name) }}: {{ py_ident(p.name) }},
+                {{ py_str(p.name) }}: {{ py_ident(p.ident) }},
 {%- endfor %}
             },
 {%- endif %}
@@ -314,7 +314,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
                 first_page={{ pg.first_page }},
 {%- endif %}
             ),
-            {{ py_ident(pg.param) }},
+            {{ py_ident((op.query_params | selectattr("name", "equalto", pg.param) | first).ident) }},
             lambda param: self.{{ py_ident(op.name) }}({{ forwarded }}),
             {{ pg.item_schema | to_upper_camel_case }},
         )

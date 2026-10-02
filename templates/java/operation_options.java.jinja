@@ -2,7 +2,7 @@
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
 {% set class_name = resource_type_name ~ (operation.name | to_upper_camel_case) ~ "Options" -%}
 {% set params = operation.query_params + operation.header_params -%}
-{% set names = params | map(attribute="name") | list -%}
+{% set names = params | map(attribute="ident") | list -%}
 {% set fields = names | idents("camel", "java", "operation `" ~ operation.id ~ "`") -%}
 {% set accessors = names | idents("pascal", "java", "operation `" ~ operation.id ~ "`") -%}
 // this file is @generated

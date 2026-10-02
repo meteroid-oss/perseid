@@ -41,10 +41,10 @@ import {
     {% if op | has_query_or_header_params -%}
     export interface {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options {
         {% for p in op.query_params -%}
-            {{ m.doc(p.description, false) }}{{ p.name | ident("camel") }}{% if not p.required %}?{% endif %}: {{ m.js_type(p.type) }};
+            {{ m.doc(p.description, false) }}{{ p.ident | ident("camel") }}{% if not p.required %}?{% endif %}: {{ m.js_type(p.type) }};
         {% endfor -%}
         {% for p in op.header_params -%}
-            {{ p.name | ident("camel") }}{% if not p.required %}?{% endif %}: string;
+            {{ p.ident | ident("camel") }}{% if not p.required %}?{% endif %}: string;
         {% endfor -%}
     }
 
@@ -116,9 +116,9 @@ export class {{ resource_type_name }} {
             {% endif -%}
 
             {% for p in op.query_params -%}
-                {% set accessor %}options{% if not p.required %}?{% endif %}.{{ p.name | ident("camel") }}{% endset -%}
+                {% set accessor %}options{% if not p.required %}?{% endif %}.{{ p.ident | ident("camel") }}{% endset -%}
                 {% if p.structured -%}
-                    {% set value = accessor if not m.converted(p.type, true) else accessor ~ " != null ? " ~ m.to_json("options." ~ (p.name | ident("camel")), p.type) ~ " : undefined" -%}
+                    {% set value = accessor if not m.converted(p.type, true) else accessor ~ " != null ? " ~ m.to_json("options." ~ (p.ident | ident("camel")), p.type) ~ " : undefined" -%}
                     request.setStructuredQueryParam({{ p.name | tojson }}, {{ value }}, {{ p.deep_object | lower }}, {{ p.explode | lower }});
                 {% elif (p.type.is_list() or p.type.is_set()) and p.explode | default(true) -%}
                     request.setExplodedQueryParam({{ p.name | tojson }}, {{ accessor }});
@@ -128,7 +128,7 @@ export class {{ resource_type_name }} {
             {% endfor -%}
 
             {% for p in op.header_params -%}
-                request.setHeaderParam({{ p.name | tojson }}, options{% if not p.required %}?{% endif %}.{{ p.name | ident("camel") }});
+                request.setHeaderParam({{ p.name | tojson }}, options{% if not p.required %}?{% endif %}.{{ p.ident | ident("camel") }});
             {% endfor -%}
 
             {% if op.request_body_schema_name is defined -%}
@@ -186,7 +186,7 @@ export class {{ resource_type_name }} {
 
         {% if op.pagination is defined -%}
         {% set pg = op.pagination -%}
-        {% set param_field = pg.param | ident("camel") -%}
+        {% set param_field = (op.query_params | selectattr("name", "equalto", pg.param) | first).ident | ident("camel") -%}
         {% set options_ty = resource_type_name ~ (op.name | to_upper_camel_case) ~ "Options" -%}
         /** Iterates with `for await` over every item of `{{ op.name | ident("camel") }}`, fetching further pages on demand. */
         public {{ op.name | to_lower_camel_case }}Iter(

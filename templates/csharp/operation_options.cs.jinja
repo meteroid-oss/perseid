@@ -16,12 +16,12 @@ public sealed record {{ class_name }}
 {% if p.description is defined %}
     {{ m.doc(p.description) }}
 {% endif -%}
-    public {% if p.required %}required {% endif %}{{ p.type.to_csharp() }}{% if not p.required %}?{% endif %} {{ m.member(p.name, class_name) }} { get; set; }
+    public {% if p.required %}required {% endif %}{{ p.type.to_csharp() }}{% if not p.required %}?{% endif %} {{ m.member(p.ident, class_name) }} { get; set; }
 {% endfor -%}
 {% for p in operation.header_params -%}
 {% if p.description is defined %}
     {{ m.doc(p.description) }}
 {% endif -%}
-    public {% if p.required %}required {% endif %}string{% if not p.required %}?{% endif %} {{ m.member(p.name, class_name) }} { get; set; }
+    public {% if p.required %}required {% endif %}string{% if not p.required %}?{% endif %} {{ m.member(p.ident, class_name) }} { get; set; }
 {% endfor -%}
 }

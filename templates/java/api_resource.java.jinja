@@ -205,7 +205,7 @@ public class {{ resource_type_name }} {
         HttpUrl url = client.newUrlBuilder(){{ ns.calls | join("") }}.build();
         {% else -%}
         HttpUrl.Builder url = client.newUrlBuilder(){{ ns.calls | join("") }};
-        {% set query_fields = op.query_params | map(attribute="name") | list | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
+        {% set query_fields = op.query_params | map(attribute="ident") | list | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
         {% for p in op.query_params -%}
         {% set getter = "options.get" ~ query_fields[loop.index0] ~ ("_" if query_fields[loop.index0] == "Class" else "") ~ "()" -%}
         {% set explode = p.explode | default(true) -%}
@@ -223,7 +223,7 @@ public class {{ resource_type_name }} {
         {% endfor -%}
         {% endif -%}
         {% if op.header_params | length > 0 -%}
-        {% set header_fields = op.header_params | map(attribute="name") | list | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
+        {% set header_fields = op.header_params | map(attribute="ident") | list | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
         Headers.Builder headers = new Headers.Builder();
         {% for p in op.header_params -%}
         {% set getter = "options.get" ~ header_fields[loop.index0] ~ ("_" if header_fields[loop.index0] == "Class" else "") ~ "()" -%}
@@ -279,9 +279,9 @@ public class {{ resource_type_name }} {
     {% set item_ty = pg.item_schema | to_upper_camel_case -%}
     {% set params = op.query_params + op.header_params -%}
     {% set pager = namespace(accessors=[], param="") -%}
-    {% for a in params | map(attribute="name") | list | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
+    {% for a in params | map(attribute="ident") | list | idents("pascal", "java", "operation `" ~ op.id ~ "`") -%}
         {% set pager.accessors = pager.accessors + [a ~ ("_" if a == "Class" else "")] -%}
-        {% if params[loop.index0].name == pg.param %}{% set pager.param = a ~ ("_" if a == "Class" else "") %}{% endif -%}
+        {% if params[loop.index0].ident == param.ident %}{% set pager.param = a ~ ("_" if a == "Class" else "") %}{% endif -%}
     {% endfor -%}
     {% set pager_accessors = pager.accessors -%}
     {% set param_accessor = pager.param -%}

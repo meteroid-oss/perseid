@@ -26,7 +26,7 @@ use crate::{error::Result, models::*, Configuration};
             {% if p.description is defined -%}
                 {{ p.description | to_doc_comment(style="rust") }}
             {% endif -%}
-            pub {{ p.name | to_rust_ident }}: {{ ty }},
+            pub {{ p.ident | to_rust_ident }}: {{ ty }},
         {% endfor -%}
         {% for p in op.header_params -%}
             {% set ty = "String" -%}
@@ -34,7 +34,7 @@ use crate::{error::Result, models::*, Configuration};
             {% if p.description is defined -%}
                 {{ p.description | to_doc_comment(style="rust") }}
             {% endif -%}
-            pub {{ p.name | to_rust_ident }}: {{ ty }},
+            pub {{ p.ident | to_rust_ident }}: {{ ty }},
         {% endfor -%}
     }
     {% endif %}
@@ -116,12 +116,12 @@ impl<'a> {{ resource_type_name }}<'a> {
                 options: Option<{{ param_struct_name }}>,
             {%- endif -%}
         {% endif -%}
-    ) -> Result<{% if op.response_is_event_stream %}crate::api::EventStream{% elif op.response_is_binary %}bytes::Bytes{% elif op.response_is_text %}String{% elif op.response_body_json_type is defined %}{{ rust_type(op.response_body_json_type) }}{% elif op.response_body_is_list %}Vec<crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}>{% elif op.response_body_schema_name is defined %}crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}{% else %}(){% endif %}> {
+    ) -> Result<{% if op.response_is_event_stream %}crate::api::EventStream{% elif op.response_is_binary %}bytes::Bytes{% elif op.response_is_text %}String{% elif op.response_body_optional %}Option<{% if op.response_body_json_type is defined %}{{ rust_type(op.response_body_json_type) }}{% elif op.response_body_is_list %}Vec<crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}>{% else %}crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}{% endif %}>{% elif op.response_body_json_type is defined %}{{ rust_type(op.response_body_json_type) }}{% elif op.response_body_is_list %}Vec<crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}>{% elif op.response_body_schema_name is defined %}crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}{% else %}(){% endif %}> {
         {% if has_params -%}
             {# unpack query / header parameter struct -#}
             let {{ param_struct_name }} {
-                {% for p in op.query_params %}{{ p.name | to_rust_ident }},{% endfor %}
-                {% for p in op.header_params %}{{ p.name | to_rust_ident }},{% endfor %}
+                {% for p in op.query_params %}{{ p.ident | to_rust_ident }},{% endfor %}
+                {% for p in op.header_params %}{{ p.ident | to_rust_ident }},{% endfor %}
             } = options
             {%- if not has_required_params %}.unwrap_or_default(){% endif -%}
             ;
@@ -161,7 +161,7 @@ impl<'a> {{ resource_type_name }}<'a> {
             {% set explode = p.explode | default(true) -%}
             {% set is_exploded_list = (p.type.is_list() or p.type.is_set()) and explode -%}
             {% if p.structured -%}
-                .with_structured_query_param("{{ p.name }}", {% if p.required %}Some({{ p.name | to_rust_ident }}){% else %}{{ p.name | to_rust_ident }}{% endif %}, {{ p.deep_object | lower }}, {{ explode | lower }})
+                .with_structured_query_param("{{ p.name }}", {% if p.required %}Some({{ p.ident | to_rust_ident }}){% else %}{{ p.ident | to_rust_ident }}{% endif %}, {{ p.deep_object | lower }}, {{ explode | lower }})
             {% else -%}
             {% if p.required and is_exploded_list -%}
                 .with_exploded_query_param
@@ -172,12 +172,12 @@ impl<'a> {{ resource_type_name }}<'a> {
             {%- else -%}
                 .with_optional_query_param
             {%- endif -%}
-            ("{{ p.name }}", {{ p.name | to_rust_ident }})
+            ("{{ p.name }}", {{ p.ident | to_rust_ident }})
             {% endif -%}
         {% endfor -%}
 
         {% for p in op.header_params -%}
-            .{% if p.required %}with_header_param{% else %}with_optional_header_param{% endif %}("{{ p.name }}", {{ p.name | to_rust_ident }})
+            .{% if p.required %}with_header_param{% else %}with_optional_header_param{% endif %}("{{ p.name }}", {{ p.ident | to_rust_ident }})
         {% endfor -%}
 
         {% if op.request_body_kind == "binary" -%}
@@ -248,7 +248,7 @@ impl<'a> {{ resource_type_name }}<'a> {
         {% if not has_required_params -%}
         let options = options.unwrap_or_default();
         {% endif -%}
-        let start = serde_json::to_value({% if param.required %}Some(&options.{{ pg.param | to_rust_ident }}){% else %}options.{{ pg.param | to_rust_ident }}.as_ref(){% endif %})
+        let start = serde_json::to_value({% if param.required %}Some(&options.{{ param.ident | to_rust_ident }}){% else %}options.{{ param.ident | to_rust_ident }}.as_ref(){% endif %})
             .ok()
             .filter(|start| !start.is_null());
         let cfg = self.cfg;
@@ -269,7 +269,7 @@ impl<'a> {{ resource_type_name }}<'a> {
                 {% endif -%}
                 Box::pin(async move {
                     if let Some(param) = param {
-                        options.{{ pg.param | to_rust_ident }} =
+                        options.{{ param.ident | to_rust_ident }} =
                             serde_json::from_value(param).map_err(crate::request::decode_error)?;
                     }
                     {% if op.deprecated -%}

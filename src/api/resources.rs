@@ -620,6 +620,7 @@ impl Operation {
                     enforce_string_parameter(&parameter_data, true)
                         .with_context(|| format!("header parameter `{name}`"))?;
                     header_params.push(HeaderParam {
+                        ident: parameter_data.name.clone(),
                         name: parameter_data.name,
                         required: parameter_data.required,
                     });
@@ -647,6 +648,7 @@ impl Operation {
                     let explode = parameter_data.explode.unwrap_or(true);
 
                     query_params.push(QueryParam {
+                        ident: name.clone(),
                         name,
                         description: super::html::doc(parameter_data.description),
                         required: parameter_data.required,
@@ -665,6 +667,9 @@ impl Operation {
                 }
             }
         }
+
+        add_undeclared_path_params(path, &mut path_params);
+        disambiguate_parameters(&path_params, &mut query_params, &mut header_params);
 
         let request_body_optional = op
             .request_body
@@ -1317,13 +1322,19 @@ fn named_or_list_of_named(
 
 #[derive(Clone, Deserialize, Serialize)]
 struct HeaderParam {
+    /// Name on the wire.
     name: String,
+    /// Name the SDK derives its identifier from, unique among the operation's parameters.
+    ident: String,
     required: bool,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct QueryParam {
+    /// Name on the wire.
     pub(crate) name: String,
+    /// Name the SDK derives its identifier from, unique among the operation's parameters.
+    pub(crate) ident: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     required: bool,
@@ -1344,6 +1355,53 @@ pub(crate) struct QueryParam {
 
 fn default_explode() -> bool {
     true
+}
+
+/// Declares the `{variable}`s of a path template that no `in: path` parameter describes, as
+/// required strings, so that they are filled in instead of sent as the literal `{variable}`.
+fn add_undeclared_path_params(path: &str, path_params: &mut Vec<String>) {
+    let mut rest = path;
+    while let Some(start) = rest.find('{') {
+        let Some(len) = rest[start..].find('}') else {
+            break;
+        };
+        let name = &rest[start + 1..start + len];
+        if !name.is_empty() && !path_params.iter().any(|p| p == name) {
+            tracing::warn!(path, name, "undeclared path parameter, typed as a string");
+            path_params.push(name.to_owned());
+        }
+        rest = &rest[start + len + 1..];
+    }
+}
+
+/// Gives every parameter an identifier unique within the operation. Path parameters keep their
+/// name, query parameters then headers that collide with an earlier one get an `_query` or
+/// `_header` suffix. The wire names are untouched.
+fn disambiguate_parameters(
+    path_params: &[String],
+    query_params: &mut [QueryParam],
+    header_params: &mut [HeaderParam],
+) {
+    let mut taken: BTreeSet<String> = path_params.iter().map(|p| p.to_snake_case()).collect();
+    let mut claim = |name: &str, suffix: &str| -> String {
+        let mut ident = name.to_owned();
+        let mut n = 1;
+        while !taken.insert(ident.to_snake_case()) {
+            n += 1;
+            ident = if n == 2 {
+                format!("{name}_{suffix}")
+            } else {
+                format!("{name}_{suffix}_{}", n - 1)
+            };
+        }
+        ident
+    };
+    for p in query_params {
+        p.ident = claim(&p.name, "query");
+    }
+    for p in header_params {
+        p.ident = claim(&p.name, "header");
+    }
 }
 
 #[cfg(test)]
@@ -1716,5 +1774,48 @@ mod tests {
             "schema": { "type": "array", "items": { "type": "string" } } });
         let error = format!("{:#}", parameter(pipes).err().unwrap());
         assert!(error.contains("pipeDelimited"), "{error}");
+    }
+
+    #[test]
+    fn same_name_parameters_get_distinct_identifiers() {
+        let op = json!({ "operationId": "op", "parameters": [
+            { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+            { "name": "id", "in": "query", "schema": { "type": "string" } },
+            { "name": "v", "in": "query", "schema": { "type": "string" } },
+            { "name": "v", "in": "header", "schema": { "type": "string" } },
+            { "name": "X-Id", "in": "header", "schema": { "type": "string" } },
+            { "name": "x_id", "in": "query", "schema": { "type": "string" } },
+        ] });
+        let (_, op) = Operation::from_openapi(
+            "/x/{id}",
+            "get",
+            serde_json::from_value(op).unwrap(),
+            &IndexMap::new(),
+            IncludeMode::OnlyPublic,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap()
+        .unwrap();
+        let queries: Vec<_> = op
+            .query_params
+            .iter()
+            .map(|p| (p.name.as_str(), p.ident.as_str()))
+            .collect();
+        assert_eq!(queries, [("id", "id_query"), ("v", "v"), ("x_id", "x_id")]);
+        let headers: Vec<_> = op
+            .header_params
+            .iter()
+            .map(|p| (p.name.as_str(), p.ident.as_str()))
+            .collect();
+        assert_eq!(headers, [("v", "v_header"), ("X-Id", "X-Id_header")]);
+        assert_eq!(op.path_params, ["id"]);
+    }
+
+    #[test]
+    fn undeclared_path_variables_become_string_parameters() {
+        let mut params = vec!["a".to_owned()];
+        add_undeclared_path_params("/x/{a}/y/{thing}/{thing}", &mut params);
+        assert_eq!(params, ["a", "thing"]);
     }
 }

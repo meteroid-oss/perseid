@@ -103,17 +103,17 @@ public sealed partial class {{ resource_type_name }}
 {% endif -%}
 {% for p in op.query_params -%}
 {% set explode = p.explode | default(true) -%}
-{% set value %}options{% if not required_options %}?{% endif %}.{{ m.member(p.name, options_type) }}{% endset -%}
+{% set value %}options{% if not required_options %}?{% endif %}.{{ m.member(p.ident, options_type) }}{% endset -%}
 {% if p.structured and p.type.to_csharp() == "JsonNode" -%}
         request.AddStructuredQuery("{{ p.name }}", {{ value }}, {{ p.deep_object | lower }}, {{ explode | lower }});
 {% elif p.structured -%}
         request.AddStructuredQuery("{{ p.name }}", {{ value }}, {{ context }}.{{ m.type_info(p.type.to_csharp()) }}, {{ p.deep_object | lower }}, {{ explode | lower }});
 {% else -%}
-        request.AddQuery("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.name, options_type) }}{% if (p.type.is_list() or p.type.is_set()) and not explode %}, explode: false{% endif %});
+        request.AddQuery("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.ident, options_type) }}{% if (p.type.is_list() or p.type.is_set()) and not explode %}, explode: false{% endif %});
 {% endif -%}
 {% endfor -%}
 {% for p in op.header_params -%}
-        request.SetHeader("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.name, options_type) }});
+        request.SetHeader("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.ident, options_type) }});
 {% endfor -%}
 {% if has_body -%}
 {% set setter = "SetFormBody" if op.request_body_is_form else "SetJsonBody" -%}
@@ -161,7 +161,7 @@ public sealed partial class {{ resource_type_name }}
 {% if op.pagination is defined -%}
 {% set pg = op.pagination -%}
 {% set param = op.query_params | selectattr("name", "equalto", pg.param) | first -%}
-{% set property = m.member(pg.param, options_type) %}
+{% set property = m.member(param.ident, options_type) %}
     /// <summary>Iterates with <c>await foreach</c> over every item of <see cref="{{ method_name }}"/>, fetching further pages on demand.</summary>
 {% if op.deprecated %}    [Obsolete]
 {% endif -%}

@@ -41,9 +41,9 @@ type {{ body_type_name }} struct {
 type {{ options_type_name }} struct {
 {% for p in op.query_params %}{% if not loop.first %}
 {% endif %}{% if p.description is defined %}{{ p.description | to_doc_comment(style="go") }}
-{% endif %}{{ go_export(p.name) }} {% if not p.required and not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}*{% endif %}{{ go_type(p.type) }}
+{% endif %}{{ go_export(p.ident) }} {% if not p.required and not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}*{% endif %}{{ go_type(p.type) }}
 {% endfor %}{% for p in op.header_params %}
-{{ go_export(p.name) }} {% if not p.required %}*{% endif %}{{ go_header_type(p) }}
+{{ go_export(p.ident) }} {% if not p.required %}*{% endif %}{{ go_header_type(p) }}
 {% endfor %}}
 {% endif %}{% endfor %}
 
@@ -80,7 +80,7 @@ type {{ resource_type_name }} struct {
 {% if not has_required_params %}	if options != nil {
 {% endif %}
 {%- for p in op.query_params %}
-{%- set field = "options." ~ go_export(p.name) %}
+{%- set field = "options." ~ go_export(p.ident) %}
 {%- if p.structured %}
 {%- if p.required and not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}	req.AddStructuredQueryParam("{{ p.name }}", {{ field }}, {{ p.deep_object | lower }}, {{ p.explode | lower }})
 {% else %}	if {{ field }} != nil {
@@ -107,7 +107,7 @@ type {{ resource_type_name }} struct {
 {% endif %}
 {%- endfor %}
 {%- for p in op.header_params %}
-{%- set field = "options." ~ go_export(p.name) %}
+{%- set field = "options." ~ go_export(p.ident) %}
 {%- if p.required %}	req.SetHeader("{{ p.name }}", {{ field }})
 {% else %}	if {{ field }} != nil {
 		req.SetHeader("{{ p.name }}", *{{ field }})
@@ -151,7 +151,7 @@ type {{ resource_type_name }} struct {
 {% if op.pagination is defined %}
 {% set pg = op.pagination %}
 {% set param = (op.query_params | selectattr("name", "equalto", pg.param) | first) %}
-{% set field = go_export(pg.param) %}
+{% set field = go_export(param.ident) %}
 {% set item_type = go_ident(pg.item_schema) %}
 // {{ go_export(op.name) }}Iter iterates over every item of {{ go_export(op.name) }}, fetching further pages on demand.
 func (a *{{ resource_type_name }}) {{ go_export(op.name) }}Iter(ctx context.Context{% for p in op.path_params %}, {{ go_local(p) }} string{% endfor %}{% if op.request_body_schema_name is defined %}, {{ body_var }} {% if op.request_body_is_list %}[]{% endif %}{{ go_ident(op.request_body_schema_name) }}{% elif op.request_body_json_type is defined %}, body {{ go_type(op.request_body_json_type) }}{% endif %}, options {% if not has_required_params %}*{% endif %}{{ options_type_name }}, opts ...RequestOption) *Pager[{{ item_type }}] {
