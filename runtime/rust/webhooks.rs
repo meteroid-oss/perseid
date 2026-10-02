@@ -4,7 +4,7 @@
 //! ```no_run
 //! use @@RUST_CRATE@@::webhooks::{Webhook, WebhookError};
 //!
-//! fn verify(body: &[u8], headers: &http1::HeaderMap) -> Result<(), WebhookError> {
+//! fn verify(body: &[u8], headers: &http::HeaderMap) -> Result<(), WebhookError> {
 //!     Webhook::new("whsec_your_webhook_secret")?.verify(body, headers)
 //! }
 //! ```
@@ -24,13 +24,20 @@ const HEADERS: [[&str; 2]; 3] = [
     ["webhook-signature", "svix-signature"],
 ];
 
+/// Why a webhook payload is rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebhookError {
+    /// The secret is empty or not valid base64.
     InvalidSecret,
+    /// A `webhook-id`, `webhook-timestamp` or `webhook-signature` header is missing.
     MissingHeaders,
+    /// The timestamp header is not a number of seconds.
     InvalidTimestamp,
+    /// The payload was signed more than five minutes ago.
     TimestampTooOld,
+    /// The payload claims to be signed more than five minutes from now.
     TimestampTooNew,
+    /// No signature matches the payload.
     NoMatchingSignature,
 }
 
@@ -56,6 +63,10 @@ pub struct Webhook {
 
 impl Webhook {
     /// The secret as shown in your dashboard: base64, with or without the `whsec_` prefix.
+    ///
+    /// # Errors
+    ///
+    /// [`WebhookError::InvalidSecret`] when the secret is empty or not base64.
     pub fn new(secret: &str) -> Result<Self, WebhookError> {
         let encoded = secret.strip_prefix(SECRET_PREFIX).unwrap_or(secret);
         let key = STANDARD
@@ -65,6 +76,10 @@ impl Webhook {
     }
 
     /// The raw, already decoded signing key.
+    ///
+    /// # Errors
+    ///
+    /// [`WebhookError::InvalidSecret`] when the key is empty.
     pub fn from_bytes(key: Vec<u8>) -> Result<Self, WebhookError> {
         if key.is_empty() {
             return Err(WebhookError::InvalidSecret);
@@ -74,7 +89,12 @@ impl Webhook {
 
     /// Checks the signature and that the timestamp is within five minutes of now.
     /// `payload` must be the exact request body, before any parsing.
-    pub fn verify(&self, payload: &[u8], headers: &http1::HeaderMap) -> Result<(), WebhookError> {
+    ///
+    /// # Errors
+    ///
+    /// The reason the payload is not to be trusted: missing headers, a timestamp too old or
+    /// too new, or no matching signature.
+    pub fn verify(&self, payload: &[u8], headers: &http::HeaderMap) -> Result<(), WebhookError> {
         let [id, timestamp, signatures] = HEADERS.map(|names| header(headers, names));
         if id.is_empty() || timestamp.is_empty() || signatures.is_empty() {
             return Err(WebhookError::MissingHeaders);
@@ -84,7 +104,7 @@ impl Webhook {
             .map_err(|_| WebhookError::InvalidTimestamp)?;
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64);
+            .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
         if seconds < now - TOLERANCE_SECONDS {
             return Err(WebhookError::TimestampTooOld);
         }
@@ -102,6 +122,7 @@ impl Webhook {
     }
 
     /// Returns the `v1,<base64>` value of the `webhook-signature` header.
+    #[must_use]
     pub fn sign(&self, msg_id: &str, timestamp: i64, payload: &[u8]) -> String {
         let signature = self.mac(msg_id, timestamp, payload).finalize().into_bytes();
         format!("v1,{}", STANDARD.encode(signature))
@@ -115,7 +136,7 @@ impl Webhook {
     }
 }
 
-fn header(headers: &http1::HeaderMap, names: [&str; 2]) -> String {
+fn header(headers: &http::HeaderMap, names: [&str; 2]) -> String {
     names
         .iter()
         .map(|name| {

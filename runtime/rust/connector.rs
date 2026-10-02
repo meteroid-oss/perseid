@@ -19,10 +19,11 @@ use crate::api::{
 /// Sends one HTTP request. Implemented for hyper's client over any connector, which is how
 /// to bring custom TLS roots, client certificates or a proxy.
 pub trait HttpClient: Send + Sync {
+    /// Sends `request`, resolving once the response head arrived.
     fn send(
         &self,
-        request: http1::Request<RequestBody>,
-    ) -> BoxFuture<'_, Result<http1::Response<Incoming>, BoxError>>;
+        request: http::Request<RequestBody>,
+    ) -> BoxFuture<'_, Result<http::Response<Incoming>, BoxError>>;
 }
 
 impl<C> HttpClient for Client<C, RequestBody>
@@ -31,8 +32,8 @@ where
 {
     fn send(
         &self,
-        request: http1::Request<RequestBody>,
-    ) -> BoxFuture<'_, Result<http1::Response<Incoming>, BoxError>> {
+        request: http::Request<RequestBody>,
+    ) -> BoxFuture<'_, Result<http::Response<Incoming>, BoxError>> {
         let response = self.request(request);
         Box::pin(async move { Ok(response.await?) })
     }

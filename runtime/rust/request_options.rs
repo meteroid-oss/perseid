@@ -7,29 +7,35 @@ use std::time::Duration;
 #[derive(Clone, Debug, Default)]
 pub struct RequestOptions {
     pub(crate) headers: Vec<(String, String)>,
+    #[allow(clippy::option_option)]
     pub(crate) timeout: Option<Option<Duration>>,
     pub(crate) max_retries: Option<u32>,
     pub(crate) idempotency_key: Option<String>,
 }
 
 impl RequestOptions {
+    /// Options changing nothing.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Adds a header, replacing one the client would send under that name.
+    #[must_use]
     pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.headers.push((name.into(), value.into()));
         self
     }
 
     /// Timeout of each attempt; `None` never times out.
+    #[must_use]
     pub fn timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
         self.timeout = Some(timeout.into());
         self
     }
 
-    /// How many times a failed request is retried, overriding the client's `num_retries`.
+    /// How many times a failed request is retried, overriding the client's `max_retries`.
+    #[must_use]
     pub fn max_retries(mut self, max_retries: u32) -> Self {
         self.max_retries = Some(max_retries);
         self
@@ -37,6 +43,7 @@ impl RequestOptions {
 
     /// The `Idempotency-Key` header, which also makes a POST request safe to retry.
     /// POST requests get a random one by default.
+    #[must_use]
     pub fn idempotency_key(mut self, key: impl Into<String>) -> Self {
         self.idempotency_key = Some(key.into());
         self
