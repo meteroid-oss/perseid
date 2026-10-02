@@ -1,7 +1,6 @@
 {% import "types/macros.java.jinja" as m -%}
 // This file is @generated
 {% set ty_name = type.name | to_upper_camel_case -%}
-{{- m.check_name(ty_name) -}}
 {% set owner = "schema `" ~ type.name ~ "`" -%}
 {% set unknown = "UNRECOGNIZED_VALUE" if "UNRECOGNIZED" in (type.values | idents("shouty", "java", owner)) else "UNRECOGNIZED" -%}
 {% set members = (type.values + [unknown | lower]) | idents("shouty", "java", owner) -%}

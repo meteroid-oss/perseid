@@ -1,7 +1,6 @@
 {% import "types/macros.java.jinja" as m -%}
 // This file is @generated
 {% set ty_name = type.name | to_upper_camel_case -%}
-{{- m.check_name(ty_name) -}}
 {% set ns = namespace(names=[], values=[]) -%}
 {% for varname, value in type.variants %}{% set ns.names = ns.names + [varname] %}{% set ns.values = ns.values + [value ~ "L"] %}{% endfor -%}
 {% set owner = "schema `" ~ type.name ~ "`" -%}

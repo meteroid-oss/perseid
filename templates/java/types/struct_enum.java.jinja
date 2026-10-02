@@ -1,6 +1,5 @@
 {% import "types/macros.java.jinja" as m -%}
 {% set type_name = type.name | to_upper_camel_case -%}
-{{- m.check_name(type_name) -}}
 {% set owner = "schema `" ~ type.name ~ "`" -%}
 {% set disc = type.discriminator_field -%}
 {% set disc_getter = "get" ~ (disc | ident("pascal", "java")) -%}

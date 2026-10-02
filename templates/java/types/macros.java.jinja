@@ -154,18 +154,9 @@ public String toString() {
 }
 {%- endmacro %}
 
-{#- Model names that would shadow a type the generated code uses. -#}
-{% macro check_name(name) -%}
-{% if name in ["Object", "String", "Boolean", "Short", "Integer", "Long", "Float", "Double", "Void",
-    "Override", "Deprecated", "List", "Map", "Set", "Optional", "Objects", "ArrayList", "HashMap",
-    "LinkedHashSet", "LinkedHashMap", "BigDecimal", "OffsetDateTime", "URI", "Utils"] -%}
-{{ panic("java codegen: schema `" ~ name ~ "` would shadow java's own `" ~ name ~ "`, rename it in the spec") }}
-{%- endif %}
-{%- endmacro %}
-
 {#- The `cls` class of the union in `ty`: one subclass per variant, told apart by JSON type. -#}
 {% macro union_class(ty, cls, shadowed=[]) -%}
-{% if ty.is_list() or ty.is_set() -%}
+{% if ty.is_list() or ty.is_set() or ty.is_nullable() -%}
 {{ union_class(ty.inner_type(), cls, shadowed) }}
 {%- elif ty.is_map() -%}
 {{ union_class(ty.value_type(), cls, shadowed) }}

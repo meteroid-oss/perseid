@@ -1,7 +1,6 @@
 {% import "types/macros.java.jinja" as m -%}
 // This file is @generated
 {% set class_ty = type.name | to_upper_camel_case -%}
-{{- m.check_name(class_ty) -}}
 {% set owner = "schema `" ~ type.name ~ "`" -%}
 {% set vars = m.field_idents(type.fields, "camel", owner) | split(" ") | reject("equalto", "") | list -%}
 {% set pascals = m.field_idents(type.fields, "pascal", owner) | split(" ") | reject("equalto", "") | list -%}

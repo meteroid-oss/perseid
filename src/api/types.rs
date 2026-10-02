@@ -851,13 +851,10 @@ fn promote_field_type(
                 };
                 return Ok(());
             }
-            let mut base = match title.take() {
-                Some(t) => t.to_upper_camel_case(),
-                None => base_name.to_upper_camel_case(),
-            };
-            if existing.reserved.contains(&base) {
-                base.push_str("Model");
-            }
+            let base = crate::reserved::safe_type_name(
+                &title.take().unwrap_or_else(|| base_name.to_owned()),
+                &existing.reserved,
+            );
             let data = TypeData::StringEnum { values };
             let mut name = base.clone();
             for n in 2.. {

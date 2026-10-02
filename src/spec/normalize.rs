@@ -110,7 +110,8 @@ fn normalize_operation(
     Ok(())
 }
 
-/// Renames the schemas whose type name the SDK already uses, `Upload` becoming `UploadModel`.
+/// Renames the schemas whose type name is not usable in the SDK: `Upload` becoming `UploadModel`
+/// when the SDK has its own, `3DModel` becoming `N3dModel` as identifiers cannot start with a digit.
 pub(super) fn rename_reserved_schemas(doc: &mut Value, reserved: &BTreeSet<String>) {
     let Some(Value::Object(schemas)) = doc.pointer("/components/schemas") else {
         return;
@@ -118,10 +119,10 @@ pub(super) fn rename_reserved_schemas(doc: &mut Value, reserved: &BTreeSet<Strin
     let mut taken: BTreeSet<String> = schemas.keys().map(|n| n.to_upper_camel_case()).collect();
     let mut renames = BTreeMap::new();
     for name in schemas.keys() {
-        if !reserved.contains(&name.to_upper_camel_case()) {
+        let base = crate::reserved::safe_type_name(name, reserved);
+        if base == name.to_upper_camel_case() {
             continue;
         }
-        let base = format!("{}Model", name.to_upper_camel_case());
         let mut candidate = base.clone();
         for n in 2.. {
             if taken.insert(candidate.clone()) {
@@ -1250,6 +1251,28 @@ mod tests {
         assert_eq!(
             schemas["Event"]["discriminator"]["mapping"]["u"],
             json!("UploadModel2")
+        );
+    }
+
+    #[test]
+    fn schema_names_starting_with_a_digit_get_a_prefix() {
+        let mut doc = json!({
+            "paths": { "/m": { "get": { "operationId": "op", "responses": { "200": {
+                "description": "", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/3DModel" } } } } } } } },
+            "components": { "schemas": {
+                "3DModel": { "type": "object" },
+                "N3dModel": { "type": "object" },
+                "": { "type": "object" }
+            } }
+        });
+        rename_reserved_schemas(&mut doc, &BTreeSet::new());
+        let schemas = doc["components"]["schemas"].as_object().unwrap();
+        assert!(schemas.contains_key("N3dModel2") && schemas.contains_key("N3dModel"));
+        assert!(schemas.contains_key("Schema") && !schemas.contains_key("3DModel"));
+        assert_eq!(
+            doc.pointer("/paths/~1m/get/responses/200/content/application~1json/schema/$ref"),
+            Some(&json!("#/components/schemas/N3dModel2"))
         );
     }
 

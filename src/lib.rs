@@ -12,6 +12,7 @@ pub mod init;
 mod postprocessing;
 pub mod pr;
 mod prompt;
+mod reserved;
 pub mod scaffold;
 pub mod sizing;
 pub mod spec;

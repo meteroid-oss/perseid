@@ -2142,7 +2142,7 @@ fn typescript_types_unions_errors_and_the_default_timeout() {
     let index = read("index.ts");
     for text in [
         "const DEFAULT_TIMEOUT_MS = 15000;",
-        "parseError: ErrorSerializer.parse,",
+        "parseError: ErrorModelSerializer.parse,",
         "export type RealWorldErrorBody =",
         "NotFoundError,",
         "static readonly NotFoundError = NotFoundError;",
@@ -2320,4 +2320,61 @@ fn csharp_types_unions_errors_and_timeout() {
             .contains("public static Models.Error? GetError(this ApiException exception)")
     );
     assert!(read("RealWorldClientOptions.cs").contains("TimeSpan.FromSeconds(15)"));
+}
+
+#[test]
+fn schema_names_that_collide_or_start_with_a_digit_are_renamed() {
+    let dir = project_from("petstore.yaml", &["rust", "go", "python", "java", "csharp"]);
+    let schema =
+        |name: &str| format!("    {name}: {{type: object, properties: {{v: {{type: string}}}}}}\n");
+    let names = [
+        "3DModel",
+        "Self",
+        "Codec",
+        "UnionRules",
+        "Serialize",
+        "ApiError",
+        "Ptr",
+        "ErrorStatus",
+        "None",
+        "IntEnum",
+        "BaseModel",
+        "JsonProperty",
+        "Short",
+        "Deprecated",
+        "IStringEnum",
+    ];
+    let fields: String = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| format!("        f{i}: {{$ref: '#/components/schemas/{n}'}}\n"))
+        .collect();
+    let spec = format!(
+        "openapi: 3.1.0\ninfo: {{title: Names, version: 1.0.0}}\nservers: [{{url: https://x.example.com}}]\n\
+         paths:\n  /echo:\n    post:\n      operationId: echo\n      tags: [echo]\n      requestBody:\n        required: true\n        \
+         content: {{application/json: {{schema: {{$ref: '#/components/schemas/Holder'}}}}}}\n      responses:\n        '200': {{description: ok}}\n\
+         components:\n  schemas:\n{}    Holder:\n      type: object\n      properties:\n{fields}",
+        names.iter().map(|n| schema(n)).collect::<String>()
+    );
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    for language in ["rust", "go", "python", "java", "csharp"] {
+        let (ok, out) = perseid(dir.path(), &["inspect", language]);
+        assert!(ok, "{language}: {out}");
+        let api: Value = serde_json::from_str(&out).unwrap();
+        let types = api["types"].as_object().unwrap();
+        assert!(types.contains_key("N3dModel"), "{language}: {out}");
+        assert!(!types.contains_key("3DModel"), "{language}: {out}");
+        if language == "python" {
+            assert!(types.contains_key("NoneModel") && types.contains_key("IntEnumModel"));
+        }
+        if language == "go" {
+            assert!(types.contains_key("ErrorStatusModel") && types.contains_key("PtrModel"));
+        }
+        if language == "rust" {
+            assert!(types.contains_key("SelfModel") && types.contains_key("CodecModel"));
+        }
+        if language == "java" {
+            assert!(types.contains_key("ShortModel") && types.contains_key("DeprecatedModel"));
+        }
+    }
 }
