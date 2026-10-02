@@ -180,7 +180,7 @@ public class RoundTripTests
         )!;
         Assert.Equal(7L, Assert.IsType<UnionHolderStrOrInt.IntegerValue>(holder.StrOrInt).Value);
         Assert.Null(holder.StrOrInt!.AsString);
-        Assert.Equal(["a", "b"], holder.InlineUnion!.AsList!);
+        Assert.Equal(["a", "b"], holder.InlineUnion!.AsArrayOfStrings!);
 
         holder = holder with { StrOrInt = "seven", InlineUnion = "one" };
         var json = JsonSerializer.Serialize(holder, Context.UnionHolder);
