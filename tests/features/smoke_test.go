@@ -217,7 +217,7 @@ func TestSmokeWire(t *testing.T) {
 		Filter:   &Filter{Status: Ptr("open"), Amount: &FilterAmount{Gte: Ptr[int64](5)}},
 		Expand:   []string{"a", "b"},
 		Metadata: map[string]string{"k": "v"},
-		IDs:      Ptr(NewWireSearchIDsFromList([]string{"x", "y"})),
+		IDs:      Ptr(NewWireSearchIDsFromArrayOfStrings([]string{"x", "y"})),
 		Tags:     []string{"t1", "t2"},
 		Range:    &SearchRange{Gte: Ptr[int64](1), Lt: Ptr[int64](9)},
 	}
