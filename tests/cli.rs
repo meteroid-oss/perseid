@@ -3033,3 +3033,35 @@ components:
     );
     assert!(generated_text(dir.path(), "python").contains("class Event"));
 }
+
+#[test]
+fn operation_ids_colliding_once_snake_cased_are_resolved_by_x_perseid_name() {
+    let dir = project_from("petstore.yaml", &["rust"]);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Collide, version: "1.0.0" }
+servers: [{ url: "https://x.example.com" }]
+paths:
+  /a/{id}:
+    get:
+      operationId: getThing
+      tags: [things]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: ok } }
+  /b/{id}:
+    get:
+      operationId: get_thing
+      x-perseid-name: get_other_thing
+      tags: [things]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      responses: { "204": { description: ok } }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let rust = generated_text(dir.path(), "rust");
+    assert!(
+        rust.contains("fn retrieve(") && rust.contains("fn get_other_thing("),
+        "{rust}"
+    );
+}
