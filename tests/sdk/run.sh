@@ -48,6 +48,9 @@ case "$lang" in
     npm install --no-audit --no-fund && npm run build
     FIXTURES="$here/../fixtures" node --test test/*.test.mjs ;;
   python)
+    # The tests generate more SDKs themselves, with the `perseid` binary of the PATH: the torture
+    # fixture, the features fixture (client behavior) and, with their `perseid samples`, the
+    # sample round trips of torture and every edge fixture.
     uv venv -q && uv pip install -q -e .
     FIXTURES="$here/../fixtures" .venv/bin/python -m unittest discover -s tests -v ;;
   go)
