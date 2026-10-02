@@ -91,10 +91,12 @@ impl Middleware for Tag {
 fn client(origin: &Origin) -> Petstore {
     Petstore::builder()
         .token("token")
+        .base_url("https://pets.example.com")
         .middleware(Tag)
         .middleware(Cache::default())
         .middleware(origin.clone())
         .build()
+        .unwrap()
 }
 
 #[tokio::test]

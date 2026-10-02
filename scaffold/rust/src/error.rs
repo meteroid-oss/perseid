@@ -23,7 +23,8 @@ pub enum Error {
     Connection(BoxError),
     /// The response body does not match the expected type.
     Decode(BoxError),
-    /// The request could not be built, e.g. an invalid header value.
+    /// The request or the client could not be built, e.g. an invalid header value or a
+    /// missing base URL.
     Request(BoxError),
 }
 

@@ -496,11 +496,7 @@ impl Request {
         let idempotent = self.method.is_idempotent() || self.headers.contains_key(IDEMPOTENCY_KEY);
         let replayable = self.upload.as_ref().is_none_or(Upload::replayable)
             && self.multipart.as_ref().is_none_or(Multipart::replayable);
-        let max_retries = match (self.max_retries, &conf.retry_schedule) {
-            (Some(max_retries), _) => max_retries as usize,
-            (None, Some(schedule)) => schedule.len(),
-            (None, None) => conf.num_retries as usize,
-        };
+        let max_retries = self.max_retries.unwrap_or(conf.max_retries) as usize;
         let mut retries = 0;
         loop {
             let attempt = self.attempt(conf, event_stream).await;
@@ -516,7 +512,7 @@ impl Request {
             }
             let delay = attempt
                 .retry_after()
-                .unwrap_or_else(|| backoff(conf, retries));
+                .unwrap_or_else(|| backoff(retries));
             tokio::time::sleep(delay).await;
             retries += 1;
             self.headers
@@ -646,11 +642,8 @@ fn open_event_stream(response: Response) -> Result<Attempt, Failure> {
     }
 }
 
-/// Exponential backoff from 500ms up to 8s with jitter, unless a schedule is configured.
-fn backoff(conf: &Configuration, retries: usize) -> Duration {
-    if let Some(delay) = conf.retry_schedule.as_ref().and_then(|s| s.get(retries)) {
-        return *delay;
-    }
+/// Exponential backoff from 500ms up to 8s with jitter.
+fn backoff(retries: usize) -> Duration {
     let exponent = u32::try_from(retries).unwrap_or(u32::MAX);
     let delay = Duration::from_millis(500) * 2u32.saturating_pow(exponent);
     let jitter = 1.0 - f64::from(u16::try_from(random() % 1000).unwrap_or_default()) / 4000.0;

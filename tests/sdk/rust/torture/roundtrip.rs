@@ -170,9 +170,9 @@ impl Origin {
     fn client(&self) -> Torture {
         Torture::builder()
             .token("token")
-            .retry_schedule(vec![Duration::ZERO; 3])
             .middleware(self.clone())
             .build()
+            .unwrap()
     }
 
     fn requests(&self) -> Vec<(String, HeaderMap)> {
@@ -241,7 +241,7 @@ async fn header_and_date_query_params_are_encoded() {
 async fn throttled_requests_are_retried_after_the_advertised_delay() {
     let origin = Origin::replying(vec![
         (200, vec![], THING),
-        (503, vec![], "busy"),
+        (503, vec![("retry-after-ms", "0")], "busy"),
         (429, vec![("retry-after", "0")], "slow down"),
     ]);
     let thing = origin.client().things().retrieve("t/1").await.unwrap();
@@ -290,7 +290,8 @@ async fn errors_are_typed() {
         .timeout(Duration::from_millis(20))
         .max_retries(0)
         .middleware(origin)
-        .build();
+        .build()
+        .unwrap();
     let error = slow.tree().retrieve().await.unwrap_err();
     assert!(error.is_timeout() && !error.is_connection(), "{error:?}");
 
@@ -339,7 +340,7 @@ fn serve() -> String {
 async fn http_client_and_connector_can_be_replaced() {
     let url = serve();
     let connector = hyper_util::client::legacy::connect::HttpConnector::new();
-    let client = Torture::builder().token("t").base_url(&url).connector(connector).build();
+    let client = Torture::builder().token("t").base_url(&url).connector(connector).build().unwrap();
     let thing = client.things().retrieve("i").await.unwrap();
     assert_eq!(thing.name, "n");
 
@@ -349,7 +350,8 @@ async fn http_client_and_connector_can_be_replaced() {
         .token("t")
         .base_url(url)
         .http_client(Arc::new(Counting(inner, count.clone())))
-        .build();
+        .build()
+        .unwrap();
     client.things().retrieve("i").await.unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 1);
 }
@@ -468,7 +470,8 @@ async fn raw_responses_and_client_headers() {
         .header("x-client", "c")
         .header("x-trace", "client")
         .middleware(origin.clone())
-        .build();
+        .build()
+        .unwrap();
     let options = RequestOptions::new().header("x-trace", "call");
     let response = client.things().with_options(options).retrieve("i").with_response().await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
@@ -499,4 +502,10 @@ async fn bodiless_success_responses_are_none() {
     assert_eq!(widgets.update("w", WidgetUpdate::new()).await.unwrap(), None);
     let updated: Option<Widget> = widgets.update("w", WidgetUpdate::new()).await.unwrap();
     assert_eq!(updated.map(|w| w.name), Some("n".to_owned()));
+}
+
+#[test]
+fn clients_default_to_the_spec_server() {
+    let client = Torture::builder().build().unwrap();
+    assert!(format!("{client:?}").contains("https://torture.example.com"), "{client:?}");
 }
