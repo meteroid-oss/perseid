@@ -96,7 +96,7 @@ impl {{ name }} {
         matches!(self, Self::{{ v }})
     }
     {% elif variant.json_type in ["integer", "number", "boolean"] and not variant.type.is_schema_ref() -%}
-    /// The value, if it is a {{ variant.json_type }}.
+    /// The value, if it is {{ "an" if variant.json_type == "integer" else "a" }} {{ variant.json_type }}.
     #[must_use]
     pub fn as_{{ variant.name | to_snake_case }}(&self) -> Option<{{ variant_type(name, variant) }}> {
         match self {
@@ -114,7 +114,7 @@ impl {{ name }} {
         }
     }
     {% else -%}
-    /// The value, if it is {% if variant.type.is_schema_ref() %}a [`{{ variant.type.to_rust() }}`]{% else %}a {{ variant.json_type }}{% endif %}.
+    /// The value, if it is {% if variant.type.is_schema_ref() %}a [`{{ variant.type.to_rust() }}`]{% else %}{{ "an" if variant.json_type in ["array", "object", "integer"] else "a" }} {{ variant.json_type }}{% endif %}.
     #[must_use]
     pub fn as_{{ variant.name | to_snake_case }}(&self) -> Option<&{{ variant_type(name, variant) }}> {
         match self {

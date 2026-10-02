@@ -159,7 +159,7 @@ async fn wire() {
         .filter(Filter { status: Some("open".into()), amount: Some(FilterAmount { gte: Some(5), ..Default::default() }), ..Default::default() })
         .expand(vec!["a".into(), "b".into()])
         .metadata([("k".to_owned(), "v".to_owned())])
-        .ids(serde_json::json!(["x", "y"]))
+        .ids(vec!["x".to_owned(), "y".to_owned()])
         .tags(vec!["t1".into(), "t2".into()])
         .range(SearchRange { gte: Some(1), lt: Some(9), ..Default::default() });
     assert_eq!(

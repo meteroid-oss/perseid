@@ -52,6 +52,9 @@ pub use self::{
                 {% if op | has_query_or_header_params -%}
                     {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options,
                 {% endif -%}
+                {% for p in op.query_params if p.typed_union is defined -%}
+                    {{ resource_type_name }}{{ op.name | to_upper_camel_case }}{{ p.name | to_upper_camel_case }},
+                {% endfor -%}
             {% endfor -%}
         },
     {% endfor -%}

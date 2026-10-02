@@ -1,6 +1,6 @@
 // this file is @generated
-#![allow(clippy::doc_markdown)]
-{% from "types/macros.rs.jinja" import rust_type -%}
+#![allow(clippy::doc_markdown, clippy::default_trait_access)]
+{% from "types/macros.rs.jinja" import rust_type, union_enum -%}
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
 
 #[allow(unused_imports, clippy::wildcard_imports)]
@@ -27,7 +27,11 @@ use crate::{error::Result, models::*, Configuration};
     {% set required = op | has_required_query_or_header_params -%}
     {% set params = namespace(all=[]) -%}
     {% for p in op.query_params -%}
+    {% if p.typed_union is defined -%}
+    {% set params.all = params.all + [(p, options_name[:-7] ~ (p.name | to_upper_camel_case), "query")] -%}
+    {% else -%}
     {% set params.all = params.all + [(p, rust_type(p.type), "query")] -%}
+    {% endif -%}
     {% endfor -%}
     {% for p in op.header_params -%}
     {% set params.all = params.all + [(p, "String", "header")] -%}
@@ -74,6 +78,9 @@ use crate::{error::Result, models::*, Configuration};
         }
         {% endfor %}
     }
+    {% for p in op.query_params if p.typed_union is defined %}
+    {{ union_enum(options_name[:-7] ~ (p.name | to_upper_camel_case), p.typed_union) }}
+    {% endfor %}
     {% endif %}
 {% endfor -%}
 
