@@ -245,6 +245,7 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
     while let Some(resource) = stack.pop() {
         for op in &mut resource.operations {
             op.untype_unions();
+            op.forget_typed_unions_of_unknown_types(types);
         }
         stack.extend(resource.subresources.values_mut());
     }
