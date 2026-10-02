@@ -308,6 +308,14 @@ func TestUnknownPropertiesRoundTrip(t *testing.T) {
 	}
 	sameJSON(t, string(out), strings.Replace(thingJSON, `{`, `{"future":{"a":[1]},`, 1))
 
+	var cased Thing
+	if err := json.Unmarshal([]byte(strings.Replace(thingJSON, `"id"`, `"ID"`, 1)), &cased); err != nil {
+		t.Fatal(err)
+	}
+	if cased.ID != "t1" || cased.ExtraFields != nil {
+		t.Errorf("a differently cased known property: ID %q, extra %v", cased.ID, cased.ExtraFields)
+	}
+
 	create := ThingCreate{Name: "n", Kind: KindAlpha, ExtraFields: map[string]json.RawMessage{"beta": []byte(`true`), "name": []byte(`"ignored"`)}}
 	out, err = json.Marshal(create)
 	if err != nil {
