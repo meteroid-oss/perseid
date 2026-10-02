@@ -20,10 +20,28 @@ cd "$lang"
 
 case "$lang" in
   rust)
+    export CARGO_TARGET_DIR="$work/target"
     cargo test --features webhooks
-    mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
-    cd "$work/torture" && perseid init --sdks rust && perseid generate rust
-    mkdir -p rust/tests && cp "$here/rust/torture/"*.rs rust/tests/ && cd rust && cargo test ;;
+    # Generates the SDK of one fixture, writes the samples of its models (`perseid samples`) and
+    # the registry of their types, then runs `cargo test`: every test of tests/sdk/rust/torture
+    # for the torture fixture, only the sample round trips for the others.
+    rust_samples() (
+      dir="$work/samples/$(basename "$1" .yaml)"
+      mkdir -p "$dir" && cd "$dir"
+      perseid init --sdks rust --spec "$1" > /dev/null && perseid generate rust > /dev/null
+      perseid samples --out samples.json > /dev/null
+      grep -q '"type_name"' samples.json || { echo "$1 has no models"; exit 0; }
+      mkdir -p rust/tests
+      python3 "$here/rust/torture/samples_registry.py" samples.json rust
+      if [ "$(basename "$1")" = torture.yaml ]; then
+        cp "$here/rust/torture/"*.rs rust/tests/ && (cd rust && cargo test)
+      else
+        cp "$here/rust/torture/samples.rs" rust/tests/ && (cd rust && cargo test --test samples)
+      fi
+    )
+    for spec in "$here/../fixtures/torture.yaml" "$here"/../fixtures/edge-*.yaml; do
+      rust_samples "$spec"
+    done ;;
   typescript)
     npm install --no-audit --no-fund && npm run build
     FIXTURES="$here/../fixtures" node --test test/*.test.mjs ;;
