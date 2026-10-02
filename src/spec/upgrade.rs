@@ -24,14 +24,119 @@ pub(super) fn to_3_1(doc: &mut Value) -> Result<()> {
     }
     let version = doc.get("openapi").and_then(Value::as_str).unwrap_or("");
     if version.starts_with("3.1") || version.starts_with("3.2") {
+        let is_3_2 = version.starts_with("3.2");
+        doc["openapi"] = json!("3.1.0");
+        if is_3_2 {
+            drop_3_2_operations(doc);
+        }
         return Ok(());
     }
     if !version.starts_with("3.0") {
-        bail!("unsupported OpenAPI version {version:?}, expected 3.0.x or 3.1.x");
+        if version.is_empty() {
+            bail!("the document has no `openapi` version: perseid reads OpenAPI 3.0, 3.1 and 3.2");
+        }
+        bail!("OpenAPI {version} is not supported; perseid reads 3.0, 3.1 and 3.2");
     }
     doc["openapi"] = json!("3.1.0");
     walk(doc);
     Ok(())
+}
+
+/// Drops what 3.2 adds to a path item and 3.1 has no place for: the QUERY method and
+/// `additionalOperations`, with a warning.
+fn drop_3_2_operations(doc: &mut Value) {
+    for section in ["paths", "webhooks"] {
+        let Some(items) = doc.get_mut(section).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        for (path, item) in items.iter_mut() {
+            let Some(item) = item.as_object_mut() else {
+                continue;
+            };
+            if item.remove("query").is_some() {
+                eprintln!("warning: QUERY {path} skipped: the QUERY method is not supported");
+            }
+            if item.remove("additionalOperations").is_some() {
+                eprintln!("warning: additionalOperations of {path} skipped: not supported");
+            }
+        }
+    }
+}
+
+/// Replaces boolean schemas by schema objects: `true` accepts any value, so it is `{}`; `false`
+/// accepts none, which no SDK type expresses, so it is warned about and read as `{}` too.
+pub(super) fn boolean_schemas(doc: &mut Value) {
+    if let Some(schemas) = doc
+        .pointer_mut("/components/schemas")
+        .and_then(Value::as_object_mut)
+    {
+        for (name, s) in schemas.iter_mut() {
+            boolean_schema(s, name);
+        }
+    }
+    walk_slots(doc);
+}
+
+fn walk_slots(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key.starts_with("x-") || key.starts_with("example") {
+                    continue;
+                }
+                if key == "schema" {
+                    boolean_schema(child, "(inline)");
+                }
+                walk_slots(child);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(walk_slots),
+        _ => {}
+    }
+}
+
+fn boolean_schema(value: &mut Value, at: &str) {
+    match value {
+        Value::Bool(allowed) => {
+            if !*allowed {
+                eprintln!(
+                    "warning: schema `{at}` is `false`, which matches no value: read as untyped JSON"
+                );
+            }
+            *value = json!({});
+        }
+        Value::Object(map) => {
+            for key in SCHEMA_MAPS {
+                for s in map
+                    .get_mut(key)
+                    .and_then(Value::as_object_mut)
+                    .into_iter()
+                    .flat_map(|m| m.values_mut())
+                {
+                    boolean_schema(s, at);
+                }
+            }
+            for key in SCHEMA_VALUES {
+                // `additionalProperties: false` is a flag, not a schema.
+                if let Some(s) = map.get_mut(key)
+                    && (key != "additionalProperties" || s.is_object())
+                {
+                    boolean_schema(s, at);
+                }
+            }
+            for key in SCHEMA_LISTS {
+                for s in map
+                    .get_mut(key)
+                    .and_then(Value::as_array_mut)
+                    .into_iter()
+                    .flatten()
+                {
+                    boolean_schema(s, at);
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 fn walk(value: &mut Value) {
@@ -310,5 +415,46 @@ mod tests {
     fn unknown_versions_are_rejected() {
         assert!(to_3_1(&mut json!({ "openapi": "4.0.0" })).is_err());
         assert!(to_3_1(&mut json!({})).is_err());
+    }
+
+    #[test]
+    fn three_two_is_read_as_three_one_without_query_operations() {
+        let mut doc = json!({ "openapi": "3.2.0", "paths": { "/x": {
+            "get": {}, "query": {}, "additionalOperations": { "COPY": {} }
+        } } });
+        to_3_1(&mut doc).unwrap();
+        assert_eq!(doc["openapi"], "3.1.0");
+        assert_eq!(doc["paths"]["/x"], json!({ "get": {} }));
+    }
+
+    #[test]
+    fn unsupported_versions_say_which_are_read() {
+        let err = to_3_1(&mut json!({ "openapi": "4.0.0" })).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("OpenAPI 4.0.0 is not supported; perseid reads 3.0, 3.1 and 3.2"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn boolean_schemas_become_empty_schemas() {
+        let mut doc = json!({ "components": { "schemas": {
+            "Any": true,
+            "Never": false,
+            "Holder": { "type": "object", "additionalProperties": false, "properties": {
+                "a": true, "b": { "items": true }
+            } }
+        } }, "paths": { "/x": { "get": { "responses": { "200": { "content": {
+            "application/json": { "schema": true } } } } } } } });
+        boolean_schemas(&mut doc);
+        let schemas = &doc["components"]["schemas"];
+        assert_eq!(schemas["Any"], json!({}));
+        assert_eq!(schemas["Never"], json!({}));
+        assert_eq!(schemas["Holder"]["additionalProperties"], json!(false));
+        assert_eq!(schemas["Holder"]["properties"]["a"], json!({}));
+        assert_eq!(schemas["Holder"]["properties"]["b"]["items"], json!({}));
+        let media = &doc["paths"]["/x"]["get"]["responses"]["200"]["content"]["application/json"];
+        assert_eq!(media["schema"], json!({}));
     }
 }
