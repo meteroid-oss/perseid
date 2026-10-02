@@ -672,6 +672,7 @@ impl Config {
             "npm_package": if language == "typescript" { &package } else { &kebab },
             "go_module": self.go_module(sdk).unwrap_or_else(|| kebab.clone()),
             "default_base_url": pick(&target.base_url, &self.base_url, "http://localhost"),
+            "has_default_base_url": target.base_url.is_some() || self.base_url.is_some(),
             "user_agent_prefix": pick(&target.user_agent, &self.user_agent, &kebab),
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
             "env_prefix": self.name.to_shouty_snake_case(),
