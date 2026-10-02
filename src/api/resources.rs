@@ -758,9 +758,12 @@ impl Operation {
             target.untype_unions();
             let target = &target;
             match target {
-                FieldType::List { inner } if !self.response_body_is_list => {
+                FieldType::List { inner }
+                    if !self.response_body_is_list
+                        && matches!(&**inner, FieldType::SchemaRef { .. }) =>
+                {
                     let FieldType::SchemaRef { name: item, .. } = &**inner else {
-                        bail!("response schema `{name}` is not supported");
+                        unreachable!("matched a schema reference");
                     };
                     self.response_body_schema_name = Some(item.clone());
                     self.response_body_is_list = true;
@@ -786,16 +789,26 @@ impl Operation {
             target.untype_unions();
             let target = &target;
             match target {
-                FieldType::List { inner } if !self.request_body_is_list => {
+                FieldType::List { inner }
+                    if !self.request_body_is_list
+                        && matches!(&**inner, FieldType::SchemaRef { .. }) =>
+                {
                     let FieldType::SchemaRef { name: item, .. } = &**inner else {
-                        bail!("request body schema `{name}` is not supported");
+                        unreachable!("matched a schema reference");
                     };
                     self.request_body_schema_name = Some(item.clone());
                     self.request_body_is_list = true;
                 }
-                target if target.is_plain_json() && !self.request_body_is_list => {
-                    self.request_body_json_type = Some(target.clone());
+                target if target.is_plain_json() => {
+                    let target = target.clone();
+                    self.request_body_json_type = Some(match self.request_body_is_list {
+                        true => FieldType::List {
+                            inner: Arc::new(target),
+                        },
+                        false => target,
+                    });
                     self.request_body_schema_name = None;
+                    self.request_body_is_list = false;
                 }
                 _ => bail!("request body schema `{name}` is not supported"),
             }
