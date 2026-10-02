@@ -13,6 +13,7 @@
 {% set defaults = type.discriminator_defaults | default({}) -%}
 package {{ sdk.java_package }}.models;
 
+import {{ sdk.java_internal_package }}.JsonField;
 import {{ sdk.java_internal_package }}.Unions;
 import {{ sdk.java_internal_package }}.Utils;
 import com.fasterxml.jackson.annotation.JsonAnyGetter;

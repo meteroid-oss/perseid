@@ -64,6 +64,9 @@ class RoundTripTest {
                 "TreeNode|{\"value\":\"root\",\"children\":[{\"value\":\"c\",\"children\":[]}],\"parent\":null,\"next\":{\"value\":\"n\",\"children\":[]}}",
                 "UnionHolder|{\"shape\":{\"type\":\"circle\",\"radius\":1.5},\"shapes\":[{\"type\":\"square\",\"side\":1.5}],\"maybe_shape\":null,\"shape_map\":{\"k\":{\"type\":\"square\",\"side\":3.5}},\"inline_union\":[\"a\"],\"empty\":{},\"free_form\":{\"any\":1},\"counts\":{\"a\":9007199254740993},\"nested\":{\"id\":\"n\",\"depth\":2}}",
                 "ThingPatch|{\"description\":null}",
+                "ThingPatch|{\"description\":\"d\",\"count\":null}",
+                "UnionHolder|{\"shape\":{\"type\":\"square\",\"side\":1.5},\"shapes\":[],\"maybe_shape\":{\"type\":\"circle\",\"radius\":2.5}}",
+                "Thing|{\"id\":\"t\",\"nullable_required\":null,\"nullable_ref\":{\"line1\":\"l\"},\"anyof_nullable_str\":null}",
                 "Reserved|{\"type\":\"t\",\"class\":\"c\",\"default\":\"d\",\"import\":\"i\",\"null\":\"n\",\"kebab-case\":\"k\",\"with space\":\"w\",\"$dollar\":\"d\",\"1leading\":\"l\"}",
                 "WidgetReactions|{\"+1\":3,\"-1\":1}",
             })
@@ -113,10 +116,11 @@ class RoundTripTest {
     @Test
     void unknownEnumValuesAreKeptAndSentBack() throws Exception {
         Thing thing = Thing.fromJson("{\"kind\":\"brand-new\",\"priority\":99}");
-        assertEquals("brand-new", thing.kind().getValue());
+        assertEquals("brand-new", thing.kind().asString());
         assertFalse(thing.kind().isKnown());
-        assertEquals(Kind.Known.UNRECOGNIZED, thing.kind().known());
-        assertEquals(99L, thing.priority().orElseThrow().getValue());
+        assertEquals(Kind.Value._UNKNOWN, thing.kind().value());
+        assertThrows(InvalidDataException.class, () -> thing.kind().known());
+        assertEquals(99L, thing.priority().orElseThrow().asLong());
         assertEquals(
                 PLAIN.readTree("{\"kind\":\"brand-new\",\"priority\":99,\"nullable_required\":null}"),
                 PLAIN.readTree(thing.toJson()));
@@ -127,8 +131,8 @@ class RoundTripTest {
     void knownEnumValuesAreTheConstants() {
         assertTrue(Kind.of("beta-2") == Kind.BETA_2);
         assertTrue(Kind.BETA_2.isKnown());
-        assertEquals("BETA_2", Kind.BETA_2.name());
-        assertTrue(Kind.valueOf("BETA_2") == Kind.BETA_2);
+        assertEquals(Kind.Value.BETA_2, Kind.BETA_2.value());
+        assertEquals(Kind.Known.BETA_2, Kind.BETA_2.known());
         assertEquals(Priority.NEGATIVE, Priority.of(-1));
         String label;
         switch (Kind.of("alpha").known()) {
@@ -221,6 +225,148 @@ class RoundTripTest {
         assertTrue(cleared.description().isEmpty());
         assertFalse(cleared.equals(ThingPatch.builder().build()));
         assertEquals("{\"description\":null}", cleared.toBuilder().build().toJson());
+        assertEquals(cleared, ThingPatch.builder().description(null).build());
+        assertEquals(cleared.hashCode(), ThingPatch.builder().description(null).build().hashCode());
+        assertEquals("{}", ThingPatch.fromJson("{}").toJson());
+        assertEquals("d", ThingPatch.fromJson("{\"description\":\"d\"}").description().orElseThrow());
+        assertEquals("{\"description\":\"d\"}", cleared.toBuilder().description("d").build().toJson());
+    }
+
+    @Test
+    void optionalIsOnlyAGetterTypeNeverAFieldType() {
+        for (Class<?> model : List.of(Thing.class, ThingPatch.class, UnionHolder.class, Shape.class)) {
+            for (Class<?> type : allClasses(model)) {
+                for (java.lang.reflect.Field field : type.getDeclaredFields()) {
+                    assertNotEquals(java.util.Optional.class, field.getType(), type.getName() + "." + field.getName());
+                }
+            }
+        }
+        UnionHolder holder = UnionHolder.fromJson("{\"maybe_shape\":{\"type\":\"circle\",\"radius\":2.5}}");
+        assertEquals(2.5, holder.maybeShape().orElseThrow().asCircle().data().radius());
+        assertTrue(UnionHolder.fromJson("{\"maybe_shape\":null}").maybeShape().isEmpty());
+    }
+
+    private static List<Class<?>> allClasses(Class<?> type) {
+        List<Class<?>> classes = new ArrayList<>(List.of(type));
+        for (Class<?> nested : type.getDeclaredClasses()) {
+            classes.addAll(allClasses(nested));
+        }
+        return classes;
+    }
+
+    @Test
+    void taggedUnionsAcceptAVisitor() {
+        Shape.Visitor<String> describe = new Shape.Visitor<>() {
+            @Override
+            public String visitCircle(Circle circle) {
+                return "circle " + circle.radius();
+            }
+
+            @Override
+            public String visitSquare(com.torture.models.Square square) {
+                return "square " + square.side();
+            }
+        };
+        assertEquals("circle 1.5", Shape.fromJson("{\"type\":\"circle\",\"radius\":1.5}").accept(describe));
+        assertEquals("square 2.0", Shape.fromJson("{\"type\":\"square\",\"side\":2}").accept(describe));
+        Shape triangle = Shape.fromJson("{\"type\":\"triangle\"}");
+        InvalidDataException unknown = assertThrows(InvalidDataException.class, () -> triangle.accept(describe));
+        assertTrue(unknown.getMessage().contains("triangle"), unknown.getMessage());
+        String kept = triangle.accept(new Shape.Visitor<String>() {
+            @Override
+            public String visitCircle(Circle circle) {
+                return "circle";
+            }
+
+            @Override
+            public String visitSquare(com.torture.models.Square square) {
+                return "square";
+            }
+
+            @Override
+            public String visitUnknown(Shape.Unrecognized shape) {
+                return shape.type();
+            }
+        });
+        assertEquals("triangle", kept);
+        Activity closed = Activity.fromJson("{\"kind\":\"closed\",\"by\":\"me\"}");
+        assertEquals("closed", closed.accept(new Activity.Visitor<String>() {
+            @Override
+            public String visitOpened(com.torture.models.Opened opened) {
+                return "opened";
+            }
+
+            @Override
+            public String visitReopened(com.torture.models.Opened opened) {
+                return "reopened";
+            }
+
+            @Override
+            public String visitClosed(com.torture.models.ActivityClosedVariant variant) {
+                return variant.kind();
+            }
+        }));
+    }
+
+    @Test
+    void inlineUnionsAcceptAVisitor() throws Exception {
+        UnionHolderStrOrInt.Visitor<String> describe = new UnionHolderStrOrInt.Visitor<>() {
+            @Override
+            public String visitString(String value) {
+                return "string " + value;
+            }
+
+            @Override
+            public String visitInteger(Long value) {
+                return "integer " + value;
+            }
+        };
+        assertEquals("string a", UnionHolderStrOrInt.ofString("a").accept(describe));
+        assertEquals("integer 7", UnionHolder.fromJson("{\"str_or_int\":7}").strOrInt().orElseThrow().accept(describe));
+
+        ObjectUnionsAccount.Visitor<String> ids = new ObjectUnionsAccount.Visitor<>() {
+            @Override
+            public String visitString(String id) {
+                return id;
+            }
+
+            @Override
+            public String visitAccount(Account account) {
+                return account.id();
+            }
+
+            @Override
+            public String visitDeletedAccount(com.torture.models.DeletedAccount deleted) {
+                return "deleted " + deleted.id();
+            }
+        };
+        ObjectUnionsAccount deleted = Utils.getObjectMapper()
+                .readValue("{\"deleted\":true,\"id\":\"a2\",\"object\":\"account\"}", ObjectUnionsAccount.class);
+        assertEquals("deleted a2", deleted.accept(ids));
+        ObjectUnionsAccount unknown = Utils.getObjectMapper()
+                .readValue("{\"object\":\"account_v2\",\"id\":\"a3\"}", ObjectUnionsAccount.class);
+        assertThrows(InvalidDataException.class, () -> unknown.accept(ids));
+        assertEquals("a3", unknown.accept(new ObjectUnionsAccount.Visitor<String>() {
+            @Override
+            public String visitString(String id) {
+                return id;
+            }
+
+            @Override
+            public String visitAccount(Account account) {
+                return account.id();
+            }
+
+            @Override
+            public String visitDeletedAccount(com.torture.models.DeletedAccount deleted) {
+                return deleted.id();
+            }
+
+            @Override
+            public String visitUnknown(JsonNode json) {
+                return json.get("id").asText();
+            }
+        }));
     }
 
     @Test
