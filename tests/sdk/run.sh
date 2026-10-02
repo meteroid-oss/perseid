@@ -12,6 +12,7 @@ cd "$work"
 perseid init --sdks "$lang"
 sed -i '/^name = /a webhooks = true' perseid.toml
 if [ "$lang" = go ]; then printf '\n[go]\nmodule = "github.com/petstore/petstore-go"\n' >> perseid.toml; fi
+if [ "$lang" = csharp ]; then printf '\n[csharp.context]\ndependency_injection = true\n' >> perseid.toml; fi
 perseid generate "$lang"
 cp -r "$here/$lang/." "$lang/"
 cd "$lang"

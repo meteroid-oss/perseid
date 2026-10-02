@@ -1,27 +1,50 @@
 {% import "macros.cs.jinja" as m -%}
 {% set class_name = (resource.name | to_upper_camel_case) ~ (operation.name | to_upper_camel_case) ~ "Options" -%}
+{% set unions = namespace(fields=[]) -%}
+{% for p in operation.query_params if p.typed_union is defined -%}
+{% set unions.fields = unions.fields + [{"name": p.name, "type": p.typed_union, "required": true, "nullable": false}] -%}
+{% endfor -%}
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // generated code may use deprecated API
+#pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
 using System;
 using System.Collections.Generic;
+{% if unions.fields -%}
+using System.Text.Json;
+{% endif -%}
 using System.Text.Json.Nodes;
+{% if unions.fields -%}
+using System.Text.Json.Serialization;
+{% endif -%}
 using {{ sdk.package_name }}.Models;
 
 namespace {{ sdk.package_name }};
 
-/// <summary>Query and header parameters of <see cref="{{ m.resource_class(resource.name) }}.{{ operation.name | to_upper_camel_case }}Async"/>.</summary>
+/// <summary>Query and header parameters of <see cref="{{ m.resource_class(resource.name) }}.{{ operation.name | to_upper_camel_case }}Async"/>{% if operation | has_required_query_or_header_params %}; the <c>required</c> ones must be set{% endif %}.</summary>
 public sealed record {{ class_name }}
 {
 {% for p in operation.query_params -%}
-{% if p.description is defined %}
-    {{ m.doc(p.description) }}
+{% if not loop.first %}
+
 {% endif -%}
-    public {% if p.required %}required {% endif %}{{ p.type.to_csharp() }}{% if not p.required %}?{% endif %} {{ m.member(p.name, class_name) }} { get; set; }
+{% if p.description is defined -%}
+    {{ m.doc(p.description) }}
+{% else -%}
+    /// <summary>The <c>{{ p.name | replace("&", "&amp;") | replace("<", "&lt;") }}</c> query parameter.</summary>
+{% endif -%}
+{% set ty = (class_name ~ (p.name | to_rust_variant)) if p.typed_union is defined else p.type.to_csharp() -%}
+    public {% if p.required %}required {% endif %}{{ ty }}{% if not p.required %}?{% endif %} {{ m.member(p.name, class_name) }} { get; init; }
 {% endfor -%}
 {% for p in operation.header_params -%}
-{% if p.description is defined %}
-    {{ m.doc(p.description) }}
+{% if operation.query_params or not loop.first %}
+
 {% endif -%}
-    public {% if p.required %}required {% endif %}string{% if not p.required %}?{% endif %} {{ m.member(p.name, class_name) }} { get; set; }
+{% if p.description is defined -%}
+    {{ m.doc(p.description) }}
+{% else -%}
+    /// <summary>The <c>{{ p.name | replace("&", "&amp;") | replace("<", "&lt;") }}</c> header.</summary>
+{% endif -%}
+    public {% if p.required %}required {% endif %}string{% if not p.required %}?{% endif %} {{ m.member(p.name, class_name) }} { get; init; }
 {% endfor -%}
 }
+{% with fields = unions.fields, union_owner = class_name, type_names = [] %}{% include "types/unions.cs.jinja" %}{% endwith %}

@@ -5,6 +5,7 @@
 {% set keys_type = sdk.client_name ~ "ApiKeys" -%}
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // generated code may use deprecated API
+#pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
@@ -13,12 +14,24 @@ using System.Threading.Tasks;
 
 namespace {{ sdk.package_name }};
 
+/// <summary>The {{ sdk.client_name }} API, as <see cref="{{ sdk.client_name }}Client"/> implements it; mock it in tests.</summary>
+public interface I{{ sdk.client_name }}Client : IDisposable
+{
+{% for resource in api.resources -%}
+{% if not loop.first %}
+
+{% endif -%}
+    /// <summary>The <c>{{ resource.name }}</c> operations.</summary>
+    I{{ m.resource_class(resource.name) }} {{ resource.name | to_upper_camel_case }} { get; }
+{% endfor -%}
+}
+
 /// <summary>
 /// Entry point of the {{ sdk.client_name }} API{% if sdk.tagline %} for {{ m.xml(sdk.tagline | doc) }}{% endif %}. Thread-safe: create one and reuse it.
 /// </summary>
 /// <example>
 /// <code>
-/// using var client = new {{ sdk.client_name }}Client("your-api-key");
+/// using var client = new {{ sdk.client_name }}Client(); // reads {{ sdk.env_prefix }}_API_KEY
 {% if sdk.example -%}
 {% for line in sdk.example | trim | lines -%}
 /// {{ line | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") }}
@@ -27,7 +40,7 @@ namespace {{ sdk.package_name }};
 /// </code>
 /// With <c>IHttpClientFactory</c>: <c>new {{ sdk.client_name }}Client(factory.CreateClient("{{ sdk.client_name | to_kebab_case }}"), "your-api-key")</c>.
 /// </example>
-public sealed partial class {{ sdk.client_name }}Client : IDisposable
+public sealed partial class {{ sdk.client_name }}Client : I{{ sdk.client_name }}Client
 {
 {% for resource in api.resources -%}
 {% if resource.subresources | length > 0 -%}
@@ -45,33 +58,36 @@ public sealed partial class {{ sdk.client_name }}Client : IDisposable
     private readonly ApiTransport _transport;
 
     /// <summary>Creates a client with its own connection pool.</summary>
-    /// <param name="token">Bearer token{% if "api_key" in kinds %}, and API key of the schemes missing from <c>ApiKeys</c>{% endif %}, if not null.</param>
+    /// <param name="token">The bearer token{% if "api_key" in kinds %}, and API key of the schemes missing from <c>ApiKeys</c>{% endif %}; when null, <c>Token</c> of the options, else the <c>{{ sdk.env_prefix }}_API_KEY</c> environment variable.</param>
     /// <param name="options">Base URL, timeout, retries, middleware and credentials.</param>
-    public {{ sdk.client_name }}Client(string? token, {{ options_type }}? options = null)
-        : this(CreateTransport(token, options ?? new(), http: null)) { }
+    public {{ sdk.client_name }}Client(string? token = null, {{ options_type }}? options = null)
+    {
+        _transport = CreateTransport(token, options ?? new(), http: null);
+{% for resource in api.resources -%}
+        {{ resource.name | to_upper_camel_case }} = new(_transport);
+{% endfor -%}
+    }
 
     /// <summary>
     /// Creates a client sending requests through <paramref name="httpClient"/>, for instance one from
     /// <c>IHttpClientFactory</c>. The caller keeps ownership of it.
     /// </summary>
     /// <param name="httpClient">The HTTP client, whose own <c>Timeout</c> also applies.</param>
-    /// <param name="token">Bearer token{% if "api_key" in kinds %}, and API key of the schemes missing from <c>ApiKeys</c>{% endif %}, if not null.</param>
+    /// <param name="token">The bearer token{% if "api_key" in kinds %}, and API key of the schemes missing from <c>ApiKeys</c>{% endif %}; when null, <c>Token</c> of the options, else the <c>{{ sdk.env_prefix }}_API_KEY</c> environment variable.</param>
     /// <param name="options">Base URL, timeout, retries, middleware and credentials.</param>
     public {{ sdk.client_name }}Client(HttpClient httpClient, string? token, {{ options_type }}? options = null)
-        : this(CreateTransport(token, options ?? new(), httpClient ?? throw new ArgumentNullException(nameof(httpClient)))) { }
-
-    private {{ sdk.client_name }}Client(ApiTransport transport)
     {
-        _transport = transport;
+        ArgumentNullException.ThrowIfNull(httpClient);
+        _transport = CreateTransport(token, options ?? new(), httpClient);
 {% for resource in api.resources -%}
-        {{ resource.name | to_upper_camel_case }} = new {{ m.resource_class(resource.name) }}(transport);
+        {{ resource.name | to_upper_camel_case }} = new(_transport);
 {% endfor -%}
     }
 
     private static ApiTransport CreateTransport(string? token, {{ options_type }} options, HttpClient? http)
     {
         var credentials = new Credentials(
-            token,
+            token ?? options.Token ?? ApiTransport.NonEmpty(Environment.GetEnvironmentVariable("{{ sdk.env_prefix }}_API_KEY")),
             {% if "bearer" in kinds %}options.TokenProvider{% else %}null{% endif %},
             {% if "basic" in kinds %}options.BasicAuth{% else %}null{% endif %},
             new Dictionary<string, string?>
@@ -82,13 +98,17 @@ public sealed partial class {{ sdk.client_name }}Client : IDisposable
         return new ApiTransport(s_auth, credentials, options, http);
     }
 {% for resource in api.resources %}
+    /// <summary>The <c>{{ resource.name }}</c> operations.</summary>
     public {{ m.resource_class(resource.name) }} {{ resource.name | to_upper_camel_case }} { get; }
+
+    I{{ m.resource_class(resource.name) }} I{{ sdk.client_name }}Client.{{ resource.name | to_upper_camel_case }} => {{ resource.name | to_upper_camel_case }};
 {% endfor %}
     /// <summary>Releases the connection pool and middleware, unless the caller owns the <see cref="HttpClient"/>.</summary>
     public void Dispose() => _transport.Dispose();
 }
 {% if kinds %}
 
+/// <summary>The credentials the API's security schemes take.</summary>
 public sealed partial class {{ options_type }}
 {
 {% if "bearer" in kinds %}
@@ -120,6 +140,7 @@ public sealed class {{ keys_type }}
 {% if api.default_error %}
 {% set error_model = api.default_error | to_upper_camel_case %}
 
+/// <summary>The error model of this API.</summary>
 public static partial class ApiExceptionExtensions
 {
     /// <summary>The body parsed as <see cref="Models.{{ error_model }}"/>, the error model of this API, or <c>null</c>.</summary>

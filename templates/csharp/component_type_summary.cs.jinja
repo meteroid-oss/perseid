@@ -2,6 +2,7 @@
 {% set _ = set_summary_filename(sdk.client_name ~ "JsonContext.cs") -%}
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // generated code may use deprecated API
+#pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
 using System.Collections.Generic;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -97,6 +98,13 @@ namespace {{ sdk.package_name }}.Models;
 {% endfor -%}
 {% for p in op.query_params if p.structured -%}
 {% set op_types.list = op_types.list + [p.type.to_csharp()] -%}
+{% endfor -%}
+{% for p in op.query_params if p.typed_union is defined -%}
+{% set union = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Options" ~ (p.name | to_rust_variant) -%}
+[JsonSerializable(typeof(global::{{ sdk.package_name }}.{{ union }}), TypeInfoPropertyName = "{{ union }}")]
+{% for v in p.typed_union.union_variants() if "<" in v.type.to_csharp() -%}
+{% set op_types.list = op_types.list + [v.type.to_csharp()] -%}
+{% endfor -%}
 {% endfor -%}
 {% set scalars = ["string", "bool", "int", "long", "short", "ushort", "ulong", "float", "double", "decimal"] -%}
 {% for ty in op_types.list if ("<" in ty or ty in scalars) and ty not in generic.types -%}

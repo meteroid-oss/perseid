@@ -10,7 +10,8 @@ using System.Text;
 namespace @@PACKAGE_NAME@@;
 
 /// <summary>Thrown when a webhook payload fails verification.</summary>
-public sealed class WebhookVerificationException(string message) : Exception(message);
+/// <param name="message">What failed.</param>
+public sealed class WebhookVerificationException(string message) : @@CLIENT_NAME@@Exception(message);
 
 /// <summary>Verifies and signs Standard Webhooks (https://www.standardwebhooks.com) payloads, also
 /// accepting <c>svix-*</c> headers: <c>new Webhook(secret).Verify(rawBody, name => Request.Headers[name])</c>.</summary>
@@ -28,12 +29,14 @@ public sealed class Webhook
 
     private readonly byte[] _key;
 
+    /// <summary>A verifier for the signing secret of an endpoint.</summary>
     /// <param name="secret">The signing secret as shown in your dashboard: base64, with or without
     /// the <c>whsec_</c> prefix.</param>
     /// <exception cref="ArgumentException">The secret is empty or not valid base64.</exception>
     public Webhook(string secret)
         : this(Decode(secret)) { }
 
+    /// <summary>A verifier for a raw signing key.</summary>
     /// <param name="key">The raw, already decoded signing key.</param>
     public Webhook(byte[] key)
     {
@@ -45,9 +48,11 @@ public sealed class Webhook
         _key = (byte[])key.Clone();
     }
 
+    /// <inheritdoc cref="Verify(byte[], Func{string, string?})"/>
     public void Verify(string payload, IEnumerable<KeyValuePair<string, string>> headers) =>
         Verify(Encoding.UTF8.GetBytes(payload), headers);
 
+    /// <inheritdoc cref="Verify(byte[], Func{string, string?})"/>
     public void Verify(byte[] payload, IEnumerable<KeyValuePair<string, string>> headers)
     {
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -58,15 +63,18 @@ public sealed class Webhook
         Verify(payload, name => map.GetValueOrDefault(name));
     }
 
+    /// <inheritdoc cref="Verify(byte[], Func{string, string?})"/>
     public void Verify(string payload, HttpHeaders headers) =>
         Verify(Encoding.UTF8.GetBytes(payload), headers);
 
+    /// <inheritdoc cref="Verify(byte[], Func{string, string?})"/>
     public void Verify(byte[] payload, HttpHeaders headers) =>
         Verify(
             payload,
             name => headers.TryGetValues(name, out var values) ? string.Join(" ", values) : null
         );
 
+    /// <inheritdoc cref="Verify(byte[], Func{string, string?})"/>
     public void Verify(string payload, Func<string, string?> header) =>
         Verify(Encoding.UTF8.GetBytes(payload), header);
 
@@ -128,6 +136,7 @@ public sealed class Webhook
     public string Sign(string msgId, DateTimeOffset timestamp, string payload) =>
         Sign(msgId, timestamp, Encoding.UTF8.GetBytes(payload));
 
+    /// <inheritdoc cref="Sign(string, DateTimeOffset, string)"/>
     public string Sign(string msgId, DateTimeOffset timestamp, byte[] payload) =>
         $"v1,{Digest(msgId, timestamp.ToUnixTimeSeconds(), payload)}";
 
