@@ -24,7 +24,7 @@ pub struct SseEvent {
     pub data: String,
     /// Last event ID, including updates from events with no data.
     pub id: Option<String>,
-    /// Server-provided reconnection delay. The SDK does not reconnect automatically.
+    /// Reconnection delay sent with this event. The SDK does not reconnect automatically.
     pub retry: Option<Duration>,
 }
 
@@ -246,6 +246,7 @@ struct Parser {
     event: String,
     id: Option<String>,
     retry: Option<Duration>,
+    event_retry: Option<Duration>,
     after_cr: bool,
     first_line: bool,
     limit: usize,
@@ -259,6 +260,7 @@ impl Default for Parser {
             event: String::new(),
             id: None,
             retry: None,
+            event_retry: None,
             after_cr: false,
             first_line: true,
             limit: 1024 * 1024,
@@ -299,6 +301,7 @@ impl Parser {
         self.first_line = false;
         let result = if line.is_empty() {
             let event = std::mem::take(&mut self.event);
+            let retry = self.event_retry.take();
             if self.data.is_empty() {
                 None
             } else {
@@ -311,7 +314,7 @@ impl Parser {
                     },
                     data: std::mem::take(&mut self.data),
                     id: self.id.clone(),
-                    retry: self.retry,
+                    retry,
                 })
             }
         } else if line.starts_with(':') {
@@ -329,6 +332,7 @@ impl Parser {
                 "retry" if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) => {
                     if let Ok(ms) = value.parse::<u64>() {
                         self.retry = Some(Duration::from_millis(ms));
+                        self.event_retry = self.retry;
                     }
                 }
                 _ => {}

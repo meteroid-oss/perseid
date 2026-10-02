@@ -671,6 +671,12 @@ impl Request {
 
         let mut path = self.path.to_owned();
         for (name, value) in &self.path_params {
+            if value == "." || value == ".." {
+                return Err(format!(
+                    "path parameter `{name}` is `{value}`, which the URL would resolve away"
+                )
+                .into());
+            }
             let value = utf8_percent_encode(value, PATH_SEGMENT).to_string();
             path = path.replace(&format!("{{{name}}}"), &value);
         }
