@@ -1,17 +1,70 @@
-{% from "types/macros.py.jinja" import py_str, docstring, py_ident, py_field, py_type, resource_module -%}
+{% from "types/macros.py.jinja" import arg_type, docstring, field_ident, field_type, field_decl, has_object_union, is_flat_union, py_str, py_field, py_ident, py_type, param_type, resource_module, type_refs, union_refs -%}
 # this file is @generated
 {% if resource.subresources | length > 0 -%}
     {{ panic("resource `" ~ resource.name ~ "` has subresources, which the Python templates do not support yet") }}
 {%- endif -%}
 {% set _ = set_summary_filename(resource_module(resource.name) ~ ".py") -%}
 {% set resource_class_name = resource.name | to_upper_camel_case -%}
+"""{{ resource.name | to_snake_case | replace("_", " ") | capitalize }} API."""
+
 from __future__ import annotations
 
 {% set body_kinds = resource.operations | map(attribute="request_body_kind") | list -%}
-{% set streams = resource.operations | selectattr("response_is_event_stream") | list | length > 0 -%}
+{% set streams = resource.operations | selectattr("response_is_event_stream") | list -%}
+{% set paginated = resource.operations | selectattr("pagination", "defined") | list -%}
+{% set may_be_empty = namespace(any=false) -%}
+{% for op in resource.operations if (op.response_may_be_empty | default(false) or op.response_body_optional | default(false)) and op.pagination is not defined and not (op.response_is_event_stream or op.response_is_binary or op.response_is_text) -%}
+    {% if op.response_body_json_type is defined or op.response_body_schema_name is defined %}{% set may_be_empty.any = true %}{% endif -%}
+{% endfor -%}
+{#- Models a method names that `referenced_components` leaves out: event and typed union ones. -#}
+{#- The indices of the fields of an object body that a method takes as keyword arguments,
+    after "F"; nothing when the body is not an object or a field is named like a parameter.
+    The `stream` property a `_stream` twin sets is left out of both twins. -#}
+{% macro flat_body(op) -%}
+    {%- set twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("stream_property", "defined") | first -%}
+    {%- set skipped = op.stream_property if op.stream_property is defined else (twin.stream_property if twin else none) -%}
+    {%- set schema = types[op.request_body_schema_name] if op.request_body_schema_name is defined else none -%}
+    {%- if schema and schema.kind == "struct" and not op.request_body_is_list | default(false)
+        and op.request_body_kind in ["json", "form"] and not schema.fields | selectattr("flatten") | list -%}
+        {%- set params = (op.path_params | list) + (op.query_params | map(attribute="ident") | list) + (op.header_params | map(attribute="ident") | list) -%}
+        {%- set taken = (params | map("ident", "snake", "python") | list) + ["self", "t"] -%}
+        {%- set out = namespace(indices=[], clash=false) -%}
+        {%- for f in schema.fields -%}
+            {%- if (f.required or not f.read_only | default(false)) and f.name != skipped -%}
+                {%- if field_ident(f) in taken %}{% set out.clash = true %}{% endif -%}
+                {%- set out.indices = out.indices + [loop.index0 | string] -%}
+            {%- endif -%}
+        {%- endfor -%}
+        {%- if not out.clash %}F {{ out.indices | join(" ") }}{% endif -%}
+    {%- endif -%}
+{%- endmacro %}
+{#- The class names of the schemas, then of those with a `t.Literal` alias of their values. -#}
+{% set names = types | items | map("last") | map(attribute="name") | map("to_upper_camel_case") | list -%}
+{% set enums = types | items | map("last") | selectattr("kind", "in", ["string_enum", "integer_enum"]) | map(attribute="name") | map("to_upper_camel_case") | reject("in", names | select("endingwith", "Literal") | map("replace", "Literal", "") | list) | list -%}
+{% set extra_models = namespace(names=[], object_unions=false) -%}
+{% for op in resource.operations -%}
+    {% if flat_body(op) -%}
+        {% for f in types[op.request_body_schema_name].fields -%}
+            {% set extra_models.names = extra_models.names + (type_refs(f.type) | trim | split(" ") | reject("equalto", "") | list) -%}
+            {% if f.type.is_schema_ref() and f.type.to_python() in enums %}{% set extra_models.names = extra_models.names + [f.type.to_python() ~ "Literal"] %}{% endif -%}
+            {% if has_object_union(f.type) %}{% set extra_models.object_unions = true %}{% endif -%}
+        {% endfor -%}
+    {% endif -%}
+    {% if op.event_schema_name is defined and op.response_is_event_stream -%}
+        {% set extra_models.names = extra_models.names + [op.event_schema_name] -%}
+    {% endif -%}
+    {% for p in op.query_params if p.typed_union is defined -%}
+        {% set extra_models.names = extra_models.names + (union_refs(p.typed_union) | trim | split(" ") | reject("equalto", "") | list) -%}
+    {% endfor -%}
+{% endfor -%}
+{% set models = ((referenced_components | list) + extra_models.names) | map("to_upper_camel_case") | unique | sort | list -%}
 {% if "multipart" in body_kinds %}import dataclasses
 {% endif -%}
 import typing as t
+{%- set builtin_names = resource.operations | map(attribute="name") | map("ident", "snake", "python") | select("in", ["list", "dict"]) | list %}
+{%- if builtin_names %}
+import builtins
+{%- endif %}
 from datetime import datetime
 from decimal import Decimal
 {%- set error_types = namespace(used=false) %}
@@ -23,17 +76,26 @@ from decimal import Decimal
 {%- if error_types.used %}
 from .. import models as _models
 {%- endif %}
-{%- if referenced_components | length > 0 %}
+{%- if models | length > 0 %}
 from ..models import (
-{%- for c in referenced_components %}
-    {{ c | to_upper_camel_case }},
+{%- for c in models %}
+    {{ c }},
 {%- endfor %}
 )
 {%- endif %}
-from ..serialization import UNSET, Unset, to_json_value
+from ..serialization import UNSET, {% if extra_models.object_unions %}UnknownVariant, {% endif %}Unset, to_json_value
+{%- if extra_models.object_unions %}
+from ..unions import ObjectUnion
+{%- endif %}
+from ._response import async_to_raw_response_wrapper, to_raw_response_wrapper
 from .common import (
     ApiBaseAsync,
     ApiBaseSync,
+    ApiRequest,
+    Timeout,
+{%- if may_be_empty.any %}
+    decode_optional_response,
+{%- endif %}
     decode_response,
 {%- if resource.operations | selectattr("path_styles") | list | length > 0 %}
     encode_path_param,
@@ -46,14 +108,25 @@ from .common import (
     serialize_form_body,
     serialize_query_params,
 )
-{%- if resource.operations | selectattr("pagination", "defined") | list | length > 0 %}
-from ._pagination import Pagination, paginate_async, paginate_sync
+{%- if paginated | length > 0 %}
+from ._pagination import (
+    AsyncPaginator,
+    CursorPaging,
+    OffsetPaging,
+    PagePaging,
+    SyncPage,
+    async_first_page,
+    first_page,
+    step,
+)
 {%- endif %}
 {%- if streams or "binary" in body_kinds or "multipart" in body_kinds %}
 from ._streaming import (
 {%- if streams %}
     AsyncEventStream,
+    AsyncStream,
     EventStream,
+    Stream,
 {%- endif %}
 {%- if "multipart" in body_kinds %}
     FileInput,
@@ -63,6 +136,23 @@ from ._streaming import (
 {%- endif %}
 )
 {%- endif %}
+
+{#- In a class with a method named `list`, `list[...]` names that method in later annotations. -#}
+{% macro unshadow(annotation) -%}
+    {%- set out = namespace(text=annotation) -%}
+    {%- for name in builtin_names -%}
+        {%- set out.text = out.text | replace(name ~ "[", "builtins." ~ name ~ "[") -%}
+    {%- endfor -%}
+    {{ out.text }}
+{%- endmacro %}
+{#- An attribute path of the response, each optional step read through `step`. -#}
+{% macro accessor(root, path) -%}
+    {%- set expr = namespace(text=root ~ "." ~ py_field(path[0])) -%}
+    {%- for key in path[1:] -%}
+        {%- set expr.text = "step(" ~ expr.text ~ ", lambda v: v." ~ py_field(key) ~ ")" -%}
+    {%- endfor -%}
+    {{ expr.text }}
+{%- endmacro %}
 {%- for op in resource.operations if op.request_body_kind == "multipart" %}
 
 
@@ -71,7 +161,7 @@ class {{ resource_class_name }}{{ op.name | to_upper_camel_case }}Body:
     """Multipart form fields of `{{ op.name | to_snake_case }}`."""
 {% for required_pass in [true, false] %}
 {%- for field in op.multipart_fields if (field.required and not field.nullable) == required_pass %}
-    {{ py_field(field.name) }}: {% if not required_pass %}t.Optional[{% endif %}{% if field.is_file and field.is_file_list %}t.List[FileInput]{% elif field.is_file %}FileInput{% else %}{{ py_type(field.type) }}{% endif %}{% if not required_pass %}] = None{% endif %}
+    {{ py_field(field.name) }}: {% if field.is_file and field.is_file_list %}list[FileInput]{% elif field.is_file %}FileInput{% else %}{{ py_type(field.type) }}{% endif %}{% if not required_pass %} | None = None{% endif %}
 {%- if field.description is defined %}
     """{{ field.description }}"""
 {%- endif %}
@@ -79,22 +169,20 @@ class {{ resource_class_name }}{{ op.name | to_upper_camel_case }}Body:
 {%- endfor %}
 {%- endfor %}
 {% for is_async in [true, false] %}
-{%- set class_suffix %}{% if is_async %}Async{% endif %}{% endset %}
+{%- set class_name %}{% if is_async %}Async{% endif %}{{ resource_class_name }}{% endset %}
 {%- set base_class %}{% if is_async %}ApiBaseAsync{% else %}ApiBaseSync{% endif %}{% endset %}
-{%- set def_kw %}{% if is_async %}async def{% else %}def{% endif %}{% endset %}
-{%- set request_fn %}{% if is_async %}await self._request_asyncio{% else %}self._request_sync{% endif %}{% endset %}
+{%- set await %}{% if is_async %}await {% endif %}{% endset %}
 
 
-class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
-    """{{ resource.name | to_snake_case | replace("_", " ") | capitalize }} API."""
+class {{ class_name }}({{ base_class }}):
+    """{{ resource.name | to_snake_case | replace("_", " ") | capitalize }} API{% if is_async %}, for asyncio{% endif %}."""
 {%- set extension %}extensions/{{ resource.name | to_snake_case }}{% if is_async %}_async{% endif %}.py{% endset %}
 {{ "\n" }}{% include extension ignore missing %}
-{%- if resource.operations | length == 0 %}
 
-    pass
-{%- endif %}
-{#- A method named `list` shadows the builtin in the annotations of the methods after it. -#}
-{%- set shadows_builtins = resource.operations | map(attribute="name") | map("ident", "snake", "python") | select("in", ["list", "dict"]) | list | length > 0 %}
+    @property
+    def with_raw_response(self) -> {{ class_name }}WithRawResponse:
+        """These methods, returning an :class:`APIResponse` with the status and headers."""
+        return {{ class_name }}WithRawResponse(self)
 {%- for op in resource.operations %}
 {%- set response_type = none %}
 {%- set body_param = none %}
@@ -105,132 +193,131 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- set response_type = op.response_body_schema_name | to_upper_camel_case %}
 {%- if op.response_body_is_list %}{% set response_type = "list[" ~ response_type ~ "]" %}{% endif %}
 {%- endif %}
-{%- if op.response_is_event_stream %}
+{%- set event_type = op.event_schema_name | to_upper_camel_case if op.event_schema_name is defined else none %}
+{%- if op.response_is_event_stream and event_type %}
+{%- set return_type = ("AsyncStream[" if is_async else "Stream[") ~ event_type ~ "]" %}
+{%- elif op.response_is_event_stream %}
 {%- set return_type = "AsyncEventStream" if is_async else "EventStream" %}
 {%- elif op.response_is_binary %}
 {%- set return_type = "bytes" %}
 {%- elif op.response_is_text %}
 {%- set return_type = "str" %}
-{%- elif response_type is not none and op.response_body_optional %}
-{%- set return_type = response_type ~ " | None" %}
 {%- elif response_type is not none %}
 {%- set return_type = response_type %}
+{%- if (op.response_may_be_empty | default(false) or op.response_body_optional | default(false)) and op.pagination is not defined %}
+{%- set return_type = response_type ~ " | None" %}
+{%- endif %}
 {%- else %}
 {%- set return_type = "None" %}
 {%- endif %}
+{%- set flat = flat_body(op) | trim %}
+{%- set flat_fields = namespace(list=[]) %}
+{%- if flat %}
+{%- set schema = types[op.request_body_schema_name] %}
+{%- for index in flat | split(" ") | list | reject("equalto", "F") %}
+{%- set flat_fields.list = flat_fields.list + [schema.fields[index | int]] %}
+{%- endfor %}
+{%- set defaults = schema.discriminator_defaults if schema.discriminator_defaults is defined else {} %}
+{%- endif %}
+{%- set param_names = (op.path_params | list) + (op.query_params | map(attribute="ident") | list) + (op.header_params | map(attribute="ident") | list) %}
+{%- set arg_names = namespace(list=param_names | map("ident", "snake", "python") | list) %}
+{%- for f in flat_fields.list %}{% set arg_names.list = arg_names.list + [field_ident(f)] %}{% endfor %}
+{%- set body_param = ("request_body" if "body" in arg_names.list else "body") if not flat else none %}
 {%- if op.request_body_json_type is defined %}
-{%- set body_param = "body" %}
 {%- set body_type = py_type(op.request_body_json_type) %}
 {%- elif op.request_body_schema_name is defined %}
-{%- set body_param = py_ident(op.request_body_schema_name) %}
-{%- set taken = (op.path_params | list) + (op.query_params | map(attribute="ident") | list) + (op.header_params | map(attribute="ident") | list) %}
-{%- if body_param in ["self", "extra_headers", "timeout"] or body_param in (taken | map("ident", "snake", "python") | list) %}{% set body_param = "body" %}{% endif %}
 {%- set body_type = op.request_body_schema_name | to_upper_camel_case %}
 {%- if op.request_body_is_list %}{% set body_type = "list[" ~ body_type ~ "]" %}{% endif %}
 {%- elif op.request_body_kind == "binary" %}
-{%- set body_param = "body" %}
 {%- set body_type = "UploadContent" %}
 {%- elif op.request_body_kind == "multipart" %}
-{%- set body_param = "body" %}
 {%- set body_type = resource_class_name ~ (op.name | to_upper_camel_case) ~ "Body" %}
+{%- else %}
+{%- set body_param = none %}
 {%- endif %}
-{%- if shadows_builtins %}
-{%- set return_type = return_type | replace("list[", "t.List[") | replace("dict[", "t.Dict[") %}
-{%- if body_type is not none %}{% set body_type = body_type | replace("list[", "t.List[") | replace("dict[", "t.Dict[") %}{% endif %}
+{%- set pg = op.pagination if op.pagination is defined else none %}
+{%- if pg %}
+{%- set item_type = pg.item_schema | to_upper_camel_case %}
+{%- set page_type = ("AsyncPaginator[" if is_async else "SyncPage[") ~ item_type ~ ", " ~ response_type ~ "]" %}
 {%- endif %}
-{%- set param_names = (op.path_params | list) + (op.query_params | map(attribute="ident") | list) + (op.header_params | map(attribute="ident") | list) %}
-{%- set param_idents = param_names | map("ident", "snake", "python") | list %}
-{%- set timeout_kw = "request_timeout" if "timeout" in param_idents else "timeout" %}
-{%- set headers_kw = "request_extra_headers" if "extra_headers" in param_idents else "extra_headers" %}
+{%- macro option(name) %}{{ "request_" ~ name if name in arg_names.list else name }}{% endmacro %}
 
 {%- set signature %}
 {%- for p in op.path_params %}
 {%- set path_type = "str" %}
 {%- if p in op.path_styles and op.path_styles[p].type is defined %}
-{%- set path_type = py_type(op.path_styles[p].type) %}
-{%- if shadows_builtins %}{% set path_type = path_type | replace("list[", "t.List[") | replace("dict[", "t.Dict[") %}{% endif %}
+{%- set path_type = unshadow(py_type(op.path_styles[p].type)) %}
 {%- endif %}
         {{ py_ident(p) }}: {{ path_type }},
 {%- endfor %}
 {%- if body_param is not none %}
-        {{ body_param }}: {{ body_type }}{% if op.request_body_optional %} | None = None{% endif %},
+        {{ body_param }}: {{ unshadow(body_type) }}{% if op.request_body_optional %} | None = None{% endif %},
 {%- endif %}
         *,
 {#- Required parameters first, for readability: they are all keyword-only. -#}
 {%- for required_pass in [true, false] %}
+{%- for f in flat_fields.list if (f.required and f.name not in defaults) == required_pass %}
+        {{ field_ident(f) }}: {{ unshadow(field_decl(f, true, arg_type(f.type, enums))) }}
+        {%- if f.required and f.name in defaults %} = {{ py_str(defaults[f.name]) }}{% endif %},
+{%- endfor %}
 {%- for p in op.query_params if p.required == required_pass %}
-{%- set param_type = py_type(p.type) %}
-{%- if shadows_builtins %}{% set param_type = param_type | replace("list[", "t.List[") | replace("dict[", "t.Dict[") %}{% endif %}
-        {{ py_ident(p.ident) }}: {{ param_type }}{% if not p.required %} | None = None{% endif %},
+        {{ py_ident(p.ident) }}: {{ unshadow(param_type(p)) }}{% if not p.required %} | None = None{% endif %},
 {%- endfor %}
 {%- for p in op.header_params if p.required == required_pass %}
-{%- set header_type = "str" %}
-{%- if p.json %}
-{%- set header_type = py_type(p.type) %}
-{%- if shadows_builtins %}{% set header_type = header_type | replace("list[", "t.List[") | replace("dict[", "t.Dict[") %}{% endif %}
+{%- set header_type = unshadow(py_type(p.type)) if p.json else "str" %}
+        {{ py_ident(p.ident) }}: {{ header_type }}{% if not p.required %} | None = None{% endif %},
+{%- endfor %}
+{%- endfor %}
+        {{ option("extra_headers") }}: t.Mapping[str, str] | None = None,
+        {{ option("extra_query") }}: t.Mapping[str, object] | None = None,
+        {{ option("extra_body") }}: t.Mapping[str, object] | None = None,
+        {{ option("timeout") }}: Timeout | Unset = UNSET,
+        {{ option("max_retries") }}: int | None = None,
+{%- endset %}
+{%- set json_value = none %}
+{%- if flat %}
+{%- set body_value %}{{ body_type }}(
+{%- for f in flat_fields.list %}
+{%- set ident = field_ident(f) %}
+{%- if arg_type(f.type, enums) != py_type(f.type) %}{{ ident }}=t.cast("{{ field_type(f) }}", {{ ident }}), {% else %}{{ ident }}={{ ident }}, {% endif %}
+{%- endfor %}
+{%- set twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("stream_property", "defined") | first %}
+{%- set skipped = op.stream_property if op.stream_property is defined else (twin.stream_property if twin else none) %}
+{%- for f in types[op.request_body_schema_name].fields if f.name == skipped and f.required %}{{ field_ident(f) }}={{ "True" if op.stream_property is defined else "False" }}, {% endfor %}){% endset %}
+{%- set json_value = "to_json_value(" ~ body_value ~ ", " ~ body_type ~ ")" %}
+{%- if op.request_body_optional and op.stream_property is not defined %}{% set json_value = json_value ~ " or None" %}{% endif %}
+{%- elif body_param is not none %}
+{%- set json_value = "to_json_value(" ~ body_param ~ ", " ~ body_type ~ ")" %}
 {%- endif %}
-        {{ py_ident(p.ident) }}: {% if p.required %}{{ header_type }},{% else %}{{ header_type }} | None = None,{% endif %}
-{%- endfor %}
-{%- endfor %}
-        {{ headers_kw }}: t.Mapping[str, str] | None = None,
-        {{ timeout_kw }}: float | None | Unset = UNSET,
-{%- endset %}
-{%- set forwarded %}
-{%- for p in op.path_params %}{{ py_ident(p) }}, {% endfor %}
-{%- if body_param is not none %}{{ body_param }}, {% endif %}
-{%- for p in op.query_params %}{{ py_ident(p.ident) }}={% if op.pagination is defined and p.name == op.pagination.param %}param{% else %}{{ py_ident(p.ident) }}{% endif %}, {% endfor %}
-{%- for p in op.header_params %}{{ py_ident(p.ident) }}={{ py_ident(p.ident) }}, {% endfor %}
-{{- headers_kw }}={{ headers_kw }}, {{ timeout_kw }}={{ timeout_kw }}
-{%- endset %}
-
-    {{ def_kw }} {{ py_ident(op.name) }}(
-        self,{{ signature }}
-    ) -> {{ return_type }}:
-{%- set params_doc %}
-{%- for p in op.query_params if p.description is defined %}
-:param {{ py_ident(p.ident) }}: {{ p.description | replace("\n", " ") }}
-{%- endfor %}
-{%- endset %}
-{%- set doc %}
-{%- if op.description is defined %}{{ op.description }}{% endif %}
-{%- if op.deprecated %}{% if op.description is defined %}
-
-{% endif %}.. deprecated:: This operation is deprecated.{% endif %}
-{%- if params_doc | trim %}{% if op.description is defined or op.deprecated %}
-
-{% endif %}{{ params_doc | trim }}{% endif %}
-{%- endset %}
-{%- if doc | trim %}
-        {{ docstring(doc | trim) | indent(8) }}
-{%- endif %}
-        {% if return_type != "None" %}response = {% endif %}{{ request_fn }}(
-            method="{{ op.method }}",
-            path="{{ op.path }}",
+{%- set request %}
+            ApiRequest(
+                method="{{ op.method }}",
+                path="{{ op.path }}",
 {%- if op.path_params | length > 0 %}
-            path_params={
+                path_params={
 {%- for p in op.path_params %}
 {%- if p in op.path_styles %}
-                {{ py_str(p) }}: encode_path_param({{ py_str(p) }}, {{ py_ident(p) }}, {{ py_str(op.path_styles[p].style) }}, {{ "True" if op.path_styles[p].explode else "False" }}),
+                    {{ py_str(p) }}: encode_path_param({{ py_str(p) }}, {{ py_ident(p) }}, {{ py_str(op.path_styles[p].style) }}, {{ "True" if op.path_styles[p].explode else "False" }}),
 {%- else %}
-                {{ py_str(p) }}: {{ py_ident(p) }},
+                    {{ py_str(p) }}: {{ py_ident(p) }},
 {%- endif %}
-{%- endfor %}
-            },
-{%- endif %}
-{%- if op.query_params | length > 0 %}
-            query_params=serialize_query_params(
-                {
-{%- for p in op.query_params %}
-                    {{ py_str(p.name) }}: {{ py_ident(p.ident) }},
 {%- endfor %}
                 },
+{%- endif %}
+{%- if op.query_params | length > 0 %}
+                query_params=serialize_query_params(
+                    {
+{%- for p in op.query_params %}
+                        {{ py_str(p.name) }}: {% if pg and p.name == pg.param %}page_param{% else %}{{ py_ident(p.ident) }}{% endif %},
+{%- endfor %}
+                    },
 {%- set comma_joined %}
 {%- for p in op.query_params if (p.type.is_list() or p.type.is_set() or p.structured) and not p.explode -%}
 {{ py_str(p.name) }},
 {%- endfor -%}
 {%- endset %}
 {%- if comma_joined | trim %}
-                comma_joined=({{ comma_joined | trim }}),
+                    comma_joined=({{ comma_joined | trim }}),
 {%- endif %}
 {%- set structured %}
 {%- for p in op.query_params if p.structured -%}
@@ -238,7 +325,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- endfor -%}
 {%- endset %}
 {%- if structured | trim %}
-                structured=({{ structured | trim }}),
+                    structured=({{ structured | trim }}),
 {%- endif %}
 {%- set deep_object %}
 {%- for p in op.query_params if p.deep_object -%}
@@ -246,7 +333,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- endfor -%}
 {%- endset %}
 {%- if deep_object | trim %}
-                deep_object=({{ deep_object | trim }}),
+                    deep_object=({{ deep_object | trim }}),
 {%- endif %}
 {%- set delimited %}
 {%- for p in op.query_params if p.delimiter is defined -%}
@@ -254,7 +341,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- endfor -%}
 {%- endset %}
 {%- if delimited | trim %}
-                delimited={ {{- delimited | trim -}} },
+                    delimited={ {{- delimited | trim -}} },
 {%- endif %}
 {%- set json_params %}
 {%- for p in op.query_params if p.json -%}
@@ -262,115 +349,179 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- endfor -%}
 {%- endset %}
 {%- if json_params | trim %}
-                json_params=({{ json_params | trim }}),
+                    json_params=({{ json_params | trim }}),
 {%- endif %}
-            ),
+                ),
 {%- endif %}
 {%- if op.header_params | rejectattr("cookie") | list | length > 0 %}
-            header_params={
+                header_params={
 {%- for p in op.header_params if not p.cookie %}
-                {{ py_str(p.name) }}: {% if p.json %}json_header({{ py_ident(p.ident) }}){% else %}{{ py_ident(p.ident) }}{% endif %},
+                    {{ py_str(p.name) }}: {% if p.json %}json_header({{ py_ident(p.ident) }}){% else %}{{ py_ident(p.ident) }}{% endif %},
 {%- endfor %}
-            },
+                },
 {%- endif %}
 {%- if op.header_params | selectattr("cookie") | list | length > 0 %}
-            cookie_params={
+                cookie_params={
 {%- for p in op.header_params if p.cookie %}
-                {{ py_str(p.name) }}: {{ py_ident(p.ident) }},
+                    {{ py_str(p.name) }}: {{ py_ident(p.ident) }},
 {%- endfor %}
-            },
+                },
 {%- endif %}
 {%- if op.security is defined %}
-            security={{ op.security | tojson }},
+                security={{ op.security | tojson }},
 {%- endif %}
 {%- if op.request_body_kind == "binary" %}
-            upload_body=body,
+                upload_body={{ body_param }},
 {%- if op.request_body_content_type is defined %}
-            upload_content_type={{ py_str(op.request_body_content_type) }},
+                upload_content_type={{ py_str(op.request_body_content_type) }},
 {%- endif %}
 {%- elif op.request_body_kind == "multipart" %}
-            multipart={% if op.request_body_optional %}None if body is None else {% endif %}[
+                multipart={% if op.request_body_optional %}None if {{ body_param }} is None else {% endif %}[
 {%- for field in op.multipart_fields %}
-                ({{ py_str(field.name) }}, body.{{ py_field(field.name) }}, {{ "True" if field.is_file else "False" }}, {{ py_str(field.content_type) if field.content_type is defined else "None" }}),
+                    ({{ py_str(field.name) }}, {{ body_param }}.{{ py_field(field.name) }}, {{ "True" if field.is_file else "False" }}, {{ py_str(field.content_type) if field.content_type is defined else "None" }}),
 {%- endfor %}
-            ],
-{%- elif body_param is not none %}
+                ],
+{%- elif json_value is not none %}
 {%- if op.request_body_is_form %}
-            form_body=serialize_form_body(
-                to_json_value({{ body_param }}, {{ body_type }}),
+                form_body=serialize_form_body(
+                    {{ json_value }},
 {%- if op.form_deep_object %}
-                deep_object=({% for n in op.form_deep_object %}{{ py_str(n) }}, {% endfor %}),
+                    deep_object=({% for n in op.form_deep_object %}{{ py_str(n) }}, {% endfor %}),
 {%- endif %}
 {%- if op.form_unexploded %}
-                unexploded=({% for n in op.form_unexploded %}{{ py_str(n) }}, {% endfor %}),
+                    unexploded=({% for n in op.form_unexploded %}{{ py_str(n) }}, {% endfor %}),
 {%- endif %}
-            ),
+                ),
+{%- elif op.stream_property is defined and op.request_body_optional and not flat %}
+                json_body={
+                    **({} if {{ body_param }} is None else {{ json_value }}),
+                    {{ py_str(op.stream_property) }}: True,
+                },
+{%- elif op.stream_property is defined %}
+                json_body={**{{ json_value }}, {{ py_str(op.stream_property) }}: True},
 {%- else %}
-            json_body=to_json_value({{ body_param }}, {{ body_type }}),
+                json_body={{ json_value }},
 {%- endif %}
 {%- endif %}
 {%- if op.response_is_event_stream %}
-            stream=True,
+                stream=True,
 {%- endif %}
-{%- if error_schemas | length > 0 %}
+{%- if error_schemas | length > 0 and (op.errors | length > 0 or default_error) %}
 {#- Statuses sharing the default schema are left to the `default` entry. #}
 {%- set fallback = op.errors["default"] if "default" in op.errors else default_error %}
-            error_types={
+                error_types={
 {%- for status, name in op.errors | items if name != fallback %}
-                {{ py_str(status) }}: _models.{{ name | to_upper_camel_case }},
+                    {{ py_str(status) }}: _models.{{ name | to_upper_camel_case }},
 {%- endfor %}
 {%- if fallback %}
-                "default": _models.{{ fallback | to_upper_camel_case }},
+                    "default": _models.{{ fallback | to_upper_camel_case }},
 {%- endif %}
-            },
+                },
 {%- endif %}
-            extra_headers={{ headers_kw }},
-            timeout={{ timeout_kw }},
+                extra_headers={{ option("extra_headers") }},
+                extra_query={{ option("extra_query") }},
+                extra_body={{ option("extra_body") }},
+                timeout={{ option("timeout") }},
+                max_retries={{ option("max_retries") }},
+            )
+{%- endset %}
+{%- set params_doc %}
+{%- for f in flat_fields.list if f.description is defined %}
+:param {{ field_ident(f) }}: {{ f.description | replace("\n", " ") }}
+{%- endfor %}
+{%- for p in op.query_params if p.description is defined %}
+:param {{ py_ident(p.ident) }}: {{ p.description | replace("\n", " ") }}
+{%- endfor %}
+{%- endset %}
+{%- set doc %}
+{%- if op.description is defined %}{{ op.description }}{% else %}`{{ op.method | upper }} {{ op.path }}`{% if pg %}: the first page, iterate it for every item{% endif %}.{% endif %}
+{%- if op.deprecated %}
+
+.. deprecated:: This operation is deprecated.{% endif %}
+{%- if params_doc | trim %}
+
+{{ params_doc | trim }}{% endif %}
+{%- endset %}
+{%- if pg %}
+
+    def {{ py_ident(op.name) }}(
+        self,{{ signature }}
+    ) -> {{ unshadow(page_type) }}:
+        {{ docstring(doc | trim) | indent(8) }}
+
+        {% if is_async %}async {% endif %}def fetch(page_param: {{ "str" if pg.style == "cursor" else "int" }} | None) -> {{ response_type }}:
+            response = {{ await }}self._request({{ request | indent(4) }}
+            )
+            return decode_response(response, {{ response_type }})
+
+        paging = {{ pg.style | capitalize }}Paging[{{ response_type }}, {{ item_type }}](
+            items=lambda body: {{ accessor("body", pg["items"]) }},
+{%- if pg.has_more is defined %}
+            has_more=lambda body: {{ accessor("body", pg.has_more) }},
+{%- endif %}
+{%- if pg.next_cursor is defined %}
+            next_cursor=lambda body: {{ accessor("body", pg.next_cursor) }},
+{%- endif %}
+{%- if pg.item_cursor is defined %}
+            item_cursor=lambda item: item.{{ py_field(pg.item_cursor) }},
+{%- endif %}
+{%- if pg.total_pages is defined %}
+            total_pages=lambda body: {{ accessor("body", pg.total_pages) }},
+{%- endif %}
+{%- if pg.total is defined %}
+            total=lambda body: {{ accessor("body", pg.total) }},
+{%- endif %}
+{%- if pg.style == "page" %}
+            first_page={{ pg.first_page }},
+{%- endif %}
         )
-{%- if op.response_is_event_stream %}
+{%- set pg_query = op.query_params | selectattr("name", "equalto", pg.param) | first %}
+{%- set pg_arg = py_ident(pg_query.ident if pg_query else pg.param) %}
+{%- if is_async %}
+        return AsyncPaginator(lambda: async_first_page(fetch, {{ pg_arg }}, paging))
+{%- else %}
+        return first_page(fetch, {{ pg_arg }}, paging)
+{%- endif %}
+{%- else %}
+
+    {% if is_async %}async {% endif %}def {{ py_ident(op.name) }}(
+        self,{{ signature }}
+    ) -> {{ unshadow(return_type) }}:
+        {{ docstring(doc | trim) | indent(8) }}
+        {% if return_type != "None" %}response = {% endif %}{{ await }}self._request({{ request }}
+        )
+{%- if op.response_is_event_stream and event_type %}
+        return {{ "AsyncStream" if is_async else "Stream" }}(response, {{ event_type }})
+{%- elif op.response_is_event_stream %}
         return {{ return_type }}(response)
 {%- elif op.response_is_binary %}
         return response.content
 {%- elif op.response_is_text %}
         return response.text
-{%- elif return_type != "None" and op.response_body_optional %}
-        if response.status_code in (204, 205) or not response.content.strip():
-            return None
-        {#- A union alias is not a class, so `decode_response` cannot infer its type. #}
-        decoded: {{ return_type }} = decode_response(response, {{ return_type }})
-        return decoded
-{%- elif return_type != "None" and sdk.flat_unions %}
-        {#- A union alias is not a class, so `decode_response` cannot infer its type. #}
-        decoded: {{ return_type }} = decode_response(response, {{ return_type }})
-        return decoded
 {%- elif return_type != "None" %}
-        return decode_response(response, {{ return_type }})
+{%- set decode = "decode_optional_response" if return_type != response_type else "decode_response" %}
+{%- set response_schema = types[op.response_body_schema_name] if op.response_body_schema_name is defined else none %}
+{%- set null_body = op.response_body_optional | default(false) %}
+{%- if null_body or (response_schema and response_schema.kind == "struct_enum" and is_flat_union(response_schema)) %}
+        {#- A union alias is not a class, so `decode_response` cannot infer its type. A body
+            that may be `null` decodes into the optional type. #}
+        decoded: {{ unshadow(return_type) }} = {{ decode }}(response, {{ return_type if null_body else response_type }})
+        return decoded
+{%- else %}
+        return {{ decode }}(response, {{ response_type }})
 {%- endif %}
-{%- if op.pagination is defined %}
-{%- set pg = op.pagination %}
-
-    def {{ py_ident(op.name ~ "_iter") }}(
-        self,{{ signature }}
-    ) -> {% if is_async %}t.AsyncIterator{% else %}t.Iterator{% endif %}[{{ pg.item_schema | to_upper_camel_case }}]:
-        """Iterate over every item of :meth:`{{ py_ident(op.name) }}`, fetching further pages on demand."""
-        return {% if is_async %}paginate_async{% else %}paginate_sync{% endif %}(
-            Pagination(
-                style="{{ pg.style }}",
-                items={{ pg.items | tojson }},
-{%- for key in ["next_cursor", "has_more", "total_pages", "total"] if pg[key] is defined %}
-                {{ key }}={{ pg[key] | tojson }},
+{%- endif %}
+{%- endif %}
 {%- endfor %}
-{%- if pg.item_cursor is defined %}
-                item_cursor="{{ pg.item_cursor }}",
-{%- endif %}
-{%- if pg.style == "page" %}
-                first_page={{ pg.first_page }},
-{%- endif %}
-            ),
-            {{ py_ident((op.query_params | selectattr("name", "equalto", pg.param) | first).ident) }},
-            lambda param: self.{{ py_ident(op.name) }}({{ forwarded }}),
-            {{ pg.item_schema | to_upper_camel_case }},
-        )
-{%- endif %}
+
+
+class {{ class_name }}WithRawResponse:
+    """The methods of :class:`{{ class_name }}`, returning an :class:`APIResponse`."""
+
+    def __init__(self, resource: {{ class_name }}) -> None:
+{%- for op in resource.operations %}
+        self.{{ py_ident(op.name) }} = {% if is_async %}async_{% endif %}to_raw_response_wrapper(resource.{{ py_ident(op.name) }})
+{%- else %}
+        pass
 {%- endfor %}
 {% endfor %}

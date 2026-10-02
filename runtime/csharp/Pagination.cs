@@ -2,135 +2,147 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Text.Json;
-using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace @@PACKAGE_NAME@@;
 
-/// <summary>How a list operation pages. Paths are JSON property names from the response root.</summary>
-internal sealed record Pagination(string[] Items)
+/// <summary>One page of a list operation: its items, the whole response, and the way to the next page.</summary>
+/// <typeparam name="TResponse">The response of the list operation.</typeparam>
+/// <typeparam name="TItem">The type of the items.</typeparam>
+public sealed class Page<TResponse, TItem>
 {
-    public string[]? NextCursor { get; init; }
-    public string? ItemCursor { get; init; }
-    public string[]? HasMore { get; init; }
-    public string[]? TotalPages { get; init; }
-    public string[]? Total { get; init; }
-    public long FirstPage { get; init; } = 1;
+    private readonly Func<CancellationToken, Task<Page<TResponse, TItem>>>? _next;
+
+    internal Page(
+        TResponse response,
+        IReadOnlyList<TItem> items,
+        Func<CancellationToken, Task<Page<TResponse, TItem>>>? next
+    )
+    {
+        Response = response;
+        Items = items;
+        _next = next;
+    }
+
+    /// <summary>The decoded response of this page, with its other properties.</summary>
+    public TResponse Response { get; }
+
+    /// <summary>The items of this page.</summary>
+    public IReadOnlyList<TItem> Items { get; }
+
+    /// <summary>Whether another page follows.</summary>
+    public bool HasNextPage => _next is not null;
+
+    /// <summary>Fetches the next page, with the same parameters and request options.</summary>
+    /// <exception cref="InvalidOperationException">This is the last page.</exception>
+    public Task<Page<TResponse, TItem>> GetNextPageAsync(CancellationToken cancellationToken = default) =>
+        _next is { } next
+            ? next(cancellationToken)
+            : throw new InvalidOperationException("this is the last page");
 }
 
-/// <summary>Yields every item of a paginated operation, fetching the next page once the current one is consumed.</summary>
-internal static class Paginator
+/// <summary>
+/// The pages of a list operation, fetched on demand. <c>await foreach</c> over it yields every item;
+/// <see cref="AsPagesAsync"/> yields the pages.
+/// </summary>
+/// <typeparam name="TResponse">The response of the list operation.</typeparam>
+/// <typeparam name="TItem">The type of the items.</typeparam>
+public sealed class AsyncPager<TResponse, TItem> : IAsyncEnumerable<TItem>
 {
-    public static async IAsyncEnumerable<TItem> CursorAsync<TPage, TItem>(
-        Pagination pagination,
+    private readonly Func<CancellationToken, Task<Page<TResponse, TItem>>> _first;
+
+    internal AsyncPager(Func<CancellationToken, Task<Page<TResponse, TItem>>> first) => _first = first;
+
+    /// <summary>Fetches the first page.</summary>
+    public Task<Page<TResponse, TItem>> GetFirstPageAsync(CancellationToken cancellationToken = default) =>
+        _first(cancellationToken);
+
+    /// <summary>Every page, the next one fetched once the current one is consumed.</summary>
+    public async IAsyncEnumerable<Page<TResponse, TItem>> AsPagesAsync(
+        [EnumeratorCancellation] CancellationToken cancellationToken = default
+    )
+    {
+        var page = await _first(cancellationToken).ConfigureAwait(false);
+        while (true)
+        {
+            yield return page;
+            if (!page.HasNextPage)
+            {
+                yield break;
+            }
+            page = await page.GetNextPageAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>Every item of every page.</summary>
+    public async IAsyncEnumerator<TItem> GetAsyncEnumerator(
+        CancellationToken cancellationToken = default
+    )
+    {
+        await foreach (var page in AsPagesAsync(cancellationToken).ConfigureAwait(false))
+        {
+            foreach (var item in page.Items)
+            {
+                yield return item;
+            }
+        }
+    }
+}
+
+/// <summary>Builds the pagers of list operations from typed accessors of their responses.</summary>
+internal static class Paging
+{
+    /// <summary>Cursor pagination: <paramref name="next"/> reads the cursor of the following page.</summary>
+    public static AsyncPager<TResponse, TItem> Cursor<TResponse, TItem>(
         string? start,
-        Func<string?, CancellationToken, Task<TPage>> fetchPage,
-        JsonTypeInfo<TPage> pageInfo,
-        JsonTypeInfo<TItem> itemInfo,
-        [EnumeratorCancellation] CancellationToken cancellationToken
+        Func<string?, CancellationToken, Task<TResponse>> fetch,
+        Func<TResponse, IReadOnlyList<TItem>> items,
+        Func<TResponse, bool?>? hasMore,
+        Func<TResponse, IReadOnlyList<TItem>, string?> next
     )
     {
-        var cursor = start;
-        while (true)
+        async Task<Page<TResponse, TItem>> Fetch(string? cursor, CancellationToken cancellationToken)
         {
-            var page = JsonSerializer.SerializeToElement(
-                await fetchPage(cursor, cancellationToken).ConfigureAwait(false),
-                pageInfo
+            var response = await fetch(cursor, cancellationToken).ConfigureAwait(false);
+            var list = items(response);
+            var following = list.Count == 0 || hasMore?.Invoke(response) == false
+                ? null
+                : next(response, list);
+            return new(
+                response,
+                list,
+                string.IsNullOrEmpty(following) || following == cursor
+                    ? null
+                    : ct => Fetch(following, ct)
             );
-            var items = Items(page, pagination);
-            foreach (var item in items)
-            {
-                yield return item.Deserialize(itemInfo)!;
-            }
-            if (items.Count == 0 || NoMore(page, pagination))
-            {
-                yield break;
-            }
-            var next = pagination.NextCursor is { } path
-                ? At(page, path)
-                : At(items[^1], [pagination.ItemCursor!]);
-            var value = next?.ValueKind == JsonValueKind.String ? next.Value.GetString() : null;
-            if (string.IsNullOrEmpty(value) || value == cursor)
-            {
-                yield break;
-            }
-            cursor = value;
         }
+        return new(ct => Fetch(start, ct));
     }
 
-    /// <summary>Page (<paramref name="pages"/>) or offset pagination.</summary>
-    public static async IAsyncEnumerable<TItem> NumberedAsync<TPage, TItem>(
-        Pagination pagination,
+    /// <summary>Page (<paramref name="pages"/>) or offset pagination, from <paramref name="start"/>.</summary>
+    public static AsyncPager<TResponse, TItem> Numbered<TResponse, TItem>(
+        long start,
+        long firstPage,
         bool pages,
-        long? start,
-        Func<long, CancellationToken, Task<TPage>> fetchPage,
-        JsonTypeInfo<TPage> pageInfo,
-        JsonTypeInfo<TItem> itemInfo,
-        [EnumeratorCancellation] CancellationToken cancellationToken
+        Func<long, CancellationToken, Task<TResponse>> fetch,
+        Func<TResponse, IReadOnlyList<TItem>> items,
+        Func<TResponse, bool?>? hasMore,
+        Func<TResponse, long?>? total
     )
     {
-        var param = start ?? (pages ? pagination.FirstPage : 0);
-        while (true)
+        async Task<Page<TResponse, TItem>> Fetch(long param, CancellationToken cancellationToken)
         {
-            var page = JsonSerializer.SerializeToElement(
-                await fetchPage(param, cancellationToken).ConfigureAwait(false),
-                pageInfo
-            );
-            var items = Items(page, pagination);
-            foreach (var item in items)
-            {
-                yield return item.Deserialize(itemInfo)!;
-            }
-            if (items.Count == 0 || NoMore(page, pagination))
-            {
-                yield break;
-            }
-            if (pages)
-            {
-                if (
-                    Integer(page, pagination.TotalPages) is { } totalPages
-                    && param - pagination.FirstPage + 1 >= totalPages
-                )
-                {
-                    yield break;
-                }
-                param++;
-            }
-            else
-            {
-                param += items.Count;
-                if (Integer(page, pagination.Total) is { } total && param >= total)
-                {
-                    yield break;
-                }
-            }
+            var response = await fetch(param, cancellationToken).ConfigureAwait(false);
+            var list = items(response);
+            var following = pages ? param + 1 : param + list.Count;
+            var done =
+                list.Count == 0
+                || hasMore?.Invoke(response) == false
+                || total?.Invoke(response) is { } count
+                    && (pages ? param - firstPage + 1 >= count : following >= count);
+            return new(response, list, done ? null : ct => Fetch(following, ct));
         }
-    }
-
-    private static List<JsonElement> Items(JsonElement page, Pagination pagination) =>
-        At(page, pagination.Items) is { ValueKind: JsonValueKind.Array } items
-            ? [.. items.EnumerateArray()]
-            : [];
-
-    private static bool NoMore(JsonElement page, Pagination pagination) =>
-        pagination.HasMore is { } path && At(page, path)?.ValueKind == JsonValueKind.False;
-
-    private static long? Integer(JsonElement page, string[]? path) =>
-        path is not null && At(page, path) is { ValueKind: JsonValueKind.Number } value
-            ? value.GetInt64()
-            : null;
-
-    private static JsonElement? At(JsonElement value, string[] path)
-    {
-        foreach (var key in path)
-        {
-            if (value.ValueKind != JsonValueKind.Object || !value.TryGetProperty(key, out value))
-            {
-                return null;
-            }
-        }
-        return value;
+        return new(ct => Fetch(start, ct));
     }
 }

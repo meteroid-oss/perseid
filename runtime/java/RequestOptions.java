@@ -5,13 +5,18 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Settings of one call, over the client's: extra headers, a timeout, a number of retries and an
  * idempotency key.
  *
  * <pre>{@code
- * RequestOptions.builder().header("X-Trace", "1").timeout(Duration.ofSeconds(5)).maxRetries(0).build()
+ * RequestOptions.builder()
+ *         .header("X-Trace", "1")
+ *         .timeout(Duration.ofSeconds(5))
+ *         .maxRetries(0)
+ *         .build()
  * }</pre>
  */
 public final class RequestOptions {
@@ -29,15 +34,29 @@ public final class RequestOptions {
         this.idempotencyKey = builder.idempotencyKey;
     }
 
-    /** No per-call settings. */
+    /**
+     * No per-call settings.
+     *
+     * @return the empty options
+     */
     public static RequestOptions none() {
         return NONE;
     }
 
+    /**
+     * A builder of per-call settings.
+     *
+     * @return a new builder
+     */
     public static Builder builder() {
         return new Builder();
     }
 
+    /**
+     * A builder starting from these settings.
+     *
+     * @return a new builder
+     */
     public Builder toBuilder() {
         Builder builder = new Builder();
         builder.headers.putAll(headers);
@@ -47,24 +66,40 @@ public final class RequestOptions {
         return builder;
     }
 
-    /** Headers set on the request, over the SDK's own. */
-    public Map<String, String> getHeaders() {
+    /**
+     * Headers set on the request, over the SDK's own.
+     *
+     * @return the headers
+     */
+    public Map<String, String> headers() {
         return headers;
     }
 
-    /** Timeout of each attempt, or null for the client's. */
-    public Duration getTimeout() {
-        return timeout;
+    /**
+     * Timeout of each attempt.
+     *
+     * @return the timeout, empty for the client's
+     */
+    public Optional<Duration> timeout() {
+        return Optional.ofNullable(timeout);
     }
 
-    /** Retries after the first attempt, or null for the client's schedule. */
-    public Integer getMaxRetries() {
-        return maxRetries;
+    /**
+     * Retries after the first attempt.
+     *
+     * @return the number of retries, empty for the client's schedule
+     */
+    public Optional<Integer> maxRetries() {
+        return Optional.ofNullable(maxRetries);
     }
 
-    /** Idempotency key, or null to generate one for POST requests. */
-    public String getIdempotencyKey() {
-        return idempotencyKey;
+    /**
+     * Idempotency key.
+     *
+     * @return the key, empty to generate one for POST requests
+     */
+    public Optional<String> idempotencyKey() {
+        return Optional.ofNullable(idempotencyKey);
     }
 
     @Override
@@ -100,6 +135,7 @@ public final class RequestOptions {
                 + "}";
     }
 
+    /** Builds {@link RequestOptions}. */
     public static final class Builder {
         private final Map<String, String> headers = new LinkedHashMap<>();
         private Duration timeout;
@@ -108,21 +144,46 @@ public final class RequestOptions {
 
         private Builder() {}
 
+        /**
+         * A header, over the SDK's own.
+         *
+         * @param name the header name
+         * @param value the value
+         * @return this builder
+         */
         public Builder header(String name, String value) {
             headers.put(Objects.requireNonNull(name, "name"), Objects.requireNonNull(value, "value"));
             return this;
         }
 
+        /**
+         * Headers, over the SDK's own.
+         *
+         * @param headers the headers
+         * @return this builder
+         */
         public Builder headers(Map<String, String> headers) {
             headers.forEach(this::header);
             return this;
         }
 
+        /**
+         * Timeout of each attempt.
+         *
+         * @param timeout the timeout, or null for the client's
+         * @return this builder
+         */
         public Builder timeout(Duration timeout) {
             this.timeout = timeout;
             return this;
         }
 
+        /**
+         * Retries after the first attempt.
+         *
+         * @param maxRetries the number of retries, 0 to never retry
+         * @return this builder
+         */
         public Builder maxRetries(int maxRetries) {
             if (maxRetries < 0) {
                 throw new IllegalArgumentException("maxRetries must not be negative");
@@ -131,11 +192,22 @@ public final class RequestOptions {
             return this;
         }
 
+        /**
+         * Idempotency key, which also makes a request safe to retry.
+         *
+         * @param idempotencyKey the key
+         * @return this builder
+         */
         public Builder idempotencyKey(String idempotencyKey) {
             this.idempotencyKey = idempotencyKey;
             return this;
         }
 
+        /**
+         * The settings.
+         *
+         * @return immutable settings
+         */
         public RequestOptions build() {
             return new RequestOptions(this);
         }

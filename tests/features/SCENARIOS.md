@@ -40,6 +40,10 @@ contract: the JSON body `{"status": ...}` echoes what the server read, with the 
 existing smoke tests already assert (`auth()` = `Authorization|X-API-Key|api_key`, sorted decoded
 query pairs, multipart summary, and so on). `stream_events` is now delivered with chunked
 transfer-encoding, one chunk per event with a short pause between chunks, same events as before.
+`create_completion` answers `{"text": PROMPT}` (the prompt upper-cased), or with `stream: true`
+one `data: {"delta": c, "index": i}` event per character of the prompt, then `data: [DONE]`.
+`list_widgets` items carry a `color` the spec does not declare, which SDKs keep as an unknown
+property. Every response carries `x-request-id: req_mock`.
 
 ## Items: methods and empty responses
 

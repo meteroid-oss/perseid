@@ -8,11 +8,17 @@ namespace @@PACKAGE_NAME@@;
 /// <summary>Configures a <see cref="@@CLIENT_NAME@@Client"/>. Every property has a sensible default.</summary>
 public sealed partial class @@CLIENT_NAME@@ClientOptions
 {
-    /// <summary>The API endpoint used when <see cref="BaseUrl"/> is not set.</summary>
-    public const string DefaultBaseUrl = "@@DEFAULT_BASE_URL@@";
+    /// <summary>The name of the <see cref="System.Diagnostics.ActivitySource"/> tracing each call,
+    /// to listen to with OpenTelemetry's <c>AddSource</c>.</summary>
+    public const string ActivitySourceName = "@@PACKAGE_NAME@@";
 
-    /// <summary>The API base URL.</summary>
-    public string BaseUrl { get; set; } = DefaultBaseUrl;
+    /// <summary>The API base URL, else <c>@@ENV_PREFIX@@_BASE_URL</c>, else the default of the API when it
+    /// declares one.</summary>
+    public string? BaseUrl { get; set; }
+
+    /// <summary>The credential when the constructor gets none, else <c>@@ENV_PREFIX@@_API_KEY</c>:
+    /// the bearer token, and the API key of the schemes missing from <c>ApiKeys</c>.</summary>
+    public string? Token { get; set; }
 
     /// <summary>The <see cref="Timeout"/> used when it is not set: @@TIMEOUT@@ seconds.</summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(@@TIMEOUT@@);
@@ -22,11 +28,12 @@ public sealed partial class @@CLIENT_NAME@@ClientOptions
     public TimeSpan Timeout { get; set; } = DefaultTimeout;
 
     /// <summary>Retries after network failures, timeouts, 408, 429 and 5xx, with jittered backoff or
-    /// <c>Retry-After</c>. Except on 429, only idempotent requests or those with an
-    /// <c>Idempotency-Key</c> are retried. Ignored when <see cref="RetrySchedule"/> is set.</summary>
-    public int NumRetries { get; set; } = 2;
+    /// <c>Retry-After</c>, for idempotent requests or those with an <c>Idempotency-Key</c> (POST
+    /// requests get one). Ignored when <see cref="RetrySchedule"/> is set.</summary>
+    public int MaxRetries { get; set; } = 2;
 
-    /// <summary>The exact delay before each retry. An empty list disables retries.</summary>
+    /// <summary>The exact delay before each retry, its length the number of retries. An empty list
+    /// disables retries.</summary>
     public IReadOnlyList<TimeSpan>? RetrySchedule { get; set; }
 
     /// <summary>Overrides the <c>User-Agent</c> header sent with every request.</summary>

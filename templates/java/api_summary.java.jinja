@@ -2,102 +2,277 @@
 List.of({%- for names in security %}{% if not loop.first %}, {% endif %}List.of({%- for name in names %}{% if not loop.first %}, {% endif %}"{{ name }}"{% endfor -%}){% endfor -%})
 {%- endmacro -%}
 {% set _ = set_summary_filename(sdk.client_name ~ ".java") -%}
+{% set client = sdk.client_name -%}
+{% set reserved = ["async", "sync", "withRawResponse", "close", "fromEnv", "builder", "getClass", "hashCode", "toString", "notify", "notifyAll", "wait", "clone", "finalize", "options"] -%}
+{% set ns = namespace(accessors=[]) -%}
+{% for resource in api.resources -%}
+{% set a = resource.name | ident("camel", "java") -%}
+{% set ns.accessors = ns.accessors + [a ~ "_" if a in reserved else a] -%}
+{% endfor -%}
+{% set accessors = ns.accessors -%}
+{% set async_source -%}
+// this file is @generated
+package {{ sdk.java_package }};
+
+{% for resource in api.resources -%}
+import {{ sdk.java_package }}.api.{{ resource.name | to_upper_camel_case }}Async;
+{% endfor %}
+
+/**
+ * The {{ client }} client without blocking: every method returns a {@link
+ * java.util.concurrent.CompletableFuture}. Obtained from {@link {{ client }}#async()}, it shares
+ * the connections of the blocking client.
+ */
+public final class {{ client }}Async implements AutoCloseable {
+    private final {{ client }} sync;
+    private final WithRawResponse withRawResponse;
+{% for resource in api.resources -%}
+    private final {{ resource.name | to_upper_camel_case }}Async {{ accessors[loop.index0] }};
+{% endfor %}
+
+    {{ client }}Async({{ client }} sync) {
+        this.sync = sync;
+{% for resource in api.resources -%}
+        this.{{ accessors[loop.index0] }} = new {{ resource.name | to_upper_camel_case }}Async(sync.{{ accessors[loop.index0] }}());
+{% endfor -%}
+        this.withRawResponse = new WithRawResponse();
+    }
+
+    /**
+     * The blocking client sharing these connections.
+     *
+     * @return the blocking client
+     */
+    public {{ client }} sync() {
+        return sync;
+    }
+
+    /**
+     * The same operations, returning the status and headers along with the body.
+     *
+     * @return the operations
+     */
+    public WithRawResponse withRawResponse() {
+        return withRawResponse;
+    }
+{% for resource in api.resources %}
+
+    /**
+     * The {@code {{ resource.name }}} operations.
+     *
+     * @return the operations
+     */
+    public {{ resource.name | to_upper_camel_case }}Async {{ accessors[loop.index0] }}() {
+        return {{ accessors[loop.index0] }};
+    }
+{% endfor %}
+
+    /** Closes the client shared with {@link #sync()}. */
+    @Override
+    public void close() {
+        sync.close();
+    }
+
+    /** The operations, returning the status and headers along with the body. */
+    public final class WithRawResponse {
+        private WithRawResponse() {}
+{% for resource in api.resources %}
+
+        /**
+         * The {@code {{ resource.name }}} operations.
+         *
+         * @return the operations
+         */
+        public {{ resource.name | to_upper_camel_case }}Async.WithRawResponse {{ accessors[loop.index0] }}() {
+            return {{ accessors[loop.index0] }}.withRawResponse();
+        }
+{% endfor %}
+    }
+}
+{% endset -%}
+{% set _ = generate_extra_file(output_dir ~ "/" ~ client ~ "Async.java", async_source) -%}
 // this file is @generated
 package {{ sdk.java_package }};
 
 {% for resource in api.resources -%}
 import {{ sdk.java_package }}.api.{{ resource.name | to_upper_camel_case }};
 {% endfor %}
-import {{ sdk.java_internal_package }}.{{ sdk.client_name }}Auth;
-import {{ sdk.java_internal_package }}.{{ sdk.client_name }}HttpClient;
+import {{ sdk.java_internal_package }}.{{ client }}Auth;
+import {{ sdk.java_internal_package }}.{{ client }}HttpClient;
 import okhttp3.HttpUrl;
-
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Main entry point for the {{ sdk.client_name }} Java SDK.
+ * The {{ client }} client, blocking: {@link #async()} has the same methods returning futures, and
+ * {@link #withRawResponse()} the same methods returning the status and headers along with the body.
+ * Close it to release its threads and connections.
  *
- * <p>This class provides access to all {{ sdk.client_name }} API resources through a fluent interface.
- *
- * <p>Example usage:
  * <pre>{@code
- * // Initialize with API key
- * {{ sdk.client_name }} {{ sdk.client_name | to_lower_camel_case }} = new {{ sdk.client_name }}("your-api-key");
- *
- * // Or with custom options
- * {{ sdk.client_name }}Options options = new {{ sdk.client_name }}Options();
- * options.setServerUrl("{{ sdk.default_base_url | replace("://", "://custom.") }}");
- * options.setTimeout(Duration.ofSeconds(30));
- * {{ sdk.client_name }} {{ sdk.client_name | to_lower_camel_case }} = new {{ sdk.client_name }}("your-api-key", options);
- *
- * // Access API resources
+ * try ({{ client }} client = {{ client }}.fromEnv()) {
  {% if sdk.example -%}
  {% for line in sdk.example | lines -%}
- * {{ line }}
+ *     {{ line | replace("@", "{@literal @}") }}
  {% endfor -%}
  {% else -%}
- * // Resource accessors depend on your OpenAPI specification.
+ *     // client.<resource>().<method>(...)
  {% endif -%}
+ * }
  * }</pre>
+ *
+ * <p>Without an API key, the client reads {@value {{ client }}Options#API_KEY_ENV}, and {@value
+ * {{ client }}Options#BASE_URL_ENV} overrides the base URL{% if sdk.has_default_base_url %}, {@link
+ * #DEFAULT_BASE_URL} otherwise{% else %}, which the API has no default for: one of them is
+ * required{% endif %}.
  */
-public class {{ sdk.client_name }} {
-    private static final Map<String, {{ sdk.client_name }}Auth.Scheme> SECURITY_SCHEMES = Map.ofEntries(
+public final class {{ client }} implements AutoCloseable {
+    private static final Map<String, {{ client }}Auth.Scheme> SECURITY_SCHEMES = Map.ofEntries(
 {%- for scheme in api.security_schemes %}
-            Map.entry({{ scheme.name | tojson }}, new {{ sdk.client_name }}Auth.Scheme("{{ scheme.kind }}", {% if scheme.kind == "api_key" %}"{{ scheme.in }}", {{ scheme.param | tojson }}{% else %}null, null{% endif %})){% if not loop.last %},{% endif %}
+            Map.entry({{ scheme.name | tojson }}, new {{ client }}Auth.Scheme("{{ scheme.kind }}", {% if scheme.kind == "api_key" %}"{{ scheme.in }}", {{ scheme.param | tojson }}{% else %}null, null{% endif %})){% if not loop.last %},{% endif %}
 {%- endfor %}
     );
-{% for resource in api.resources %}
-    private final {{ resource.name | to_upper_camel_case }} {{ resource.name | ident("camel", "java") }};
+
+{% if sdk.has_default_base_url -%}
+    /** The base URL of the API when neither the options nor the environment set one. */
+    public static final String DEFAULT_BASE_URL = {{ sdk.default_base_url | tojson }};
+
+{% endif -%}
+    private final {{ client }}Options options;
+    private final {{ client }}HttpClient httpClient;
+    private final WithRawResponse withRawResponse;
+    private final {{ client }}Async async;
+{% for resource in api.resources -%}
+    private final {{ resource.name | to_upper_camel_case }} {{ accessors[loop.index0] }};
 {% endfor %}
 
     /**
-     * Create a new {{ sdk.client_name }} client with default options.
+     * A client with the default options, its API key and base URL read from the environment.
      *
-     * @param apiKey Your {{ sdk.client_name }} API key
+     * @return the client
      */
-    public {{ sdk.client_name }}(String apiKey) {
-        this(apiKey, new {{ sdk.client_name }}Options());
+    public static {{ client }} fromEnv() {
+        return new {{ client }}({{ client }}Options.builder().build());
     }
 
     /**
-     * Create a new {{ sdk.client_name }} client with custom options.
+     * A client with the default options.
      *
-     * @param apiKey Your {{ sdk.client_name }} API key
-     * @param options Configuration options for the client
+     * @param apiKey your API key, or null to read {@value {{ client }}Options#API_KEY_ENV}
      */
-    public {{ sdk.client_name }}(String apiKey, {{ sdk.client_name }}Options options) {
-        HttpUrl parsedUrl = HttpUrl.parse(options.getServerUrl());
-        if (parsedUrl == null) {
-            throw new IllegalArgumentException("Invalid server URL: " + options.getServerUrl());
+    public {{ client }}(String apiKey) {
+        this(apiKey, {{ client }}Options.builder().build());
+    }
+
+    /**
+     * A client with custom options.
+     *
+     * @param apiKey your API key, or null for that of the options, else {@value
+     *     {{ client }}Options#API_KEY_ENV}
+     * @param options the options
+     */
+    public {{ client }}(String apiKey, {{ client }}Options options) {
+        this(apiKey == null ? options : options.toBuilder().apiKey(apiKey).build());
+    }
+
+    /**
+     * A client with custom options.
+     *
+     * @param options the options; the environment supplies the API key and base URL they leave out
+{% if not sdk.has_default_base_url -%}
+     * @throws IllegalStateException when neither the options nor the environment set a base URL
+{% endif -%}
+     */
+    public {{ client }}({{ client }}Options options) {
+        this.options = options;
+        String baseUrl = options.baseUrl().orElseGet(() -> env({{ client }}Options.BASE_URL_ENV, {{ "DEFAULT_BASE_URL" if sdk.has_default_base_url else "null" }}));
+        {% if not sdk.has_default_base_url -%}
+        if (baseUrl == null) {
+            throw new IllegalStateException(
+                    "no base URL: set {{ client }}Options.builder().baseUrl(...) or the "
+                            + {{ client }}Options.BASE_URL_ENV
+                            + " environment variable");
         }
+        {% endif -%}
+        HttpUrl parsedUrl = HttpUrl.parse(baseUrl);
+        if (parsedUrl == null) {
+            throw new IllegalArgumentException("Invalid base URL: " + baseUrl);
+        }
+        String apiKey = options.apiKey().orElseGet(() -> env({{ client }}Options.API_KEY_ENV, null));
+        Map<String, String> defaultHeaders = new LinkedHashMap<>();
+        defaultHeaders.put("User-Agent", "{{ sdk.user_agent_prefix }}-java/" + Version.VERSION);
+        defaultHeaders.putAll(options.headers());
+        {{ client }}Auth auth = new {{ client }}Auth(SECURITY_SCHEMES, {{ java_security(api.security) }}, apiKey, options);
+        this.httpClient = new {{ client }}HttpClient(parsedUrl, defaultHeaders, options, auth);
+{% for resource in api.resources -%}
+        this.{{ accessors[loop.index0] }} = new {{ resource.name | to_upper_camel_case }}(httpClient);
+{% endfor -%}
+        this.withRawResponse = new WithRawResponse();
+        this.async = new {{ client }}Async(this);
+    }
 
-        Map<String, String> defaultHeaders = Map.of(
-                "User-Agent", "{{ sdk.user_agent_prefix }}-java/" + Version.VERSION
-        );
-        {{ sdk.client_name }}Auth auth = new {{ sdk.client_name }}Auth(SECURITY_SCHEMES, {{ java_security(api.security) }}, apiKey, options);
+    private static String env(String name, String fallback) {
+        String value = System.getenv(name);
+        return value == null || value.isEmpty() ? fallback : value;
+    }
 
-        {{ sdk.client_name }}HttpClient httpClient = new {{ sdk.client_name }}HttpClient(
-                parsedUrl,
-                defaultHeaders,
-                options.getRetrySchedule(),
-                {{ sdk.client_name }}HttpClient.okHttpClient(
-                        options.getHttpClient(),
-                        options.getTimeout(),
-                        options.getInterceptors(),
-                        options.isDebug()),
-                auth
-        );
+    /**
+     * The options of this client.
+     *
+     * @return the options
+     */
+    public {{ client }}Options options() {
+        return options;
+    }
 
-{% for resource in api.resources %}
-        this.{{ resource.name | ident("camel", "java") }} = new {{ resource.name | to_upper_camel_case }}(httpClient);
-{% endfor %}
+    /**
+     * The same operations without blocking, sharing this client's connections.
+     *
+     * @return the async client
+     */
+    public {{ client }}Async async() {
+        return async;
+    }
+
+    /**
+     * The same operations, returning the status and headers along with the body.
+     *
+     * @return the operations
+     */
+    public WithRawResponse withRawResponse() {
+        return withRawResponse;
+    }
+
+    /** Releases the threads and connections of the client, unless they belong to one given in the options. */
+    @Override
+    public void close() {
+        httpClient.close();
     }
 {% for resource in api.resources %}
-    {% set accessor = resource.name | ident("pascal", "java") %}
 
-    public {{ resource.name | to_upper_camel_case }} get{{ accessor }}{% if accessor == "Class" %}_{% endif %}() {
-        return {{ resource.name | ident("camel", "java") }};
+    /**
+     * The {@code {{ resource.name }}} operations.
+     *
+     * @return the operations
+     */
+    public {{ resource.name | to_upper_camel_case }} {{ accessors[loop.index0] }}() {
+        return {{ accessors[loop.index0] }};
     }
 {% endfor %}
+
+    /** The operations, returning the status and headers along with the body. */
+    public final class WithRawResponse {
+        private WithRawResponse() {}
+{% for resource in api.resources %}
+
+        /**
+         * The {@code {{ resource.name }}} operations.
+         *
+         * @return the operations
+         */
+        public {{ resource.name | to_upper_camel_case }}.WithRawResponse {{ accessors[loop.index0] }}() {
+            return {{ accessors[loop.index0] }}.withRawResponse();
+        }
+{% endfor %}
+    }
 }

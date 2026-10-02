@@ -275,7 +275,12 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
     let mut stack: Vec<&mut Resource> = resources.values_mut().collect();
     while let Some(resource) = stack.pop() {
         for op in &mut resource.operations {
+            // Settled first, so that `typed_union` tells references apart by their JSON type.
+            for param in &mut op.query_params {
+                settle(&mut param.r#type, &known, &op.id);
+            }
             op.untype_unions();
+            op.forget_typed_unions_of_unknown_types(types);
         }
         stack.extend(resource.subresources.values_mut());
     }
@@ -598,7 +603,17 @@ pub(crate) fn inline_flattened_fields(types: &mut Types) -> anyhow::Result<()> {
             Ok(())
         };
         match &mut ty.data {
-            TypeData::Struct { fields, .. } => flat(fields)?,
+            TypeData::Struct {
+                fields,
+                additional_properties,
+            } => {
+                // Inlined parts bring their `additionalProperties`, unless the owner has its own.
+                if additional_properties.is_none() {
+                    *additional_properties =
+                        inherited_additional_properties(&snapshot, fields, &mut BTreeSet::new());
+                }
+                flat(fields)?;
+            }
             TypeData::StructEnum { fields, repr, .. } => {
                 flat(fields)?;
                 let (StructEnumRepr::AdjacentlyTagged { variants, .. }
@@ -647,6 +662,33 @@ fn flattened<'a>(
         }
     }
     Ok(out)
+}
+
+/// The `additionalProperties` type of the first embedded part of `fields` declaring one.
+fn inherited_additional_properties<'a>(
+    types: &'a Types,
+    fields: &'a [Field],
+    seen: &mut BTreeSet<&'a str>,
+) -> Option<Box<FieldType>> {
+    for field in fields.iter().filter(|f| f.flatten) {
+        let part = field.r#type.referenced_schema().unwrap_or_default();
+        if !seen.insert(part) {
+            continue;
+        }
+        if let Some(TypeData::Struct {
+            fields: inner,
+            additional_properties,
+        }) = types.get(part).map(|t| &t.data)
+        {
+            if let Some(extra) = additional_properties {
+                return Some(extra.clone());
+            }
+            if let Some(extra) = inherited_additional_properties(types, inner, seen) {
+                return Some(extra);
+            }
+        }
+    }
+    None
 }
 
 /// Replace every reference to a [`TypeData::Alias`] type by the alias target, for

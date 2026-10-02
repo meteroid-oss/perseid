@@ -9,12 +9,11 @@ import { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.nam
 {% endfor -%}
 import type { Security, SecurityScheme } from "./auth.js";
 import type { Middleware } from "./middleware.js";
-import type { {{ sdk.client_name }}RequestContext } from "./request.js";
-import type { XOR } from "./util.js";
+import { readEnv, type {{ sdk.client_name }}RequestContext } from "./request.js";
 {% set ns = namespace(models=[]) -%}
 {% for _, type in api.types | items %}{% set ns.models = ns.models + [type.name | to_upper_camel_case] %}{% endfor -%}
 {% set model_names = ns.models -%}
-{% set error_classes = ["ApiError", "BadRequestError", "AuthenticationError", "PermissionDeniedError", "NotFoundError", "ConflictError", "UnprocessableEntityError", "RateLimitError", "InternalServerError", "ApiTimeoutError"] -%}
+{% set error_classes = [sdk.client_name ~ "Error", "APIError", "BadRequestError", "AuthenticationError", "PermissionDeniedError", "NotFoundError", "ConflictError", "UnprocessableEntityError", "RateLimitError", "InternalServerError", "APIConnectionError", "APIConnectionTimeoutError", "APIUserAbortError", "APIDecodeError"] -%}
 {% set exported_errors = error_classes | reject("in", model_names) | list -%}
 import {
     {% for name in error_classes %}{{ name }}{% if name in model_names %} as {{ name }}Class{% endif %},{% endfor %}
@@ -22,25 +21,32 @@ import {
 {% if api.default_error -%}
 import { {{ api.default_error | to_upper_camel_case }}Serializer } from "./models/{{ api.default_error | to_lower_camel_case }}.js";
 {% endif %}
-export { ApiException } from "./util.js";
 {% if exported_errors -%}
 export { {{ exported_errors | join(", ") }} } from "./apiErrors.js";
 {% endif -%}
 {% if api.error_schemas -%}
-/** The error bodies the API declares, `ApiError.error` once parsed. */
+/** The error bodies the API declares, `APIError.error` once parsed. */
 export type {{ sdk.client_name }}ErrorBody =
     {%- for name in api.error_schemas %}
     | import("./models/{{ name | to_lower_camel_case }}.js").{{ name | to_upper_camel_case }}
     {%- endfor %};
 {% else -%}
-/** The API declares no error body schema. */
+/** The API declares no error body schema: `APIError.error` is the body as plain JSON. */
 export type {{ sdk.client_name }}ErrorBody = unknown;
 {% endif -%}
-export type { XOR } from "./util.js";
 export type { Middleware } from "./middleware.js";
 export { parseJson, stringifyJson } from "./json.js";
 export { expandableId } from "./unions.js";
 export { LIB_VERSION, type RequestOptions } from "./request.js";
+{#- Runtime names a model of the API takes are left to the model. -#}
+{% macro runtime_exports(module, names) -%}
+{% set free = names | reject("in", model_names) | list -%}
+{% if free %}export { {{ free | join(", ") }} } from "./{{ module }}.js";{% endif %}
+{%- endmacro %}
+{{ runtime_exports("apiPromise", ["APIPromise"]) }}
+{{ runtime_exports("pagination", ["Page", "PagePromise"]) }}
+{{ runtime_exports("streaming", ["EventStream", "Stream"]) }}
+export type { WithResponse } from "./apiPromise.js";
 {% for module in sdk.extra_exports | default([]) -%}
 export * from "./{{ module }}.js";
 {% endfor -%}
@@ -48,7 +54,7 @@ export * from "./{{ module }}.js";
 export * from "./webhook.js";
 {% endif -%}
 export * from "./models/index.js";
-export type { EventStream, SseEvent, Upload, UploadBody } from "./streaming.js";
+export type { SseEvent, Upload, UploadBody } from "./streaming.js";
 {% set kinds = api.security_schemes | map(attribute="kind") | list %}
 {% for resource in api.resources -%}
 export { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}.js";
@@ -63,54 +69,63 @@ export type { {{ resource.name | to_upper_camel_case }}{{ op.name | to_upper_cam
 {% endfor %}
 
 export type {{ sdk.client_name }}Options = {
-  /** Write a one-line summary of every request and response to stderr. */
-  debug?: boolean;
-  /** Custom API server URL. Defaults to `{{ sdk.default_base_url }}`. */
-  serverUrl?: string;
+  /**
+   * The API key or bearer token sent with every request{% if "api_key" in kinds %}, and the default
+   * API key of every scheme{% endif %}. Defaults to the `{{ sdk.env_prefix }}_API_KEY` environment variable.
+   */
+  apiKey?: string | null | undefined;
+  /**
+   * The API server URL. Defaults to the `{{ sdk.env_prefix }}_BASE_URL` environment variable{% if sdk.has_default_base_url %}, then
+   * `{{ sdk.default_base_url }}`{% else %}; one of them is required{% endif %}.
+   */
+  baseURL?: string | null | undefined;
   /**
    * Time in milliseconds to wait for each attempt to get a response. Default:
    * {{ (sdk.timeout * 1000) | int }} ({{ sdk.timeout }} seconds); `Infinity` waits forever.
    */
-  requestTimeout?: number;
+  timeout?: number | undefined;
+  /**
+   * How many times a failed request is retried: connection errors, timeouts, 408, 429
+   * and 5xx responses. Default: 2, or the length of `retryScheduleInMs`.
+   */
+  maxRetries?: number | undefined;
+  /** Headers sent with every request; `null` removes a header the SDK sets. */
+  defaultHeaders?: Record<string, string | null | undefined> | undefined;
+  /** Query parameters sent with every request. */
+  defaultQuery?: Record<string, string | undefined> | undefined;
   /** Custom fetch implementation, for tests or non-standard runtimes. */
-  fetch?: typeof fetch;
+  fetch?: typeof fetch | undefined;
   /** Wraps every HTTP attempt: caching, logging, custom headers. */
-  middleware?: Middleware[];
+  middleware?: Middleware[] | undefined;
+  /** Write a one-line summary of every request and response to stderr. */
+  debug?: boolean | undefined;
+  /** Delays in milliseconds before each retry, instead of the default backoff. */
+  retryScheduleInMs?: number[] | undefined;
   {% if "bearer" in kinds -%}
   /**
    * Called before each request for a fresh bearer token, e.g. an OAuth2 access
-   * token. Takes precedence over the constructor token.
+   * token. Takes precedence over `apiKey`.
    */
-  tokenProvider?: () => string | Promise<string>;
+  tokenProvider?: (() => string | Promise<string>) | undefined;
   {% endif -%}
   {% if "basic" in kinds -%}
   /** HTTP basic credentials. */
-  basicAuth?: { username: string; password: string };
+  basicAuth?: { username: string; password: string } | undefined;
   {% endif -%}
   {% if "api_key" in kinds -%}
-  /** API keys by security scheme name. Schemes left out use the constructor token. */
+  /** API keys by security scheme name. Schemes left out use `apiKey`. */
   apiKeys?: {
     {% for scheme in api.security_schemes if scheme.kind == "api_key" -%}
     /** Sent as the `{{ scheme.param }}` {% if scheme.in == "query" %}query parameter{% else %}{{ scheme.in }}{% endif %}. */
-    {{ scheme.name | ident("camel") }}?: string;
+    {{ scheme.name | ident("camel") }}?: string | undefined;
     {% endfor -%}
-  };
+  } | undefined;
   {% endif -%}
-} & XOR<
-  {
-    /** Delays in milliseconds before each retry, instead of the default backoff. */
-    retryScheduleInMs?: number[];
-  },
-  {
-    /**
-     * How many times a failed request is retried: connection errors, timeouts, 408, 429
-     * and 5xx responses. Default: 2
-     */
-    numRetries?: number;
-  }
->;
+};
 
+{% if sdk.has_default_base_url -%}
 const DEFAULT_BASE_URL = "{{ sdk.default_base_url }}";
+{% endif -%}
 const DEFAULT_TIMEOUT_MS = {{ (sdk.timeout * 1000) | int }};
 
 const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
@@ -128,7 +143,7 @@ const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
  *
  * @example
  * ```typescript
- * const {{ sdk.client_name | to_lower_camel_case }} = new {{ sdk.client_name }}("your-api-key");
+ * const {{ sdk.client_name | to_lower_camel_case }} = new {{ sdk.client_name }}({ apiKey: "your-api-key"{% if not sdk.has_default_base_url %}, baseURL: "https://api.example.com"{% endif %} });
  *
  {% if sdk.example -%}
  {% for line in sdk.example | lines -%}
@@ -149,10 +164,19 @@ export class {{ sdk.client_name }} {
   {% endfor %}
 
   /**
-   * @param token API token for authentication{% if "api_key" in kinds %}, also the default API key{% endif %}
-   * @param options Client configuration options
+   * Reads the API key from `{{ sdk.env_prefix }}_API_KEY` and the base URL from `{{ sdk.env_prefix }}_BASE_URL`
+   * unless `options` sets them.
    */
-  public constructor(token: string | null, options: {{ sdk.client_name }}Options = {}) {
+  public constructor(options: {{ sdk.client_name }}Options = {}) {
+    const token = options.apiKey ?? readEnv("{{ sdk.env_prefix }}_API_KEY");
+    const baseUrl = options.baseURL ?? readEnv("{{ sdk.env_prefix }}_BASE_URL"){% if sdk.has_default_base_url %} ?? DEFAULT_BASE_URL{% endif %};
+    {% if not sdk.has_default_base_url -%}
+    if (baseUrl === undefined) {
+      throw new {{ sdk.client_name }}Error{% if sdk.client_name ~ "Error" in model_names %}Class{% endif %}(
+        "No base URL: pass the `baseURL` option or set the `{{ sdk.env_prefix }}_BASE_URL` environment variable."
+      );
+    }
+    {% endif -%}
     this.requestCtx = {
       auth: AUTH,
       token,
@@ -165,8 +189,8 @@ export class {{ sdk.client_name }} {
         {% endfor -%}
       },
       {% endif -%}
-      baseUrl: (options.serverUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, ""),
-      timeout: options.requestTimeout ?? DEFAULT_TIMEOUT_MS,
+      baseUrl: baseUrl.replace(/\/+$/, ""),
+      timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
       {% if api.default_error -%}
       parseError: {{ api.default_error | to_upper_camel_case }}Serializer.parse,
       {% endif -%}
@@ -174,7 +198,9 @@ export class {{ sdk.client_name }} {
       fetch: options.fetch,
       middleware: options.middleware,
       retryScheduleInMs: options.retryScheduleInMs,
-      numRetries: options.numRetries,
+      maxRetries: options.maxRetries,
+      defaultHeaders: options.defaultHeaders,
+      defaultQuery: options.defaultQuery,
     };
   }
 

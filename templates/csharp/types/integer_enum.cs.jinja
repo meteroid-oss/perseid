@@ -1,31 +1,53 @@
 {% import "macros.cs.jinja" as m -%}
 {% set type_name = type.name | to_upper_camel_case -%}
+{% set values_class = "KnownValues" if type_name == "Values" else "Values" -%}
+{% macro name(varname) -%}
+{% set id = m.member(varname, type_name) -%}
+{{ id }}{% if id in ["Value", values_class, "IsKnown", "Equals", "GetHashCode", "ToString"] %}Variant{% endif %}
+{%- endmacro -%}
 // this file is @generated
+#pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
 using System.Text.Json.Serialization;
 
 namespace {{ sdk.package_name }}.Models;
-
-{% if type.description is defined -%}
+{% if type.description is defined %}
 {{ m.doc(type.description) }}
-{% else -%}
+{%- else %}
 /// <summary>
 /// One of the known values below, or any other integer a newer API version sends.
 /// </summary>
-{% endif -%}
+{%- endif %}
+/// <param name="Value">The JSON value.</param>
 [JsonConverter(typeof(IntegerEnumConverter<{{ type_name }}>))]
 public readonly partial record struct {{ type_name }}(long Value) : IIntegerEnum<{{ type_name }}>
 {
-{% for varname, value in type.variants -%}
-{% set name = m.member(varname, type_name) -%}
-{% if name in ["Value", "FromValue", "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
-    public static {{ type_name }} {{ name }} { get; } = new({{ value }});
-{% endfor %}
+{%- for varname, value in type.variants %}
+{%- if not loop.first %}{{ "\n" }}{% endif %}
+    /// <summary><c>{{ value }}</c></summary>
+    public static {{ type_name }} {{ name(varname) }} { get; } = new({{ value }});
+{%- endfor %}
+
     /// <summary>Whether this SDK version knows the value.</summary>
-    public bool IsKnown => Value is {% for _, value in type.variants %}{{ value }}{% if not loop.last %} or {% endif %}{% endfor %};
+{%- set known %}Value is {% for _, value in type.variants %}{{ value }}{% if not loop.last %} or {% endif %}{% endfor %}{% endset %}
+    {{ m.arrow("public bool IsKnown", known, 4) }}
 
-    public static {{ type_name }} FromValue(long value) => new(value);
+    /// <summary>The known values as constants, to <c>switch</c> on <see cref="Value"/>.</summary>
+    public static class {{ values_class }}
+    {
+{%- for varname, value in type.variants %}
+{%- if not loop.first %}{{ "\n" }}{% endif %}
+        /// <summary><c>{{ value }}</c></summary>
+        public const long {{ name(varname) }} = {{ value }};
+{%- endfor %}
+    }
 
+    static {{ type_name }} IIntegerEnum<{{ type_name }}>.FromValue(long value) => new(value);
+
+    /// <summary>The value <paramref name="value"/>, known or not.</summary>
+    /// <param name="value">The JSON value.</param>
     public static implicit operator {{ type_name }}(long value) => new(value);
 
+    /// <inheritdoc/>
     public override string ToString() => Json.Invariant(Value);
 }
+

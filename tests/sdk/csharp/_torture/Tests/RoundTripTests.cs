@@ -89,9 +89,24 @@ public class RoundTripTests
         Assert.False(thing.Priority!.Value.IsKnown);
         Assert.Equal(99, thing.Priority.Value.Value);
         Assert.True(Kind.Beta2.IsKnown);
-        Assert.Equal(Kind.Beta2, Kind.FromValue("beta-2"));
-        Assert.Equal(Priority.Negative, Priority.FromValue(-1));
+        Assert.Equal(Kind.Beta2, new Kind("beta-2"));
+        Assert.Equal(Priority.Negative, new Priority(-1));
         Assert.Contains("\"kind\":\"brand-new\"", JsonSerializer.Serialize(thing, Context.Thing));
+    }
+
+    [Fact]
+    public void KnownEnumValuesAreConstantsToSwitchOn()
+    {
+        static string Describe(Kind kind) =>
+            kind.Value switch
+            {
+                Kind.Values.Alpha => "first",
+                Kind.Values.Beta2 => "second",
+                _ => "other",
+            };
+        Assert.Equal("second", Describe(Kind.Beta2));
+        Assert.Equal("other", Describe("brand-new"));
+        Assert.Equal(Priority.Values.Negative, Priority.Negative.Value);
     }
 
     [Fact]
@@ -113,6 +128,28 @@ public class RoundTripTests
         Assert.Equal(2.5, parsed.Value.Radius);
         var reopened = JsonSerializer.Deserialize("""{"kind":"reopened"}""", Context.Activity);
         Assert.Equal("reopened", Assert.IsType<Activity.Reopened>(reopened).Kind);
+    }
+
+    [Fact]
+    public void RecordsCompareCollectionsAndUnknownPropertiesByValue()
+    {
+        var thing = JsonSerializer.Deserialize(Thing, Context.Thing)!;
+        var copy = JsonSerializer.Deserialize(Thing, Context.Thing)!;
+        Assert.NotSame(thing.Tags, copy.Tags);
+        Assert.Equal(thing, copy);
+        Assert.Equal(thing.GetHashCode(), copy.GetHashCode());
+        Assert.NotEqual(thing, copy with { Tags = ["b"] });
+        var extra = JsonSerializer.Deserialize(Thing.Replace("\"mode\"", "\"brand_new\":[1],\"mode\""), Context.Thing)!;
+        Assert.Equal(1, extra.AdditionalProperties!["brand_new"][0].GetInt32());
+        Assert.NotEqual(thing, extra);
+        Assert.Contains("\"brand_new\":[1]", JsonSerializer.Serialize(extra, Context.Thing));
+        var holder = new UnionHolder
+        {
+            Shape = new Shape.Circle(new Circle { Radius = 1 }),
+            Shapes = [],
+            InlineUnion = new List<string> { "a" },
+        };
+        Assert.Equal(holder, holder with { Shapes = [], InlineUnion = new List<string> { "a" } });
     }
 
     [Fact]
@@ -141,7 +178,7 @@ public class RoundTripTests
             """{"shape":{"type":"circle","radius":1},"shapes":[],"str_or_int":7,"inline_union":["a","b"]}""",
             Context.UnionHolder
         )!;
-        Assert.Equal(7L, Assert.IsType<UnionHolderStrOrInt.Integer>(holder.StrOrInt).Value);
+        Assert.Equal(7L, Assert.IsType<UnionHolderStrOrInt.IntegerValue>(holder.StrOrInt).Value);
         Assert.Null(holder.StrOrInt!.AsString);
         Assert.Equal(["a", "b"], holder.InlineUnion!.AsList!);
 
@@ -166,7 +203,7 @@ public class RoundTripTests
         var account = JsonSerializer.Deserialize(json, Context.ObjectUnionsAccount)!;
         var picked = account switch
         {
-            ObjectUnionsAccount.String => "string",
+            ObjectUnionsAccount.StringValue => "string",
             ObjectUnionsAccount.Account => "account",
             ObjectUnionsAccount.DeletedAccount => "deleted",
             ObjectUnionsAccount.Unrecognized => "unrecognized",

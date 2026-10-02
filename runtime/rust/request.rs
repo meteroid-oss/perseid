@@ -5,11 +5,12 @@
 use std::{
     fmt,
     hash::{BuildHasher as _, Hasher as _},
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
 use bytes::Bytes;
-use http1::{
+use http::{
     header::{CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, USER_AGENT},
     HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
 };
@@ -20,7 +21,7 @@ use crate::api::{
     auth_schemes::Security,
     middleware::{BoxError, Next, Request as MiddlewareRequest, Response},
     upload::{Multipart, RequestBody},
-    EventStream, RequestOptions, Upload,
+    Call, EventStream, RequestOptions, SseEvent, Upload,
 };
 use crate::{error::Error, Configuration};
 
@@ -73,14 +74,63 @@ pub(crate) fn decode_error(error: impl Into<BoxError>) -> Error {
     Error::generic(Failure::Decode(error.into()))
 }
 
-enum ResponseBody {
+/// The body of a successful response: read whole, or left open for an event stream.
+pub(crate) enum ResponseBody {
     Buffered(Bytes),
-    Events(EventStream),
+    Events(hyper::body::Incoming),
+}
+
+impl ResponseBody {
+    fn bytes(self) -> Result<Bytes, Error> {
+        match self {
+            Self::Buffered(bytes) => Ok(bytes),
+            Self::Events(_) => Err(decode_error("expected a buffered body")),
+        }
+    }
+}
+
+/// A successful response, before its body is decoded.
+pub(crate) struct Received {
+    pub(crate) status: StatusCode,
+    pub(crate) headers: HeaderMap,
+    pub(crate) body: ResponseBody,
+}
+
+fn json<T: DeserializeOwned>(body: ResponseBody) -> Result<T, Error> {
+    serde_json::from_slice(&body.bytes()?).map_err(decode_error)
+}
+
+fn json_or_none<T: DeserializeOwned>(body: ResponseBody) -> Result<Option<T>, Error> {
+    let bytes = body.bytes()?;
+    if bytes.trim_ascii().is_empty() {
+        return Ok(None);
+    }
+    // A `null` body is no value too.
+    serde_json::from_slice::<Option<T>>(&bytes).map_err(decode_error)
+}
+
+fn empty(body: ResponseBody) -> Result<(), Error> {
+    body.bytes().map(drop)
+}
+
+fn text(body: ResponseBody) -> Result<String, Error> {
+    String::from_utf8(body.bytes()?.into()).map_err(decode_error)
+}
+
+fn events(body: ResponseBody) -> Result<EventStream, Error> {
+    match body {
+        ResponseBody::Events(body) => Ok(EventStream::new(body)),
+        ResponseBody::Buffered(_) => Err(decode_error("expected an event stream")),
+    }
+}
+
+fn typed_events<E: DeserializeOwned>(body: ResponseBody) -> Result<EventStream<E>, Error> {
+    events(body).map(EventStream::typed)
 }
 
 /// How one attempt ended, before deciding whether to retry.
 enum Attempt {
-    Done(ResponseBody),
+    Done(StatusCode, HeaderMap, ResponseBody),
     Status(StatusCode, HeaderMap, Bytes),
     Failed(Failure),
 }
@@ -88,7 +138,7 @@ enum Attempt {
 impl Attempt {
     fn retryable(&self) -> bool {
         match self {
-            Self::Done(_) | Self::Failed(Failure::Request(_) | Failure::Decode(_)) => false,
+            Self::Done(..) | Self::Failed(Failure::Request(_) | Failure::Decode(_)) => false,
             Self::Failed(Failure::Timeout | Failure::Transport(_)) => true,
             Self::Status(status, ..) => {
                 matches!(status.as_u16(), 408 | 429) || status.is_server_error()
@@ -115,7 +165,7 @@ impl Attempt {
 
     fn into_error(self) -> Error {
         match self {
-            Self::Done(_) => unreachable!("a successful attempt is not an error"),
+            Self::Done(..) => unreachable!("a successful attempt is not an error"),
             Self::Status(status, headers, body) => Error::from_response(status, headers, body),
             Self::Failed(failure) => Error::generic(failure),
         }
@@ -140,6 +190,7 @@ pub(crate) struct Request {
     error: Option<Error>,
     security: Option<Security>,
     overrides: HeaderMap,
+    #[allow(clippy::option_option)]
     timeout: Option<Option<Duration>>,
     max_retries: Option<u32>,
 }
@@ -209,6 +260,25 @@ impl Request {
         }
     }
 
+    /// Sets `name` in the JSON object body, e.g. `stream: true` for a streaming twin.
+    pub fn with_body_property(mut self, name: &str, value: impl Into<serde_json::Value>) -> Self {
+        let body = self.serialized_body.as_deref().unwrap_or(b"{}");
+        match serde_json::from_slice::<serde_json::Value>(body) {
+            Ok(serde_json::Value::Object(mut object)) => {
+                object.insert(name.to_owned(), value.into());
+                self.with_body_param(object)
+            }
+            Ok(_) => {
+                self.fail("the body is not a JSON object");
+                self
+            }
+            Err(error) => {
+                self.fail(error);
+                self
+            }
+        }
+    }
+
     /// Encodes the properties of `param` as `a=1&b[c]=2`, given those whose lists are sent as
     /// `name[]=x` (`deepObject`) or comma-separated (`explode: false`).
     pub fn with_form_body_param<T: serde::Serialize>(
@@ -243,8 +313,13 @@ impl Request {
         self
     }
 
-    pub fn with_multipart_body(mut self, body: Option<Multipart>) -> Self {
-        self.multipart = body;
+    pub fn with_multipart_body(mut self, body: Result<Option<Multipart>, Error>) -> Self {
+        match body {
+            Ok(body) => self.multipart = body,
+            Err(error) => {
+                self.error.get_or_insert(error);
+            }
+        }
         self
     }
 
@@ -254,8 +329,8 @@ impl Request {
         self
     }
 
-    pub fn with_header_param(mut self, name: &'static str, value: String) -> Self {
-        match header(name, &value) {
+    pub fn with_header_param(mut self, name: &'static str, value: &str) -> Self {
+        match header(name, value) {
             Ok((name, value)) => {
                 self.headers.insert(name, value);
             }
@@ -271,7 +346,7 @@ impl Request {
         value: Option<T>,
     ) -> Self {
         match value.map(|value| serde_json::to_string(&value)).transpose() {
-            Ok(Some(json)) => return self.with_header_param(name, json),
+            Ok(Some(json)) => return self.with_header_param(name, &json),
             Ok(None) => {}
             Err(error) => self.fail(error),
         }
@@ -280,25 +355,25 @@ impl Request {
 
     pub fn with_optional_header_param(self, name: &'static str, value: Option<String>) -> Self {
         match value {
-            Some(value) => self.with_header_param(name, value),
+            Some(value) => self.with_header_param(name, &value),
             None => self,
         }
     }
 
     /// A cookie parameter, sent in the single `Cookie` header with the other cookies.
-    pub fn with_cookie_param(mut self, name: &'static str, value: String) -> Self {
-        self.cookies.push((name.to_owned(), value));
+    pub fn with_cookie_param(mut self, name: &'static str, value: &str) -> Self {
+        self.cookies.push((name.to_owned(), value.to_owned()));
         self
     }
 
     pub fn with_optional_cookie_param(self, name: &'static str, value: Option<String>) -> Self {
         match value {
-            Some(value) => self.with_cookie_param(name, value),
+            Some(value) => self.with_cookie_param(name, &value),
             None => self,
         }
     }
 
-    pub fn with_query_param(mut self, name: &'static str, param: impl QueryParamValue) -> Self {
+    pub fn with_query_param(mut self, name: &'static str, param: &impl QueryParamValue) -> Self {
         self.query_params.push((name.to_owned(), param.encode()));
         self
     }
@@ -314,7 +389,7 @@ impl Request {
     ) -> Self {
         match param.map(serde_json::to_value).transpose() {
             Ok(Some(value)) => {
-                encode_param(name, &value, deep_object, explode, &mut self.query_params)
+                encode_param(name, &value, deep_object, explode, &mut self.query_params);
             }
             Ok(None) => {}
             Err(error) => self.fail(error),
@@ -366,12 +441,12 @@ impl Request {
         param: Option<impl QueryParamValue>,
     ) -> Self {
         match param {
-            Some(value) => self.with_query_param(name, value),
+            Some(value) => self.with_query_param(name, &value),
             None => self,
         }
     }
 
-    /// Repeats the parameter for each value (OpenAPI `explode: true`): `?tag=a&tag=b`.
+    /// Repeats the parameter for each value (`explode: true`): `?tag=a&tag=b`.
     pub fn with_exploded_query_param<T: QueryParamValue>(
         mut self,
         name: &'static str,
@@ -417,59 +492,58 @@ impl Request {
         self
     }
 
-    pub async fn execute<T: DeserializeOwned>(self, conf: &Configuration) -> Result<T, Error> {
-        let bytes = self.execute_bytes(conf).await?;
-        serde_json::from_slice(&bytes).map_err(decode_error)
+    /// A call decoding the JSON response body as `T`.
+    pub fn json<T: DeserializeOwned + Send + 'static>(self, cfg: &Arc<Configuration>) -> Call<T> {
+        Call::new(self, cfg.clone(), json::<T>, false)
     }
 
-    /// Runs a request whose response may be empty or `null`, such as a `204`.
-    pub async fn execute_optional<T: DeserializeOwned>(
+    /// A call decoding the JSON response body as `T`, or `None` when there is no body.
+    pub fn json_or_none<T: DeserializeOwned + Send + 'static>(
         self,
-        conf: &Configuration,
-    ) -> Result<Option<T>, Error> {
-        let bytes = self.execute_bytes(conf).await?;
-        if bytes.iter().all(u8::is_ascii_whitespace) {
-            return Ok(None);
-        }
-        serde_json::from_slice(&bytes).map_err(decode_error)
+        cfg: &Arc<Configuration>,
+    ) -> Call<Option<T>> {
+        Call::new(self, cfg.clone(), json_or_none::<T>, false)
     }
 
-    /// Runs a request whose response has no body worth decoding.
-    pub async fn execute_empty(self, conf: &Configuration) -> Result<(), Error> {
-        self.execute_bytes(conf).await.map(drop)
+    /// A call whose response has no body worth decoding.
+    pub fn empty(self, cfg: &Arc<Configuration>) -> Call<()> {
+        Call::new(self, cfg.clone(), empty, false)
     }
 
-    pub async fn execute_binary(self, conf: &Configuration) -> Result<Bytes, Error> {
-        self.execute_bytes(conf).await
+    pub fn binary(self, cfg: &Arc<Configuration>) -> Call<Bytes> {
+        Call::new(self, cfg.clone(), ResponseBody::bytes, false)
     }
 
-    pub async fn execute_text(self, conf: &Configuration) -> Result<String, Error> {
-        let bytes = self.execute_bytes(conf).await?;
-        String::from_utf8(bytes.into()).map_err(decode_error)
+    pub fn text(self, cfg: &Arc<Configuration>) -> Call<String> {
+        Call::new(self, cfg.clone(), text, false)
     }
 
-    pub async fn execute_event_stream(
-        mut self,
-        conf: &Configuration,
-    ) -> Result<EventStream, Error> {
+    /// A call opening an event stream of raw events.
+    pub fn events(self, cfg: &Arc<Configuration>) -> Call<EventStream<SseEvent>> {
+        Call::new(self.accepting_events(), cfg.clone(), events, true)
+    }
+
+    /// A call opening an event stream whose events carry JSON `E`s, until `[DONE]`.
+    pub fn typed_events<E: DeserializeOwned + Send + 'static>(
+        self,
+        cfg: &Arc<Configuration>,
+    ) -> Call<EventStream<E>> {
+        Call::new(self.accepting_events(), cfg.clone(), typed_events::<E>, true)
+    }
+
+    fn accepting_events(mut self) -> Self {
         self.headers.insert(
-            http1::header::ACCEPT,
+            http::header::ACCEPT,
             HeaderValue::from_static("text/event-stream"),
         );
-        match self.send(conf, true).await? {
-            ResponseBody::Events(stream) => Ok(stream),
-            ResponseBody::Buffered(_) => unreachable!("event streams are never buffered"),
-        }
+        self
     }
 
-    async fn execute_bytes(self, conf: &Configuration) -> Result<Bytes, Error> {
-        match self.send(conf, false).await? {
-            ResponseBody::Buffered(body) => Ok(body),
-            ResponseBody::Events(_) => unreachable!("only event streams are streamed"),
-        }
-    }
-
-    async fn send(mut self, conf: &Configuration, event_stream: bool) -> Result<ResponseBody, Error> {
+    pub(crate) async fn send(
+        mut self,
+        conf: &Configuration,
+        event_stream: bool,
+    ) -> Result<Received, Error> {
         if let Some(error) = self.error.take() {
             return Err(error);
         }
@@ -477,6 +551,17 @@ impl Request {
         let auth = conf.credentials.apply(self.security, token).await?;
         self.query_params
             .extend(auth.query.into_iter().map(|(name, value)| (name.to_owned(), value)));
+        for (name, value) in &conf.headers {
+            match header(name, value) {
+                Ok((name, value))
+                    if !self.overrides.contains_key(&name) && !self.headers.contains_key(&name) =>
+                {
+                    self.overrides.append(name, value);
+                }
+                Ok(_) => {}
+                Err(error) => return Err(request_error(error)),
+            }
+        }
         for (name, value) in auth.headers {
             let name = HeaderName::from_bytes(name.as_bytes()).map_err(request_error)?;
             let mut value = HeaderValue::try_from(value).map_err(request_error)?;
@@ -507,35 +592,35 @@ impl Request {
             self.headers.append(name, value.clone());
         }
         if self.method == Method::POST && !self.headers.contains_key(IDEMPOTENCY_KEY) {
-            let key = format!("auto_{}", uuid::Uuid::new_v4());
+            let key = format!("auto_{:016x}{:016x}", random(), random());
             self.headers
                 .insert(IDEMPOTENCY_KEY, HeaderValue::try_from(key).map_err(request_error)?);
         }
         self.headers.insert(
             "@@HEADER_PREFIX@@-req-id",
-            HeaderValue::from(random() as u32),
+            HeaderValue::from(random()),
         );
         // Retrying a non-idempotent request without a key could apply it twice.
         let idempotent = self.method.is_idempotent() || self.headers.contains_key(IDEMPOTENCY_KEY);
         let replayable = self.upload.as_ref().is_none_or(Upload::replayable)
             && self.multipart.as_ref().is_none_or(Multipart::replayable);
-        let max_retries = match (self.max_retries, &conf.retry_schedule) {
-            (Some(max_retries), _) => max_retries as usize,
-            (None, Some(schedule)) => schedule.len(),
-            (None, None) => conf.num_retries as usize,
-        };
+        let max_retries = self.max_retries.unwrap_or(conf.max_retries) as usize;
         let mut retries = 0;
         loop {
             let attempt = self.attempt(conf, event_stream).await;
-            if let Attempt::Done(body) = attempt {
-                return Ok(body);
+            if let Attempt::Done(status, headers, body) = attempt {
+                return Ok(Received {
+                    status,
+                    headers,
+                    body,
+                });
             }
             if !(idempotent && replayable && attempt.retryable()) || retries >= max_retries {
                 return Err(attempt.into_error());
             }
             let delay = attempt
                 .retry_after()
-                .unwrap_or_else(|| backoff(conf, retries));
+                .unwrap_or_else(|| backoff(retries));
             tokio::time::sleep(delay).await;
             retries += 1;
             self.headers
@@ -557,13 +642,14 @@ impl Request {
                 .map_err(Failure::Transport)?;
             let status = response.status();
             if status.is_success() && event_stream {
-                return open_event_stream(response).map(Attempt::Done);
+                return open_event_stream(response);
             }
             let (status, headers, body) =
                 response.into_parts().await.map_err(Failure::Transport)?;
-            Ok(match status.is_success() {
-                true => Attempt::Done(ResponseBody::Buffered(body)),
-                false => Attempt::Status(status, headers, body),
+            Ok(if status.is_success() {
+                Attempt::Done(status, headers, ResponseBody::Buffered(body))
+            } else {
+                Attempt::Status(status, headers, body)
             })
         };
         let result = match self.timeout.unwrap_or(conf.timeout) {
@@ -578,7 +664,7 @@ impl Request {
     fn build_request(
         &mut self,
         conf: &Configuration,
-    ) -> Result<http1::Request<RequestBody>, BoxError> {
+    ) -> Result<http::Request<RequestBody>, BoxError> {
         const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
         const PATH: &AsciiSet = &FRAGMENT.add(b'#').add(b'?').add(b'{').add(b'}');
         const PATH_SEGMENT: &AsciiSet = &PATH.add(b'/').add(b'%');
@@ -606,9 +692,10 @@ impl Request {
         } else if let Some(upload) = &mut self.upload {
             (upload.body()?, Some(self.upload_content_type.to_owned()))
         } else if let Some(body) = &self.serialized_body {
-            let content_type = match self.body_is_form {
-                true => "application/x-www-form-urlencoded",
-                false => "application/json",
+            let content_type = if self.body_is_form {
+                "application/x-www-form-urlencoded"
+            } else {
+                "application/json"
             };
             (Upload::bytes(body.clone()).body()?, Some(content_type.to_owned()))
         } else {
@@ -616,7 +703,7 @@ impl Request {
         };
 
         let length = body.length();
-        let mut request = http1::Request::builder()
+        let mut request = http::Request::builder()
             .method(self.method.clone())
             .uri(uri)
             .body(body)?;
@@ -651,7 +738,7 @@ fn header(name: &str, value: &str) -> Result<(HeaderName, HeaderValue), BoxError
     Ok((HeaderName::from_bytes(name.as_bytes())?, HeaderValue::try_from(value)?))
 }
 
-fn open_event_stream(response: Response) -> Result<ResponseBody, Failure> {
+fn open_event_stream(response: Response) -> Result<Attempt, Failure> {
     let content_type = response
         .headers()
         .get(CONTENT_TYPE)
@@ -664,26 +751,25 @@ fn open_event_stream(response: Response) -> Result<ResponseBody, Failure> {
             format!("expected a text/event-stream response, got `{content_type}`").into(),
         ));
     }
+    let (status, headers) = (response.status(), response.headers().clone());
     match response.into_upstream() {
-        Some(body) => Ok(ResponseBody::Events(EventStream::new(body))),
+        Some(body) => Ok(Attempt::Done(status, headers, ResponseBody::Events(body))),
         None => Err(Failure::Transport(
             "middleware cannot buffer an event stream".into(),
         )),
     }
 }
 
-/// Exponential backoff from 500ms up to 8s with jitter, unless a schedule is configured.
-fn backoff(conf: &Configuration, retries: usize) -> Duration {
-    if let Some(delay) = conf.retry_schedule.as_ref().and_then(|s| s.get(retries)) {
-        return *delay;
-    }
-    let delay = Duration::from_millis(500) * 2u32.saturating_pow(retries as u32);
-    let jitter = 1.0 - (random() % 1000) as f64 / 4000.0;
+/// Exponential backoff from 500ms up to 8s with jitter.
+fn backoff(retries: usize) -> Duration {
+    let exponent = u32::try_from(retries).unwrap_or(u32::MAX);
+    let delay = Duration::from_millis(500) * 2u32.saturating_pow(exponent);
+    let jitter = 1.0 - f64::from(u16::try_from(random() % 1000).unwrap_or_default()) / 4000.0;
     delay.min(Duration::from_secs(8)).mul_f64(jitter)
 }
 
 /// Randomness for request ids and jitter, without a dependency.
-fn random() -> u64 {
+pub(crate) fn random() -> u64 {
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
     hasher.write_u128(
         SystemTime::now()
@@ -867,7 +953,7 @@ impl QueryParamValue for rust_decimal::Decimal {
     }
 }
 
-/// A comma-separated list (OpenAPI `explode: false`).
+/// A comma-separated list (`explode: false`).
 impl<T: QueryParamValue> QueryParamValue for Vec<T> {
     fn encode(&self) -> String {
         self.iter().map(T::encode).collect::<Vec<_>>().join(",")

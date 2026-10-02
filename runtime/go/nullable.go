@@ -8,10 +8,7 @@ import "encoding/json"
 // pointers, and Go has no way to take the address of a literal, so this saves a
 // temporary variable:
 //
-//	options := &@@PACKAGE_NAME@@.CustomersListCustomersOptions{
-//		Search:  @@PACKAGE_NAME@@.Ptr("acme"),
-//		PerPage: @@PACKAGE_NAME@@.Ptr(int32(10)),
-//	}
+//	limit := @@PACKAGE_NAME@@.Ptr(int32(10))
 func Ptr[T any](v T) *T {
 	return &v
 }
@@ -20,9 +17,9 @@ func Ptr[T any](v T) *T {
 // style request: absent, explicitly null, or set to a value. Used as
 // *Nullable[T] together with `omitempty`, the three states map onto Go as:
 //
-//	field = nil                  // absent, the server leaves it untouched
-//	field = @@PACKAGE_NAME@@.Null[T]()   // explicit null, the server clears it
-//	field = @@PACKAGE_NAME@@.Set(value)  // set to value
+//	field = nil                                        // absent, the server leaves it untouched
+//	field = @@PACKAGE_NAME@@.ExplicitNull[string]()    // null, the server clears it
+//	field = @@PACKAGE_NAME@@.NewNullable("value")      // set to "value"
 //
 // The optional nullable fields of PATCH request bodies have this type.
 // Decoding a JSON null leaves a *Nullable nil, as encoding/json does for
@@ -32,19 +29,20 @@ type Nullable[T any] struct {
 	null  bool
 }
 
-// Set builds a Nullable holding value.
-func Set[T any](value T) *Nullable[T] {
+// NewNullable builds a Nullable holding value.
+func NewNullable[T any](value T) *Nullable[T] {
 	return &Nullable[T]{value: value}
 }
 
-// Null builds a Nullable that serializes as an explicit JSON null.
-func Null[T any]() *Nullable[T] {
+// ExplicitNull builds a Nullable that serializes as an explicit JSON null.
+func ExplicitNull[T any]() *Nullable[T] {
 	return &Nullable[T]{null: true}
 }
 
-// IsNull reports whether the value is an explicit null.
+// IsNull reports whether the value is an explicit null. It is false for an
+// absent (nil) value: test n == nil for absence.
 func (n *Nullable[T]) IsNull() bool {
-	return n == nil || n.null
+	return n != nil && n.null
 }
 
 // Get returns the wrapped value and whether one is present. It reports false

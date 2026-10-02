@@ -134,7 +134,7 @@ function client(responses, options = {}) {
     const next = responses[Math.min(calls.length - 1, responses.length - 1)];
     return typeof next === "function" ? next(init) : next.clone();
   };
-  return { calls, torture: new sdk.Torture("token", { fetch, ...options }) };
+  return { calls, torture: new sdk.Torture({ apiKey: "token", fetch, ...options }) };
 }
 
 const json = (body, status = 200, headers = {}) =>
@@ -151,7 +151,7 @@ describe("client", () => {
 
   it("ignores a trailing slash in the server URL", async () => {
     const { calls, torture } = client([new Response(SAMPLES.Thing)], {
-      serverUrl: "https://torture.test/v2/",
+      baseURL: "https://torture.test/v2/",
     });
     await torture.things.retrieve("t");
     assert.equal(calls[0].url.pathname, "/v2/things/t");
@@ -178,6 +178,32 @@ describe("client", () => {
     assert.equal(calls[0].init.headers.authorization, "Bearer token");
   });
 
+  it("sends default headers and query, overridden or removed per request", async () => {
+    const { calls, torture } = client([json(THING)], {
+      defaultHeaders: { "X-Team": "core", "User-Agent": null },
+      defaultQuery: { tenant: "t1" },
+    });
+    await torture.things.retrieve("t1");
+    await torture.things.retrieve("t1", {
+      headers: { "x-team": null, "X-Trace": "1" },
+      query: { tenant: "t2", debug: true },
+    });
+    assert.equal(calls[0].init.headers["x-team"], "core");
+    assert.equal(calls[0].init.headers["user-agent"], undefined);
+    assert.equal(calls[0].url.search, "?tenant=t1");
+    assert.equal(calls[1].init.headers["x-team"], undefined);
+    assert.equal(calls[1].init.headers["x-trace"], "1");
+    assert.equal(calls[1].url.search, "?tenant=t2&debug=true");
+  });
+
+  it("sends a default query parameter only where the method sets none", async () => {
+    const { calls, torture } = client([json({ data: [] })], {
+      defaultQuery: { flag: "true", ratio: "1", toString: "x" },
+    });
+    await torture.things.list({ xRequired: "r", flag: false }, { query: { ratio: 2 } });
+    assert.deepEqual([...calls[0].url.searchParams], [["flag", "false"], ["toString", "x"], ["ratio", "2"]]);
+  });
+
   it("retries a 429 after its Retry-After delay", async () => {
     const { calls, torture } = client([
       json({}, 429, { "retry-after": "0" }),
@@ -193,11 +219,14 @@ describe("client", () => {
   it("does not retry a failed PATCH without an idempotency key", async () => {
     const { calls, torture } = client([json({}, 500)], { retryScheduleInMs: [1, 1] });
     await assert.rejects(torture.things.update("t1", {}), (error) => {
-      assert.ok(error instanceof sdk.ApiException);
+      assert.ok(error instanceof sdk.APIError);
       assert.equal(error.status, 500);
       return true;
     });
     assert.equal(calls.length, 1);
+    const limited = client([json({}, 429, { "retry-after": "0" })]);
+    await assert.rejects(limited.torture.things.update("t1", {}), sdk.RateLimitError);
+    assert.equal(limited.calls.length, 1);
   });
 
   it("stops retrying when the caller aborts", async () => {
@@ -210,7 +239,7 @@ describe("client", () => {
     ]);
     await assert.rejects(
       torture.things.retrieve("t1", { signal: controller.signal }),
-      (error) => error.name === "AbortError"
+      (error) => error instanceof sdk.APIUserAbortError && error.cause.name === "AbortError"
     );
     assert.equal(calls.length, 1);
   });
@@ -218,12 +247,15 @@ describe("client", () => {
   it("times out each attempt", async () => {
     const hang = (init) =>
       new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
-    const { calls, torture } = client([hang], { numRetries: 1 });
+    const { calls, torture } = client([hang], { maxRetries: 1 });
     // Node does not keep the process alive for `AbortSignal.timeout` alone.
     const alive = setInterval(() => {}, 1000);
     await assert.rejects(
       torture.things.retrieve("t1", { timeout: 10 }),
-      (error) => error instanceof sdk.ApiTimeoutError && error.name === "TimeoutError"
+      (error) =>
+        error instanceof sdk.APIConnectionTimeoutError &&
+        error instanceof sdk.APIConnectionError &&
+        error.name === "APIConnectionTimeoutError"
     );
     clearInterval(alive);
     assert.equal(calls.length, 2);
@@ -234,7 +266,7 @@ describe("client", () => {
     const { torture } = client([json(body, 422, { "x-request-id": "req_1" })]);
     await assert.rejects(torture.things.create({ name: "n", kind: "alpha" }), (error) => {
       assert.ok(error instanceof sdk.UnprocessableEntityError);
-      assert.ok(error instanceof sdk.ApiError && error instanceof sdk.ApiException);
+      assert.ok(error instanceof sdk.APIError && error instanceof sdk.TortureError);
       assert.equal(error.name, "UnprocessableEntityError");
       assert.equal(error.status, 422);
       assert.deepEqual(error.error, body);
@@ -244,7 +276,7 @@ describe("client", () => {
     });
   });
 
-  it("keeps undeclared and unparsable error bodies as text", async () => {
+  it("keeps unparsable error bodies as text, and undeclared ones as JSON", async () => {
     const { torture } = client([new Response("gone", { status: 404 })]);
     await assert.rejects(torture.things.retrieve("t1"), (error) => {
       assert.ok(error instanceof sdk.NotFoundError);
@@ -252,8 +284,12 @@ describe("client", () => {
       assert.equal(error.body, "gone");
       return true;
     });
-    const { torture: other } = client([json({}, 418), json({}, 503)], { numRetries: 0 });
-    await assert.rejects(other.things.retrieve("t1"), (error) => error.constructor === sdk.ApiError);
+    const { torture: other } = client([json({}, 418), json({}, 503)], { maxRetries: 0 });
+    await assert.rejects(other.things.retrieve("t1"), (error) => {
+      assert.equal(error.constructor, sdk.APIError);
+      assert.deepEqual(error.error, {});
+      return true;
+    });
     await assert.rejects(other.things.retrieve("t1"), sdk.InternalServerError);
     assert.equal(sdk.Torture.NotFoundError, sdk.NotFoundError);
   });
@@ -262,7 +298,7 @@ describe("client", () => {
     const { calls, torture } = client([json(THING)]);
     await torture.things.retrieve("t1");
     assert.ok(calls[0].init.signal instanceof AbortSignal);
-    const { calls: unbounded, torture: patient } = client([json(THING)], { requestTimeout: Infinity });
+    const { calls: unbounded, torture: patient } = client([json(THING)], { timeout: Infinity });
     await patient.things.retrieve("t1");
     assert.equal(unbounded[0].init.signal, undefined);
   });

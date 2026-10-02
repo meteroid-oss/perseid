@@ -31,7 +31,8 @@ function client(responses) {
     calls.push({ url: new URL(url), init });
     return responses[Math.min(calls.length - 1, responses.length - 1)].clone();
   };
-  return { calls, realWorld: new sdk.RealWorld("sk_test", { fetch, numRetries: 0 }) };
+  const realWorld = new sdk.RealWorld({ apiKey: "sk_test", baseURL: "https://api.test", fetch, maxRetries: 0 });
+  return { calls, realWorld };
 }
 
 describe("unions", () => {
@@ -64,6 +65,22 @@ describe("client", () => {
     assert.equal(calls[0].url.pathname, "/v1/charges/ch_1");
     assert.equal(typeof realWorld.charges.capture, "function");
     assert.equal(realWorld.charges, realWorld.charges);
+  });
+
+  it("requires a base URL when perseid.toml sets none", () => {
+    assert.throws(
+      () => new sdk.RealWorld({ apiKey: "sk_test" }),
+      (error) =>
+        error instanceof sdk.RealWorldError &&
+        error.message.includes("`baseURL`") &&
+        error.message.includes("`REAL_WORLD_BASE_URL`")
+    );
+    process.env.REAL_WORLD_BASE_URL = "https://env.test";
+    try {
+      assert.ok(new sdk.RealWorld({ apiKey: "sk_test" }));
+    } finally {
+      delete process.env.REAL_WORLD_BASE_URL;
+    }
   });
 
   it("types the error body with the API-wide error schema", async () => {

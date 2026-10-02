@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"testing"
 )
 
@@ -83,6 +84,9 @@ func TestErrorsMatchStatusSentinelsAndDecodeBodies(t *testing.T) {
 	if !errors.As(err, &apiErr) || apiErr.RequestID() != "req_1" {
 		t.Fatalf("request id: %v", err)
 	}
+	if body, ok := apiErr.Body.(*Problem); !ok || body.Title != "no widgets" {
+		t.Fatalf("declared body: %#v", apiErr.Body)
+	}
 
 	_, err = client.Widgets().Create(context.Background(), CreateWidgetRequest{})
 	if !errors.Is(err, ErrUnprocessableEntity) {
@@ -155,5 +159,34 @@ func TestUnionsOfObjects(t *testing.T) {
 	}
 	if json.Unmarshal([]byte(`{"body":"b"}`), &untitled) != nil || untitled.Draft != nil || untitled.Article != nil {
 		t.Fatalf("%+v", untitled)
+	}
+}
+
+func TestBodilessSuccessReturnsNil(t *testing.T) {
+	client, _ := server(t, func(n int32, w http.ResponseWriter, _ *http.Request) {
+		if n == 1 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		io.WriteString(w, `{"id":"w1","name":"n"}`)
+	})
+	widget, err := client.Widgets().Update(context.Background(), "w1", WidgetUpdate{})
+	if err != nil || widget != nil {
+		t.Fatalf("202: %+v %v", widget, err)
+	}
+	widget, err = client.Widgets().Update(context.Background(), "w1", WidgetUpdate{})
+	if err != nil || widget == nil || widget.ID != "w1" {
+		t.Fatalf("200: %+v %v", widget, err)
+	}
+}
+
+func TestUnionDiscriminatorsAreTyped(t *testing.T) {
+	var tag ShapeType = NewShapeCircle(Circle{Radius: 1}).Type
+	if tag != ShapeCircle || reflect.TypeOf(PetCat).Name() != "PetPetType" {
+		t.Errorf("tag %q, Pet constants are %T", tag, PetCat)
+	}
+	var pet Pet
+	if err := json.Unmarshal([]byte(`{"pet_type":"Cat","meow":true}`), &pet); err != nil || pet.PetType != PetCat {
+		t.Fatalf("%+v %v", pet, err)
 	}
 }

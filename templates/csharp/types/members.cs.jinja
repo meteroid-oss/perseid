@@ -1,0 +1,45 @@
+{#- The unknown JSON properties (with `extension`) and value equality of the record `owner` holding
+    `fields`, indented by `depth`; each line starts with a newline, a blank line before each member
+    (but the first without `lead`). -#}
+{%- set equality = "global::" ~ sdk.package_name ~ ".Equality" %}
+{%- set depth = depth | default(4) %}
+{%- set names = namespace(list=[]) %}
+{%- for field in fields %}{% set names.list = names.list + [m.member(field.name, owner)] %}{% endfor %}
+{%- set extra = "AdditionalJsonProperties" if "AdditionalProperties" in names.list else "AdditionalProperties" %}
+{%- if extension %}
+{%- if lead | default(true) %}{{ "\n" }}{% endif %}
+/// <summary>The properties of the JSON object this SDK version does not know, sent back as they came.</summary>
+[JsonExtensionData]
+public IDictionary<string, JsonElement>? {{ extra }} { get; set; }
+{%- set names.list = names.list + [extra] %}
+{%- endif %}
+{%- if names.list %}
+
+/// <summary>Whether <paramref name="other"/> holds the same values, collections and JSON compared by content.</summary>
+/// <param name="other">The record to compare with.</param>
+/// <returns>Whether the records are equal.</returns>
+{%- set terms = namespace(list=["other is not null"]) %}
+{%- if not sealed %}{% set terms.list = terms.list + ["EqualityContract == other.EqualityContract"] %}{% endif %}
+{%- for name in names.list %}{% set terms.list = terms.list + [equality ~ ".Equal(" ~ name ~ ", other." ~ name ~ ")"] %}{% endfor %}
+{%- set head %}public {% if not sealed %}virtual {% endif %}bool Equals({{ owner }}? other) =>{% endset %}
+{%- set body = terms.list | join(" && ") %}
+{%- if depth + (head | length) + (body | length) + 2 <= 120 %}
+{{ head }} {{ body }};
+{%- elif depth + (body | length) + 5 <= 120 %}
+{{ head }}
+    {{ body }};
+{%- else %}
+{{ head }}
+    {{ terms.list | join("\n    && ") }};
+{%- endif %}
+
+/// <inheritdoc/>
+public override int GetHashCode()
+{
+    var hash = new HashCode();
+{%- for name in names.list %}
+    hash.Add({{ equality }}.Hash({{ name }}));
+{%- endfor %}
+    return hash.ToHashCode();
+}
+{%- endif %}

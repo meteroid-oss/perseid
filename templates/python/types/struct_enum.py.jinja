@@ -1,14 +1,13 @@
-{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, module_name, py_field -%}
-{#- Discriminated unions: a model holding the discriminator and the variant
-    (`Shape(type="circle", content=Circle(...))`), or with `flat_unions`
-    in the `[python]` table, the plain union `Circle | Square`. -#}
+{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, is_flat_union, model_imports, module_name, py_field -%}
+{#- Discriminated unions: the plain union `Circle | Square` of their variant models, or when
+    variants share fields or have no model of their own, a model holding the discriminator and
+    the variant (`Shape(type="circle", content=Circle(...))`). -#}
 {% if type.variants | has_non_ref_struct_enum_variants -%}
     {{ panic("struct enum `" ~ type.name ~ "` has inline struct variants, which the Python templates do not support yet") }}
 {%- endif -%}
 {% set class_name = type.name | to_upper_camel_case -%}
 {% set refs = type.variants | map(attribute="schema_ref") | list -%}
-{% set flat = sdk.flat_unions and type.repr == "internally_tagged" and type.fields | length == 0
-    and refs | select | list | length == refs | length and refs | unique | list | length == refs | length -%}
+{% set flat = is_flat_union(type) -%}
 
 {% if flat -%}
 from __future__ import annotations
@@ -40,12 +39,12 @@ from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
 {% else -%}
     {% set content_attr = "content" -%}
 {% endif -%}
-{% set shared = type.fields | map(attribute="name") | map("ident", "snake", "python") | list -%}
+{% set shared = type.fields | map(attribute="name") | map("ident", "snake", "python_field") | list -%}
 {% if content_attr == discriminator_attr or content_attr in shared or discriminator_attr in shared -%}
     {{ panic("struct enum `" ~ type.name ~ "`: the discriminator, content and shared fields collide") }}
 {%- endif -%}
 {% set runtime_names = ["FROM_CONTENT", "TaggedUnionModel", "UnknownVariant"] -%}
-{% if type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
+{% if request_schema and type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
     {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
 {% endif -%}
 {% set objects = namespace(any=false) -%}
@@ -60,9 +59,8 @@ from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
 
 @dataclasses.dataclass(kw_only=True)
 class {{ class_name }}(TaggedUnionModel):
-    {% if type.description is defined -%}
-        {{ docstring(type.description) | indent(4) }}
-    {% endif %}
+    {{ docstring(type.description if type.description is defined else "One of the `" ~ type.name ~ "` variants, told apart by `" ~ type.discriminator_field ~ "`.") | indent(4) }}
+
     _DISCRIMINATOR: t.ClassVar[str] = {{ py_str(type.discriminator_field) }}
     _DISCRIMINATOR_ATTR: t.ClassVar[str] = "{{ discriminator_attr }}"
     _CONTENT_ATTR: t.ClassVar[str] = "{{ content_attr }}"
@@ -70,6 +68,14 @@ class {{ class_name }}(TaggedUnionModel):
     _CONTENT_KEY: t.ClassVar[str | None] = {{ py_str(type.content_field) }}
     {%- elif type.repr != "internally_tagged" %}
     {{ panic("unsupported struct enum representation `" ~ type.repr ~ "` for `" ~ type.name ~ "`") }}
+    {%- endif %}
+    {%- set json_keys %}
+        {%- for field in type.fields if not field.flatten and field_ident(field) != field.name -%}
+            "{{ field_ident(field) }}": {{ py_str(field.name) }},
+        {%- endfor -%}
+    {%- endset %}
+    {%- if json_keys | trim %}
+    _JSON_KEYS: t.ClassVar[t.Mapping[str, str]] = { {{ json_keys | trim }} }
     {%- endif %}
     _VARIANTS: t.ClassVar[t.Mapping[str, str | None]] = {
     {%- for variant in type.variants %}
@@ -92,7 +98,7 @@ class {{ class_name }}(TaggedUnionModel):
     """The variant; an `UnknownVariant` when this SDK version does not know it."""
     {%- for field in type.fields %}
 
-    {{ field_ident(field) }}: {{ field_decl(field) }}
+    {{ field_ident(field) }}: {{ field_decl(field, request_schema) }}
         {%- if field.description is defined %}
     {{ docstring(field.description) | indent(4) }}
         {%- endif %}

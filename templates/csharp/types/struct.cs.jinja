@@ -4,20 +4,20 @@
 {% include "types/usings.cs.jinja" %}
 
 namespace {{ sdk.package_name }}.Models;
-
-{% if type.description is defined -%}
+{% if type.description is defined %}
 {{ m.doc(type.description) }}
-{% endif -%}
-{% if type.deprecated %}[Obsolete]
-{% endif -%}
+{%- else %}
+/// <summary>The <c>{{ type.name }}</c> object.</summary>
+{%- endif %}
+{%- if type.deprecated %}
+[Obsolete("Deprecated by the API.")]
+{%- endif %}
 public sealed partial record {{ type_name }}
 {
-{% with fields = type.fields, owner = type_name, union_owner = type_name %}{% include "types/fields.cs.jinja" %}{% endwith %}
-{% if type.additional_properties is defined -%}
-{#- `System.Text.Json` only keeps extension data as `JsonElement` values. -#}
-/// <summary>Properties beyond the declared ones, as received.</summary>
-[JsonExtensionData]
-public Dictionary<string, JsonElement>? {{ m.member("additional_properties", type_name) }} { get; set; }
-{% endif -%}
+{%- filter indent(4) %}
+{%- with fields = type.fields, owner = type_name, union_owner = type_name, lead = false %}{% include "types/fields.cs.jinja" %}{% endwith %}
+{%- with fields = type.fields, owner = type_name, extension = true, sealed = true, lead = type.fields | length > 0 %}{% include "types/members.cs.jinja" %}{% endwith %}
+{%- endfilter %}
 }
-{% with fields = type.fields, union_owner = type_name %}{% include "types/unions.cs.jinja" %}{% endwith %}
+{%- with fields = type.fields, union_owner = type_name %}{% include "types/unions.cs.jinja" %}{% endwith %}
+

@@ -10,15 +10,15 @@ use std::{
 };
 
 use bytes::Bytes;
-use http1::{HeaderMap, HeaderValue, StatusCode};
+use http::{HeaderMap, HeaderValue, StatusCode};
 use serde_json::{json, Value};
 use torture::{
     api::{
         middleware::{BoxError, BoxFuture, Middleware, Next, Request, Response},
         HttpClient, RequestBody, RequestOptions, ThingsCreateOptions, ThingsListOptions,
-        Torture, TortureOptions,
+        Torture,
     },
-    error::Error,
+    error::{ApiErrorKind, Error},
     models::*,
 };
 
@@ -39,11 +39,47 @@ fn thing() -> Value {
 #[test]
 fn models_round_trip_unchanged() {
     assert_eq!(round_trip::<Thing>(thing()), thing());
+    let mut newer = thing();
+    newer["surprise"] = json!({"nested": [1]});
+    assert_eq!(round_trip::<Thing>(newer.clone()), newer);
+    let parsed: Thing = serde_json::from_value(newer).unwrap();
+    assert_eq!(parsed.extra["surprise"], json!({"nested": [1]}));
+    let circle = json!({"type": "circle", "radius": 1.5, "color": "red"});
+    let shape: Shape = serde_json::from_value(circle.clone()).unwrap();
+    assert!(matches!(&shape, Shape::Circle(c) if c.extra.len() == 1 && c.extra["color"] == "red"));
+    assert_eq!(serde_json::to_value(&shape).unwrap(), circle);
     let tree = json!({"value": "root", "children": [{"value": "c", "children": []}],
         "next": {"value": "n", "children": []}});
     assert_eq!(round_trip::<TreeNode>(tree.clone()), tree);
     let composed = json!({"id": "b1", "extra": "e", "sibling_prop": "s"});
     assert_eq!(round_trip::<Composed>(composed.clone()), composed);
+}
+
+#[test]
+fn all_of_parts_keep_unknown_properties_once() {
+    let mut located: Located = serde_json::from_str(r#"{"id":"1","line1":"l","zip":"z"}"#).unwrap();
+    located.id = "new".into();
+    located.line1 = "edited".into();
+    assert_eq!(serde_json::to_string(&located).unwrap(), r#"{"id":"new","line1":"edited","zip":"z"}"#);
+
+    let text = r#"{"id":"b","extra":"e","sibling_prop":"s","more":1}"#;
+    let composed: Composed = serde_json::from_str(text).unwrap();
+    assert_eq!(composed.extra_properties["more"], 1);
+    assert_eq!(serde_json::to_string(&composed).unwrap(), text);
+}
+
+#[test]
+fn members_named_like_the_unknown_property_map_round_trip() {
+    let input = json!({
+        "type": "t", "class": "c", "extra": "e", "extra_fields": "f", "properties": {"k": "v"},
+        "additional_properties": "a", "any_properties": "p", "$dollar": "d", "with space": "w",
+        "surprise": [1],
+    });
+    let reserved: Reserved = serde_json::from_value(input.clone()).unwrap();
+    assert_eq!(reserved.extra.as_deref(), Some("e"));
+    assert_eq!(reserved.properties.as_ref().unwrap()["k"], "v");
+    assert_eq!(reserved.extra_properties.len(), 1);
+    assert_eq!(round_trip::<Reserved>(input.clone()), input);
 }
 
 #[test]
@@ -132,12 +168,11 @@ impl Origin {
     }
 
     fn client(&self) -> Torture {
-        let mut options = TortureOptions {
-            retry_schedule: Some(vec![Duration::ZERO; 3]),
-            ..Default::default()
-        };
-        options.middleware.push(self.clone());
-        Torture::new("token", Some(options))
+        Torture::builder()
+            .token("token")
+            .middleware(self.clone())
+            .build()
+            .unwrap()
     }
 
     fn requests(&self) -> Vec<(String, HeaderMap)> {
@@ -170,9 +205,9 @@ impl Middleware for Origin {
 #[tokio::test]
 async fn caller_idempotency_key_replaces_the_automatic_one() {
     let origin = Origin::default();
-    let options = ThingsCreateOptions { idempotency_key: Some("mine".into()) };
+    let options = ThingsCreateOptions::new().idempotency_key("mine");
     let create = ThingCreate::new(Kind::Alpha, "n");
-    origin.client().things().create(create.clone(), Some(options)).await.unwrap();
+    origin.client().things().create(create.clone(), options).await.unwrap();
     origin.client().things().create(create, None).await.unwrap();
 
     let requests = origin.requests();
@@ -184,15 +219,12 @@ async fn caller_idempotency_key_replaces_the_automatic_one() {
 #[tokio::test]
 async fn header_and_date_query_params_are_encoded() {
     let origin = Origin::replying(vec![(200, vec![], r#"{"data":[]}"#)]);
-    let since = "2024-01-02T03:04:05Z".parse().unwrap();
-    let options = ThingsListOptions {
-        x_required: "req".into(),
-        since: Some(since),
-        day: Some("2024-02-29".parse().unwrap()),
-        kinds: Some(vec![Kind::Beta2, Kind::Unknown("new".into())]),
-        csv_ids: Some(vec!["a".into(), "b".into()]),
-        ..Default::default()
-    };
+    let since = "2024-01-02T03:04:05Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap();
+    let options = ThingsListOptions::new("req")
+        .since(since)
+        .day("2024-02-29".parse::<chrono::NaiveDate>().unwrap())
+        .kinds(vec![Kind::Beta2, Kind::Unknown("new".into())])
+        .csv_ids(vec!["a".into(), "b".into()]);
     origin.client().things().list(options).await.unwrap();
 
     let (target, headers) = &origin.requests()[0];
@@ -209,7 +241,7 @@ async fn header_and_date_query_params_are_encoded() {
 async fn throttled_requests_are_retried_after_the_advertised_delay() {
     let origin = Origin::replying(vec![
         (200, vec![], THING),
-        (503, vec![], "busy"),
+        (503, vec![("retry-after-ms", "0")], "busy"),
         (429, vec![("retry-after", "0")], "slow down"),
     ]);
     let thing = origin.client().things().retrieve("t/1").await.unwrap();
@@ -253,14 +285,15 @@ async fn errors_are_typed() {
     assert_eq!(problem.message, "bad");
 
     let origin = Origin { delay: Some(Duration::from_secs(5)), ..Origin::default() };
-    let mut options = TortureOptions {
-        timeout: Some(Duration::from_millis(20)),
-        num_retries: Some(0),
-        ..Default::default()
-    };
-    options.middleware.push(origin);
-    let error = Torture::new("t", Some(options)).tree().retrieve().await.unwrap_err();
-    assert!(matches!(error, Error::Timeout), "{error:?}");
+    let slow = Torture::builder()
+        .token("t")
+        .timeout(Duration::from_millis(20))
+        .max_retries(0)
+        .middleware(origin)
+        .build()
+        .unwrap();
+    let error = slow.tree().retrieve().await.unwrap_err();
+    assert!(error.is_timeout() && !error.is_connection(), "{error:?}");
 
     let origin = Origin::replying(vec![(200, vec![], "not json")]);
     let error = origin.client().tree().retrieve().await.unwrap_err();
@@ -274,8 +307,8 @@ struct Counting(Arc<dyn HttpClient>, Arc<AtomicUsize>);
 impl HttpClient for Counting {
     fn send(
         &self,
-        request: http1::Request<RequestBody>,
-    ) -> BoxFuture<'_, Result<http1::Response<hyper::body::Incoming>, BoxError>> {
+        request: http::Request<RequestBody>,
+    ) -> BoxFuture<'_, Result<http::Response<hyper::body::Incoming>, BoxError>> {
         self.1.fetch_add(1, Ordering::SeqCst);
         self.0.send(request)
     }
@@ -306,22 +339,20 @@ fn serve() -> String {
 #[tokio::test]
 async fn http_client_and_connector_can_be_replaced() {
     let url = serve();
-    let options = TortureOptions {
-        server_url: Some(url.clone()),
-        ..Default::default()
-    }
-    .with_connector(hyper_util::client::legacy::connect::HttpConnector::new());
-    let thing = Torture::new("t", Some(options)).things().retrieve("i").await.unwrap();
+    let connector = hyper_util::client::legacy::connect::HttpConnector::new();
+    let client = Torture::builder().token("t").base_url(&url).connector(connector).build().unwrap();
+    let thing = client.things().retrieve("i").await.unwrap();
     assert_eq!(thing.name, "n");
 
     let count = Arc::new(AtomicUsize::new(0));
     let inner = torture::api::http_client(hyper_util::client::legacy::connect::HttpConnector::new());
-    let options = TortureOptions {
-        server_url: Some(url),
-        http_client: Some(Arc::new(Counting(inner, count.clone()))),
-        ..Default::default()
-    };
-    Torture::new("t", Some(options)).things().retrieve("i").await.unwrap();
+    let client = Torture::builder()
+        .token("t")
+        .base_url(url)
+        .http_client(Arc::new(Counting(inner, count.clone())))
+        .build()
+        .unwrap();
+    client.things().retrieve("i").await.unwrap();
     assert_eq!(count.load(Ordering::SeqCst), 1);
 }
 
@@ -345,7 +376,6 @@ fn primitive_or_object_unions_are_enums() {
 #[test]
 fn union_variants_default_their_tag() {
     assert_eq!(Circle::new(2.0).r#type, "circle");
-    assert_eq!(Circle::default().r#type, "circle");
     assert_eq!(Cat::new(true).pet_type, "Cat");
     let shape = Shape::Square(Square::new(3.0));
     assert_eq!(serde_json::to_value(&shape).unwrap(), json!({"type": "square", "side": 3.0}));
@@ -388,6 +418,7 @@ async fn api_errors_expose_their_payload_and_request_id() {
     let origin = Origin::replying(vec![(404, vec![("x-request-id", "req_1")], r#"{"title":"gone"}"#)]);
     let error = origin.client().tree().retrieve().await.unwrap_err();
     let api = error.api().unwrap();
+    assert_eq!(api.kind(), ApiErrorKind::NotFound);
     assert_eq!(api.request_id(), Some("req_1"));
     let payload: torture::api::ErrorBody = api.payload().unwrap();
     assert_eq!(payload["title"], "gone");
@@ -429,4 +460,68 @@ fn unions_of_objects_pick_their_variant_and_keep_unknown_shapes() {
     assert_eq!(untitled, ObjectUnionsDocument::Unknown(json!({"body": "b"})));
     let text = json!({"source": {"url": "u"}, "document": {"title": "t", "body": "b"}, "sources": []});
     assert_eq!(round_trip::<ObjectUnions>(text.clone()), text);
+}
+
+#[tokio::test]
+async fn raw_responses_and_client_headers() {
+    let origin = Origin::replying(vec![(200, vec![("x-request-id", "req_2")], THING)]);
+    let client = Torture::builder()
+        .token("token")
+        .header("x-client", "c")
+        .header("x-trace", "client")
+        .middleware(origin.clone())
+        .build()
+        .unwrap();
+    let options = RequestOptions::new().header("x-trace", "call");
+    let response = client.things().with_options(options).retrieve("i").with_response().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.request_id(), Some("req_2"));
+    assert_eq!(response.into_data().name, "n");
+    let headers = &origin.requests()[0].1;
+    assert_eq!(headers["x-client"], "c");
+    assert_eq!(headers.get_all("x-trace").iter().collect::<Vec<_>>(), ["call"]);
+}
+
+#[tokio::test]
+async fn header_params_win_over_client_headers() {
+    let origin = Origin::replying(vec![(200, vec![], r#"{"data":[]}"#)]);
+    let client = Torture::builder()
+        .token("token")
+        .header("x-required", "client")
+        .header("authorization", "Bearer client")
+        .middleware(origin.clone())
+        .build()
+        .unwrap();
+    client.things().list(ThingsListOptions::new("req")).await.unwrap();
+    let headers = &origin.requests()[0].1;
+    assert_eq!(headers.get_all("x-required").iter().collect::<Vec<_>>(), ["req"]);
+    assert_eq!(headers["authorization"], "Bearer client");
+}
+
+#[tokio::test]
+async fn throttled_non_idempotent_requests_are_not_retried() {
+    let origin = Origin::replying(vec![(429, vec![("retry-after-ms", "0")], "slow down")]);
+    let error = origin
+        .client()
+        .things()
+        .update("t", ThingPatch::new())
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), Some(ApiErrorKind::RateLimited));
+    assert_eq!(origin.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn bodiless_success_responses_are_none() {
+    let origin = Origin::replying(vec![(200, vec![], r#"{"id":"w","name":"n"}"#), (202, vec![], "")]);
+    let widgets = origin.client().widgets();
+    assert_eq!(widgets.update("w", WidgetUpdate::new()).await.unwrap(), None);
+    let updated: Option<Widget> = widgets.update("w", WidgetUpdate::new()).await.unwrap();
+    assert_eq!(updated.map(|w| w.name), Some("n".to_owned()));
+}
+
+#[test]
+fn clients_default_to_the_spec_server() {
+    let client = Torture::builder().build().unwrap();
+    assert!(format!("{client:?}").contains("https://torture.example.com"), "{client:?}");
 }

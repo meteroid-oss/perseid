@@ -3,8 +3,24 @@
 {% set kinds = api.security_schemes | map(attribute="kind") | list -%}
 {% set options_type = sdk.client_name ~ "ClientOptions" -%}
 {% set keys_type = sdk.client_name ~ "ApiKeys" -%}
+{% for resource in api.resources if resource.subresources | length > 0 -%}
+{{ panic("csharp codegen: subresources are not supported (resource `" ~ resource.name ~ "`)") }}
+{% endfor -%}
+{% set schemes = namespace(list=[]) -%}
+{% for scheme in api.security_schemes -%}
+{% set schemes.list = schemes.list + ["[" ~ (scheme.name | tojson) ~ "] = new(SchemeKind." ~ (scheme.kind | to_upper_camel_case) ~ ((", " ~ (scheme.in | tojson) ~ ", " ~ (scheme.param | tojson)) if scheme.kind == "api_key" else "") ~ ")"] -%}
+{% endfor -%}
+{% set requirements = namespace(list=[]) -%}
+{% for requirement in api.security -%}
+{% set requirements.list = requirements.list + ["[" ~ (requirement | map("tojson") | join(", ")) ~ "]"] -%}
+{% endfor -%}
+{% set keys = namespace(list=[]) -%}
+{% for scheme in api.security_schemes if scheme.kind == "api_key" -%}
+{% set keys.list = keys.list + ["[" ~ (scheme.name | tojson) ~ "] = options.ApiKeys." ~ m.member(scheme.name, keys_type)] -%}
+{% endfor -%}
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // generated code may use deprecated API
+#pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
@@ -13,117 +29,168 @@ using System.Threading.Tasks;
 
 namespace {{ sdk.package_name }};
 
+/// <summary>The {{ sdk.client_name }} API, as <see cref="{{ sdk.client_name }}Client"/> implements it; mock it in tests.</summary>
+public interface I{{ sdk.client_name }}Client : IDisposable
+{
+{%- for resource in api.resources %}
+{%- if not loop.first %}{{ "\n" }}{% endif %}
+    /// <summary>The <c>{{ resource.name }}</c> operations.</summary>
+    I{{ m.resource_class(resource.name) }} {{ resource.name | to_upper_camel_case }} { get; }
+{%- endfor %}
+}
+
 /// <summary>
 /// Entry point of the {{ sdk.client_name }} API{% if sdk.tagline %} for {{ m.xml(sdk.tagline | doc) }}{% endif %}. Thread-safe: create one and reuse it.
 /// </summary>
 /// <example>
 /// <code>
-/// using var client = new {{ sdk.client_name }}Client("your-api-key");
-{% if sdk.example -%}
-{% for line in sdk.example | trim | lines -%}
+/// using var client = new {{ sdk.client_name }}Client(); // reads {{ sdk.env_prefix }}_API_KEY
+{%- if sdk.example %}
+{%- for line in sdk.example | trim | lines %}
 /// {{ line | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") }}
-{% endfor -%}
-{% endif -%}
+{%- endfor %}
+{%- endif %}
 /// </code>
 /// With <c>IHttpClientFactory</c>: <c>new {{ sdk.client_name }}Client(factory.CreateClient("{{ sdk.client_name | to_kebab_case }}"), "your-api-key")</c>.
 /// </example>
-public sealed partial class {{ sdk.client_name }}Client : IDisposable
+public sealed partial class {{ sdk.client_name }}Client : I{{ sdk.client_name }}Client
 {
-{% for resource in api.resources -%}
-{% if resource.subresources | length > 0 -%}
-{{ panic("csharp codegen: subresources are not supported (resource `" ~ resource.name ~ "`)") }}
-{% endif -%}
-{% endfor -%}
     private static readonly ApiAuth s_auth = new(
+{%- set dictionary = "new Dictionary<string, SecurityScheme> { " ~ (schemes.list | join(", ")) ~ " }," %}
+{%- if not schemes.list %}
+        new Dictionary<string, SecurityScheme>(),
+{%- elif 8 + (dictionary | length) <= 120 %}
+        {{ dictionary }}
+{%- else %}
         new Dictionary<string, SecurityScheme>
         {
-{% for scheme in api.security_schemes %}            [{{ scheme.name | tojson }}] = new(SchemeKind.{{ scheme.kind | to_upper_camel_case }}{% if scheme.kind == "api_key" %}, {{ scheme.in | tojson }}, {{ scheme.param | tojson }}{% endif %}),
-{% endfor %}        },
-        {{ api.security | tojson }}
+{%- for scheme in schemes.list %}
+            {{ scheme }},
+{%- endfor %}
+        },
+{%- endif %}
+{%- if requirements.list %}
+        [
+{%- for requirement in requirements.list %}
+            {{ requirement }},
+{%- endfor %}
+        ]
+{%- else %}
+        []
+{%- endif %}
     );
 
     private readonly ApiTransport _transport;
 
     /// <summary>Creates a client with its own connection pool.</summary>
-    /// <param name="token">Bearer token{% if "api_key" in kinds %}, and API key of the schemes missing from <c>ApiKeys</c>{% endif %}, if not null.</param>
+    /// <param name="token">The bearer token{% if "api_key" in kinds %}, and API key of the schemes missing from <c>ApiKeys</c>{% endif %}; when null, <c>Token</c> of the options, else the <c>{{ sdk.env_prefix }}_API_KEY</c> environment variable.</param>
     /// <param name="options">Base URL, timeout, retries, middleware and credentials.</param>
-    public {{ sdk.client_name }}Client(string? token, {{ options_type }}? options = null)
-        : this(CreateTransport(token, options ?? new(), http: null)) { }
+    public {{ sdk.client_name }}Client(string? token = null, {{ options_type }}? options = null)
+    {
+        _transport = CreateTransport(token, options ?? new(), http: null);
+{%- for resource in api.resources %}
+        {{ resource.name | to_upper_camel_case }} = new(_transport);
+{%- endfor %}
+    }
 
     /// <summary>
     /// Creates a client sending requests through <paramref name="httpClient"/>, for instance one from
     /// <c>IHttpClientFactory</c>. The caller keeps ownership of it.
     /// </summary>
     /// <param name="httpClient">The HTTP client, whose own <c>Timeout</c> also applies.</param>
-    /// <param name="token">Bearer token{% if "api_key" in kinds %}, and API key of the schemes missing from <c>ApiKeys</c>{% endif %}, if not null.</param>
+    /// <param name="token">The bearer token{% if "api_key" in kinds %}, and API key of the schemes missing from <c>ApiKeys</c>{% endif %}; when null, <c>Token</c> of the options, else the <c>{{ sdk.env_prefix }}_API_KEY</c> environment variable.</param>
     /// <param name="options">Base URL, timeout, retries, middleware and credentials.</param>
-    public {{ sdk.client_name }}Client(HttpClient httpClient, string? token, {{ options_type }}? options = null)
-        : this(CreateTransport(token, options ?? new(), httpClient ?? throw new ArgumentNullException(nameof(httpClient)))) { }
-
-    private {{ sdk.client_name }}Client(ApiTransport transport)
+    {{ m.wrap("public " ~ sdk.client_name ~ "Client", ["HttpClient httpClient", "string? token", options_type ~ "? options = null"], 4) }}
     {
-        _transport = transport;
-{% for resource in api.resources -%}
-        {{ resource.name | to_upper_camel_case }} = new {{ m.resource_class(resource.name) }}(transport);
-{% endfor -%}
+        ArgumentNullException.ThrowIfNull(httpClient);
+        _transport = CreateTransport(token, options ?? new(), httpClient);
+{%- for resource in api.resources %}
+        {{ resource.name | to_upper_camel_case }} = new(_transport);
+{%- endfor %}
     }
 
-    private static ApiTransport CreateTransport(string? token, {{ options_type }} options, HttpClient? http)
+    {{ m.wrap("private static ApiTransport CreateTransport", ["string? token", options_type ~ " options", "HttpClient? http"], 4) }}
     {
         var credentials = new Credentials(
-            token,
+            token ?? options.Token ?? ApiTransport.NonEmpty(Environment.GetEnvironmentVariable("{{ sdk.env_prefix }}_API_KEY")),
             {% if "bearer" in kinds %}options.TokenProvider{% else %}null{% endif %},
             {% if "basic" in kinds %}options.BasicAuth{% else %}null{% endif %},
+{%- set dictionary = "new Dictionary<string, string?> { " ~ (keys.list | join(", ")) ~ " }" %}
+{%- if not keys.list %}
+            new Dictionary<string, string?>()
+{%- elif 12 + (dictionary | length) <= 120 %}
+            {{ dictionary }}
+{%- else %}
             new Dictionary<string, string?>
             {
-{% for scheme in api.security_schemes if scheme.kind == "api_key" %}                [{{ scheme.name | tojson }}] = options.ApiKeys.{{ m.member(scheme.name, keys_type) }},
-{% endfor %}            }
+{%- for key in keys.list %}
+                {{ key }},
+{%- endfor %}
+            }
+{%- endif %}
         );
         return new ApiTransport(s_auth, credentials, options, http);
     }
-{% for resource in api.resources %}
+{%- for resource in api.resources %}
+
+    /// <summary>The <c>{{ resource.name }}</c> operations.</summary>
     public {{ m.resource_class(resource.name) }} {{ resource.name | to_upper_camel_case }} { get; }
-{% endfor %}
+
+    {{ m.arrow("I" ~ m.resource_class(resource.name) ~ " I" ~ sdk.client_name ~ "Client." ~ (resource.name | to_upper_camel_case), resource.name | to_upper_camel_case, 4) }}
+{%- endfor %}
+
     /// <summary>Releases the connection pool and middleware, unless the caller owns the <see cref="HttpClient"/>.</summary>
     public void Dispose() => _transport.Dispose();
 }
-{% if kinds %}
 
+/// <summary>The default base URL{% if kinds %} and the credentials the API's security schemes take{% endif %}.</summary>
 public sealed partial class {{ options_type }}
 {
-{% if "bearer" in kinds %}
+{%- if sdk.has_default_base_url %}
+    /// <summary>The API endpoint used when neither <see cref="BaseUrl"/> nor the
+    /// <c>{{ sdk.env_prefix }}_BASE_URL</c> environment variable is set.</summary>
+    public const string DefaultBaseUrl = {{ sdk.default_base_url | tojson }};
+{%- else %}
+    /// <summary>None: the API declares no server.</summary>
+    internal const string? DefaultBaseUrl = null;
+{%- endif %}
+{%- if "bearer" in kinds %}
+
     /// <summary>Called before each request for a fresh bearer token, e.g. an OAuth2 access token,
     /// instead of the constructor token.</summary>
     public Func<CancellationToken, ValueTask<string>>? TokenProvider { get; set; }
-{% endif -%}
-{% if "basic" in kinds %}
+{%- endif %}
+{%- if "basic" in kinds %}
+
     /// <summary>HTTP basic credentials.</summary>
     public BasicCredentials? BasicAuth { get; set; }
-{% endif -%}
-{% if "api_key" in kinds %}
+{%- endif %}
+{%- if "api_key" in kinds %}
+
     /// <summary>API keys by security scheme. Schemes left out use the constructor token.</summary>
     public {{ keys_type }} ApiKeys { get; set; } = new();
-{% endif -%}
+{%- endif %}
 }
-{% endif -%}
-{% if "api_key" in kinds %}
+{%- if "api_key" in kinds %}
 
 /// <summary>API keys by security scheme, for <see cref="{{ options_type }}.ApiKeys"/>.</summary>
 public sealed class {{ keys_type }}
 {
-{% for scheme in api.security_schemes if scheme.kind == "api_key" %}
+{%- for scheme in api.security_schemes if scheme.kind == "api_key" %}
+{%- if not loop.first %}{{ "\n" }}{% endif %}
     /// <summary>Sent as the <c>{{ scheme.param }}</c> {% if scheme.in == "query" %}query parameter{% else %}{{ scheme.in }}{% endif %}.</summary>
     public string? {{ m.member(scheme.name, keys_type) }} { get; set; }
-{% endfor -%}
+{%- endfor %}
 }
-{% endif -%}
-{% if api.default_error %}
-{% set error_model = api.default_error | to_upper_camel_case %}
+{%- endif %}
+{%- if api.default_error %}
+{%- set error_model = api.default_error | to_upper_camel_case %}
 
+/// <summary>The error model of this API.</summary>
 public static partial class ApiExceptionExtensions
 {
     /// <summary>The body parsed as <see cref="Models.{{ error_model }}"/>, the error model of this API, or <c>null</c>.</summary>
-    public static Models.{{ error_model }}? GetError(this ApiException exception) =>
-        exception.GetError<Models.{{ error_model }}>();
+    {{ m.arrow("public static Models." ~ error_model ~ "? GetError(this ApiException exception)", "exception.GetError<Models." ~ error_model ~ ">()", 4) }}
 }
-{% endif -%}
+{%- endif %}
+

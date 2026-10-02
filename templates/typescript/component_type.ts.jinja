@@ -31,7 +31,7 @@
 {% if "parseDateTime(" in body -%}
 import { parseDateTime } from "../datetime.js";
 {% endif -%}
-{% set json_helpers = ["isJsonObject", "omitKeys"] | select("in", body) | list -%}
+{% set json_helpers = ["extraProperties", "isJsonObject", "omitProperties", "pickProperties"] | select("in", body) | list -%}
 {% if json_helpers -%}
 import { {{ json_helpers | join(", ") }} } from "../json.js";
 {% endif -%}

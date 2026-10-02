@@ -8,6 +8,7 @@ license = "@@LICENSE@@"
 repository = "@@REPOSITORY@@"
 homepage = "@@HOMEPAGE@@"
 authors = @@AUTHORS_JSON@@
+readme = "README.md"
 categories = ["api-bindings"]
 
 [dependencies]
@@ -17,9 +18,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 futures-core = "0.3"
-
-# HTTP crate versions (aliased for compatibility)
-http1 = { package = "http", version = "1.0" }
+http = "1"
 
 # TLS (rustls by default)
 hyper-rustls = { version = "0.27", optional = true, default-features = false, features = ["http1", "tls12", "ring", "native-tokio"] }
@@ -37,7 +36,6 @@ chrono = { version = "0.4.38", default-features = false, features = ["serde", "s
 # Utilities
 url = "2.5"
 percent-encoding = "2.3"
-uuid = { version = "1", features = ["v4"] }
 
 # Webhook verification, behind the `webhooks` feature
 hmac = { version = "0.12", optional = true }

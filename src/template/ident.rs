@@ -39,6 +39,7 @@ const PYTHON_FIELD: &[&str] = &[
     "to_json",
     "from_dict",
     "from_json",
+    "extra_fields",
 ];
 const GO: &[&str] = &[
     "break",
@@ -411,6 +412,7 @@ mod tests {
         assert_eq!(field("str"), "str_");
         assert_eq!(field("to_dict"), "to_dict_");
         assert_eq!(field("toJson"), "to_json_");
+        assert_eq!(field("extra_fields"), "extra_fields_");
         assert_eq!(field("name"), "name");
         assert_eq!(field("type"), "type");
         assert_eq!(field("object"), "object");

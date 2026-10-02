@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Torture;
 using Torture.Models;
 
@@ -44,6 +45,26 @@ public class HttpTests
 
     private static string? Header(HttpRequestMessage request, string name) =>
         request.Headers.TryGetValues(name, out var values) ? string.Join(",", values) : null;
+
+    [Fact]
+    public async Task WithoutAServerTheBaseUrlIsRequired()
+    {
+        var error = Assert.Throws<TortureException>(() => new TortureClient("token"));
+        Assert.Contains("BaseUrl", error.Message);
+        Assert.Contains("TORTURE_BASE_URL", error.Message);
+        Environment.SetEnvironmentVariable("TORTURE_BASE_URL", "https://env.test/v2");
+        try
+        {
+            var server = new Server((_, _, _) => Task.FromResult(Reply(HttpStatusCode.OK, ThingJson)));
+            using var client = new TortureClient("token", new() { HttpMessageHandler = server });
+            await client.Things.RetrieveAsync("t1");
+            Assert.Equal("https://env.test/v2/things/t1", server.Seen[0].Request.RequestUri!.ToString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TORTURE_BASE_URL", null);
+        }
+    }
 
     [Fact]
     public async Task KeepsTheBasePathAndEscapesPathParameters()
@@ -120,6 +141,7 @@ public class HttpTests
     [InlineData(HttpStatusCode.TooManyRequests, 3)]
     [InlineData(HttpStatusCode.RequestTimeout, 3)]
     [InlineData(HttpStatusCode.BadGateway, 3)]
+    [InlineData(HttpStatusCode.NotImplemented, 3)]
     [InlineData(HttpStatusCode.Conflict, 1)]
     [InlineData(HttpStatusCode.BadRequest, 1)]
     public async Task RetriesTransientFailures(HttpStatusCode status, int attempts)
@@ -146,6 +168,133 @@ public class HttpTests
             () => client.Things.UpdateAsync("t1", new(), new() { IdempotencyKey = "k" })
         );
         Assert.Equal(4, server.Seen.Count);
+    }
+
+    [Fact]
+    public async Task DoesNotRetryARateLimitedPatchWithoutAnIdempotencyKey()
+    {
+        var (client, server) = Client(_ => Reply(HttpStatusCode.TooManyRequests));
+        using var _ = client;
+        await Assert.ThrowsAsync<RateLimitException>(() => client.Things.UpdateAsync("t1", new()));
+        Assert.Single(server.Seen);
+    }
+
+    [Fact]
+    public async Task BacksOffInsteadOfAFarRetryAfter()
+    {
+        var (client, server) = Client(n =>
+        {
+            var response = n > 2 ? Reply(HttpStatusCode.OK, ThingJson) : Reply(HttpStatusCode.ServiceUnavailable);
+            response.Headers.TryAddWithoutValidation("Retry-After", n == 1 ? "3600" : "-5");
+            return response;
+        });
+        using var _ = client;
+        var clock = Stopwatch.StartNew();
+        await client.Things.RetrieveAsync("t1");
+        Assert.Equal(3, server.Seen.Count);
+        Assert.InRange(clock.Elapsed, TimeSpan.Zero, TimeSpan.FromSeconds(30));
+    }
+
+    [Fact]
+    public async Task StreamTwinsSetStreamWithoutTouchingTheBody()
+    {
+        var (client, server) = Client(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("data: {\"text\":\"hi\"}\n\ndata: [DONE]\n\n", Encoding.UTF8, "text/event-stream"),
+            }
+        );
+        using var _ = client;
+        var texts = new List<string>();
+        await foreach (var reply in await client.Chats.CreateStreamAsync())
+        {
+            texts.Add(reply.Text);
+        }
+        var body = new ChatRequest { Model = "m" };
+        await using (await client.Chats.CreateStreamAsync(body)) { }
+        Assert.Equal(["hi"], texts);
+        Assert.Equal("""{"stream":true}""", server.Seen[0].Body);
+        Assert.Equal("""{"model":"m","stream":true}""", server.Seen[1].Body);
+        Assert.Null(body.Stream);
+    }
+
+    [Fact]
+    public async Task ABodilessSuccessIsNullWhereTheSpecAllowsIt()
+    {
+        var (client, _) = Client(n =>
+            n == 1
+                ? new HttpResponseMessage(HttpStatusCode.Accepted)
+                : Reply(HttpStatusCode.OK, """{"id":"j1"}""")
+        );
+        using var _ = client;
+        Assert.Null(await client.Jobs.RetrieveAsync("j1"));
+        Assert.Equal("j1", (await client.Jobs.RetrieveAsync("j1"))?.Id);
+    }
+
+    [Fact]
+    public async Task HonorsRetryAfterMilliseconds()
+    {
+        var (client, server) = Client(
+            n =>
+            {
+                if (n > 1)
+                {
+                    return Reply(HttpStatusCode.OK, ThingJson);
+                }
+                var response = Reply(HttpStatusCode.TooManyRequests);
+                response.Headers.TryAddWithoutValidation("retry-after-ms", "1");
+                return response;
+            },
+            new() { RetrySchedule = [TimeSpan.FromHours(1)] }
+        );
+        using var _ = client;
+        await client.Things.RetrieveAsync("t1");
+        Assert.Equal(2, server.Seen.Count);
+    }
+
+    [Fact]
+    public async Task ConnectionFailuresAreRetriedThenWrapped()
+    {
+        var server = new Server((_, _, _) => throw new HttpRequestException("refused"));
+        using var client = new TortureClient(
+            "token",
+            new()
+            {
+                BaseUrl = "https://torture.test/v1",
+                HttpMessageHandler = server,
+                RetrySchedule = [TimeSpan.Zero],
+            }
+        );
+        var error = await Assert.ThrowsAsync<ApiConnectionException>(() => client.Things.RetrieveAsync("t1"));
+        Assert.IsType<HttpRequestException>(error.InnerException);
+        Assert.IsAssignableFrom<TortureException>(error);
+        Assert.Equal(2, server.Seen.Count);
+    }
+
+    [Fact]
+    public async Task UndecodableResponsesThrowADecodeError()
+    {
+        var (client, _) = Client(_ => Reply(HttpStatusCode.OK, "not json"));
+        using var _ = client;
+        var error = await Assert.ThrowsAsync<ApiDecodeException>(() => client.Things.RetrieveAsync("t1"));
+        Assert.IsAssignableFrom<TortureException>(error);
+    }
+
+    [Fact]
+    public async Task RawResponsesCarryTheStatusAndHeaders()
+    {
+        var (client, _) = Client(_ =>
+        {
+            var response = Reply(HttpStatusCode.OK, ThingJson);
+            response.Headers.TryAddWithoutValidation("x-request-id", "req_1");
+            return response;
+        });
+        using var _ = client;
+        var raw = await client.Things.WithRawResponse.RetrieveAsync("t1");
+        Assert.Equal(HttpStatusCode.OK, raw.StatusCode);
+        Assert.Equal("req_1", raw.RequestId);
+        Assert.Equal("application/json", raw.ContentHeaders!.ContentType!.MediaType);
+        Assert.Equal("t1", raw.Value.Id);
     }
 
     [Fact]
@@ -181,13 +330,18 @@ public class HttpTests
         });
         using var client = new TortureClient(
             "token",
-            new() { HttpMessageHandler = server, RetrySchedule = [TimeSpan.Zero] }
+            new()
+            {
+                BaseUrl = "https://torture.test/v1",
+                HttpMessageHandler = server,
+                RetrySchedule = [TimeSpan.Zero],
+            }
         );
-        await Assert.ThrowsAsync<TimeoutException>(
+        await Assert.ThrowsAsync<ApiTimeoutException>(
             () => client.Things.RetrieveAsync("t1", new() { Timeout = TimeSpan.FromMilliseconds(20) })
         );
         Assert.Equal(2, server.Seen.Count);
-        await Assert.ThrowsAsync<TimeoutException>(
+        await Assert.ThrowsAsync<ApiTimeoutException>(
             () =>
                 client.Things.RetrieveAsync(
                     "t1",
@@ -220,7 +374,7 @@ public class HttpTests
             new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([1, 2, 3]) }
         );
         using var _ = client;
-        Assert.Equal([1, 2, 3], await client.Things.RetrievePdfAsync("t1"));
+        Assert.Equal([1, 2, 3], await client.Things.DownloadAsync("t1"));
     }
 
     [Fact]
@@ -240,9 +394,12 @@ public class HttpTests
             () => client.Things.CreateAsync(new ThingCreate { Name = "", Kind = Kind.Alpha })
         );
         Assert.Equal(["empty"], invalid.GetError<ValidationError>()!.Fields!["name"]);
-        Assert.Equal("req_1", invalid.GetRequestId());
+        Assert.Equal(["empty"], Assert.IsType<ValidationError>(invalid.Error).Fields!["name"]);
+        Assert.Same(invalid.Error, invalid.Error);
+        Assert.Equal("req_1", invalid.RequestId);
         var missing = await Assert.ThrowsAsync<NotFoundException>(() => client.Things.RetrieveAsync("t1"));
-        Assert.IsAssignableFrom<ApiException>(missing);
+        Assert.IsAssignableFrom<TortureException>(missing);
         Assert.Null(missing.GetError<Problem>());
+        Assert.Equal("invalid", ((JsonElement)missing.Error!).GetProperty("message").GetString());
     }
 }

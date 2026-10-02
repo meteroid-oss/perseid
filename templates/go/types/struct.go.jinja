@@ -1,54 +1,76 @@
 {% from "types/macros.go.jinja" import go_field_type, go_json_tag, go_deprecated, go_ident, go_export, go_type, go_union_name, go_union -%}
 {% set type_name = go_ident(type.name) -%}
 {% set patch = patch_body -%}
-{% macro field_type(field) %}{% if field.flatten %}{{ go_type(field.type) }}{% else %}{{ go_field_type(field, patch, go_union_name(type.name, field.name, field.type, type_names)) }}{% endif %}{% endmacro -%}
-{#- Properties beyond the declared ones: a map kept next to the fields and encoded by hand. -#}
+{% macro field_type(field) %}{{ go_field_type(field, patch, go_union_name(type.name, field.name, field.type, type_names)) }}{% endmacro -%}
+{#- A declared `additionalProperties` (always a map type) types the values of the extra map. -#}
 {% set has_extra = type.additional_properties is defined -%}
 {% set extra_field = {"name": "additional_properties", "type": type.additional_properties, "required": false, "nullable": false} if has_extra else none -%}
 {% set extra_union = go_union_name(type.name, "additional_properties", type.additional_properties, type_names) if has_extra else "" -%}
-{% set unions %}{% for field in type.fields if not field.flatten %}{% set union = go_union_name(type.name, field.name, field.type, type_names) %}{% if union %}
+{% set unions %}{% for field in type.fields %}{% set union = go_union_name(type.name, field.name, field.type, type_names) %}{% if union %}
 {{ go_union(union, field.type) }}
 {% endif %}{% endfor %}{% if extra_union %}
 {{ go_union(extra_union, type.additional_properties) }}
 {% endif %}{% endset -%}
 {% set defaults = type.discriminator_defaults | default({}) -%}
-{#- A flattened type's promoted MarshalJSON would take over from plain(v). -#}
-{% set ns = namespace(defaulted=[]) -%}
-{% for field in type.fields if field.name in defaults and not (type.fields | selectattr("flatten") | list) %}{% set ns.defaulted = ns.defaulted + [field] %}{% endfor -%}
+{% set ns = namespace(defaulted=[], names=[]) -%}
+{% for field in type.fields -%}
+{% set ns.names = ns.names + [go_export(field.name)] -%}
+{% if field.name in defaults %}{% set ns.defaulted = ns.defaulted + [field] %}{% endif -%}
+{% endfor -%}
 {% set defaulted = ns.defaulted -%}
+{% set extra = "ExtraFields" if "ExtraFields" not in ns.names else "ExtraProperties" -%}
+{% set extra_type = (go_field_type(extra_field, patch, extra_union) | trim) if has_extra else "map[string]json.RawMessage" -%}
+{% set typed_extra = extra_type != "map[string]json.RawMessage" -%}
 {#- Fields whose JSON name a struct tag cannot carry are encoded by MarshalJSON/UnmarshalJSON. -#}
-{% set untagged = type.fields | rejectattr("flatten") | rejectattr("name", "go_taggable") | list -%}
-{% if untagged and (type.fields | selectattr("flatten") | list) -%}
-{{ panic("go codegen: `" ~ type.name ~ "` flattens another schema and has the property " ~ (untagged[0].name | tojson) ~ ", which cannot be a `json` struct tag: rename the property in the spec") }}
-{%- endif -%}
-{% set rendered_types %}{% for field in type.fields %}{{ field_type(field) }} {% endfor %}{% if has_extra %}{{ go_field_type(extra_field, patch, extra_union) }} {% endif %}{{ unions }}{% if defaulted or untagged or has_extra %} json.{% endif %}{% endset -%}
+{% set untagged = type.fields | rejectattr("name", "go_taggable") | list -%}
+{% set rendered_types %}{% for field in type.fields %}{{ field_type(field) }} {% endfor %}{{ extra_type }} {{ unions }}{% endset -%}
 package {{ sdk.package_name }}
-{% if "time.Time" in rendered_types and "json." in rendered_types %}
+{% if "time.Time" in rendered_types %}
 import (
 	"encoding/json"
 	"time"
 )
-{% elif "time.Time" in rendered_types %}
-import "time"
-{% elif "json." in rendered_types %}
+{% else %}
 import "encoding/json"
 {% endif %}
-{{ doc_comment }}
-{% if type.deprecated %}{{ go_deprecated("type") }}
+{% if not named %}// {{ type_name }} is the {{ type.name }} object of the {{ sdk.client_name }} API.
+{% if doc_comment %}//
+{% endif %}{% endif %}{% if doc_comment %}{{ doc_comment }}
+{% endif %}{% if type.deprecated %}//
+{{ go_deprecated("type") }}
 {% endif %}type {{ type_name }} struct {
-{% for field in type.fields %}{% if not loop.first %}
-{% endif %}{% if field.description is defined %}{{ field.description | to_doc_comment(style="go") }}
+{% for field in type.fields %}{% if field.description is defined %}{{ field.description | to_doc_comment(style="go") }}
 {% endif %}{% if field in defaulted %}{% if field.description is defined %}//
 {% endif %}// Encodes as {{ defaults[field.name] | tojson }} when left empty.
 {% endif %}{% if field.type.is_datetime() %}// RFC 3339 timestamp.
-{% endif %}{% if field.deprecated %}{{ go_deprecated("field") }}
-{% endif %}{% if field.flatten %}{{ go_type(field.type) }}{% else %}{{ go_export(field.name) }} {{ field_type(field) }} {% if field in untagged %}`json:"-"`{% else %}{{ go_json_tag(field) }}{% endif %}{% endif %}
-{% endfor %}{% if has_extra %}{% if type.fields %}
-{% endif %}// Properties beyond the declared ones, as received.
-AdditionalProperties {{ go_field_type(extra_field, patch, extra_union) }} `json:"-"`
+{% endif %}{% if field.deprecated %}{% if field.description is defined or field in defaulted or field.type.is_datetime() %}//
+{% endif %}{{ go_deprecated("field") }}
+{% endif %}{{ go_export(field.name) }} {{ field_type(field) }} {% if field in untagged %}`json:"-"`{% else %}{{ go_json_tag(field) }}{% endif %}
+
+{% endfor %}{% if has_extra %}// {{ extra }} holds the properties beyond the declared ones (the schema's
+// additionalProperties), as decoded, and sends them along when encoding.
+{% else %}// {{ extra }} holds the properties this SDK version does not know, as
+// decoded, and sends them along when encoding.
+{% endif %}{{ extra }} {{ extra_type }} `json:"-"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler, keeping unknown properties in {{ extra }}.
+func (v *{{ type_name }}) UnmarshalJSON(data []byte) error {
+	type plain {{ type_name }}
+	if err := json.Unmarshal(data, (*plain)(v)); err != nil {
+		return err
+	}
+{% if untagged %}	if err := unmarshalFields(data, map[string]any{
+{% for field in untagged %}		{{ field.name | tojson }}: &v.{{ go_export(field.name) }},
+{% endfor %}	}); err != nil {
+		return err
+	}
+{% endif %}{% if typed_extra %}	return typedExtraFields(&v.{{ extra }}, data{% for field in type.fields %}, {{ field.name | tojson }}{% endfor %})
+{% else %}	v.{{ extra }} = extraFields(data{% for field in type.fields %}, {{ field.name | tojson }}{% endfor %})
+	return nil
 {% endif %}}
-{% if defaulted or untagged or has_extra %}
-// MarshalJSON implements json.Marshaler{% if defaulted %}, filling in the discriminator{% endif %}.
+
+// MarshalJSON implements json.Marshaler, sending {{ extra }} along{% if defaulted %} and filling in the discriminator{% endif %}.
 func (v {{ type_name }}) MarshalJSON() ([]byte, error) {
 	type plain {{ type_name }}
 {% for field in defaulted %}{% set value = defaults[field.name] | tojson if go_type(field.type) == "string" else go_type(field.type) ~ "(" ~ (defaults[field.name] | tojson) ~ ")" %}{% if field_type(field) is startingwith("*") %}	if v.{{ go_export(field.name) }} == nil {
@@ -57,28 +79,13 @@ func (v {{ type_name }}) MarshalJSON() ([]byte, error) {
 {% else %}	if v.{{ go_export(field.name) }} == "" {
 		v.{{ go_export(field.name) }} = {{ value }}
 	}
-{% endif %}{% endfor %}{% if untagged %}	{% if has_extra %}data, err := {% else %}return {% endif %}marshalWithFields(plain(v), []jsonField{
+{% endif %}{% endfor %}{% if untagged %}	data, err := marshalWithFields(plain(v), []jsonField{
 {% for field in untagged %}		{Name: {{ field.name | tojson }}, Value: v.{{ go_export(field.name) }}{% if not field.required %}, Omit: {% if field_type(field) is startingwith("*") %}v.{{ go_export(field.name) }} == nil{% else %}len(v.{{ go_export(field.name) }}) == 0{% endif %}{% endif %}},
 {% endfor %}	})
-{% elif has_extra %}	data, err := json.Marshal(plain(v))
-{% else %}	return json.Marshal(plain(v))
-{% endif %}{% if has_extra %}	if err != nil {
+	if err != nil {
 		return nil, err
 	}
-	return mergeAdditionalProperties(data, v.AdditionalProperties)
+	return appendExtra(data, v.{{ extra }})
+{% else %}	return marshalWithExtra(plain(v), v.{{ extra }})
 {% endif %}}
-{% endif %}{% if untagged or has_extra %}
-// UnmarshalJSON implements json.Unmarshaler.
-func (v *{{ type_name }}) UnmarshalJSON(data []byte) error {
-	type plain {{ type_name }}
-	if err := json.Unmarshal(data, (*plain)(v)); err != nil {
-		return err
-	}
-{% if untagged %}	{% if has_extra %}if err := {% else %}return {% endif %}unmarshalFields(data, map[string]any{
-{% for field in untagged %}		{{ field.name | tojson }}: &v.{{ go_export(field.name) }},
-{% endfor %}	}){% if has_extra %}; err != nil {
-		return err
-	}{% endif %}
-{% endif %}{% if has_extra %}	return unmarshalAdditionalProperties(data, &v.AdditionalProperties, []string{ {%- for field in type.fields if not field.flatten %}{{ field.name | tojson }}{% if not loop.last %}, {% endif %}{% endfor -%} })
-{% endif %}}
-{% endif %}{{ unions }}
+{{ unions }}

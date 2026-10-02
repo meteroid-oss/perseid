@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"mime"
 	"mime/multipart"
 	"net/textproto"
@@ -17,9 +18,9 @@ import (
 	"time"
 )
 
-// SseEvent is one server-sent event. Data lines are joined with a newline;
+// SSEEvent is one server-sent event. Data lines are joined with a newline;
 // nothing is JSON-decoded.
-type SseEvent struct {
+type SSEEvent struct {
 	Event string
 	Data  string
 	// ID is the last event ID, including updates from events with no data.
@@ -28,14 +29,20 @@ type SseEvent struct {
 	Retry time.Duration
 }
 
+// maxEventLine caps the length of one line of an event stream.
+const maxEventLine = 1 << 20
+
 // EventStream is a live text/event-stream response: loop on Next, check Err,
 // and Close it once done. The client timeout only covers opening the stream.
 type EventStream struct {
 	body   io.ReadCloser
 	reader *bufio.Reader
 	cancel context.CancelFunc
+	method string
+	path   string
+	status int
 	parser sseParser
-	event  SseEvent
+	event  SSEEvent
 	err    error
 }
 
@@ -46,11 +53,16 @@ func (s *EventStream) Next() bool {
 		char, _, err := s.reader.ReadRune()
 		if err != nil {
 			if !errors.Is(err, io.EOF) {
-				s.err = err
+				s.err = &TransportError{Method: s.method, Path: s.path, Err: err}
 			}
 			return false
 		}
-		if event, ok := s.parser.push(char); ok {
+		event, ok, err := s.parser.push(char)
+		if err != nil {
+			s.err = &DecodeError{StatusCode: s.status, Err: err}
+			return false
+		}
+		if ok {
 			s.event = event
 			return true
 		}
@@ -59,7 +71,7 @@ func (s *EventStream) Next() bool {
 }
 
 // Event returns the event Next read.
-func (s *EventStream) Event() SseEvent { return s.event }
+func (s *EventStream) Event() SSEEvent { return s.event }
 
 // LastEventID returns the ID of the last event read, including events with no data.
 func (s *EventStream) LastEventID() string { return s.parser.id }
@@ -73,17 +85,77 @@ func (s *EventStream) Close() error {
 	return s.body.Close()
 }
 
-// All yields every event, then the error that ended the stream, if any. It has
-// the shape of an iter.Seq2[SseEvent, error].
-func (s *EventStream) All() func(yield func(SseEvent, error) bool) {
-	return func(yield func(SseEvent, error) bool) {
+// All yields every event, then the error that ended the stream, if any.
+func (s *EventStream) All() iter.Seq2[SSEEvent, error] {
+	return func(yield func(SSEEvent, error) bool) {
 		for s.Next() {
 			if !yield(s.event, nil) {
 				return
 			}
 		}
 		if s.err != nil {
-			yield(SseEvent{}, s.err)
+			yield(SSEEvent{}, s.err)
+		}
+	}
+}
+
+// Stream is a live text/event-stream response whose events carry JSON T
+// values: loop on Next, check Err, and Close it once done. It ends at a
+// `[DONE]` event.
+type Stream[T any] struct {
+	events  *EventStream
+	current T
+	done    bool
+	err     error
+}
+
+// Next reads and decodes the next event. It returns false at the end of the
+// stream or on error, see Err.
+func (s *Stream[T]) Next() bool {
+	if s.done || s.err != nil {
+		return false
+	}
+	if !s.events.Next() {
+		s.err = s.events.Err()
+		return false
+	}
+	event := s.events.Event()
+	if event.Data == "[DONE]" {
+		s.done = true
+		return false
+	}
+	var value T
+	if err := json.Unmarshal([]byte(event.Data), &value); err != nil {
+		s.err = &DecodeError{StatusCode: s.events.status, RawBody: []byte(event.Data), Err: err}
+		return false
+	}
+	s.current = value
+	return true
+}
+
+// Current returns the value Next decoded.
+func (s *Stream[T]) Current() T { return s.current }
+
+// Event returns the raw event Next decoded, with its name and id.
+func (s *Stream[T]) Event() SSEEvent { return s.events.Event() }
+
+// Err returns the error that ended the stream, if any.
+func (s *Stream[T]) Err() error { return s.err }
+
+// Close closes the connection.
+func (s *Stream[T]) Close() error { return s.events.Close() }
+
+// All yields every value, then the error that ended the stream, if any.
+func (s *Stream[T]) All() iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		for s.Next() {
+			if !yield(s.current, nil) {
+				return
+			}
+		}
+		if s.err != nil {
+			var zero T
+			yield(zero, s.err)
 		}
 	}
 }
@@ -96,16 +168,19 @@ type sseParser struct {
 	started           bool
 }
 
-func (p *sseParser) push(char rune) (SseEvent, bool) {
+func (p *sseParser) push(char rune) (SSEEvent, bool, error) {
 	if p.afterCR {
 		p.afterCR = false
 		if char == '\n' {
-			return SseEvent{}, false
+			return SSEEvent{}, false, nil
 		}
 	}
 	if char != '\n' && char != '\r' {
+		if p.line.Len() >= maxEventLine {
+			return SSEEvent{}, false, fmt.Errorf("event stream line longer than %d bytes", maxEventLine)
+		}
 		p.line.WriteRune(char)
-		return SseEvent{}, false
+		return SSEEvent{}, false, nil
 	}
 	p.afterCR = char == '\r'
 	line := p.line.String()
@@ -123,12 +198,12 @@ func (p *sseParser) push(char rune) (SseEvent, bool) {
 		data := p.data.String()
 		p.data.Reset()
 		if data == "" {
-			return SseEvent{}, false
+			return SSEEvent{}, false, nil
 		}
-		return SseEvent{Event: name, Data: strings.TrimSuffix(data, "\n"), ID: p.id, Retry: p.retry}, true
+		return SSEEvent{Event: name, Data: strings.TrimSuffix(data, "\n"), ID: p.id, Retry: p.retry}, true, nil
 	}
 	if strings.HasPrefix(line, ":") {
-		return SseEvent{}, false
+		return SSEEvent{}, false, nil
 	}
 	name, value, _ := strings.Cut(line, ":")
 	value = strings.TrimPrefix(value, " ")
@@ -147,7 +222,7 @@ func (p *sseParser) push(char rune) (SseEvent, bool) {
 			p.retry = time.Duration(ms) * time.Millisecond
 		}
 	}
-	return SseEvent{}, false
+	return SSEEvent{}, false, nil
 }
 
 // executeEventStream opens a text/event-stream response.
@@ -160,11 +235,38 @@ func (c *Client) executeEventStream(ctx context.Context, req *request) (*EventSt
 	resp := req.response
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	if mediaType != "text/event-stream" {
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		req.cancel()
-		return nil, fmt.Errorf("@@PACKAGE_NAME@@: expected a text/event-stream response, got %q", mediaType)
+		return nil, &DecodeError{StatusCode: resp.StatusCode, Err: fmt.Errorf("expected a text/event-stream response, got %q", mediaType)}
 	}
-	return &EventStream{body: resp.Body, reader: bufio.NewReader(resp.Body), cancel: req.cancel}, nil
+	return &EventStream{
+		body:   resp.Body,
+		reader: bufio.NewReader(resp.Body),
+		cancel: req.cancel,
+		method: req.method,
+		path:   req.path,
+		status: resp.StatusCode,
+	}, nil
+}
+
+// executeStream opens a text/event-stream response of JSON T events.
+func executeStream[T any](ctx context.Context, c *Client, req *request) (*Stream[T], error) {
+	events, err := c.executeEventStream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return &Stream[T]{events: events}, nil
+}
+
+// enableStream sets the boolean body property asking for an event stream,
+// whether the field is a bool or a *bool.
+func enableStream(field any) {
+	switch field := field.(type) {
+	case *bool:
+		*field = true
+	case **bool:
+		*field = Ptr(true)
+	}
 }
 
 // Upload is a multipart file. Readers implementing io.Seeker are rewound for

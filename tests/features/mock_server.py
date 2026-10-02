@@ -236,7 +236,8 @@ def h_list_widgets(req):
     if cursor not in WIDGETS:
         return req.problem(f"query: unexpected cursor {cursor!r}")
     ids, nxt = WIDGETS[cursor]
-    return js({"data": [{"id": i, "name": i} for i in ids], "next_cursor": nxt})
+    # `color` is not in the spec: SDKs keep it as an unknown property.
+    return js({"data": [{"id": i, "name": i, "color": "red"} for i in ids], "next_cursor": nxt})
 
 
 def h_list_widget_events(req):
@@ -284,6 +285,16 @@ def h_status_echo_auth(req):
 def h_stream_events(req):
     topic = req.qd().get("topic", "")
     return Chunked([chunk.replace("TOPIC", topic) for chunk in STREAM])
+
+
+def h_completion(req):
+    request = req.json()
+    if not isinstance(request, dict) or not isinstance(request.get("prompt"), str):
+        return req.problem(f"body: expected an object with a string prompt, got {req.body[:200]!r}")
+    if not request.get("stream"):
+        return js({"text": request["prompt"].upper()})
+    chunks = [f'data: {{"delta": "{c}", "index": {i}}}\n\n' for i, c in enumerate(request["prompt"])]
+    return Chunked(chunks + ["data: [DONE]\n\n"], delay=0.0)
 
 
 def h_upload_file(req):
@@ -566,6 +577,7 @@ ROUTES = [
     Route("create_session", "POST", r"/session", h_status_echo_auth, security="basic"),
     Route("machine_status", "GET", r"/machine", h_status_echo_auth, security="bearer"),
     Route("stream_events", "GET", r"/events/stream", h_stream_events, query=("topic",), security="default"),
+    Route("create_completion", "POST", r"/completions", h_completion, content_type="application/json", body="required", security="default"),
     Route("upload_file", "POST", r"/files", h_upload_file, content_type="multipart/form-data", body="required", security="default"),
     Route("upload_content", "PUT", r"/files/([^/]+)/content", h_upload_content,
           content_type="application/octet-stream", body="required", security="default"),
@@ -700,6 +712,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def send_reply(self, reply):
         self.send_response(reply.status)
+        self.send_header("x-request-id", "req_mock")
         if reply.ctype:
             self.send_header("content-type", reply.ctype)
         if reply.status != 204:
@@ -714,6 +727,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("content-type", stream.ctype)
         self.send_header("cache-control", "no-cache")
+        self.send_header("x-request-id", "req_mock")
         self.send_header("transfer-encoding", "chunked")
         self.end_headers()
         self.wfile.flush()

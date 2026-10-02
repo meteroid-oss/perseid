@@ -35,7 +35,7 @@ tempfile = "3.14.0"
 toml = "0.8.23"
 tracing = "0.1.41"
 tracing-subscriber = "0.3.20"
-ureq = { version = "3.2.0", default-features = false, features = ["rustls"] }
+ureq = { version = "3.2.0", default-features = false, features = ["rustls", "platform-verifier"] }
 
 [profile.release]
 lto = true

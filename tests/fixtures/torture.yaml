@@ -304,6 +304,46 @@ paths:
       responses:
         '204':
           description: pong
+  /jobs/{job_id}:
+    get:
+      operationId: get_job
+      tags:
+      - jobs
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: the finished job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '202':
+          description: still running, no body
+  /chats:
+    post:
+      operationId: create_chat
+      tags:
+      - chats
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: the reply, or its chunks as server-sent events with `stream`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatReply'
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ChatReply'
   /composed:
     get:
       operationId: get_composed
@@ -844,6 +884,8 @@ components:
           $ref: '#/components/schemas/StringMap'
         nested:
           $ref: '#/components/schemas/Nested'
+        located:
+          $ref: '#/components/schemas/Located'
         objects:
           $ref: '#/components/schemas/ObjectUnions'
     # Unions of several objects without a discriminator.
@@ -1046,6 +1088,18 @@ components:
           type: string
         1leading:
           type: string
+        properties:
+          type: object
+          additionalProperties:
+            type: string
+        extra:
+          type: string
+        extra_fields:
+          type: string
+        additional_properties:
+          type: string
+        any_properties:
+          type: string
     ValidationError:
       type: object
       required:
@@ -1150,6 +1204,27 @@ components:
         at:
           type: string
           format: date-time
+    Job:
+      type: object
+      required:
+      - id
+      properties:
+        id:
+          type: string
+    ChatRequest:
+      type: object
+      properties:
+        model:
+          type: string
+        stream:
+          type: boolean
+    ChatReply:
+      type: object
+      required:
+      - text
+      properties:
+        text:
+          type: string
     Nested:
       allOf:
       - allOf:
@@ -1157,6 +1232,10 @@ components:
       - properties:
           depth:
             type: integer
+    Located:
+      allOf:
+      - $ref: '#/components/schemas/Base'
+      - $ref: '#/components/schemas/Address'
   parameters:
     WidgetId:
       name: widget_id

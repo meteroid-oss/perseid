@@ -23,15 +23,33 @@ public final class Upload {
         this.contentType = contentType;
     }
 
+    /**
+     * Bytes to send, which can be retried.
+     *
+     * @param bytes the content
+     * @return the upload
+     */
     public static Upload of(byte[] bytes) {
         return new Upload(RequestBody.create(bytes), null, "application/octet-stream");
     }
 
+    /**
+     * A file to send, named after it in multipart forms, which can be retried.
+     *
+     * @param file the file
+     * @return the upload
+     */
     public static Upload of(File file) {
         return new Upload(RequestBody.create(file, null), file.getName(), "application/octet-stream");
     }
 
-    /** Streams {@code input} without buffering it; {@code length} is -1 when unknown. */
+    /**
+     * Streams {@code input} without buffering it, so the request is not retried.
+     *
+     * @param input the content, closed once sent
+     * @param length the length in bytes, -1 when unknown
+     * @return the upload
+     */
     public static Upload of(InputStream input, long length) {
         RequestBody body =
                 new RequestBody() {
@@ -60,12 +78,22 @@ public final class Upload {
         return new Upload(body, null, "application/octet-stream");
     }
 
-    /** Filename used by multipart encoding; does not affect a raw upload. */
+    /**
+     * Filename used by multipart encoding; does not affect a raw upload.
+     *
+     * @param filename the file name
+     * @return a copy with the file name
+     */
     public Upload withFilename(String filename) {
         return new Upload(body, filename, contentType);
     }
 
-    /** Content type used by multipart encoding; raw uploads use the spec's media type. */
+    /**
+     * Content type used by multipart encoding; raw uploads use the spec's media type.
+     *
+     * @param contentType the media type
+     * @return a copy with the content type
+     */
     public Upload withContentType(String contentType) {
         return new Upload(body, filename, contentType);
     }
@@ -74,7 +102,12 @@ public final class Upload {
         return filename;
     }
 
-    /** The body, sent with {@code contentType}. */
+    /**
+     * The body, sent with {@code contentType}.
+     *
+     * @param contentType the media type
+     * @return the request body
+     */
     public RequestBody toRequestBody(String contentType) {
         MediaType mediaType = MediaType.get(contentType);
         return new RequestBody() {

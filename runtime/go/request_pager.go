@@ -4,68 +4,104 @@ package @@PACKAGE_NAME@@
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+	"iter"
 )
 
-// pagination describes how a list operation pages. Paths are JSON property
-// names from the response root.
-type pagination struct {
-	style      string
-	items      []string
-	nextCursor []string
-	itemCursor string
-	hasMore    []string
-	totalPages []string
-	total      []string
-	firstPage  int64
+// Page is one page of a paginated list operation, as its List method returns
+// it: its items, the response they came in, and the way to the page after it.
+// Each operation names its own, such as CustomersListPage.
+//
+//	for page != nil {
+//		for _, item := range page.Items {
+//			// ...
+//		}
+//		if page, err = page.NextPage(ctx); err != nil {
+//			return err
+//		}
+//	}
+type Page[T, R any] struct {
+	// Items holds the items of this page.
+	Items []T
+
+	// Body is the decoded response of this page, for its fields besides the
+	// items, such as a total.
+	Body R
+
+	next func(ctx context.Context) (*Page[T, R], error)
 }
 
-// Pager iterates over every item of a paginated list operation, fetching the
-// next page once the current one is consumed: loop on Next, then check Err.
-// With Go 1.23 or later, range over [Pager.All] instead.
-type Pager[T any] struct {
-	ctx      context.Context
-	spec     pagination
-	fetch    func(ctx context.Context, param any) (any, error)
-	param    any
-	buffered []T
-	current  T
-	done     bool
-	err      error
+// HasNextPage reports whether another page follows this one.
+func (p *Page[T, R]) HasNextPage() bool {
+	return p != nil && p.next != nil
 }
 
-func newPager[T any](ctx context.Context, spec pagination, start any, fetch func(context.Context, any) (any, error)) *Pager[T] {
-	if start == nil && spec.style == "page" {
-		start = spec.firstPage
-	} else if start == nil && spec.style == "offset" {
-		start = int64(0)
+// NextPage fetches the page after this one. It returns nil and no error after
+// the last page.
+func (p *Page[T, R]) NextPage(ctx context.Context) (*Page[T, R], error) {
+	if !p.HasNextPage() {
+		return nil, nil
 	}
-	return &Pager[T]{ctx: ctx, spec: spec, fetch: fetch, param: start}
+	return p.next(ctx)
+}
+
+// fetchItems fetches the items of a page, and the way to the page after it.
+type fetchItems[T any] func(ctx context.Context) ([]T, fetchItems[T], error)
+
+func pageItems[T, R any](fetch func(ctx context.Context) (*Page[T, R], error)) fetchItems[T] {
+	return func(ctx context.Context) ([]T, fetchItems[T], error) {
+		page, err := fetch(ctx)
+		if err != nil || page == nil {
+			return nil, nil, err
+		}
+		if !page.HasNextPage() {
+			return page.Items, nil, nil
+		}
+		return page.Items, pageItems(page.NextPage), nil
+	}
+}
+
+// AutoPager iterates over every item of a paginated list operation, as its
+// ListAutoPaging method returns it, fetching each page once the previous one
+// is consumed: loop on Next, then check Err, or range over [AutoPager.All].
+type AutoPager[T any] struct {
+	ctx     context.Context
+	fetch   fetchItems[T]
+	items   []T
+	index   int
+	current T
+	err     error
+}
+
+func newAutoPager[T, R any](ctx context.Context, first func(ctx context.Context) (*Page[T, R], error)) *AutoPager[T] {
+	return &AutoPager[T]{ctx: ctx, fetch: pageItems(first)}
 }
 
 // Next advances to the next item. It returns false once every item has been
 // read or when a request failed, see Err.
-func (p *Pager[T]) Next() bool {
-	for len(p.buffered) == 0 {
-		if p.done || p.err != nil {
+func (p *AutoPager[T]) Next() bool {
+	for p.err == nil {
+		if p.index < len(p.items) {
+			p.current = p.items[p.index]
+			p.index++
+			return true
+		}
+		if p.fetch == nil {
 			return false
 		}
-		p.err = p.fetchPage()
+		p.items, p.fetch, p.err = p.fetch(p.ctx)
+		p.index = 0
 	}
-	p.current, p.buffered = p.buffered[0], p.buffered[1:]
-	return true
+	return false
 }
 
 // Current returns the item Next advanced to.
-func (p *Pager[T]) Current() T { return p.current }
+func (p *AutoPager[T]) Current() T { return p.current }
 
 // Err returns the error that stopped the iteration, if any.
-func (p *Pager[T]) Err() error { return p.err }
+func (p *AutoPager[T]) Err() error { return p.err }
 
 // All yields every item, then the error that stopped the iteration, if any.
-// It has the shape of an iter.Seq2[T, error].
-func (p *Pager[T]) All() func(yield func(T, error) bool) {
+func (p *AutoPager[T]) All() iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		for p.Next() {
 			if !yield(p.current, nil) {
@@ -79,107 +115,11 @@ func (p *Pager[T]) All() func(yield func(T, error) bool) {
 	}
 }
 
-func (p *Pager[T]) fetchPage() error {
-	page, err := p.fetch(p.ctx, p.param)
-	if err != nil {
-		return err
-	}
-	encoded, err := json.Marshal(page)
-	if err != nil {
-		return err
-	}
-	var raw []json.RawMessage
-	if items := jsonAt(encoded, p.spec.items); items != nil {
-		if err := json.Unmarshal(items, &raw); err != nil {
-			return fmt.Errorf("@@PACKAGE_NAME@@: decoding page items: %w", err)
-		}
-	}
-	for _, item := range raw {
-		var value T
-		if err := json.Unmarshal(item, &value); err != nil {
-			return fmt.Errorf("@@PACKAGE_NAME@@: decoding page item: %w", err)
-		}
-		p.buffered = append(p.buffered, value)
-	}
-	p.done = !p.advance(encoded, raw)
-	return nil
+type pageNumber interface {
+	~int | ~int16 | ~int32 | ~int64 | ~uint16 | ~uint64
 }
 
-// advance moves to the next page, reporting whether there is one.
-func (p *Pager[T]) advance(page json.RawMessage, items []json.RawMessage) bool {
-	var hasMore *bool
-	if len(items) == 0 || (jsonDecode(jsonAt(page, p.spec.hasMore), &hasMore) && hasMore != nil && !*hasMore) {
-		return false
-	}
-	switch p.spec.style {
-	case "cursor":
-		var next *string
-		if p.spec.nextCursor != nil {
-			jsonDecode(jsonAt(page, p.spec.nextCursor), &next)
-		} else {
-			jsonDecode(jsonAt(items[len(items)-1], []string{p.spec.itemCursor}), &next)
-		}
-		if next == nil || *next == "" || *next == p.param {
-			return false
-		}
-		p.param = *next
-	case "page":
-		current := toInt64(p.param)
-		var totalPages *int64
-		if jsonDecode(jsonAt(page, p.spec.totalPages), &totalPages) && totalPages != nil && current-p.spec.firstPage+1 >= *totalPages {
-			return false
-		}
-		p.param = current + 1
-	default:
-		offset := toInt64(p.param) + int64(len(items))
-		p.param = offset
-		var total *int64
-		if jsonDecode(jsonAt(page, p.spec.total), &total) && total != nil && offset >= *total {
-			return false
-		}
-	}
-	return true
-}
-
-func jsonAt(value json.RawMessage, path []string) json.RawMessage {
-	if path == nil {
-		return nil
-	}
-	for _, key := range path {
-		var object map[string]json.RawMessage
-		if json.Unmarshal(value, &object) != nil {
-			return nil
-		}
-		value = object[key]
-	}
-	return value
-}
-
-func jsonDecode(value json.RawMessage, out any) bool {
-	return value != nil && json.Unmarshal(value, out) == nil
-}
-
-func toInt64(value any) int64 {
-	switch v := value.(type) {
-	case int64:
-		return v
-	case int32:
-		return int64(v)
-	case int16:
-		return int64(v)
-	case uint16:
-		return int64(v)
-	case uint64:
-		return int64(v)
-	case int:
-		return int64(v)
-	}
-	return 0
-}
-
-func pagerStart[T any](value *T) any {
-	if value == nil {
-		return nil
-	}
-	return *value
+// reached reports whether n is at least total.
+func reached[N, M pageNumber](n N, total M) bool {
+	return int64(n) >= int64(total)
 }

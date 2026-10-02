@@ -14,7 +14,7 @@ using System.Text.Json.Serialization.Metadata;
 namespace @@PACKAGE_NAME@@;
 
 /// <summary>One API call, built by the generated resources and sent by <see cref="ApiTransport"/>.</summary>
-internal sealed class ApiRequest(HttpMethod method, string path)
+internal sealed class ApiRequest(HttpMethod method, string path, string operation)
 {
     private readonly List<KeyValuePair<string, string>> _query = [];
     private byte[]? _json;
@@ -26,6 +26,12 @@ internal sealed class ApiRequest(HttpMethod method, string path)
     public HttpMethod Method { get; } = method;
 
     public string Path { get; } = path;
+
+    /// <summary>The operation, <c>resource.method</c>, naming the trace activity of the call.</summary>
+    public string Operation { get; } = operation;
+
+    /// <summary>The error schemas the operation declares, by status: <c>404</c>, <c>4XX</c> or <c>default</c>.</summary>
+    public IReadOnlyList<KeyValuePair<string, JsonTypeInfo>>? ErrorTypes { get; set; }
 
     public Dictionary<string, string> Headers { get; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -233,6 +239,8 @@ internal sealed class ApiRequest(HttpMethod method, string path)
 
     public void SetJsonBody<T>(T body, JsonTypeInfo<T> typeInfo) =>
         _json = JsonSerializer.SerializeToUtf8Bytes(body, typeInfo);
+
+    public void SetJsonBody(JsonObject body) => _json = Encoding.UTF8.GetBytes(body.ToJsonString());
 
     /// <summary>Sets an <c>application/x-www-form-urlencoded</c> body from the JSON form of
     /// <paramref name="body"/>, so wire names come from the model's attributes. Lists of the

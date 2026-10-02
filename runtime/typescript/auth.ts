@@ -9,12 +9,12 @@ export type Security = string[][];
 
 export type Credentials = {
   /** Bearer token, also used as the API key of schemes missing from `apiKeys`. */
-  token?: string | null;
+  token?: string | null | undefined;
   /** Called before each request for a fresh bearer token, e.g. an OAuth2 access token. */
-  tokenProvider?: () => string | Promise<string>;
-  basicAuth?: { username: string; password: string };
+  tokenProvider?: (() => string | Promise<string>) | undefined;
+  basicAuth?: { username: string; password: string } | undefined;
   /** API keys by security scheme name. */
-  apiKeys?: Record<string, string | undefined>;
+  apiKeys?: Record<string, string | undefined> | undefined;
 };
 
 function base64(value: string): string {
@@ -55,15 +55,18 @@ export async function applyAuth(
   );
   for (const name of chosen ?? []) {
     const scheme = schemes[name];
+    if (scheme === undefined) {
+      continue;
+    }
     if (scheme.kind === "bearer") {
       const token = credentials.tokenProvider
         ? await credentials.tokenProvider()
         : credentials.token;
       headers.authorization = `Bearer ${token}`;
-    } else if (scheme.kind === "basic") {
-      const { username, password } = credentials.basicAuth!;
+    } else if (scheme.kind === "basic" && credentials.basicAuth) {
+      const { username, password } = credentials.basicAuth;
       headers.authorization = `Basic ${base64(`${username}:${password}`)}`;
-    } else {
+    } else if (scheme.kind === "api_key") {
       const key = credentials.apiKeys?.[name] ?? credentials.token ?? "";
       if (scheme.in === "query") {
         url.searchParams.set(scheme.param, key);

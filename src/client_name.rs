@@ -320,6 +320,13 @@ pub fn collision(name: &str) -> Option<String> {
             "its package `{snake}` would shadow a standard library module, a dependency or a generated file"
         ));
     }
+    // Go packages (and Java's last package segment) join the words without underscores.
+    let joined = snake.replace('_', "");
+    if RESERVED_PACKAGES.contains(&joined.as_str()) {
+        return Some(format!(
+            "its Go package `{joined}` would shadow a standard library package or a generated file"
+        ));
+    }
     if RESERVED_CLASSES.contains(&name) {
         return Some(format!(
             "`{name}` is a builtin or runtime type in some SDK language"

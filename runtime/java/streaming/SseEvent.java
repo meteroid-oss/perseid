@@ -11,6 +11,14 @@ public final class SseEvent {
     private final String id;
     private final Duration retry;
 
+    /**
+     * An event.
+     *
+     * @param event the event name, {@code message} by default
+     * @param data the data lines, joined with a newline
+     * @param id the last event ID, or null
+     * @param retry the reconnection delay, or null
+     */
     public SseEvent(String event, String data, String id, Duration retry) {
         this.event = event;
         this.data = data;
@@ -18,21 +26,39 @@ public final class SseEvent {
         this.retry = retry;
     }
 
-    public String getEvent() {
+    /**
+     * The event name.
+     *
+     * @return the name, {@code message} when the server sent none
+     */
+    public String event() {
         return event;
     }
 
-    public String getData() {
+    /**
+     * The data lines, joined with a newline.
+     *
+     * @return the data
+     */
+    public String data() {
         return data;
     }
 
-    /** The last event ID, including updates from events with no data, or null. */
-    public String getId() {
+    /**
+     * The last event ID, including updates from events with no data.
+     *
+     * @return the ID, or null
+     */
+    public String id() {
         return id;
     }
 
-    /** The server-provided reconnection delay, or null. The SDK does not reconnect. */
-    public Duration getRetry() {
+    /**
+     * The server-provided reconnection delay. The SDK does not reconnect.
+     *
+     * @return the delay, or null
+     */
+    public Duration retry() {
         return retry;
     }
 

@@ -1,6 +1,8 @@
 package com.petstore;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -54,30 +56,40 @@ class MiddlewareTest {
     }
 
     @Test
-    void cacheAnswersRepeatedGetsWithoutReachingTheOrigin() throws Exception {
+    void cacheAnswersRepeatedGetsWithoutReachingTheOrigin() {
         List<Request> seen = new ArrayList<>();
-        PetstoreOptions options = new PetstoreOptions();
-        options.getInterceptors().add(cache());
-        options.getInterceptors().add(origin(seen));
-        Petstore petstore = new Petstore("token", options);
-
-        for (int i = 0; i < 3; i++) {
-            assertEquals("Rex", petstore.getPets().retrieve("1").getName());
+        PetstoreOptions options = PetstoreOptions.builder().addInterceptor(cache()).addInterceptor(origin(seen)).build();
+        try (Petstore petstore = new Petstore("token", options)) {
+            for (int i = 0; i < 3; i++) {
+                assertEquals("Rex", petstore.pets().retrieve("1").name());
+            }
+            assertEquals(1, seen.size());
+            petstore.pets().retrieve("2");
+            assertEquals(2, seen.size());
         }
-        assertEquals(1, seen.size());
-        petstore.getPets().retrieve("2");
-        assertEquals(2, seen.size());
     }
 
     @Test
-    void middlewareCanChangeTheRequest() throws Exception {
+    void middlewareCanChangeTheRequest() {
         List<Request> seen = new ArrayList<>();
-        PetstoreOptions options = new PetstoreOptions();
-        options.getInterceptors().add(chain -> chain.proceed(chain.request().newBuilder().header("x-tag", "yes").build()));
-        options.getInterceptors().add(origin(seen));
-        new Petstore("token", options).getPets().retrieve("1");
+        PetstoreOptions options = PetstoreOptions.builder()
+                .addInterceptor(chain -> chain.proceed(chain.request().newBuilder().header("x-tag", "yes").build()))
+                .addInterceptor(origin(seen))
+                .header("x-default", "d")
+                .build();
+        new Petstore("token", options).pets().retrieve("1");
 
         assertEquals("yes", seen.get(0).header("x-tag"));
+        assertEquals("d", seen.get(0).header("x-default"));
         assertEquals("Bearer token", seen.get(0).header("Authorization"));
+    }
+
+    @Test
+    void optionsAreImmutable() {
+        PetstoreOptions options = PetstoreOptions.builder().addInterceptor(chain -> chain.proceed(chain.request())).build();
+        assertThrows(UnsupportedOperationException.class, () -> options.interceptors().clear());
+        PetstoreOptions changed = options.toBuilder().maxRetries(0).build();
+        assertTrue(changed.retrySchedule().isEmpty());
+        assertEquals(2, options.retrySchedule().size());
     }
 }

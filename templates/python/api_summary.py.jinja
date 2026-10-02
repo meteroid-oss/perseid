@@ -7,284 +7,323 @@
 {%- set streaming.used = true %}
 {%- endfor %}
 {%- endfor %}
+{%- set client = sdk.client_name %}
+{%- set error_names = ["APIStatusError", "AuthenticationError", "BadRequestError", "ConflictError", "ErrorBody", "InternalServerError", "NotFoundError", "PermissionDeniedError", "RateLimitError", "UnprocessableEntityError"] %}
 
-{% if streaming.used -%}
-from ._streaming import AsyncEventStream, EventStream, SseEvent, Upload
-{% endif -%}
-from ._errors import (
-    ApiStatusError,
-    AuthenticationError,
-    BadRequestError,
-    ConflictError,
-    ErrorBody,
-    InternalServerError,
-    NotFoundError,
-    PermissionDeniedError,
-    RateLimitError,
-    UnprocessableEntityError,
+from .._exceptions import (
+    APIConnectionError,
+    APIError,
+    APIResponseValidationError,
+    APITimeoutError,
 )
-from .client import {{ sdk.client_name }}, {{ sdk.client_name }}Async, {{ sdk.client_name }}Options
+from ..serialization import {{ client }}Error
+from ._errors import (
+{%- for name in error_names %}
+    {{ name }},
+{%- endfor %}
+)
+from ._pagination import AsyncPage, AsyncPaginator, SyncPage
+from ._response import APIResponse
+from ._streaming import AsyncEventStream, AsyncStream, EventStream, SseEvent, Stream, Upload
+from .client import Async{{ client }}, {{ client }}
 {% for resource in api.resources -%}
     {% set cls = resource.name | to_upper_camel_case -%}
-    from .{{ resource_module(resource.name) }} import {{ cls }}, {{ cls }}Async
+    from .{{ resource_module(resource.name) }} import Async{{ cls }}, {{ cls }}
     {%- for op in resource.operations if op.request_body_kind == "multipart" %}, {{ cls }}{{ op.name | to_upper_camel_case }}Body{% endfor %}
 {% endfor %}
 __all__ = [
-    "{{ sdk.client_name }}",
-    "{{ sdk.client_name }}Async",
-    "{{ sdk.client_name }}Options",
-    "ApiStatusError",
-    "AuthenticationError",
-    "BadRequestError",
-    "ConflictError",
-    "ErrorBody",
-    "InternalServerError",
-    "NotFoundError",
-    "PermissionDeniedError",
-    "RateLimitError",
-    "UnprocessableEntityError",
-    {% if streaming.used -%}
+    "APIConnectionError",
+    "APIError",
+    "APIResponse",
+    "APIResponseValidationError",
+    "APITimeoutError",
+    "Async{{ client }}",
     "AsyncEventStream",
+    "AsyncPage",
+    "AsyncPaginator",
+    "AsyncStream",
     "EventStream",
+    "{{ client }}",
+    "{{ client }}Error",
     "SseEvent",
+    "Stream",
+    "SyncPage",
     "Upload",
-    {% endif -%}
-    {% for resource in api.resources -%}
-        {% set cls = resource.name | to_upper_camel_case -%}
-        "{{ cls }}",
-        "{{ cls }}Async",
-        {% for op in resource.operations if op.request_body_kind == "multipart" -%}
-        "{{ cls }}{{ op.name | to_upper_camel_case }}Body",
-        {% endfor -%}
-    {% endfor -%}
+{%- for name in error_names %}
+    "{{ name }}",
+{%- endfor %}
+{%- for resource in api.resources %}
+{%- set cls = resource.name | to_upper_camel_case %}
+    "Async{{ cls }}",
+    "{{ cls }}",
+{%- for op in resource.operations if op.request_body_kind == "multipart" %}
+    "{{ cls }}{{ op.name | to_upper_camel_case }}Body",
+{%- endfor %}
+{%- endfor %}
 ]
 
 {#- The client entry point lives in its own module so `api/__init__.py` stays a
     plain barrel file. -#}
 {% set kinds = api.security_schemes | map(attribute="kind") | list -%}
+{% set env = sdk.env_prefix -%}
+{% macro client_class(is_async) -%}
+{%- set cls = ("Async" if is_async else "") ~ client -%}
+{%- set http = "httpx.AsyncClient" if is_async else "httpx.Client" -%}
+{%- set prefix = "Async" if is_async else "" %}
+class {{ cls }}:
+    """{% if is_async %}Asyncio {% endif %}{{ client }} API client.
+
+    Credentials and the base URL default to the ``{{ env }}_API_KEY`` and
+    ``{{ env }}_BASE_URL`` environment variables.
+
+    Example
+    -------
+    ::
+
+        from {{ sdk.package_name }} import {{ cls }}
+{% if is_async %}
+        async with {{ cls }}(api_key="your-api-key") as client:
+            {% if sdk.async_example -%}
+            {{ sdk.async_example | replace("\n", "\n            ") }}
+            {% else -%}
+            pass  # Access the generated resources through client.
+            {% endif -%}
+{% else %}
+        client = {{ cls }}(api_key="your-api-key")
+        {% if sdk.example -%}
+        {{ sdk.example | replace("\n", "\n        ") }}
+        {% else -%}
+        # Access the generated resources through client.
+        {% endif -%}
+{% endif %}    """
+
+    _cfg: Configuration
+    _httpx_client: {{ http }}
+    _owns_httpx_client: bool
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | httpx.URL | None = None,
+        timeout: Timeout | Unset = UNSET,
+        max_retries: int | None = None,
+        default_headers: t.Mapping[str, str] | None = None,
+        http_client: {{ http }} | None = None,
+{%- if "bearer" in kinds %}
+        token_provider: TokenProvider | None = None,
+{%- endif %}
+{%- if "basic" in kinds %}
+        basic_auth: tuple[str, str] | None = None,
+{%- endif %}
+{%- if "api_key" in kinds %}
+        api_keys: t.Mapping[str, str] | None = None,
+{%- endif %}
+        middleware: t.Sequence[{{ prefix }}{% if not is_async %}Sync{% endif %}Middleware] | None = None,
+    ) -> None:
+        """Creates a client.
+
+        :param api_key: The token of the API, read from ``{{ env }}_API_KEY`` when ``None``.
+{%- if sdk.has_default_base_url %}
+        :param base_url: Defaults to ``{{ env }}_BASE_URL``, else ``{{ sdk.default_base_url }}``.
+{%- else %}
+        :param base_url: Defaults to ``{{ env }}_BASE_URL``; one of them is required.
+{%- endif %}
+        :param timeout: Of each attempt, in seconds ({{ sdk.timeout }} by default); ``None`` waits.
+        :param max_retries: Retries of a failed idempotent request (2 by default).
+        :param default_headers: Sent with every request.
+        :param http_client: The ``httpx`` client to send requests with, left open by :meth:`close`.
+{%- if "bearer" in kinds %}
+        :param token_provider: Called before each request for a fresh bearer token,
+            such as an OAuth2 access token; it wins over ``api_key``.
+{%- endif %}
+{%- if "basic" in kinds %}
+        :param basic_auth: HTTP basic ``(username, password)``.
+{%- endif %}
+{%- if "api_key" in kinds %}
+        :param api_keys: API keys by security scheme name ({% for scheme in api.security_schemes if scheme.kind == "api_key" %}{% if not loop.first %}, {% endif %}``{{ scheme.name }}``{% endfor %});
+            schemes left out use ``api_key``.
+{%- endif %}
+        :param middleware: Wraps every HTTP attempt: caching, logging, signing.
+        """
+        self._cfg = _configuration(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+            default_headers=default_headers,
+{%- if "bearer" in kinds %}
+            token_provider=token_provider,
+{%- endif %}
+{%- if "basic" in kinds %}
+            basic_auth=basic_auth,
+{%- endif %}
+{%- if "api_key" in kinds %}
+            api_keys=api_keys,
+{%- endif %}
+        )
+        self._cfg.{{ "async_" if is_async else "" }}middleware = list(middleware or ())
+        self._owns_httpx_client = http_client is None
+        self._httpx_client = (
+            http_client if http_client is not None else {{ http }}(timeout=self._cfg.timeout)
+        )
+
+    def with_options(
+        self,
+        *,
+        api_key: str | None = None,
+        base_url: str | httpx.URL | None = None,
+        timeout: Timeout | Unset = UNSET,
+        max_retries: int | None = None,
+        default_headers: t.Mapping[str, str] | None = None,
+    ) -> {{ cls }}:
+        """A copy of this client with these options changed, sharing its connection pool.
+
+        ``client.with_options(max_retries=0).items.list()`` changes them for one call.
+        """
+        cfg = dataclasses.replace(self._cfg)
+        if api_key is not None:
+            cfg.bearer_access_token = api_key
+        if base_url is not None:
+            cfg.base_path = str(base_url).rstrip("/")
+        if not isinstance(timeout, Unset):
+            cfg.timeout = timeout
+        if max_retries is not None:
+            cfg.max_retries = max_retries
+        if default_headers is not None:
+            cfg.default_headers = {**cfg.default_headers, **default_headers}
+        clone = {{ cls }}.__new__({{ cls }})
+        clone._cfg = cfg
+        clone._httpx_client = self._httpx_client
+        clone._owns_httpx_client = False
+        return clone
+
+    @property
+    def with_raw_response(self) -> {{ cls }}WithRawResponse:
+        """The resources, whose methods return an :class:`APIResponse` with the status and headers."""
+        return {{ cls }}WithRawResponse(self)
+
+    {% if is_async %}async {% endif %}def {% if is_async %}aclose{% else %}close{% endif %}(self) -> None:
+        """Closes the connection pool, unless it is the ``http_client`` given."""
+        if self._owns_httpx_client:
+            {% if is_async %}await self._httpx_client.aclose(){% else %}self._httpx_client.close(){% endif %}
+
+    {% if is_async %}async {% endif %}def __{{ "a" if is_async else "" }}enter__(self) -> {{ cls }}:
+        return self
+
+    {% if is_async %}async {% endif %}def __{{ "a" if is_async else "" }}exit__(self, *exc_info: object) -> None:
+        {% if is_async %}await self.aclose(){% else %}self.close(){% endif %}
+{% for resource in api.resources %}
+{%- set rcls = prefix ~ (resource.name | to_upper_camel_case) %}
+    @property
+    def {{ py_ident(resource.name) }}(self) -> {{ rcls }}:
+        """The {{ resource.name | to_snake_case | replace("_", " ") }} API."""
+        return {{ rcls }}(self._cfg, self._httpx_client)
+{% endfor %}
+
+class {{ cls }}WithRawResponse:
+    """The resources of :class:`{{ cls }}`, whose methods return an :class:`APIResponse`."""
+
+    def __init__(self, client: {{ cls }}) -> None:
+        self._client = client
+{% for resource in api.resources %}
+{%- set rcls = prefix ~ (resource.name | to_upper_camel_case) %}
+    @property
+    def {{ py_ident(resource.name) }}(self) -> {{ rcls }}WithRawResponse:
+        """The {{ resource.name | to_snake_case | replace("_", " ") }} API."""
+        return {{ rcls }}WithRawResponse(self._client.{{ py_ident(resource.name) }})
+{% endfor %}
+{%- endmacro %}
 {% set client_py %}# this file is @generated
-"""{{ sdk.client_name }} API client."""
+"""{{ client }} API client."""
 
 from __future__ import annotations
 
 import dataclasses
+import os
 import typing as t
 
 import httpx
 
+from ..serialization import UNSET, {{ client }}Error, Unset
 from ._auth import SecurityScheme{% if "bearer" in kinds %}, TokenProvider{% endif %}
-from .common import (
-    DEFAULT_NUM_RETRIES,
-    DEFAULT_SERVER_URL,
-    DEFAULT_TIMEOUT,
-    Configuration,
-    default_retry_schedule,
-)
+from .common import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, Configuration, Timeout
 from .middleware import AsyncMiddleware, SyncMiddleware
 {% for resource in api.resources -%}
     {% set cls = resource.name | to_upper_camel_case -%}
-    from .{{ resource_module(resource.name) }} import {{ cls }}, {{ cls }}Async
+    from .{{ resource_module(resource.name) }} import (
+        Async{{ cls }},
+        Async{{ cls }}WithRawResponse,
+        {{ cls }},
+        {{ cls }}WithRawResponse,
+    )
 {% endfor %}
+__all__ = [
+    "Async{{ client }}",
+    "Async{{ client }}WithRawResponse",
+    "{{ client }}",
+    "{{ client }}WithRawResponse",
+]
+{%- if sdk.has_default_base_url %}
 
-@dataclasses.dataclass
-class {{ sdk.client_name }}Options:
-    """Options for configuring the {{ sdk.client_name }} client."""
-
-    server_url: str | None = None
-    """Custom server URL. Defaults to `{{ sdk.default_base_url }}`."""
-
-    timeout: float | None = DEFAULT_TIMEOUT
-    """Timeout for HTTP requests, in seconds (default {{ sdk.timeout }}). `None` disables it."""
-
-    num_retries: int | None = None
-    """Number of retries on connection failures, 429, 5xx and timeouts. Defaults to 2."""
-
-    retry_schedule: list[float] | None = None
-    """Explicit list of delays (seconds) before each retry, reduced by a random
-    jitter of up to 25%. Takes precedence over `num_retries`. A `Retry-After`
-    header of up to 60 seconds overrides it."""
-{%- if "bearer" in kinds %}
-
-    token_provider: TokenProvider | None = None
-    """Called before each request for a fresh bearer token, e.g. an OAuth2 access
-    token. Takes precedence over the client token."""
-{%- endif %}
-{%- if "basic" in kinds %}
-
-    basic_auth: tuple[str, str] | None = None
-    """HTTP basic `(username, password)`."""
-{%- endif %}
-{%- if "api_key" in kinds %}
-
-    api_keys: dict[str, str] = dataclasses.field(default_factory=dict)
-    """API keys by security scheme name ({% for scheme in api.security_schemes if scheme.kind == "api_key" %}{% if not loop.first %}, {% endif %}`{{ scheme.name }}`{% endfor %}).
-    Schemes left out use the client token."""
+DEFAULT_BASE_URL = {{ sdk.default_base_url | tojson }}
 {%- endif %}
 
-    middleware: list[SyncMiddleware] = dataclasses.field(default_factory=list)
-    """Wraps every HTTP attempt of the synchronous client: caching, logging,
-    custom headers. See `middleware.py`."""
 
-    async_middleware: list[AsyncMiddleware] = dataclasses.field(default_factory=list)
-    """The same, for the asyncio client."""
-
-
-SECURITY_SCHEMES = {
+SECURITY_SCHEMES: dict[str, SecurityScheme] = {
 {%- for scheme in api.security_schemes %}
     {{ scheme.name | tojson }}: SecurityScheme("{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, "{{ scheme.in }}", {{ scheme.param | tojson }}{% endif %}),
 {%- endfor %}
 }
 
 
-def _build_configuration(
-    token: str | None, options: {{ sdk.client_name }}Options | None
-) -> Configuration:
-    options = options if options is not None else {{ sdk.client_name }}Options()
-    if options.retry_schedule is not None:
-        retry_schedule = list(options.retry_schedule)
-    else:
-        num_retries = (
-            options.num_retries if options.num_retries is not None else DEFAULT_NUM_RETRIES
-        )
-        retry_schedule = default_retry_schedule(num_retries)
-    return Configuration(
-        base_path=(options.server_url or DEFAULT_SERVER_URL).rstrip("/"),
-        bearer_access_token=token,
+def _configuration(
+    *,
+    api_key: str | None,
+    base_url: str | httpx.URL | None,
+    timeout: Timeout | Unset,
+    max_retries: int | None,
+    default_headers: t.Mapping[str, str] | None,
 {%- if "bearer" in kinds %}
-        token_provider=options.token_provider,
+    token_provider: TokenProvider | None,
 {%- endif %}
 {%- if "basic" in kinds %}
-        basic_auth=options.basic_auth,
+    basic_auth: tuple[str, str] | None,
 {%- endif %}
 {%- if "api_key" in kinds %}
-        api_keys=dict(options.api_keys),
+    api_keys: t.Mapping[str, str] | None,
+{%- endif %}
+) -> Configuration:
+    """The configuration of a client: its arguments, else the environment."""
+    base_url = base_url or os.environ.get("{{ env }}_BASE_URL")
+{%- if sdk.has_default_base_url %} or DEFAULT_BASE_URL
+{%- else %}
+    if not base_url:
+        raise {{ client }}Error(
+            "pass base_url to the client or set the {{ env }}_BASE_URL environment variable"
+        )
+{%- endif %}
+    return Configuration(
+        base_path=str(base_url).rstrip("/"),
+        bearer_access_token=api_key if api_key is not None else os.environ.get("{{ env }}_API_KEY"),
+{%- if "bearer" in kinds %}
+        token_provider=token_provider,
+{%- endif %}
+{%- if "basic" in kinds %}
+        basic_auth=basic_auth,
+{%- endif %}
+{%- if "api_key" in kinds %}
+        api_keys=dict(api_keys or {}),
 {%- endif %}
         security_schemes=SECURITY_SCHEMES,
         security={{ api.security | tojson }},
-        timeout=options.timeout,
-        retry_schedule=retry_schedule,
-        middleware=list(options.middleware),
-        async_middleware=list(options.async_middleware),
+        timeout=DEFAULT_TIMEOUT if isinstance(timeout, Unset) else timeout,
+        max_retries=DEFAULT_MAX_RETRIES if max_retries is None else max_retries,
+        default_headers=dict(default_headers or {}),
     )
 
-
-class {{ sdk.client_name }}:
-    """Synchronous {{ sdk.client_name }} API client.
-
-    Example
-    -------
-    ::
-
-        from {{ sdk.package_name }} import {{ sdk.client_name }}
-
-        client = {{ sdk.client_name }}("your-api-key")
-        {% if sdk.example -%}
-        {{ sdk.example | replace("\n", "\n        ") }}
-        {% else -%}
-        # Access the generated resources through client.
-        {% endif -%}
-    """
-
-    _cfg: Configuration
-    _httpx_client: httpx.Client
-    _owns_httpx_client: bool
-
-    def __init__(
-        self,
-        token: str | None,
-        options: {{ sdk.client_name }}Options | None = None,
-        httpx_client: httpx.Client | None = None,
-    ) -> None:
-        self._cfg = _build_configuration(token, options)
-        self._owns_httpx_client = httpx_client is None
-        self._httpx_client = (
-            httpx_client
-            if httpx_client is not None
-            else httpx.Client(timeout=self._cfg.timeout)
-        )
-
-    def with_token(self, token: str) -> {{ sdk.client_name }}:
-        """Return a client using a different token but the same connection pool."""
-        clone = {{ sdk.client_name }}.__new__({{ sdk.client_name }})
-        clone._cfg = dataclasses.replace(self._cfg, bearer_access_token=token)
-        clone._httpx_client = self._httpx_client
-        clone._owns_httpx_client = False
-        return clone
-
-    def close(self) -> None:
-        if self._owns_httpx_client:
-            self._httpx_client.close()
-
-    def __enter__(self) -> {{ sdk.client_name }}:
-        return self
-
-    def __exit__(self, *exc_info: t.Any) -> None:
-        self.close()
-{% for resource in api.resources %}
-    @property
-    def {{ py_ident(resource.name) }}(self) -> {{ resource.name | to_upper_camel_case }}:
-        """Access the {{ resource.name | to_snake_case | replace("_", " ") }} API."""
-        return {{ resource.name | to_upper_camel_case }}(self._cfg, self._httpx_client)
-{% endfor %}
-
-class {{ sdk.client_name }}Async:
-    """Asyncio {{ sdk.client_name }} API client.
-
-    Example
-    -------
-    ::
-
-        from {{ sdk.package_name }} import {{ sdk.client_name }}Async
-
-        async with {{ sdk.client_name }}Async("your-api-key") as client:
-            {% if sdk.async_example -%}
-            {{ sdk.async_example | replace("\n", "\n            ") }}
-            {% else -%}
-            pass  # Access the generated resources through client.
-            {% endif -%}
-    """
-
-    _cfg: Configuration
-    _httpx_client: httpx.AsyncClient
-    _owns_httpx_client: bool
-
-    def __init__(
-        self,
-        token: str | None,
-        options: {{ sdk.client_name }}Options | None = None,
-        httpx_client: httpx.AsyncClient | None = None,
-    ) -> None:
-        self._cfg = _build_configuration(token, options)
-        self._owns_httpx_client = httpx_client is None
-        self._httpx_client = (
-            httpx_client
-            if httpx_client is not None
-            else httpx.AsyncClient(timeout=self._cfg.timeout)
-        )
-
-    def with_token(self, token: str) -> {{ sdk.client_name }}Async:
-        """Return a client using a different token but the same connection pool."""
-        clone = {{ sdk.client_name }}Async.__new__({{ sdk.client_name }}Async)
-        clone._cfg = dataclasses.replace(self._cfg, bearer_access_token=token)
-        clone._httpx_client = self._httpx_client
-        clone._owns_httpx_client = False
-        return clone
-
-    async def aclose(self) -> None:
-        if self._owns_httpx_client:
-            await self._httpx_client.aclose()
-
-    async def __aenter__(self) -> {{ sdk.client_name }}Async:
-        return self
-
-    async def __aexit__(self, *exc_info: t.Any) -> None:
-        await self.aclose()
-{% for resource in api.resources %}
-    @property
-    def {{ py_ident(resource.name) }}(self) -> {{ resource.name | to_upper_camel_case }}Async:
-        """Access the {{ resource.name | to_snake_case | replace("_", " ") }} API."""
-        return {{ resource.name | to_upper_camel_case }}Async(self._cfg, self._httpx_client)
-{% endfor %}
+{{ client_class(false) }}
+{{ client_class(true) }}
 {% endset %}
 {% set _ = generate_extra_file(output_dir ~ "/client.py", client_py) %}
 
@@ -295,13 +334,17 @@ from __future__ import annotations
 
 import typing as t
 
+import httpx
+
 {% if api.error_schemas | length > 0 -%}
 from .. import models as _models
 {% endif -%}
-from ..errors import ApiException
+from .._exceptions import APIError, request_of
+from ..serialization import JSONValue
+from ._response import request_id
 
 __all__ = [
-    "ApiStatusError",
+    "APIStatusError",
     "AuthenticationError",
     "BadRequestError",
     "ConflictError",
@@ -314,67 +357,96 @@ __all__ = [
     "error_class",
 ]
 
+_MAX_DETAIL = 500
+
 {% if api.error_schemas | length > 0 -%}
 ErrorBody: t.TypeAlias = {% for name in api.error_schemas %}{% if not loop.first %} | {% endif %}_models.{{ name | to_upper_camel_case }}{% endfor %}
 """The error responses the API declares."""
 {%- else -%}
-ErrorBody: t.TypeAlias = t.Any
+ErrorBody: t.TypeAlias = JSONValue
 """The decoded JSON of an error response: the API declares no error schema."""
 {%- endif %}
 
-_REQUEST_ID_HEADERS = ("x-request-id", "request-id")
 
-
-class ApiStatusError(ApiException):
+class APIStatusError(APIError):
     """The API answered with a non-2xx status. Subclasses tell the common ones apart."""
 
-    body: ErrorBody | None = None
+    response: httpx.Response
+    status_code: int
+{%- if api.error_schemas | length > 0 %}
+    body: ErrorBody | JSONValue
     """The error response decoded into the schema the operation declares for its
-    status, `None` when it matches none."""
+    status; its JSON when it declares none or it does not match; else `None`."""
+{%- else %}
+    body: ErrorBody
+    """The JSON of the error response, `None` when it is not JSON."""
+{%- endif %}
+
+    def __init__(self, response: httpx.Response, body: object) -> None:
+        detail = _body_text(response) or response.reason_phrase or "error"
+        super().__init__(f"Error code: {response.status_code} - {detail}", request_of(response))
+        self.response = response
+        self.status_code = response.status_code
+        self.body = t.cast("ErrorBody | JSONValue", body)
+
+    @property
+    def headers(self) -> httpx.Headers:
+        """The response headers."""
+        return self.response.headers
 
     @property
     def request_id(self) -> str | None:
         """The request id to quote to support, when the API sends one."""
-        headers: t.Mapping[str, str] = getattr(self, "headers", None) or {}
-        for name in _REQUEST_ID_HEADERS:
-            if name in headers:
-                return headers[name]
-        return None
+        return request_id(self.response.headers)
+
+    @property
+    def raw_body(self) -> bytes:
+        """The response body."""
+        return self.response.content
 
 
-class BadRequestError(ApiStatusError):
+def _body_text(response: httpx.Response) -> str:
+    """The start of the response body, for the error message."""
+    try:
+        text = response.text.strip()
+    except httpx.ResponseNotRead:
+        return ""
+    return text if len(text) <= _MAX_DETAIL else f"{text[:_MAX_DETAIL]}..."
+
+
+class BadRequestError(APIStatusError):
     """400 Bad Request."""
 
 
-class AuthenticationError(ApiStatusError):
+class AuthenticationError(APIStatusError):
     """401 Unauthorized."""
 
 
-class PermissionDeniedError(ApiStatusError):
+class PermissionDeniedError(APIStatusError):
     """403 Forbidden."""
 
 
-class NotFoundError(ApiStatusError):
+class NotFoundError(APIStatusError):
     """404 Not Found."""
 
 
-class ConflictError(ApiStatusError):
+class ConflictError(APIStatusError):
     """409 Conflict."""
 
 
-class UnprocessableEntityError(ApiStatusError):
+class UnprocessableEntityError(APIStatusError):
     """422 Unprocessable Entity."""
 
 
-class RateLimitError(ApiStatusError):
+class RateLimitError(APIStatusError):
     """429 Too Many Requests, once retries are exhausted."""
 
 
-class InternalServerError(ApiStatusError):
+class InternalServerError(APIStatusError):
     """Any 5xx status, once retries are exhausted."""
 
 
-_BY_STATUS: dict[int, type[ApiStatusError]] = {
+_BY_STATUS: dict[int, type[APIStatusError]] = {
     400: BadRequestError,
     401: AuthenticationError,
     403: PermissionDeniedError,
@@ -385,10 +457,10 @@ _BY_STATUS: dict[int, type[ApiStatusError]] = {
 }
 
 
-def error_class(status_code: int) -> type[ApiStatusError]:
+def error_class(status_code: int) -> type[APIStatusError]:
     """The error raised for a response with this status."""
     if status_code >= 500:
         return InternalServerError
-    return _BY_STATUS.get(status_code, ApiStatusError)
+    return _BY_STATUS.get(status_code, APIStatusError)
 {% endset %}
 {% set _ = generate_extra_file(output_dir ~ "/_errors.py", errors_py) %}

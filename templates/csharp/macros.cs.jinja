@@ -81,13 +81,18 @@
     "BasicCredentials", "SecurityScheme", "SchemeKind", "Webhook", "BadRequestException",
     "UnauthorizedException", "ForbiddenException", "NotFoundException", "ConflictException",
     "UnprocessableEntityException", "RateLimitException", "ServerErrorException",
-    "ApiExceptionExtensions"] %}Models.{% endif %}{{ id }}
+    "ApiExceptionExtensions", "ApiConnectionException", "ApiTimeoutException", "ApiDecodeException",
+    "ApiResponse", "Page", "AsyncPager", "Paging", "Equality", "IStringEnum", "IIntegerEnum",
+    "UnionRules", "Json", "MaybeUnset", "WebhookVerificationException"] %}Models.{% endif %}{{ id }}
 {%- endmacro %}
 
-{# The property type of a model field or query parameter, `union` naming its typed union. -#}
-{% macro field_type(field, union="") -%}
+{# The property type of a model field or query parameter, `union` naming its typed union, its
+   collections read-only interfaces with `readonly`. -#}
+{% macro field_type(field, union="", readonly=false) -%}
 {% set ty = field.type.to_csharp() -%}
-{{ ty | replace("JsonNode", union) if union else ty }}{% if field.nullable or not field.required %}?{% endif %}
+{% if union %}{% set ty = ty | replace("JsonNode", union) %}{% endif -%}
+{% if readonly %}{% set ty = ty | replace("List<", "IReadOnlyList<") | replace("Dictionary<", "IReadOnlyDictionary<") %}{% endif -%}
+{{ ty }}{% if field.nullable or not field.required %}?{% endif %}
 {%- endmacro %}
 
 {# The class of the union a field of `owner` holds, directly or in collections; empty without. -#}
@@ -134,10 +139,13 @@
 {% if "<" in type %}Json{{ type | to_upper_camel_case }}{% else %}{{ clr[type] | default(type) }}{% endif %}
 {%- endmacro %}
 
-{# The nested record of union variant `v` in the union class `union`. -#}
+{# The nested record of union variant `v` in the union class `union`: JSON type names get a
+   `Value` suffix, not to shadow the BCL types (CA1720). -#}
 {% macro union_variant_class(v, union) -%}
 {% set class = v.name | to_rust_variant -%}
-{{ class }}{% if class in [union, "Unrecognized", "Value", "Raw", "Id", "EqualityContract", "Deconstruct", "PrintMembers", "Equals", "GetHashCode", "ToString", "IsEmpty"] %}Variant{% endif %}
+{% if v.name in ["string", "integer", "number", "boolean", "list", "array", "object", "map"] %}{{ class }}Value
+{%- else %}{{ class }}{% if class in [union, "Unrecognized", "Value", "Raw", "Id", "EqualityContract", "Deconstruct", "PrintMembers", "Equals", "GetHashCode", "ToString", "IsEmpty"] %}Variant{% endif %}
+{%- endif %}
 {%- endmacro %}
 
 {# The exception class thrown for an error response status: `404`, `4XX` or `default`. -#}
@@ -146,4 +154,21 @@
     "404": "NotFoundException", "409": "ConflictException", "422": "UnprocessableEntityException",
     "429": "RateLimitException", "5XX": "ServerErrorException"} -%}
 {{ classes[status] | default("ServerErrorException" if status is startingwith("5") else "ApiException") }}
+{%- endmacro %}
+
+{# A declaration or call `head(args)` then `tail`, on one line when it fits in 120 columns at
+   `depth`, else one argument per line as CSharpier lays it out. -#}
+{% macro wrap(head, args, depth, tail="") -%}
+{% set flat = head ~ "(" ~ (args | join(", ")) ~ ")" ~ tail -%}
+{% if depth + (flat | length) <= 120 or not args %}{{ flat }}{% else %}{{ head }}(
+{%- for a in args %}
+{{ " " * (depth + 4) }}{{ a }}{% if not loop.last %},{% endif %}
+{%- endfor %}
+{{ " " * depth }}){{ tail }}{% endif %}
+{%- endmacro %}
+
+{# An expression-bodied member `head => body;`, broken after `=>` when longer than 120 columns. -#}
+{% macro arrow(head, body, depth) -%}
+{{ head }} =>{% if depth + (head | length) + (body | length) + 5 <= 120 %} {% else %}
+{{ " " * (depth + 4) }}{% endif %}{{ body }};
 {%- endmacro %}

@@ -46,13 +46,37 @@ export function isJsonObject<T>(
   );
 }
 
-/** @internal The members of a JSON object other than `known`: its additional properties. */
-export function omitKeys(json: any, known: readonly string[]): { [key: string]: any } {
-  const rest: { [key: string]: any } = {};
-  for (const key of Object.keys(json)) {
-    if (!known.includes(key)) {
-      rest[key] = json[key];
+/**
+ * @internal The properties of `object` other than `known` (property names): those the API
+ * sends or accepts that this SDK version does not know, kept as they are, or converted by
+ * `convert` when the schema types its `additionalProperties`.
+ */
+export function extraProperties(
+  object: unknown,
+  known: readonly string[],
+  convert?: (value: any) => unknown
+): object {
+  const extra = {};
+  if (isJsonObject(object)) {
+    for (const [key, item] of Object.entries(object as Record<string, unknown>)) {
+      if (!known.includes(key)) {
+        const value = convert && item !== undefined ? convert(item) : item;
+        Object.defineProperty(extra, key, { value, enumerable: true, writable: true, configurable: true });
+      }
     }
   }
-  return rest;
+  return extra;
+}
+
+/**
+ * @internal The properties of `object` named in `keys`: a base model's own, without the ones
+ * it took for unknown.
+ */
+export function pickProperties<T extends object>(object: T, keys: readonly string[]): T {
+  return Object.fromEntries(Object.entries(object).filter(([key]) => keys.includes(key))) as T;
+}
+
+/** @internal The properties of `object` other than those named in `keys`, set again after. */
+export function omitProperties<T extends object>(object: T, keys: readonly string[]): T {
+  return Object.fromEntries(Object.entries(object).filter(([key]) => !keys.includes(key))) as T;
 }

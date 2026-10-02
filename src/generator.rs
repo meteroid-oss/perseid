@@ -10,6 +10,7 @@ use serde::Deserialize;
 use crate::{
     api::{
         Api, Resource, Types,
+        resources::request_and_response_roots,
         types::{self, Type, TypeData},
     },
     postprocessing::Postprocessor,
@@ -26,6 +27,8 @@ enum TemplateKind {
     Summary,
 }
 
+/// Renders `tpl_name` with the API model as the SDK of `language` (`rs`, `ts`, `py`...) sees it,
+/// which is also the extension of the code it renders, unless it renders documentation.
 pub(crate) fn generate_with_output_context(
     mut api: Api,
     tpl_name: String,
@@ -33,6 +36,7 @@ pub(crate) fn generate_with_output_context(
     no_postprocess: bool,
     sdk: serde_json::Value,
     output_context: Option<&str>,
+    language: &str,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let (name_without_jinja_suffix, tpl_path) = match tpl_name.strip_suffix(".jinja") {
         Some(basename) => (basename, &tpl_name),
@@ -45,25 +49,27 @@ pub(crate) fn generate_with_output_context(
         .rsplit_once(".")
         .context("template name must contain '.'")?;
 
-    if tpl_file_ext != "rs" {
+    if language != "rs" {
         api.inline_aliases()?;
     }
     api.settle_object_unions(&sdk);
-    if tpl_file_ext == "java" {
+    if language == "java" {
         api.inline_string_alias_bodies()?;
     }
-    if tpl_file_ext == "cs" {
+    if matches!(language, "cs" | "go" | "rs") {
         api.inline_flattened_fields()?;
     }
 
     let tpl_kind = match tpl_base_name {
         "api_resource" => TemplateKind::ApiResource,
         "operation_options" => TemplateKind::OperationOptions,
-        "api_summary" | "component_type_summary" | "summary" => TemplateKind::Summary,
+        "api_summary" | "component_type_summary" | "api_reference" | "summary" => {
+            TemplateKind::Summary
+        }
         "component_type" => TemplateKind::Type,
         _ => bail!(
             "template file basename must be one of 'api_resource', 'api_summary', \
-             'component_type', 'component_type_summary', 'summary'",
+             'api_reference', 'component_type', 'component_type_summary', 'summary'",
         ),
     };
 
@@ -144,7 +150,10 @@ impl Generator<'_> {
     }
 
     fn generate_api_resources(self, api: Api) -> anyhow::Result<Vec<Utf8PathBuf>> {
-        self.generate_api_resources_inner(api.resources.values(), &errors_context(&api))
+        // Every schema, for templates that read the fields of a request body.
+        let types = minijinja::Value::from_serialize(&api.types);
+        let shared = context! { types, ..errors_context(&api) };
+        self.generate_api_resources_inner(api.resources.values(), &shared)
     }
 
     fn generate_api_resources_inner<'a>(
@@ -183,6 +192,7 @@ impl Generator<'_> {
                 .map(|name| (name.to_upper_camel_case(), true))
                 .collect::<std::collections::BTreeMap<_, _>>(),
         );
+        let request_schemas = request_schemas(&api);
         let errors = errors_context(&api);
         let recursive_aliases = types::recursive_aliases(&api.types);
         for (name, ty) in &api.types {
@@ -220,6 +230,7 @@ impl Generator<'_> {
                     output_dir,
                     type_names => type_names.clone(),
                     is_error_schema => api.error_schemas.contains(name),
+                    request_schema => request_schemas.contains(name.as_str()),
                     ..errors.clone()
                 },
             )?);
@@ -252,6 +263,7 @@ impl Generator<'_> {
             (None, "go") => "models".to_owned(),
             (None, "rb") => "client".to_owned(),
             (None, "php") => "Client".to_owned(),
+            (None, "md") => "api".to_owned(),
             (None, _) => "summary".to_owned(),
         };
 
@@ -306,6 +318,26 @@ fn errors_context(api: &Api) -> minijinja::Value {
     context! { error_schemas => api.error_schemas, default_error => api.default_error }
 }
 
+/// Schemas a request can carry: the ones operations send and every schema they reach.
+fn request_schemas(api: &Api) -> BTreeSet<&str> {
+    let mut stack: Vec<&str> = request_and_response_roots(&api.resources)
+        .0
+        .into_iter()
+        .collect();
+    let mut seen = BTreeSet::new();
+    while let Some(name) = stack.pop() {
+        if seen.insert(name) {
+            let ty = api.types.get(name);
+            stack.extend(ty.into_iter().flat_map(|ty| {
+                let mut refs = ty.referenced_components();
+                refs.extend(ty.union_refs());
+                refs
+            }));
+        }
+    }
+    seen
+}
+
 /// Schemas `ty` holds by value that lead back to it, so a language without indirection by
 /// default (Rust) must box them.
 fn recursive_refs<'a>(types: &'a Types, ty: &'a Type) -> BTreeSet<&'a str> {
@@ -329,7 +361,7 @@ fn recursive_refs<'a>(types: &'a Types, ty: &'a Type) -> BTreeSet<&'a str> {
 }
 
 /// Go only builds `x_windows.go`, `x_arm64.go` or `x_test.go` for that OS, arch or test run.
-fn go_file_stem(stem: String) -> String {
+pub(crate) fn go_file_stem(stem: String) -> String {
     const CONSTRAINTS: &[&str] = &[
         "aix",
         "android",

@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use heck::ToKebabCase;
 use serde_json::{Value, json};
 
@@ -14,8 +14,14 @@ use crate::{
 };
 
 /// Gives the SDK at `dir` its skeleton when it has no package manifest: manifest, README, error
-/// types.
-pub fn bootstrap(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<PathBuf>> {
+/// types. The README's examples call operations of `spec`.
+pub fn bootstrap(
+    config: &Config,
+    root: &Path,
+    sdk: &Sdk,
+    dir: &Path,
+    spec: &str,
+) -> Result<Vec<PathBuf>> {
     let manifests: &[&str] = match sdk.language {
         "rust" => &["Cargo.toml"],
         "typescript" => &["package.json"],
@@ -34,8 +40,16 @@ pub fn bootstrap(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<PathBuf>>
     if manifests.iter().any(|m| dir.join(m).exists()) || (sdk.language == "csharp" && dotnet()) {
         return Ok(vec![]);
     }
+    let examples = tracing::subscriber::with_default(tracing_subscriber::registry(), || {
+        crate::spec::api(spec, &config.filters_for(sdk)).map(|api| crate::docs::examples(&api))
+    })
+    .unwrap_or(Value::Null);
+    let docs = Docs {
+        overrides: Some(config.overrides_dir(root)),
+        examples,
+    };
     let mut created = Vec::new();
-    for (path, content) in skeleton(config, sdk, dir)? {
+    for (path, content) in skeleton(config, sdk, dir, &docs)? {
         let target = dir.join(path);
         if !target.exists() {
             fsx::write(&target, &content)?;
@@ -45,21 +59,43 @@ pub fn bootstrap(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<PathBuf>>
     Ok(created)
 }
 
+/// What the README is rendered with: the templates overriding the built-in ones, whose
+/// `docs.jinja` names the API in the SDK's language, and the operations its examples call.
+struct Docs {
+    overrides: Option<PathBuf>,
+    examples: Value,
+}
+
 /// The skeleton of an SDK checked out at `dir`, relative to it.
-fn skeleton(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+fn skeleton(config: &Config, sdk: &Sdk, dir: &Path, docs: &Docs) -> Result<Vec<(String, Vec<u8>)>> {
     let mut context = config.context(sdk, dir);
     let path = context["java_package"].as_str().unwrap().replace('.', "/");
     context["java_package_path"] = path.into();
     package_metadata(config, &mut context);
     let mut files = Vec::new();
     for (path, content) in assets::under(&format!("scaffold/{}", sdk.language)) {
-        let content = without_unset_metadata(std::str::from_utf8(content)?, &context);
-        files.push((
-            tokens(path, &context)?,
-            tokens(&content, &context)?.into_bytes(),
-        ));
+        let mut content = without_unset_metadata(std::str::from_utf8(content)?, &context);
+        if path == "README.md" {
+            content = readme(&content, sdk.language, &context, docs)
+                .with_context(|| format!("rendering the {} README", sdk.language))?;
+        }
+        let content = tokens(&content, &context)?;
+        files.push((tokens(path, &context)?, content.into_bytes()));
     }
     Ok(files)
+}
+
+/// Renders the README template `source` with the `examples` of `docs`.
+fn readme(source: &str, language: &str, context: &Value, docs: &Docs) -> Result<String> {
+    let assets = tempfile::tempdir()?;
+    assets::materialize(language, docs.overrides.as_deref(), assets.path())?;
+    let templates = assets.path().join("templates").join(language);
+    let templates = camino::Utf8Path::from_path(&templates).context("non UTF-8 path")?;
+    let mut env = crate::template::env_with_dir(templates)?;
+    env.set_keep_trailing_newline(true);
+    env.add_global("sdk", minijinja::Value::from_serialize(context));
+    let examples = minijinja::Value::from_serialize(&docs.examples);
+    Ok(env.render_str(source, minijinja::context! { examples })?)
 }
 
 /// A release-please package, `released` at its current version or never released.
@@ -450,7 +486,11 @@ mod tests {
         };
         let file = |config: &Config, language: &str, path: &str| {
             let sdk = config.sdks(&[language.to_owned()]).unwrap().remove(0);
-            let files = skeleton(config, &sdk, Path::new("/nonexistent")).unwrap();
+            let docs = Docs {
+                overrides: None,
+                examples: Value::Null,
+            };
+            let files = skeleton(config, &sdk, Path::new("/nonexistent"), &docs).unwrap();
             let (_, content) = files.into_iter().find(|(p, _)| p == path).unwrap();
             String::from_utf8(content).unwrap()
         };

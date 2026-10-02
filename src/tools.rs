@@ -145,11 +145,7 @@ fn source(tool: Tool, os: &str, arch: &str) -> Result<Source> {
 const ATTEMPTS: u32 = 3;
 
 fn download(url: &str) -> Result<Vec<u8>> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
-        .user_agent(concat!("perseid/", env!("CARGO_PKG_VERSION")))
-        .timeout_global(Some(Duration::from_secs(300)))
-        .build()
-        .into();
+    let agent: ureq::Agent = crate::http::config(Duration::from_secs(300)).build().into();
     let mut attempt = 1;
     loop {
         let result = agent.get(url).call().and_then(|mut response| {

@@ -8,13 +8,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 {% set variants = names | map("to_rust_variant") | list -%}
 {% set unknown = unknown_variant(variants) -%}
 {{ doc_comment }}
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum {{ name }} {
     {% for value in type.values -%}
-        {% if loop.first -%}
-        #[default]
-        {% endif -%}
         {{ variants[loop.index0] }},
     {% endfor -%}
     /// A value this version of the SDK does not know yet.
@@ -23,6 +20,7 @@ pub enum {{ name }} {
 
 impl {{ name }} {
     /// The value as sent on the wire.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             {% for value in type.values -%}

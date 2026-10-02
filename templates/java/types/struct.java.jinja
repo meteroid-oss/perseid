@@ -2,25 +2,25 @@
 // This file is @generated
 {% set class_ty = type.name | to_upper_camel_case -%}
 {% set owner = "schema `" ~ type.name ~ "`" -%}
-{% set vars = m.field_idents(type.fields, "camel", owner) | split(" ") | reject("equalto", "") | list -%}
+{% set vars = m.member_names(type.fields, owner) | split(" ") | reject("equalto", "") | list -%}
 {% set pascals = m.field_idents(type.fields, "pascal", owner) | split(" ") | reject("equalto", "") | list -%}
 {% set ns = namespace(unions=[]) -%}
 {% for field in type.fields -%}
 {% set ns.unions = ns.unions + [m.union_name(field, class_ty, pascals[loop.index0])] -%}
 {% endfor -%}
 {% set unions = ns.unions -%}
-{#- Properties beyond the declared ones, kept in a map. -#}
+{#- Every model keeps the properties it does not declare; a schema whose `additionalProperties`
+    types them also gets typed accessors for them, of `extra_value`. -#}
 {% set has_extra = type.additional_properties is defined -%}
 {% set extra_field = {"name": "additional_properties", "type": type.additional_properties, "flatten": false} if has_extra else none -%}
 {% set extra_union = m.union_name(extra_field, class_ty, "AdditionalProperties") if has_extra else "" -%}
 {% set extra_value = m.java_type(type.additional_properties.value_type(), extra_union) if has_extra else "" -%}
-{% set extra_type = m.java_type(type.additional_properties, extra_union) if has_extra else "" -%}
-{% set all_vars = vars + ["additionalProperties"] if has_extra else vars -%}
 {% set defaults = type.discriminator_defaults | default({}) -%}
 package {{ sdk.java_package }}.models;
 
+import {{ sdk.java_internal_package }}.JsonField;
+import {{ sdk.java_internal_package }}.Unions;
 import {{ sdk.java_internal_package }}.Utils;
-
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
@@ -29,21 +29,18 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
-{% if (unions | select | list) or extra_union -%}
 import com.fasterxml.jackson.annotation.JsonValue;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import java.io.IOException;
-{% endif -%}
-
-
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -51,9 +48,17 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
-{% if type.description is defined -%}
-{{ m.javadoc(type.description) }}
+{% set summary -%}
+{% if type.description is defined %}{{ m.html(type.description) }}
+
 {% endif -%}
+Immutable: build one with {@link #builder()}, change a copy with {@link #toBuilder()}.
+{%- if type.deprecated %}
+
+@deprecated the API deprecates this schema.
+{%- endif %}
+{%- endset -%}
+{{ summary | to_doc_comment(style="java") }}
 {% if type.deprecated %}@Deprecated{% endif %}
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -61,22 +66,8 @@ import java.util.Set;
         getterVisibility = Visibility.NONE,
         isGetterVisibility = Visibility.NONE,
         setterVisibility = Visibility.NONE)
-public class {{ class_ty }} {
-{% for field in type.fields -%}
-    {{ m.declaration(field, vars[loop.index0], unions[loop.index0], defaults[field.name] if field.name in defaults else none) }}
-{% endfor %}
-
-    public {{ class_ty }}() {}
-
-{% for field in type.fields -%}
-    {{ m.accessors(field, vars[loop.index0], pascals[loop.index0], class_ty, unions[loop.index0]) }}
-
-{% endfor -%}
-{% if has_extra -%}
-    {{ m.additional_properties(class_ty, extra_type, extra_value) }}
-
-{% endif -%}
-    {{ m.value_methods(class_ty, all_vars) }}
+public final class {{ class_ty }} {
+    {{ m.model_members(class_ty, type.fields, vars, pascals, unions, defaults, extra_value) }}
 
     {{ m.json_methods(class_ty) }}
 {% for field in type.fields %}{% if unions[loop.index0] %}

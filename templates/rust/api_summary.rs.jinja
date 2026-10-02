@@ -1,4 +1,5 @@
 // this file is @generated
+//! The [`{{ sdk.client_name }}`] client, its resources and what their calls take and return.
 pub mod client;
 #[path = "../upload.rs"]
 pub mod upload;
@@ -6,7 +7,10 @@ pub mod upload;
 mod event_stream;
 #[path = "../middleware.rs"]
 pub mod middleware;
+#[path = "../call.rs"]
+mod call;
 pub use crate::connector::{http_client, HttpClient};
+pub use call::{ApiResponse, Call};
 pub use event_stream::{EventStream, SseEvent};
 pub use upload::{RequestBody, Upload};
 #[path = "../auth_schemes.rs"]
@@ -14,13 +18,13 @@ pub(crate) mod auth_schemes;
 pub use auth_schemes::{BasicAuth, TokenProvider};
 #[path = "../pagination.rs"]
 pub(crate) mod pagination;
-pub use pagination::Paginator;
+pub use pagination::{Page, Pages, Paginator};
 #[path = "../request_options.rs"]
 mod request_options;
 pub use request_options::RequestOptions;
 
 /// The `http` crate, whose `HeaderMap`, `StatusCode` and `Method` the API uses.
-pub use http1 as http;
+pub use ::http;
 pub use bytes::Bytes;
 
 {% if api.default_error -%}
@@ -31,23 +35,12 @@ pub type ErrorBody = crate::models::{{ api.default_error | to_upper_camel_case }
 pub type ErrorBody = serde_json::Value;
 {% endif %}
 
-impl<T: serde::de::DeserializeOwned> futures_core::Stream for Paginator<'_, T> {
-    type Item = Result<T, crate::error::Error>;
-
-    fn poll_next(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.get_mut().poll_item(cx)
-    }
-}
-
 {% for resource in api.resources -%}
     mod {{ resource.name | to_snake_case }};
 {% endfor %}
 
 pub use self::{
-    client::{ {{ sdk.client_name }}, {{ sdk.client_name }}Options},
+    client::{ {{ sdk.client_name }}, {{ sdk.client_name }}Builder},
     {% for resource in api.resources -%}
         {% set resource_type_name = resource.name | to_upper_camel_case -%}
         {{ resource.name | to_snake_case }}::{
@@ -59,198 +52,179 @@ pub use self::{
                 {% if op | has_query_or_header_params -%}
                     {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Options,
                 {% endif -%}
+                {% for p in op.query_params if p.typed_union is defined -%}
+                    {{ resource_type_name }}{{ op.name | to_upper_camel_case }}{{ p.ident | to_upper_camel_case }},
+                {% endfor -%}
             {% endfor -%}
         },
     {% endfor -%}
 };
 
-{% set streaming = namespace(events=false) -%}
+{% set patch = namespace(bodies=[]) -%}
 {% for resource in api.resources -%}
-{% for op in resource.operations -%}
-{% if op.response_is_event_stream %}{% set streaming.events = true %}{% endif -%}
+{% for op in resource.operations if op.method == "patch" and op.request_body_schema_name is defined -%}
+{% set patch.bodies = patch.bodies + [op.request_body_schema_name | to_upper_camel_case] -%}
 {% endfor -%}
 {% endfor -%}
-{% set kinds = api.security_schemes | map(attribute="kind") | list -%}
-{# Generate client.rs with resource accessors #}
-{% set client_rs %}// this file is @generated
-//! {{ sdk.client_name }} API client.
+{# An `Option<_>` expression reading the property at `path` from `root`, a reference to a
+   `schema`: `&X` (`&mut X` with `mut`), `&str` (`str`), `bool` (`copy`) or `i64` (`i64`). -#}
+{% macro access(root, schema, path, kind="ref", mut=false) -%}
+{% set walk = namespace(schema=schema | to_upper_camel_case, expr=root, option=false, ty="") -%}
+{% set as = "as_mut()" if mut else "as_ref()" -%}
+{% for segment in path -%}
+{% set found = namespace(field=none) -%}
+{% for _, t in api.types | items if (t.name | to_upper_camel_case) == walk.schema -%}
+{% for f in t.fields if f.name == segment %}{% set found.field = f %}{% endfor -%}
+{% endfor -%}
+{% set member = walk.expr ~ ("?" if walk.option else "") ~ "." ~ (found.field.name | to_rust_ident) -%}
+{% set walk.ty = found.field.type.to_rust() -%}
+{% if found.field.required and not found.field.nullable -%}
+{% set walk.expr = member %}{% set walk.option = false -%}
+{% elif found.field.nullable and not found.field.required and walk.schema in patch.bodies -%}
+{% set walk.expr = member ~ "." ~ as ~ "?." ~ as %}{% set walk.option = true -%}
+{% else -%}
+{% set walk.expr = member ~ "." ~ as %}{% set walk.option = true -%}
+{% endif -%}
+{% if found.field.type.is_schema_ref() %}{% set walk.schema = found.field.type.to_rust() %}{% endif -%}
+{% endfor -%}
+{% set lossless = walk.ty in ["i8", "u8", "i16", "u16", "i32", "u32"] -%}
+{% if walk.option -%}
+{% if kind == "str" and walk.expr is endingwith(".as_ref()") -%}
+{{ walk.expr[:-9] }}.as_deref()
+{%- else -%}
+{{ walk.expr }}{% if kind == "str" %}.map(String::as_str){% elif kind == "copy" or (kind == "i64" and walk.ty == "i64") %}.copied(){% elif kind == "i64" and lossless %}.map(|value| i64::from(*value)){% elif kind == "i64" %}.and_then(|value| i64::try_from(*value).ok()){% endif %}
+{%- endif -%}
+{%- elif kind == "str" -%}
+Some({{ walk.expr }}.as_str())
+{%- elif kind == "copy" or (kind == "i64" and walk.ty == "i64") -%}
+Some({{ walk.expr }})
+{%- elif kind == "i64" and lossless -%}
+Some(i64::from({{ walk.expr }}))
+{%- elif kind == "i64" -%}
+i64::try_from({{ walk.expr }}).ok()
+{%- else -%}
+Some(&{% if mut %}mut {% endif %}{{ walk.expr }})
+{%- endif -%}
+{%- endmacro %}
+{% set paged = namespace(ops=[]) -%}
+{% for resource in api.resources -%}
+{% for op in resource.operations if op.pagination is defined -%}
+{% set paged.ops = paged.ops + [(resource, op)] -%}
+{% endfor -%}
+{% endfor -%}
+{% if paged.ops %}
+/// Typed accessors of the paging fields of each paginated operation's response.
+pub(crate) mod pages {
+    use super::pagination::Fields;
+    use crate::models;
+    {% for resource, op in paged.ops -%}
+    {% set pg = op.pagination -%}
+    {% set page_type = op.response_body_schema_name | to_upper_camel_case -%}
+    {% set total = pg.total_pages if pg.total_pages is defined else pg.total -%}
 
-use std::{sync::Arc, time::Duration};
+    pub(crate) static {{ (resource.name ~ "_" ~ op.name) | to_upper_snake_case }}: Fields<models::{{ page_type }}, models::{{ pg.item_schema | to_upper_camel_case }}> = Fields {
+        items: |page| {{ access("page", op.response_body_schema_name, pg["items"]) }},
+        items_mut: |page| {{ access("page", op.response_body_schema_name, pg["items"], mut=true) }},
+        next_cursor: {% if pg.next_cursor is defined %}Some(|page| {{ access("page", op.response_body_schema_name, pg.next_cursor, "str") }}){% else %}None{% endif %},
+        item_cursor: {% if pg.item_cursor is defined %}Some(|item| {{ access("item", pg.item_schema, [pg.item_cursor], "str") }}){% else %}None{% endif %},
+        has_more: {% if pg.has_more is defined %}Some(|page| {{ access("page", op.response_body_schema_name, pg.has_more, "copy") }}){% else %}None{% endif %},
+        total: {% if total %}Some(|page| {{ access("page", op.response_body_schema_name, total, "i64") }}){% else %}None{% endif %},
+    };
+    {% endfor %}
+}
+{% endif %}
+
+{% set kinds = api.security_schemes | map(attribute="kind") | list -%}
+{% set client = sdk.client_name -%}
+{% set client_rs %}// this file is @generated
+//! The `{{ client }}` client and its builder.
+
+use std::{fmt, sync::Arc, time::Duration};
 
 use hyper_util::client::legacy::connect::Connect;
 
-use super::{middleware::Middlewares, HttpClient};
-use crate::Configuration;
+use super::{
+    middleware::{Middleware, Middlewares},
+    HttpClient,
+};
+use crate::{error::Error, request::Failure, Configuration};
 
 use super::auth_schemes::{Credentials, Scheme, Security};
 
 const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
+const DEFAULT_BASE_URL: Option<&str> = {% if sdk.has_default_base_url %}Some({{ sdk.default_base_url | rust_str }}){% else %}None{% endif %};
+const API_KEY_ENV: &str = "{{ sdk.env_prefix }}_API_KEY";
+const BASE_URL_ENV: &str = "{{ sdk.env_prefix }}_BASE_URL";
 
 static SECURITY_SCHEMES: &[(&str, Scheme)] = &[
 {%- for scheme in api.security_schemes %}
-    ("{{ scheme.name }}", {% if scheme.kind == "bearer" %}Scheme::Bearer{% elif scheme.kind == "basic" %}Scheme::Basic{% else %}Scheme::ApiKey("{{ scheme.in }}", "{% if scheme.in == "query" %}{{ scheme.param }}{% else %}{{ scheme.param | lower }}{% endif %}"){% endif %}),
+    ("{{ scheme.name }}", {% if scheme.kind == "bearer" %}Scheme::Bearer{% elif scheme.kind == "basic" %}Scheme::Basic{% else %}Scheme::ApiKey("{{ scheme.in }}", {% if scheme.in == "header" %}{{ scheme.param | lower | rust_str }}{% else %}{{ scheme.param | rust_str }}{% endif %}){% endif %}),
 {%- endfor %}
 ];
 
 static DEFAULT_SECURITY: Security = &[{% for names in api.security %}&[{% for name in names %}"{{ name }}", {% endfor %}], {% endfor %}];
 
-/// Options for configuring the {{ sdk.client_name }} client.
-#[derive(Debug, Clone)]
-pub struct {{ sdk.client_name }}Options {
-    #[deprecated(note = "has no effect, use a middleware to log requests")]
-    pub debug: bool,
-
-    /// Custom server URL. Defaults to `{{ sdk.default_base_url }}`.
-    pub server_url: Option<String>,
-
-    /// Timeout of each attempt, from connecting until the response body is read{% if streaming.events %}
-    /// (for event streams, until the stream opens){% endif %}.
-    /// `None` never times out.
-    ///
-    /// Default: {% if sdk.timeout %}{{ sdk.timeout }} seconds{% else %}none{% endif %}.
-    pub timeout: Option<Duration>,
-
-    /// How many times a failed request is retried: on connection errors, timeouts, and
-    /// 408, 429 and 5xx responses. Only idempotent requests are retried; POST requests are
-    /// made idempotent with an automatic `Idempotency-Key`. `Retry-After` is honored up to
-    /// a minute, otherwise delays grow from 500ms to 8s with jitter.
-    ///
-    /// Default: 2
-    pub num_retries: Option<u32>,
-{%- if "bearer" in kinds %}
-
-    /// Called before each request for a fresh bearer token, e.g. an OAuth2
-    /// access token. Takes precedence over the client token.
-    pub token_provider: Option<super::TokenProvider>,
-{%- endif %}
-{%- if "basic" in kinds %}
-
-    /// HTTP basic credentials.
-    pub basic_auth: Option<super::BasicAuth>,
-{%- endif %}
-{%- if "api_key" in kinds %}
-
-    /// API keys by security scheme name ({% for scheme in api.security_schemes if scheme.kind == "api_key" %}{% if not loop.first %}, {% endif %}`{{ scheme.name }}`{% endfor %}).
-    /// Schemes left out use the client token.
-    pub api_keys: std::collections::HashMap<String, String>,
-{%- endif %}
-
-    /// Exact delays before each retry, overriding `num_retries` and the backoff.
-    pub retry_schedule: Option<Vec<Duration>>,
-
-    /// Middleware wrapping every HTTP attempt: caching, logging, custom headers.
-    pub middleware: Middlewares,
-
-    /// Sends the requests. Defaults to hyper over rustls, or native-tls with the
-    /// `native-tls` feature. See [`with_connector`](Self::with_connector) for custom TLS
-    /// roots, client certificates or a proxy.
-    pub http_client: Option<Arc<dyn HttpClient>>,
-}
-
-impl {{ sdk.client_name }}Options {
-    /// Sends requests through `connector`, e.g. a `hyper_rustls::HttpsConnector` with its
-    /// own `rustls::ClientConfig`.
-    pub fn with_connector<C>(mut self, connector: C) -> Self
-    where
-        C: Connect + Clone + Send + Sync + 'static,
-    {
-        self.http_client = Some(super::http_client(connector));
-        self
-    }
-}
-
-impl Default for {{ sdk.client_name }}Options {
-    fn default() -> Self {
-        #[allow(deprecated)]
-        Self {
-            debug: false,
-            server_url: None,
-            timeout: {% if sdk.timeout %}Some(Duration::from_secs({{ sdk.timeout }})){% else %}None{% endif %},
-            num_retries: None,
-            retry_schedule: None,
-            middleware: Middlewares::default(),
-{%- if "bearer" in kinds %}
-            token_provider: None,
-{%- endif %}
-{%- if "basic" in kinds %}
-            basic_auth: None,
-{%- endif %}
-{%- if "api_key" in kinds %}
-            api_keys: Default::default(),
-{%- endif %}
-            http_client: None,
-        }
-    }
-}
-
-/// {{ sdk.client_name }} API client.
-///
-/// This is the main entry point for interacting with the {{ sdk.client_name }} API.
-///
-/// # Example
+/// The `{{ client }}` API client, cheap to clone: clones share their connections.
 ///
 /// ```no_run
-/// use {{ sdk.rust_crate }}::api::{{ "{" }}{{ sdk.client_name }}, {{ sdk.client_name }}Options};
+/// use {{ sdk.rust_crate }}::api::{{ client }};
 ///
 /// # async fn example() -> Result<(), {{ sdk.rust_crate }}::error::Error> {
-/// let client = {{ sdk.client_name }}::new("your-api-key", None);
-///
+{% if sdk.has_default_base_url -%}
+/// // `{{ sdk.env_prefix }}_API_KEY` and `{{ sdk.env_prefix }}_BASE_URL`, when set
+{% else -%}
+/// // The token from `{{ sdk.env_prefix }}_API_KEY`, the base URL from `{{ sdk.env_prefix }}_BASE_URL`
+{% endif -%}
+/// let client = {{ client }}::from_env()?;
+/// let client = {{ client }}::builder()
+///     .token("your-api-key")
+{% if not sdk.has_default_base_url -%}
+///     .base_url("https://api.example.com")
+{% endif -%}
+///     .timeout(std::time::Duration::from_secs(20))
+///     .max_retries(3)
+///     .build()?;
 {% if sdk.example -%}
-/// // Access API resources
 {% for line in sdk.example | lines -%}
 /// {{ line }}
 {% endfor -%}
-{% else -%}
-/// // Access the generated resources through `client`.
 {% endif -%}
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct {{ sdk.client_name }} {
+pub struct {{ client }} {
     pub(super) cfg: Arc<Configuration>,
 }
 
-impl {{ sdk.client_name }} {
-    /// Create a new {{ sdk.client_name }} client with the given API key.
+impl {{ client }} {
+    /// A client sending `token`, configured otherwise like [`from_env`](Self::from_env).
     ///
-    /// # Arguments
+    /// # Errors
     ///
-    /// * `token` - Your {{ sdk.client_name }} API key
-    /// * `options` - Optional configuration options
-    pub fn new(token: impl Into<String>, options: Option<{{ sdk.client_name }}Options>) -> Self {
-        let options = options.unwrap_or_default();
-        let cfg = Arc::new(Configuration {
-            user_agent: Some(format!("{{ sdk.user_agent_prefix }}-rust/{CRATE_VERSION}")),
-            client: options
-                .http_client
-                .unwrap_or_else(|| super::http_client(crate::make_connector())),
-            timeout: options.timeout,
-            base_path: options
-                .server_url
-                .unwrap_or_else(|| "{{ sdk.default_base_url }}".to_string()),
-            bearer_access_token: Some(token.into()),
-            num_retries: options.num_retries.unwrap_or(2),
-            retry_schedule: options.retry_schedule,
-            middleware: options.middleware.0,
-            credentials: Credentials {
-                schemes: SECURITY_SCHEMES,
-                security: DEFAULT_SECURITY,
-                token_provider: {% if "bearer" in kinds %}options.token_provider{% else %}None{% endif %},
-                basic_auth: {% if "basic" in kinds %}options.basic_auth{% else %}None{% endif %},
-                api_keys: {% if "api_key" in kinds %}options.api_keys{% else %}Default::default(){% endif %},
-            },
-        });
-
-        Self { cfg }
+    /// See [`{{ client }}Builder::build`].
+    pub fn new(token: impl Into<String>) -> Result<Self, Error> {
+        Self::builder().token(token).build()
     }
 
-    /// Creates a new `{{ sdk.client_name }}` API client with a different token,
-    /// re-using all of the settings and the HTTP client from
-    /// an existing `{{ sdk.client_name }}` instance.
+    /// A client configured from the environment: the token from `{{ sdk.env_prefix }}_API_KEY`,
+    /// and the base URL from `{{ sdk.env_prefix }}_BASE_URL`{% if sdk.has_default_base_url %} when set{% endif %}.
     ///
-    /// This can be used to change the token without incurring
-    /// the cost of TLS initialization.
+    /// # Errors
+    ///
+    /// See [`{{ client }}Builder::build`].
+    pub fn from_env() -> Result<Self, Error> {
+        Self::builder().build()
+    }
+
+    /// A builder of a client, to set its token, base URL, timeout, retries, headers or HTTP
+    /// client.
+    pub fn builder() -> {{ client }}Builder {
+        {{ client }}Builder::default()
+    }
+
+    /// The same client sending another token, sharing its connections.
+    #[must_use]
     pub fn with_token(&self, token: impl Into<String>) -> Self {
         let cfg = Arc::new(Configuration {
             base_path: self.cfg.base_path.clone(),
@@ -258,25 +232,226 @@ impl {{ sdk.client_name }} {
             bearer_access_token: Some(token.into()),
             client: self.cfg.client.clone(),
             timeout: self.cfg.timeout,
-            num_retries: self.cfg.num_retries,
-            retry_schedule: self.cfg.retry_schedule.clone(),
+            max_retries: self.cfg.max_retries,
             middleware: self.cfg.middleware.clone(),
+            headers: self.cfg.headers.clone(),
             credentials: self.cfg.credentials.clone(),
         });
 
         Self { cfg }
     }
 {% for resource in api.resources %}
-    /// Access the {{ resource.name | to_snake_case | replace("_", " ") }} API.
-    pub fn {{ resource.name | to_snake_case }}(&self) -> super::{{ resource.name | to_upper_camel_case }}<'_> {
-        super::{{ resource.name | to_upper_camel_case }}::new(&self.cfg)
+    /// The {{ resource.name | to_snake_case | replace("_", " ") }} API.
+    #[must_use]
+    pub fn {{ resource.name | to_snake_case }}(&self) -> super::{{ resource.name | to_upper_camel_case }} {
+        super::{{ resource.name | to_upper_camel_case }}::new(self.cfg.clone())
     }
 {% endfor %}
 }
 
+impl fmt::Debug for {{ client }} {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("{{ client }}")
+            .field("base_url", &self.cfg.base_path)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Settings of a [`{{ client }}`]: `{{ client }}::builder().token("...").build()?`.
+#[derive(Clone)]
+#[must_use]
+pub struct {{ client }}Builder {
+    token: Option<String>,
+    base_url: Option<String>,
+    timeout: Option<Duration>,
+    max_retries: Option<u32>,
+    headers: Vec<(String, String)>,
+    middleware: Middlewares,
+    http_client: Option<Arc<dyn HttpClient>>,
+    token_provider: Option<super::TokenProvider>,
+    basic_auth: Option<super::BasicAuth>,
+    api_keys: std::collections::HashMap<String, String>,
+}
+
+impl {{ client }}Builder {
+    /// The token sent to the API. Defaults to `{{ sdk.env_prefix }}_API_KEY`.
+    pub fn token(mut self, token: impl Into<String>) -> Self {
+        self.token = Some(token.into());
+        self
+    }
+
+{% if sdk.has_default_base_url -%}
+    /// The URL the API is served at. Defaults to `{{ sdk.env_prefix }}_BASE_URL`, or
+    /// `{{ sdk.default_base_url }}`.
+{%- else -%}
+    /// The URL the API is served at. Defaults to `{{ sdk.env_prefix }}_BASE_URL`; the API has no
+    /// default, so one of them is required.
+{%- endif %}
+    pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
+    /// Timeout of each attempt, from connecting until the response body is read (for event
+    /// streams, until the stream opens). `None` never times out.
+    ///
+    /// Default: {{ sdk.timeout }} seconds.
+    pub fn timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.timeout = timeout.into();
+        self
+    }
+
+    /// How many times a failed request is retried: on connection errors, timeouts, and
+    /// 408, 429 and 5xx responses. Only idempotent requests are retried; POST requests are
+    /// made idempotent with an automatic `Idempotency-Key`. `Retry-After` is honored up to
+    /// a minute, otherwise delays grow from 500ms to 8s with jitter.
+    ///
+    /// Default: 2.
+    pub fn max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = Some(max_retries);
+        self
+    }
+
+    /// Adds a header to every request. Headers of one call win over it.
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
+    }
+
+    /// Wraps every HTTP attempt: caching, logging, custom headers. The first one added is the
+    /// outermost.
+    pub fn middleware(mut self, middleware: impl Middleware + 'static) -> Self {
+        self.middleware.push(middleware);
+        self
+    }
+
+    /// Sends the requests. Defaults to hyper over rustls, or native-tls with the
+    /// `native-tls` feature.
+    pub fn http_client(mut self, http_client: Arc<dyn HttpClient>) -> Self {
+        self.http_client = Some(http_client);
+        self
+    }
+
+    /// Sends requests through `connector`, e.g. a `hyper_rustls::HttpsConnector` with its
+    /// own `rustls::ClientConfig`, for custom TLS roots, client certificates or a proxy.
+    pub fn connector<C>(self, connector: C) -> Self
+    where
+        C: Connect + Clone + Send + Sync + 'static,
+    {
+        self.http_client(super::http_client(connector))
+    }
+{%- if "bearer" in kinds %}
+
+    /// Called before each request for a fresh bearer token, e.g. a short-lived access token.
+    /// Takes precedence over the token.
+    pub fn token_provider(mut self, provider: super::TokenProvider) -> Self {
+        self.token_provider = Some(provider);
+        self
+    }
+{%- endif %}
+{%- if "basic" in kinds %}
+
+    /// HTTP basic credentials.
+    pub fn basic_auth(mut self, username: impl Into<String>, password: impl Into<String>) -> Self {
+        self.basic_auth = Some(super::BasicAuth {
+            username: username.into(),
+            password: password.into(),
+        });
+        self
+    }
+{%- endif %}
+{%- if "api_key" in kinds %}
+
+    /// The API key of a security scheme ({% for scheme in api.security_schemes if scheme.kind == "api_key" %}{% if not loop.first %}, {% endif %}`{{ scheme.name }}`{% endfor %}).
+    /// Schemes left out use the token.
+    pub fn api_key(mut self, scheme: impl Into<String>, key: impl Into<String>) -> Self {
+        self.api_keys.insert(scheme.into(), key.into());
+        self
+    }
+{%- endif %}
+
+    /// The client.
+    ///
+    /// # Errors
+    ///
+    /// Fails with [`Error::Request`] when the base URL is {% if not sdk.has_default_base_url %}missing (neither
+    /// [`base_url`](Self::base_url) nor `{{ sdk.env_prefix }}_BASE_URL` is set) or {% endif %}not an absolute URL.
+    pub fn build(self) -> Result<{{ client }}, Error> {
+        let env = |name| std::env::var(name).ok().filter(|value: &String| !value.is_empty());
+        let base_path = self
+            .base_url
+            .or_else(|| env(BASE_URL_ENV))
+            .or_else(|| DEFAULT_BASE_URL.map(str::to_owned))
+            .ok_or_else(|| {
+                invalid(format!(
+                    "no base URL: call `base_url()` on the builder or set `{BASE_URL_ENV}`"
+                ))
+            })?;
+        let absolute = base_path.parse::<http::Uri>().ok().is_some_and(|uri| {
+            uri.authority().is_some() && matches!(uri.scheme_str(), Some("http" | "https"))
+        });
+        if !absolute {
+            return Err(invalid(format!(
+                "the base URL `{base_path}` is not an absolute http(s) URL"
+            )));
+        }
+        let cfg = Arc::new(Configuration {
+            user_agent: Some(format!("{{ sdk.user_agent_prefix }}-rust/{CRATE_VERSION}")),
+            client: self
+                .http_client
+                .unwrap_or_else(|| super::http_client(crate::make_connector())),
+            timeout: self.timeout,
+            base_path,
+            bearer_access_token: self.token.or_else(|| env(API_KEY_ENV)),
+            max_retries: self.max_retries.unwrap_or(2),
+            middleware: self.middleware.0,
+            headers: self.headers,
+            credentials: Credentials {
+                schemes: SECURITY_SCHEMES,
+                security: DEFAULT_SECURITY,
+                token_provider: self.token_provider,
+                basic_auth: self.basic_auth,
+                api_keys: self.api_keys,
+            },
+        });
+        Ok({{ client }} { cfg })
+    }
+}
+
+fn invalid(message: String) -> Error {
+    Error::generic(Failure::Request(message.into()))
+}
+
+impl Default for {{ client }}Builder {
+    fn default() -> Self {
+        Self {
+            token: None,
+            base_url: None,
+            timeout: Some(Duration::from_secs({{ sdk.timeout }})),
+            max_retries: None,
+            headers: Vec::new(),
+            middleware: Middlewares::default(),
+            http_client: None,
+            token_provider: None,
+            basic_auth: None,
+            api_keys: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl fmt::Debug for {{ client }}Builder {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("{{ client }}Builder")
+            .field("base_url", &self.base_url)
+            .field("timeout", &self.timeout)
+            .field("max_retries", &self.max_retries)
+            .finish_non_exhaustive()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{{ sdk.client_name }};
+    use super::{{ client }};
 
     {% if sdk.send_sync_probe -%}
     #[test]
@@ -291,10 +466,9 @@ mod tests {
     {% else -%}
     #[test]
     fn test_client_send_sync() {
-        fn require_send_sync<T: Send + Sync>(_: T) {}
+        fn require_send_sync<T: Send + Sync>() {}
 
-        let client = {{ sdk.client_name }}::new("", None);
-        require_send_sync(client);
+        require_send_sync::<{{ client }}>();
     }
     {% endif -%}
 }

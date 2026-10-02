@@ -3,15 +3,16 @@ use std::{sync::Arc, time::Duration};
 
 use crate::{api::middleware::Middleware, connector::HttpClient};
 
-/// Settings shared by every request of a client, built from its options.
+/// Settings shared by every request of a client, built from its builder.
 pub struct Configuration {
     pub base_path: String,
     pub user_agent: Option<String>,
     pub bearer_access_token: Option<String>,
     pub timeout: Option<Duration>,
-    pub num_retries: u32,
-    pub retry_schedule: Option<Vec<Duration>>,
+    pub max_retries: u32,
     pub middleware: Vec<Arc<dyn Middleware>>,
+    /// Sent with every request, below the headers of one call.
+    pub headers: Vec<(String, String)>,
     pub(crate) credentials: crate::api::auth_schemes::Credentials,
 
     pub(crate) client: Arc<dyn HttpClient>,

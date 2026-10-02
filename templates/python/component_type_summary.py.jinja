@@ -1,16 +1,20 @@
-{% from "types/macros.py.jinja" import module_name -%}
+{% from "types/macros.py.jinja" import literal_alias, module_name -%}
 # this file is @generated
 """Models for the {{ sdk.client_name }} API."""
+{%- set names = api.types | items | map("last") | map(attribute="name") | map("to_upper_camel_case") | list %}
+{%- set exports = namespace(names=[]) %}
 
 from ..serialization import UNSET, Unset, UnknownVariant
 {% for _, type in api.types | items -%}
-from .{{ module_name(type.name) }} import {{ type.name | to_upper_camel_case }}
+{%- set alias = literal_alias(type, names) if type.kind in ["string_enum", "integer_enum"] else "" -%}
+from .{{ module_name(type.name) }} import {{ type.name | to_upper_camel_case }}{% if alias %}, {{ alias }}{% endif %}
+{% set exports.names = exports.names + [type.name | to_upper_camel_case] + ([alias] if alias else []) -%}
 {% endfor %}
 __all__ = [
     "UNSET",
     "Unset",
     "UnknownVariant",
-    {% for _, type in api.types | items -%}
-        "{{ type.name | to_upper_camel_case }}",
+    {% for name in exports.names -%}
+        "{{ name }}",
     {% endfor -%}
 ]

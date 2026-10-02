@@ -1,4 +1,4 @@
-{% from "types/macros.rs.jinja" import struct_fields, struct_new, unknown_variant, value_type, union_enums, union_imports -%}
+{% from "types/macros.rs.jinja" import extra_field, extra_name, struct_fields, struct_new, unknown_variant, value_type, union_enums, union_imports -%}
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::models::codec;
@@ -22,7 +22,7 @@ use super::{
 
 {% if shared -%}
 {{ doc_comment }}
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct {{ type_name }} {
     {{ struct_fields(shared, recursive, patch_body, owner=type_name) }}
 
@@ -34,14 +34,17 @@ pub struct {{ type_name }} {
 
 {% for variant in type.variants if variant.type == "struct" and variant.fields -%}
 {% set struct_name = type_name ~ (variant.name | to_rust_variant) ~ "Variant" -%}
+{% set required = variant.fields | selectattr("required") | rejectattr("nullable") | rejectattr("name", "equalto", tag) | list -%}
 /// The `{{ variant.name }}` variant of [`{{ enum_name }}`].
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, {% if not required %}Default, {% endif %}PartialEq, Deserialize, Serialize)]
+{% set extra = extra_name(variant.fields) -%}
 pub struct {{ struct_name }} {
     {{ struct_fields(variant.fields, recursive, false, tag, owner=struct_name) }}
+    {{- extra_field(extra) }}
 }
 
 impl {{ struct_name }} {
-    {{ struct_new(variant.fields, recursive, tag, owner=struct_name) }}
+    {{ struct_new(variant.fields, recursive, tag, owner=struct_name, extra=extra) }}
 }
 {{ union_enums(struct_name, variant.fields) }}
 {% endfor %}
@@ -60,15 +63,11 @@ Box<{{ variant.schema_ref | to_upper_camel_case }}>
 ///
 {% endif -%}
 /// Variants are told apart by `{{ tag }}`{% if adjacent %}, their fields sit under `{{ type.content_field }}`{% endif %}.
-{% set unit_default = not payload(type.variants[0]) -%}
-#[derive(Clone, Debug, {% if unit_default %}Default, {% endif %}PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum {{ enum_name }} {
     {% for variant in type.variants -%}
         {% set p = payload(variant) -%}
-        {% if loop.first and unit_default -%}
-        #[default]
-        {% endif -%}
         {{ variant.name | to_rust_variant }}{% if p %}({{ p }}){% endif %},
     {% endfor -%}
     /// A variant this version of the SDK does not know yet, as received.
@@ -77,6 +76,7 @@ pub enum {{ enum_name }} {
 
 impl {{ enum_name }} {
     /// The `{{ tag }}` value of this variant.
+    #[must_use]
     pub fn tag(&self) -> Option<&str> {
         match self {
             {% for variant in type.variants -%}
@@ -87,13 +87,6 @@ impl {{ enum_name }} {
     }
 }
 
-{% if not unit_default -%}
-impl Default for {{ enum_name }} {
-    fn default() -> Self {
-        Self::{{ type.variants[0].name | to_rust_variant }}(Default::default())
-    }
-}
-{% endif %}
 
 impl Serialize for {{ enum_name }} {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -124,7 +117,7 @@ impl<'de> Deserialize<'de> for {{ enum_name }} {
         Ok(match tag.as_str() {
             {% for variant in type.variants -%}
             {% if payload(variant) -%}
-            {{ variant.name | rust_str }} => Self::{{ variant.name | to_rust_variant }}(codec::from_value({% if adjacent %}codec::take(&mut value, {{ type.content_field | rust_str }}){% else %}value{% endif %})?),
+            {{ variant.name | rust_str }} => Self::{{ variant.name | to_rust_variant }}(codec::from_value({% if adjacent %}codec::take(&mut value, {{ type.content_field | rust_str }}){% elif variant.type == "struct" and variant.fields %}codec::without(value, {{ tag | rust_str }}){% else %}value{% endif %})?),
             {% else -%}
             {{ variant.name | rust_str }} => Self::{{ variant.name | to_rust_variant }},
             {% endif -%}

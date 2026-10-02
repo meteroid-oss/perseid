@@ -71,6 +71,8 @@ var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.
 - Enums and unions that keep values newer than the SDK instead of failing.
 - Sync and async clients in Python.
 - An opt-in [Standard Webhooks](https://www.standardwebhooks.com) verifier in every language.
+- An `api.md` in every SDK listing each method, its HTTP request and models, regenerated with
+  the code, and a README whose examples call your API's own operations.
 - Middleware, resource snippets and ejectable templates when the defaults don't fit.
 - `perseid generate --check` fails CI when the SDKs drift from the spec.
 
@@ -148,7 +150,7 @@ signs in with `GH_TOKEN`, `GITHUB_TOKEN`, the token `gh` stores, or a browser lo
 - [CI and releases](docs/ci.md): the Actions, tokens, spec pushes, release-please, publishing
 - [Configuration](docs/configuration.md): every key of `perseid.toml`
 - [Languages](docs/languages.md): what each SDK looks like
-- [Auth, pagination, streaming and encoding](docs/features.md)
+- [Auth, pagination, streaming, raw responses and encoding](docs/features.md)
 - [Customizing](docs/customizing.md): handwritten code, middleware, snippets, templates, webhooks
 
 ## Status

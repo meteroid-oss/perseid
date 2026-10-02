@@ -295,9 +295,10 @@ fn webhooks_verifier_is_opt_in() {
     let dir = project();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
-    // Rust always ships the verifier, gated by its `webhooks` cargo feature, so that
-    // `--all-features` (and docs.rs) builds whatever the setting.
-    assert!(dir.path().join("rust/src/webhooks.rs").exists());
+    assert!(
+        dir.path().join("rust/src/webhooks.rs").exists(),
+        "the `webhooks` cargo feature is the opt-in in Rust"
+    );
     assert!(!dir.path().join("go/webhooks.go").exists());
 
     let config = dir.path().join("perseid.toml");
@@ -429,8 +430,15 @@ fn csharp_init_and_generate_lay_out_a_dotnet_project() {
         assert!(sdk.join("Petstore").join(file).exists(), "{file}: {out}");
     }
     let api = fs::read_to_string(sdk.join("Petstore/Api/PetsApi.cs")).unwrap();
-    assert!(api.contains("public Task<Pet> RetrieveAsync("), "{api}");
-    assert!(api.contains("public Task<Pet> CreateAsync("), "{api}");
+    assert!(api.contains("public interface IPetsApi"), "{api}");
+    assert!(
+        api.contains("public async Task<Pet> RetrieveAsync("),
+        "{api}"
+    );
+    assert!(
+        api.contains("public Task<ApiResponse<Pet>> CreateAsync("),
+        "{api}"
+    );
 }
 
 #[test]
@@ -442,17 +450,29 @@ fn csharp_generates_streaming_auth_and_pagination() {
         |path: &str| fs::read_to_string(dir.path().join("csharp/Features").join(path)).unwrap();
     let streaming = read("Api/StreamingApi.cs");
     assert!(
-        streaming.contains("public Task<EventStream> RetrieveEventsStreamAsync("),
+        streaming.contains("public async Task<EventStream> RetrieveEventsStreamAsync("),
         "{streaming}"
     );
     assert!(
-        streaming.contains("public sealed class StreamingCreateFileBody"),
+        streaming.contains("Task<EventStream<CompletionChunk>> CreateCompletionStreamAsync("),
+        "{streaming}"
+    );
+    assert!(
+        streaming.contains("(completionRequest with { Stream = true })"),
+        "{streaming}"
+    );
+    assert!(
+        streaming.contains("public sealed class StreamingUploadFileBody"),
         "{streaming}"
     );
     assert!(streaming.contains("Upload body,"), "{streaming}");
     let widgets = read("Api/WidgetsApi.cs");
     assert!(
-        widgets.contains("public IAsyncEnumerable<Widget> ListIterAsync("),
+        widgets.contains("public AsyncPager<WidgetList, Widget> ListAutoPagingAsync("),
+        "{widgets}"
+    );
+    assert!(
+        widgets.contains("(page, _) => page.NextCursor"),
         "{widgets}"
     );
     let client = read("FeaturesClient.cs");
@@ -460,7 +480,22 @@ fn csharp_generates_streaming_auth_and_pagination() {
         client.contains("public FeaturesApiKeys ApiKeys"),
         "{client}"
     );
-    assert!(read("Api/RecordsApi.cs").contains(r#"request.Security = [["api_key_query"]];"#));
+    assert!(
+        read("Api/RecordsApi.cs").contains(
+            "request.Security =\n        [\n            [\"api_key_query\"],\n        ];"
+        )
+    );
+    for entry in fs::read_dir(dir.path().join("csharp/Features/Api")).unwrap() {
+        let code = fs::read_to_string(entry.unwrap().path()).unwrap();
+        assert!(
+            !code.contains("\n\n\n") && !code.contains("{\n\n") && !code.contains("\n\n    }"),
+            "stray blank lines before CSharpier:\n{code}"
+        );
+        assert!(
+            !code.contains("\nTask") && !code.contains("\npublic async") && code.ends_with("}\n"),
+            "broken indentation before CSharpier:\n{code}"
+        );
+    }
 }
 
 #[test]
@@ -1623,7 +1658,7 @@ fn torture_fixture_generates_every_language() {
         "{reactions}"
     );
     assert!(read("typescript/src/api/widgets.ts").contains("Promise<Widget[]>"));
-    assert!(read("python/torture/api/widgets.py").contains("-> t.List[Widget]:"));
+    assert!(read("python/torture/api/widgets.py").contains("-> builtins.list[Widget]:"));
     let tree = read("python/torture/models/tree_node.py");
     assert!(!tree.contains("import TreeNode"), "{tree}");
     assert!(read("python/torture/api/class_.py").contains("class Class(ApiBaseSync)"));
@@ -1810,6 +1845,8 @@ fn init_names_methods_after_their_resource_path() {
         ("PostChargesChargeCapture", "capture"),
         ("GetChargesChargeRefunds", "refunds"),
         ("PutCustomer", "update"),
+        ("loginUser", "login"),
+        ("markdown/render-raw", "render_raw"),
     ] {
         let op = operation(&model, id);
         assert_eq!(op["name"], name, "{id}");
@@ -2083,8 +2120,12 @@ fn rust_timeout_stream_and_error_docs_follow_the_config() {
         fs::read_to_string(dir.path().join("rust/src").join(path)).unwrap()
     };
     assert!(read("api/client.rs").contains("Some(Duration::from_secs(60))"));
+    let pagination = read("pagination.rs");
+    assert!(
+        pagination.contains("futures_core::Stream for Paginator"),
+        "{pagination}"
+    );
     let api = read("api/mod.rs");
-    assert!(api.contains("futures_core::Stream for Paginator"), "{api}");
     assert!(
         api.contains("pub type ErrorBody = serde_json::Value;"),
         "{api}"
@@ -2119,9 +2160,9 @@ fn typescript_types_unions_errors_and_the_default_timeout() {
     let charge = read("models/charge.ts");
     for decl in [
         "customer: string | Customer | null;",
-        "amount?: number | \"\";",
-        "shipping?: ChargeShipping | \"\";",
-        "source?: string | Customer | UploadModel;",
+        "amount?: number | \"\" | undefined;",
+        "shipping?: ChargeShipping | \"\" | undefined;",
+        "source?: string | Customer | UploadModel | undefined;",
     ] {
         assert!(charge.contains(decl), "no `{decl}` in {charge}");
     }
@@ -2234,7 +2275,8 @@ fn java_is_unchecked_and_hides_plumbing() {
         pets.contains("final RequestOptions requestOptions)"),
         "{pets}"
     );
-    assert!(read("exceptions/ApiException.java").contains("extends RuntimeException"));
+    assert!(read("exceptions/PetstoreException.java").contains("extends RuntimeException"));
+    assert!(read("exceptions/ApiException.java").contains("extends PetstoreException"));
     assert!(read("models/PetStatus.java").contains("public final class PetStatus"));
 }
 
@@ -2274,6 +2316,157 @@ fn java_enums_keep_unknown_values_and_docs_are_html() {
     assert!(api.contains("<code>created</code> &amp;"), "{api}");
 }
 
+const LANGUAGES: [&str; 6] = ["rust", "typescript", "python", "go", "java", "csharp"];
+
+/// `(METHOD, path)` of every operation `language` generates.
+fn operations(dir: &Path, language: &str) -> Vec<(String, String)> {
+    let (ok, out) = perseid(dir, &["inspect", language]);
+    assert!(ok, "{out}");
+    let api: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let mut stack: Vec<serde_json::Value> = api["resources"].as_array().unwrap().clone();
+    let mut operations = vec![];
+    while let Some(resource) = stack.pop() {
+        for op in resource["operations"].as_array().unwrap() {
+            let method = op["method"].as_str().unwrap().to_uppercase();
+            operations.push((method, op["path"].as_str().unwrap().to_owned()));
+        }
+        stack.extend(
+            resource["subresources"]
+                .as_object()
+                .unwrap()
+                .values()
+                .cloned(),
+        );
+    }
+    operations
+}
+
+#[test]
+fn api_md_lists_every_operation_and_readmes_call_real_ones() {
+    let calls = [
+        (
+            "petstore.yaml",
+            "rust",
+            "client.pets().retrieve(\"pet_id\")",
+        ),
+        (
+            "petstore.yaml",
+            "typescript",
+            "client.pets.retrieve(\"pet_id\")",
+        ),
+        (
+            "petstore.yaml",
+            "python",
+            "client.pets.retrieve(\"pet_id\")",
+        ),
+        (
+            "petstore.yaml",
+            "go",
+            "client.Pets().Retrieve(ctx, \"pet_id\")",
+        ),
+        (
+            "petstore.yaml",
+            "java",
+            "client.pets().retrieve(\"pet_id\")",
+        ),
+        (
+            "petstore.yaml",
+            "csharp",
+            "client.Pets.RetrieveAsync(\"pet_id\")",
+        ),
+        ("features.yaml", "rust", "client.gadgets().list_iter(None)"),
+        ("features.yaml", "typescript", "client.gadgets.list()"),
+        ("features.yaml", "python", "client.gadgets.list()"),
+        (
+            "features.yaml",
+            "go",
+            "client.Gadgets().ListAutoPaging(ctx, nil)",
+        ),
+        ("features.yaml", "java", "client.gadgets().listIter()"),
+        (
+            "features.yaml",
+            "csharp",
+            "client.Gadgets.ListAutoPagingAsync()",
+        ),
+        (
+            "features.yaml",
+            "rust",
+            "client.streaming().create_completion_stream(CompletionRequest::new(\"prompt\"))",
+        ),
+        (
+            "features.yaml",
+            "typescript",
+            "client.streaming.createCompletionStream({ prompt: \"prompt\" })",
+        ),
+        (
+            "features.yaml",
+            "python",
+            "client.streaming.create_completion_stream(prompt=\"prompt\")",
+        ),
+        (
+            "features.yaml",
+            "go",
+            "client.Streaming().CreateCompletionStream(ctx, features.CompletionRequest{Prompt: \"prompt\"})",
+        ),
+        (
+            "features.yaml",
+            "java",
+            "client.streaming().createCompletionStream(CompletionRequest.builder().prompt(\"prompt\").build())",
+        ),
+        (
+            "features.yaml",
+            "csharp",
+            "client.Streaming.CreateCompletionStreamAsync(new CompletionRequest { Prompt = \"prompt\" })",
+        ),
+    ];
+    for fixture in ["petstore.yaml", "features.yaml"] {
+        let dir = project_from(fixture, &LANGUAGES);
+        let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+        assert!(ok, "{out}");
+        for language in LANGUAGES {
+            let read = |path: &str| fs::read_to_string(dir.path().join(language).join(path));
+            let readme = read("README.md").unwrap();
+            for placeholder in [
+                "@@",
+                "{{",
+                "{%",
+                "someResource",
+                "some_resource",
+                "Things()",
+            ] {
+                assert!(!readme.contains(placeholder), "{placeholder} in {readme}");
+            }
+            assert!(readme.contains("[api.md](api.md)"), "{readme}");
+            for (_, _, call) in calls.iter().filter(|c| c.0 == fixture && c.1 == language) {
+                assert!(
+                    readme.contains(call),
+                    "no `{call}` in the {language} {readme}"
+                );
+            }
+            let api = read("api.md").unwrap();
+            assert!(api.starts_with("<!-- This file is @generated"), "{api}");
+            let operations = operations(dir.path(), language);
+            assert!(!operations.is_empty());
+            for (method, path) in &operations {
+                let row = format!("| `{method} {path}` |");
+                let expected = operations.iter().filter(|o| o.0 == *method && o.1 == *path);
+                assert!(
+                    api.matches(&row).count() >= expected.count(),
+                    "{language}: no row for {method} {path} in {api}"
+                );
+            }
+        }
+    }
+
+    let dir = project_from("petstore.yaml", &["go"]);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let api = dir.path().join("go/api.md");
+    fs::write(&api, fs::read_to_string(&api).unwrap() + "edited\n").unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--check", "--no-format"]);
+    assert!(!ok && out.contains("~ api.md"), "{out}");
+}
+
 #[test]
 fn csharp_types_unions_errors_and_timeout() {
     let dir = project_from("realworld.yaml", &["csharp"]);
@@ -2289,9 +2482,9 @@ fn csharp_types_unions_errors_and_timeout() {
         |path: &str| fs::read_to_string(dir.path().join("csharp/RealWorld").join(path)).unwrap();
     let charge = read("Models/Charge.cs");
     for expected in [
-        "public required ChargeCustomer? Customer { get; set; }",
+        "public required ChargeCustomer? Customer { get; init; }",
         "public sealed record Customer(global::RealWorld.Models.Customer Value) : ChargeCustomer;",
-        "public static implicit operator ChargeCustomer(string value) => new String(value);",
+        "public static implicit operator ChargeCustomer(string value) => new StringValue(value);",
         "public sealed record Empty() : ChargeAmount;",
         "/// A <c>Charge</c> moves money from a card.",
     ] {
@@ -2304,7 +2497,7 @@ fn csharp_types_unions_errors_and_timeout() {
     let charges = read("Api/ChargesApi.cs");
     assert!(charges.contains("RetrieveAsync("), "{charges}");
     assert!(
-        charges.contains("/// <exception cref=\"NotFoundException\">404: <c>GetError()</c> reads the <see cref=\"Models.Error\"/> body.</exception>"),
+        charges.contains("/// <exception cref=\"NotFoundException\">404: <c>Error</c> is the <see cref=\"Models.Error\"/> body.</exception>"),
         "{charges}"
     );
     assert!(

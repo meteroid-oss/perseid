@@ -1,99 +1,125 @@
-{#- The typed unions of `fields`, named after `union_owner`. -#}
-{% set models = "global::" ~ sdk.package_name ~ ".Models." -%}
-{% for field in fields -%}
-{% set name = m.union_class(field, union_owner, type_names) -%}
-{% if name -%}
-{% set t = namespace(ty=field.type) -%}
-{% for _ in range(8) -%}
-{% if t.ty.is_list() or t.ty.is_set() or t.ty.is_nullable() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
-{% endfor -%}
-{% set variants = namespace(list=[]) -%}
-{% set objects = t.ty.union_mode() != "json" -%}
-{% for v in t.ty.union_variants() -%}
-{% set class = m.union_variant_class(v, name) -%}
-{% set leaf = namespace(ty=v.type) -%}
-{% for _ in range(8) -%}
-{% if leaf.ty.is_list() or leaf.ty.is_set() or leaf.ty.is_nullable() %}{% set leaf.ty = leaf.ty.inner_type() %}{% elif leaf.ty.is_map() %}{% set leaf.ty = leaf.ty.value_type() %}{% endif -%}
-{% endfor -%}
-{% set ty = v.type.to_csharp() -%}
-{% if leaf.ty.is_schema_ref() and leaf.ty.to_csharp() not in ["string", "JsonNode"] -%}
-{% set ty = ty | replace(leaf.ty.to_csharp(), models ~ leaf.ty.to_csharp()) -%}
-{% endif -%}
-{% set ty = ty | replace("List<", "global::System.Collections.Generic.List<") | replace("Dictionary<", "global::System.Collections.Generic.Dictionary<") -%}
-{% set kind = "empty" if v.empty
+{#- The typed unions of `fields`, named after `union_owner`. #}
+{%- set models = "global::" ~ sdk.package_name ~ ".Models." %}
+{%- for field in fields %}
+{%- set name = m.union_class(field, union_owner, type_names) %}
+{%- if name %}
+{%- set t = namespace(ty=field.type) %}
+{%- for _ in range(8) %}
+{%- if t.ty.is_list() or t.ty.is_set() or t.ty.is_nullable() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif %}
+{%- endfor %}
+{%- set variants = namespace(list=[]) %}
+{%- set objects = t.ty.union_mode() != "json" %}
+{%- for v in t.ty.union_variants() %}
+{%- set class = m.union_variant_class(v, name) %}
+{%- set leaf = namespace(ty=v.type) %}
+{%- for _ in range(8) %}
+{%- if leaf.ty.is_list() or leaf.ty.is_set() or leaf.ty.is_nullable() %}{% set leaf.ty = leaf.ty.inner_type() %}{% elif leaf.ty.is_map() %}{% set leaf.ty = leaf.ty.value_type() %}{% endif %}
+{%- endfor %}
+{%- set ty = v.type.to_csharp() %}
+{%- if leaf.ty.is_schema_ref() and leaf.ty.to_csharp() not in ["string", "JsonNode"] %}
+{%- set ty = ty | replace(leaf.ty.to_csharp(), models ~ leaf.ty.to_csharp()) %}
+{%- endif %}
+{%- set ty = ty | replace("List<", "global::System.Collections.Generic.List<") | replace("Dictionary<", "global::System.Collections.Generic.Dictionary<") %}
+{%- set kind = "empty" if v.empty
     else "string" if ty == "string"
     else "bool" if ty == "bool"
     else "date_time" if ty == "DateTimeOffset"
     else "decimal" if ty == "decimal"
     else "number" if ty in ["short", "int", "long", "ushort", "ulong", "float", "double"]
     else "node" if ty == "JsonNode"
-    else "json" -%}
-{% set variants.list = variants.list + [{"class": class, "type": ty, "kind": kind, "json_type": v.json_type, "doc": v.type.to_csharp() if not v.empty else "\"\"", "name": v.name}] -%}
-{% endfor %}
+    else "json" %}
+{%- set accessor = (v.name | to_rust_variant) if class == (v.name | to_rust_variant) ~ "Value" else class %}
+{%- set variants.list = variants.list + [{"class": class, "accessor": accessor, "type": ty, "kind": kind, "json_type": v.json_type, "doc": v.type.to_csharp() if not v.empty else "\"\"", "name": v.name}] %}
+{%- endfor %}
 
 /// <summary>
-/// The <c>{{ field.name }}</c> value, one of {% for v in variants.list %}<see cref="{{ v.class }}"/>{% if not loop.last %}, {% endif %}{% endfor %}.
+/// The <c>{{ field.name | replace("&", "&amp;") | replace("<", "&lt;") }}</c> value, one of {% for v in variants.list %}<see cref="{{ v.class }}"/>{% if not loop.last %}, {% endif %}{% endfor %}.
 /// </summary>
 /// <remarks>
 /// Match on the nested variant records, or assign a variant's value directly. <see cref="Unrecognized"/>
 /// holds any other JSON value, as sent by a newer API version.
-{% if objects -%}
-{% if t.ty.union_mode() == "rules" -%}
+{%- if objects %}
+{%- if t.ty.union_mode() == "rules" %}
 /// An object is the first variant whose conditions it meets:
 /// <list type="bullet">
-{% for o in t.ty.object_variants() -%}
-{% set c = (variants.list | selectattr("name", "equalto", o.name) | first).class -%}
+{%- for o in t.ty.object_variants() %}
+{%- set c = (variants.list | selectattr("name", "equalto", o.name) | first).class %}
 /// <item><see cref="{{ c }}"/>: {% for w in o.when %}{% if not loop.first %} and {% endif %}<c>{{ w.property }}</c> {% if w.value is defined %}is <c>{{ w.value | tojson | replace("&", "&amp;") | replace("<", "&lt;") }}</c>{% else %}is present{% endif %}{% else %}any object{% endfor %}</item>
-{% endfor -%}
+{%- endfor %}
 /// </list>
-{% else -%}
+{%- else %}
 /// An object is the variant whose required properties are all present and which has the most of its
 /// properties, the first one on ties.
-{% endif -%}
+{%- endif %}
 /// An object no variant decodes is <see cref="Unrecognized"/> too; <see cref="DecodeAs{T}"/> reads the value as
 /// another variant.
-{% endif -%}
+{%- endif %}
 /// </remarks>
 [JsonConverter(typeof({{ name }}Converter))]
 public abstract partial record {{ name }}
 {
     private {{ name }}() { }
-{% for v in variants.list %}
-{% if v.kind == "empty" %}
+{%- for v in variants.list %}
+{%- if v.kind == "empty" %}
+
     /// <summary>The empty string, which unsets the value.</summary>
     public sealed record {{ v.class }}() : {{ name }};
 
     /// <summary>Whether this is <see cref="{{ v.class }}"/>, the empty string.</summary>
     public bool IsEmpty => this is {{ v.class }};
-{% else %}
-    /// <summary>A <c>{{ v.doc | replace("<", "&lt;") | replace(">", "&gt;") }}</c> value.</summary>
-    public sealed record {{ v.class }}({{ v.type }} Value) : {{ name }};
+{%- else %}
 
-    public static implicit operator {{ name }}({{ v.type }} value) => new {{ v.class }}(value);
+    /// <summary>A <c>{{ v.doc | replace("<", "&lt;") | replace(">", "&gt;") }}</c> value.</summary>
+    /// <param name="Value">The value.</param>
+{%- if "<" in v.type %}
+    public sealed record {{ v.class }}({{ v.type }} Value) : {{ name }}
+    {
+        /// <inheritdoc/>
+        {{ m.arrow("public bool Equals(" ~ v.class ~ "? other)", "other is not null && global::" ~ sdk.package_name ~ ".Equality.Equal(Value, other.Value)", 8) }}
+
+        /// <inheritdoc/>
+        public override int GetHashCode() => global::{{ sdk.package_name }}.Equality.Hash(Value);
+    }
+{%- else %}
+    public sealed record {{ v.class }}({{ v.type }} Value) : {{ name }};
+{%- endif %}
+
+    /// <summary>Wraps <paramref name="value"/> in <see cref="{{ v.class }}"/>.</summary>
+    /// <param name="value">The value.</param>
+    {{ m.arrow("public static implicit operator " ~ name ~ "(" ~ v.type ~ " value)", "new " ~ v.class ~ "(value)", 4) }}
 
     /// <summary>The value if this is <see cref="{{ v.class }}"/>, else <c>null</c>.</summary>
-    public {{ v.type }}? As{{ v.class }} => this is {{ v.class }} variant ? variant.Value : default({{ v.type }}?);
-{% endif -%}
-{% endfor %}
+    {{ m.arrow("public " ~ v.type ~ "? As" ~ v.accessor, "this is " ~ v.class ~ " variant ? variant.Value : default(" ~ v.type ~ "?)", 4) }}
+{%- endif %}
+{%- endfor %}
+
     /// <summary>A value of none of the known variants, kept as raw JSON.</summary>
-    public sealed record Unrecognized(JsonElement Raw) : {{ name }};
-{% if objects %}
+    /// <param name="Raw">The JSON value.</param>
+    public sealed record Unrecognized(JsonElement Raw) : {{ name }}
+    {
+        /// <inheritdoc/>
+        {{ m.arrow("public bool Equals(Unrecognized? other)", "other is not null && global::" ~ sdk.package_name ~ ".Equality.Equal(Raw, other.Raw)", 8) }}
+
+        /// <inheritdoc/>
+        public override int GetHashCode() => global::{{ sdk.package_name }}.Equality.Hash(Raw);
+    }
+{%- if objects %}
 
     /// <summary>The value read as another type, such as another variant than the one decoding picked.</summary>
     public T DecodeAs<T>(global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> typeInfo) =>
         JsonSerializer
-            .SerializeToElement(this, (global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<{{ name }}>)typeInfo.Options.GetTypeInfo(typeof({{ name }})))
+            .SerializeToElement(
+                this,
+                (global::System.Text.Json.Serialization.Metadata.JsonTypeInfo<{{ name }}>)
+                    typeInfo.Options.GetTypeInfo(typeof({{ name }}))
+            )
             .Deserialize(typeInfo)!;
-{% endif %}
+{%- endif %}
 }
 
 internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
 {
-    public override {{ name }} Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options
-    )
+    {{ m.wrap("public override " ~ name ~ " Read", ["ref Utf8JsonReader reader", "Type typeToConvert", "JsonSerializerOptions options"], 4) }}
     {
         using var document = JsonDocument.ParseValue(ref reader);
         var root = document.RootElement;
@@ -101,105 +127,108 @@ internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
         {
             switch (root.ValueKind)
             {
-{% if objects -%}
+{%- if objects %}
                 case JsonValueKind.Object:
-{% set candidates = t.ty.object_variants() -%}
-{% if t.ty.union_mode() == "rules" -%}
-{% for o in candidates -%}
-{% set v = variants.list | selectattr("name", "equalto", o.name) | first -%}
-{% if o.when -%}
+{%- set candidates = t.ty.object_variants() %}
+{%- if t.ty.union_mode() == "rules" %}
+{%- for o in candidates %}
+{%- set v = variants.list | selectattr("name", "equalto", o.name) | first %}
+{%- if o.when %}
                     if ({% for w in o.when %}global::{{ sdk.package_name }}.UnionRules.Has(root, {{ w.property | tojson }}, {{ (w.value | tojson | tojson) if w.value is defined else "null" }}){% if not loop.last %} && {% endif %}{% endfor %})
                     {
-                        return new {{ name }}.{{ v.class }}(Json.Deserialize<{{ v.type }}>(root, options));
+                        {{ m.wrap("return new " ~ name ~ "." ~ v.class, ["Json.Deserialize<" ~ v.type ~ ">(root, options)"], 24, ";") }}
                     }
-{% else -%}
-                    return new {{ name }}.{{ v.class }}(Json.Deserialize<{{ v.type }}>(root, options));
-{% endif -%}
-{% endfor -%}
-{% if candidates[-1].when -%}
+{%- else %}
+                    {{ m.wrap("return new " ~ name ~ "." ~ v.class, ["Json.Deserialize<" ~ v.type ~ ">(root, options)"], 20, ";") }}
+{%- endif %}
+{%- endfor %}
+{%- if candidates[-1].when %}
                     break;
-{% endif -%}
-{% else -%}
+{%- endif %}
+{%- else %}
                     switch (global::{{ sdk.package_name }}.UnionRules.BestMatch(root{% for o in candidates %}, [[{% for p in o.required %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}], [{% for p in o.properties %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]]{% endfor %}))
                     {
-{% for o in candidates -%}
-{% set v = variants.list | selectattr("name", "equalto", o.name) | first -%}
+{%- for o in candidates %}
+{%- set v = variants.list | selectattr("name", "equalto", o.name) | first %}
                         case {{ loop.index0 }}:
-                            return new {{ name }}.{{ v.class }}(Json.Deserialize<{{ v.type }}>(root, options));
-{% endfor -%}
+                            {{ m.wrap("return new " ~ name ~ "." ~ v.class, ["Json.Deserialize<" ~ v.type ~ ">(root, options)"], 28, ";") }}
+{%- endfor %}
                     }
                     break;
-{% endif -%}
-{% endif -%}
-{% for v in variants.list if not (objects and v.json_type == "object") -%}
-{% set create = "new " ~ name ~ "." ~ v.class -%}
-{% if v.kind == "empty" -%}
+{%- endif %}
+{%- endif %}
+{%- for v in variants.list if not (objects and v.json_type == "object") %}
+{%- set create = "new " ~ name ~ "." ~ v.class %}
+{%- if v.kind == "empty" %}
                 case JsonValueKind.String when root.ValueEquals(""):
                     return {{ create }}();
-{% elif v.kind == "string" -%}
+{%- elif v.kind == "string" %}
                 case JsonValueKind.String:
                     return {{ create }}(root.GetString()!);
-{% elif v.kind == "date_time" -%}
+{%- elif v.kind == "date_time" %}
                 case JsonValueKind.String when root.TryGetDateTimeOffset(out var dateTime):
                     return {{ create }}(dateTime);
-{% elif v.kind == "decimal" -%}
+{%- elif v.kind == "decimal" %}
                 case JsonValueKind.String
                     when decimal.TryParse(root.GetString(), global::System.Globalization.NumberStyles.Float, global::System.Globalization.CultureInfo.InvariantCulture, out var number):
                     return {{ create }}(number);
-{% elif v.kind == "bool" -%}
+{%- elif v.kind == "bool" %}
                 case JsonValueKind.True or JsonValueKind.False:
                     return {{ create }}(root.GetBoolean());
-{% elif v.kind == "number" -%}
-{% set getter = {"short": "Int16", "int": "Int32", "long": "Int64", "ushort": "UInt16", "ulong": "UInt64", "float": "Single", "double": "Double"}[v.type] -%}
+{%- elif v.kind == "number" %}
+{%- set getter = {"short": "Int16", "int": "Int32", "long": "Int64", "ushort": "UInt16", "ulong": "UInt64", "float": "Single", "double": "Double"}[v.type] %}
                 case JsonValueKind.Number when root.TryGet{{ getter }}(out var number):
                     return {{ create }}(number);
-{% elif v.kind == "node" -%}
+{%- elif v.kind == "node" %}
                 case JsonValueKind.Object:
                     return {{ create }}(JsonNode.Parse(root.GetRawText())!);
-{% else -%}
-{% set kinds = {"string": "String", "integer": "Number", "number": "Number", "boolean": "True or JsonValueKind.False", "array": "Array", "object": "Object"} -%}
+{%- else %}
+{%- set kinds = {"string": "String", "integer": "Number", "number": "Number", "boolean": "True or JsonValueKind.False", "array": "Array", "object": "Object"} %}
                 case JsonValueKind.{{ kinds[v.json_type] }}:
-                    return {{ create }}(Json.Deserialize<{{ v.type }}>(root, options));
-{% endif -%}
-{% endfor -%}
+                    {{ m.wrap("return " ~ create, ["Json.Deserialize<" ~ v.type ~ ">(root, options)"], 20, ";") }}
+{%- endif %}
+{%- endfor %}
             }
         }
-        catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException) { }
+        catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException)
+        {
+            return new {{ name }}.Unrecognized(root.Clone());
+        }
         return new {{ name }}.Unrecognized(root.Clone());
     }
 
-    public override void Write(Utf8JsonWriter writer, {{ name }} value, JsonSerializerOptions options)
+    {{ m.wrap("public override void Write", ["Utf8JsonWriter writer", name ~ " value", "JsonSerializerOptions options"], 4) }}
     {
         switch (value)
         {
-{% for v in variants.list -%}
-{% if v.kind == "empty" -%}
+{%- for v in variants.list %}
+{%- if v.kind == "empty" %}
             case {{ name }}.{{ v.class }}:
                 writer.WriteStringValue("");
                 break;
-{% else -%}
+{%- else %}
             case {{ name }}.{{ v.class }} variant:
-{% if v.kind in ["string", "date_time"] -%}
+{%- if v.kind in ["string", "date_time"] %}
                 writer.WriteStringValue(variant.Value);
-{% elif v.kind == "decimal" -%}
+{%- elif v.kind == "decimal" %}
                 writer.WriteStringValue(variant.Value.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
-{% elif v.kind == "bool" -%}
+{%- elif v.kind == "bool" %}
                 writer.WriteBooleanValue(variant.Value);
-{% elif v.kind == "number" -%}
+{%- elif v.kind == "number" %}
                 writer.WriteNumberValue(variant.Value);
-{% elif v.kind == "node" -%}
+{%- elif v.kind == "node" %}
                 variant.Value.WriteTo(writer, options);
-{% else -%}
-                JsonSerializer.Serialize(writer, variant.Value, Json.TypeInfo<{{ v.type }}>(options));
-{% endif -%}
+{%- else %}
+                {{ m.wrap("JsonSerializer.Serialize", ["writer", "variant.Value", "Json.TypeInfo<" ~ v.type ~ ">(options)"], 16, ";") }}
+{%- endif %}
                 break;
-{% endif -%}
-{% endfor -%}
+{%- endif %}
+{%- endfor %}
             case {{ name }}.Unrecognized unrecognized:
                 unrecognized.Raw.WriteTo(writer);
                 break;
         }
     }
 }
-{% endif -%}
-{% endfor -%}
+{%- endif %}
+{%- endfor %}

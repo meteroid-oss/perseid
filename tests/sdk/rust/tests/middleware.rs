@@ -1,8 +1,8 @@
 use bytes::Bytes;
-use http1::{HeaderMap, HeaderValue, Method, StatusCode};
+use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use petstore::api::{
     middleware::{BoxError, BoxFuture, Middleware, Next, Request, Response},
-    Petstore, PetstoreOptions,
+    Petstore,
 };
 use std::{
     collections::HashMap,
@@ -89,11 +89,14 @@ impl Middleware for Tag {
 }
 
 fn client(origin: &Origin) -> Petstore {
-    let mut options = PetstoreOptions::default();
-    options.middleware.push(Tag);
-    options.middleware.push(Cache::default());
-    options.middleware.push(origin.clone());
-    Petstore::new("token", Some(options))
+    Petstore::builder()
+        .token("token")
+        .base_url("https://pets.example.com")
+        .middleware(Tag)
+        .middleware(Cache::default())
+        .middleware(origin.clone())
+        .build()
+        .unwrap()
 }
 
 #[tokio::test]

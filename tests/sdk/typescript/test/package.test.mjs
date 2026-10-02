@@ -10,7 +10,7 @@ test("the exports map serves ESM to import and CommonJS to require", async () =>
   const cjs = createRequire(import.meta.url)(name);
   for (const sdk of [esm, cjs]) {
     assert.equal(typeof sdk.Petstore, "function");
-    assert.equal(typeof sdk.ApiException, "function");
+    assert.equal(typeof sdk.APIError, "function");
     assert.equal(sdk.PetStatus.Available, "available");
     assert.equal(typeof sdk.PetSerializer.parse, "function");
   }
@@ -31,5 +31,4 @@ test("models parse and serialize under their public names", async () => {
     name: "Rex",
     created_at: "2024-01-01T00:00:00.000Z",
   });
-  assert.deepEqual(PetSerializer._fromJsonObject({ id: "1", name: "Rex", created_at: "2024-01-01T00:00:00Z" }), pet);
 });

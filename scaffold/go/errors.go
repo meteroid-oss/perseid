@@ -10,7 +10,10 @@ import (
 type APIError struct {
 	StatusCode int
 	// Header holds the response headers, such as the request id to quote to support.
-	Header  http.Header
+	Header http.Header
+	// Body is the body decoded as the error schema the operation declares for
+	// the status, such as *ErrorResponse, else as plain JSON; nil when not JSON.
+	Body    any
 	RawBody []byte
 }
 
@@ -41,7 +44,8 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("@@PACKAGE_NAME@@: API error (status %d): %s", e.StatusCode, body)
 }
 
-// TransportError is returned when no response was received.
+// TransportError is returned when no response was received: the connection
+// failed or the call was canceled. A timeout is a [*TimeoutError] instead.
 type TransportError struct {
 	Method string
 	Path   string
@@ -54,7 +58,8 @@ func (e *TransportError) Error() string {
 
 func (e *TransportError) Unwrap() error { return e.Err }
 
-// DecodeError is returned when a 2xx response body could not be decoded.
+// DecodeError is returned when a 2xx response body, or an event of a stream,
+// could not be decoded.
 type DecodeError struct {
 	StatusCode int
 	RawBody    []byte

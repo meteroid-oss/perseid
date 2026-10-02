@@ -15,12 +15,28 @@ import okhttp3.RequestBody;
 public final class Multipart {
     private final MultipartBody.Builder builder = new MultipartBody.Builder().setType(MultipartBody.FORM);
 
-    /** Adds a field: scalars as text, objects as JSON, lists as one part per item. */
+    /** An empty form. */
+    public Multipart() {}
+
+    /**
+     * Adds a field: scalars as text, objects as JSON, lists as one part per item.
+     *
+     * @param name the field name
+     * @param value the value, left out when null
+     * @return this form
+     */
     public Multipart field(String name, Object value) {
         return field(name, value, null);
     }
 
-    /** Like {@link #field(String, Object)}, with the media type the spec declares for the part. */
+    /**
+     * Like {@link #field(String, Object)}, with the media type the spec declares for the part.
+     *
+     * @param name the field name
+     * @param value the value, left out when null
+     * @param contentType the declared media type, or null
+     * @return this form
+     */
     public Multipart field(String name, Object value, String contentType) {
         if (value == null) {
             return this;
@@ -43,11 +59,26 @@ public final class Multipart {
         return this;
     }
 
+    /**
+     * Adds a file.
+     *
+     * @param name the field name
+     * @param upload the file, left out when null
+     * @return this form
+     */
     public Multipart file(String name, Upload upload) {
         return file(name, upload, null);
     }
 
-    /** Adds a file; {@code contentType} is the media type the spec declares, used unless the upload sets its own. */
+    /**
+     * Adds a file; {@code contentType} is the media type the spec declares, used unless the
+     * upload sets its own.
+     *
+     * @param name the field name
+     * @param upload the file, left out when null
+     * @param contentType the declared media type, or null
+     * @return this form
+     */
     public Multipart file(String name, Upload upload, String contentType) {
         if (upload != null) {
             String filename = upload.getFilename() != null ? upload.getFilename() : "file";
@@ -56,7 +87,14 @@ public final class Multipart {
         return this;
     }
 
-    /** Adds several files as repeated parts of the same name. */
+    /**
+     * Adds several files as repeated parts of the same name.
+     *
+     * @param name the field name
+     * @param uploads the files, left out when null
+     * @param contentType the declared media type, or null
+     * @return this form
+     */
     public Multipart files(String name, java.util.List<Upload> uploads, String contentType) {
         if (uploads != null) {
             uploads.forEach(upload -> file(name, upload, contentType));
@@ -64,6 +102,11 @@ public final class Multipart {
         return this;
     }
 
+    /**
+     * The body.
+     *
+     * @return the multipart body
+     */
     public RequestBody build() {
         return builder.build();
     }

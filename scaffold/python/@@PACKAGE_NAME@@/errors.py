@@ -1,45 +1,46 @@
-"""Customize API error decoding here without changing generated files."""
+"""Every error this SDK raises derives from `@@CLIENT_NAME@@Error`.
 
-import httpx
+* `APIStatusError` (and a subclass per common status): the API answered with
+  an error status. `body` is the error response decoded into its schema.
+* `APIConnectionError`: no response, after retries; `APITimeoutError` when the
+  request timed out.
+* `APIResponseValidationError`: a successful response that does not decode.
+"""
+# ruff: noqa: I001  (the import order depends on the client name)
 
+from ._exceptions import (
+    APIConnectionError,
+    APIError,
+    APIResponseValidationError,
+    APITimeoutError,
+)
+from .api._errors import (
+    APIStatusError,
+    AuthenticationError,
+    BadRequestError,
+    ConflictError,
+    InternalServerError,
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitError,
+    UnprocessableEntityError,
+)
 from .serialization import @@CLIENT_NAME@@Error, ModelParseError
 
 __all__ = [
     "@@CLIENT_NAME@@Error",
-    "ApiException",
+    "APIConnectionError",
+    "APIError",
+    "APIResponseValidationError",
+    "APIStatusError",
+    "APITimeoutError",
+    "AuthenticationError",
+    "BadRequestError",
+    "ConflictError",
+    "InternalServerError",
     "ModelParseError",
-    "NetworkException",
-    "ResponseDecodeError",
+    "NotFoundError",
+    "PermissionDeniedError",
+    "RateLimitError",
+    "UnprocessableEntityError",
 ]
-
-
-class NetworkException(@@CLIENT_NAME@@Error):
-    """The request got no response: connection failure or timeout, after retries."""
-
-
-class ApiException(@@CLIENT_NAME@@Error):
-    """The API answered with a non-2xx status."""
-
-    def __init__(
-        self, status_code: int, raw_body: bytes, headers: httpx.Headers | None = None
-    ) -> None:
-        self.status_code = status_code
-        self.raw_body = raw_body
-        self.headers = headers if headers is not None else httpx.Headers()
-        """Response headers, such as the request id to quote to support."""
-        super().__init__(f"API error {status_code}: {raw_body!r}")
-
-    @classmethod
-    def from_response(
-        cls, status_code: int, raw_body: bytes, headers: httpx.Headers | None = None
-    ) -> "ApiException":
-        return cls(status_code, raw_body, headers)
-
-
-class ResponseDecodeError(@@CLIENT_NAME@@Error, ValueError):
-    """A 2xx body was not valid JSON or did not match its model."""
-
-    def __init__(self, status_code: int, raw_body: bytes, reason: str) -> None:
-        self.status_code = status_code
-        self.raw_body = raw_body
-        super().__init__(f"Could not decode response ({status_code}): {reason}")

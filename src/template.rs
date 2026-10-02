@@ -55,6 +55,10 @@ pub fn populate_env(
     env.add_filter("go_tag", |s: Cow<'_, str>| ident::go_tag(&s));
     env.add_test("go_taggable", |s: Cow<'_, str>| ident::go_tag(&s).is_ok());
     env.add_filter("go_name", |s: Cow<'_, str>| go::initialisms(&s));
+    // The file a Go model or resource is generated into, without its `.go`.
+    env.add_filter("go_file", |s: Cow<'_, str>| {
+        crate::generator::go_file_stem(s.to_snake_case())
+    });
     // `tojson` writes `'` as `\u0027`, which Rust string literals reject.
     env.add_filter("rust_str", |s: Cow<'_, str>| format!("{s:?}"));
     env.add_filter("to_rust_variant", |s: Cow<'_, str>| {

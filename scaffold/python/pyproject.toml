@@ -34,5 +34,9 @@ packages = ["@@PACKAGE_NAME@@"]
 [tool.ruff]
 target-version = "py310"
 
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "PIE", "RET", "SIM"]
+ignore = ["E501"]
+
 [tool.mypy]
 strict = true

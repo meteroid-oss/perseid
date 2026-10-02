@@ -42,6 +42,9 @@ impl std::fmt::Display for Change {
     }
 }
 
+/// The template of `api.md`, the API reference at the root of every SDK.
+const API_REFERENCE: &str = "api_reference";
+
 /// Where each template renders to, and where the runtime goes, relative to the SDK root.
 fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathBuf)>) {
     let runtime = PathBuf::from(match language {
@@ -80,6 +83,7 @@ fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathB
         "go" => {}
         _ => tasks.push(("component_type_summary", models)),
     }
+    tasks.push((API_REFERENCE, PathBuf::from(".")));
     (runtime, tasks)
 }
 
@@ -175,9 +179,13 @@ fn render(
         );
     }
     for (template, output) in tasks {
-        let template = assets_dir
-            .path()
-            .join(format!("templates/{language}/{template}.{extension}.jinja"));
+        let output_extension = match template {
+            API_REFERENCE => "md",
+            _ => extension,
+        };
+        let template = assets_dir.path().join(format!(
+            "templates/{language}/{template}.{output_extension}.jinja"
+        ));
         let template = template.to_str().context("non UTF-8 path")?.to_owned();
         let out = Utf8PathBuf::from_path_buf(stage.join(&output))
             .map_err(|p| anyhow::anyhow!("non UTF-8 path {}", p.display()))?;
@@ -188,6 +196,7 @@ fn render(
             true,
             context.clone(),
             Some(output.to_str().unwrap()),
+            extension,
         )?;
         for path in paths {
             produced.push(clean(path.as_std_path().strip_prefix(stage)?));
@@ -229,7 +238,7 @@ fn feature_path<'a>(relative: &'a Path, context: &Value) -> Option<&'a Path> {
     (context.get(feature) == Some(&Value::Bool(true))).then_some(parts.as_path())
 }
 
-/// Substitutes `@@UPPER_SNAKE@@` tokens with `sdk` context values.
+/// Substitutes `@@UPPER_SNAKE@@` tokens (digits allowed after the first letter) with `sdk` context values.
 pub(crate) fn tokens(source: &str, context: &Value) -> Result<String> {
     let mut out = String::with_capacity(source.len());
     let mut rest = source;
@@ -238,7 +247,11 @@ pub(crate) fn tokens(source: &str, context: &Value) -> Result<String> {
             break;
         };
         let key = &rest[start + 2..start + 2 + len];
-        if key.is_empty() || !key.bytes().all(|b| b.is_ascii_uppercase() || b == b'_') {
+        if !key.starts_with(|c: char| c.is_ascii_uppercase())
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        {
             out.push_str(&rest[..start + 2]);
             rest = &rest[start + 2..];
             continue;
@@ -427,4 +440,20 @@ pub fn summary(
         }
     }
     out.trim_end().to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::tokens;
+
+    #[test]
+    fn tokens_with_digits_are_substituted() {
+        let context = json!({ "int64": "bigint", "client_name": "Acme" });
+        assert_eq!(
+            tokens("@@INT64@@ @@CLIENT_NAME@@ a@@b@@ @@1@@", &context).unwrap(),
+            "bigint Acme a@@b@@ @@1@@"
+        );
+    }
 }

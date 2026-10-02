@@ -1,0 +1,39 @@
+{#- The API as Python names it, for api.md and the README's examples. An example is a
+    `{resource, operation, path_args, body, result, item}` the README receives. -#}
+{% from "types/macros.py.jinja" import field_ident, py_ident, module_name, resource_module %}
+
+{#- The heading of a resource in api.md, and links to every resource's. -#}
+{% macro title(name) %}{{ name | to_snake_case | replace("_", " ") | capitalize }}{% endmacro %}
+
+{% macro contents(resources) -%}
+    {%- for r in resources %}[{{ title(r.name) }}](#{{ r.name | to_kebab_case }}){% if not loop.last %} · {% endif %}{% endfor -%}
+{%- endmacro %}
+
+{% macro package() %}{{ sdk.package_name | replace(".", "_") | replace("-", "_") }}{% endmacro %}
+
+{% macro resource(name) %}client.{{ py_ident(name) }}{% endmacro %}
+
+{% macro method(op) %}{{ py_ident(op.name) }}{% endmacro %}
+
+{% macro model_path(name) %}{{ package() }}/models/{{ module_name(name) }}.py{% endmacro %}
+
+{% macro resource_path(name) %}{{ package() }}/api/{{ resource_module(name) }}.py{% endmacro %}
+
+{#- A variable holding a value of schema `name`, `fallback` without one. -#}
+{% macro var(name, fallback) -%}
+    {%- set id = py_ident(name) if name else fallback -%}
+    {{ fallback if id in ["client", "page", "stream", "response", "error"] else id }}
+{%- endmacro %}
+
+{% macro literal(arg) -%}
+    {%- if arg.kind == "boolean" %}{{ "True" if arg.value else "False" }}{% else %}{{ arg.value | tojson }}{% endif -%}
+{%- endmacro %}
+
+{#- The call of an example, `kwargs` (`name=value, ...`) closing its arguments. -#}
+{% macro call(ex, kwargs="", raw=false) -%}
+    {%- set out = namespace(args=[]) -%}
+    {%- for a in ex.path_args %}{% set out.args = out.args + [literal(a)] %}{% endfor -%}
+    {%- if ex.body %}{% for f in ex.body.fields %}{% set out.args = out.args + [field_ident(f) ~ "=" ~ literal(f)] %}{% endfor %}{% endif -%}
+    {%- if kwargs %}{% set out.args = out.args + [kwargs] %}{% endif -%}
+    client.{{ "with_raw_response." if raw }}{{ py_ident(ex.resource) }}.{{ method(ex.operation) }}({{ out.args | join(", ") }})
+{%- endmacro %}

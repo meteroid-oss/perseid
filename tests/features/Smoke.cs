@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Features;
 using Features.Models;
 
@@ -25,21 +26,44 @@ void Equal<T>(T expected, T actual)
 void Ids(string expected, List<string> actual) => Equal(expected, string.Join(",", actual));
 
 using var client = new FeaturesClient("tok", new() { BaseUrl = serverUrl });
-Equal("||", (await client.Account.RetrieveHealthAsync()).Status);
+Equal("||", (await client.Account.CheckHealthAsync()).Status);
 Equal("Bearer tok||", (await client.Account.RetrieveMachineAsync()).Status);
-Ids("w1,w2,w3", await Collect(client.Widgets.ListIterAsync(), w => w.Id));
+Ids("w1,w2,w3", await Collect(client.Widgets.ListAutoPagingAsync(), w => w.Id));
 Ids(
     "e1,e2,e3",
-    await Collect(client.Widgets.ListEventsIterAsync("w1", new() { Kind = "created" }), e => e.Id)
+    await Collect(client.Widgets.ListEventsAutoPagingAsync("w1", new() { Kind = "created" }), e => e.Id)
 );
-Ids("g1,g2,g3", await Collect(client.Gadgets.ListIterAsync(), g => g.Id));
-Ids("r1,r2,r3", await Collect(client.Records.ListIterAsync(), r => r.Id));
+Ids("g1,g2,g3", await Collect(client.Gadgets.ListAutoPagingAsync(), g => g.Id));
+Ids("r1,r2,r3", await Collect(client.Records.ListAutoPagingAsync(), r => r.Id));
+
+var pages = new List<string>();
+await foreach (var page in client.Widgets.ListAutoPagingAsync().AsPagesAsync())
+{
+    pages.Add($"{string.Join("+", page.Items.Select(w => w.Id))}:{page.HasNextPage}");
+}
+Equal("w1+w2:True,w3:False", string.Join(",", pages));
+var first = await client.Gadgets.ListAutoPagingAsync().GetFirstPageAsync();
+Equal(2, first.Response.Meta.TotalPages);
+var second = await first.GetNextPageAsync();
+Equal("g3", second.Items.Single().Id);
+Equal(false, second.HasNextPage);
+
+var widget = (await client.Widgets.ListAsync()).Data[0];
+Equal("red", widget.AdditionalProperties!["color"].GetString());
+var widgetJson = JsonSerializer.Serialize(widget, FeaturesJsonContext.Default.Widget);
+Equal("""{"id":"w1","name":"w1","color":"red"}""", widgetJson);
+Equal(widget, JsonSerializer.Deserialize(widgetJson, FeaturesJsonContext.Default.Widget));
+
+var raw = await client.Widgets.WithRawResponse.ListAsync();
+Equal("req_mock", raw.RequestId);
+Equal(200, (int)raw.StatusCode);
+Equal("w1", raw.Value.Data[0].Id);
 
 using var basic = new FeaturesClient(
     null,
     new() { BaseUrl = serverUrl, BasicAuth = new("u", "p") }
 );
-Equal("Basic dTpw||", (await basic.Account.SessionAsync()).Status);
+Equal("Basic dTpw||", (await basic.Account.CreateSessionAsync()).Status);
 
 using var provided = new FeaturesClient(
     null,
@@ -51,14 +75,36 @@ using var keyed = new FeaturesClient(
     null,
     new() { BaseUrl = serverUrl, ApiKeys = new() { ApiKey = "k" } }
 );
-Ids("w1,w2,w3", await Collect(keyed.Widgets.ListIterAsync(), w => w.Id));
+Ids("w1,w2,w3", await Collect(keyed.Widgets.ListAutoPagingAsync(), w => w.Id));
 using var anonymous = new FeaturesClient(null, new() { BaseUrl = serverUrl });
 try
 {
     await anonymous.Widgets.ListAsync();
     throw new Exception("an unauthenticated call must fail");
 }
-catch (ApiException e) when ((int)e.StatusCode == 401) { }
+catch (UnauthorizedException e)
+{
+    Equal("req_mock", e.RequestId);
+    Equal("unauthorized", ((JsonElement)e.Error!).GetProperty("error").GetString());
+}
+
+Environment.SetEnvironmentVariable("FEATURES_API_KEY", "envtok");
+Environment.SetEnvironmentVariable("FEATURES_BASE_URL", serverUrl);
+using (var fromEnvironment = new FeaturesClient())
+{
+    Equal("Bearer envtok||", (await fromEnvironment.Account.RetrieveMachineAsync()).Status);
+}
+using (var explicitly = new FeaturesClient("tok", new() { BaseUrl = "http://127.0.0.1:9" }))
+{
+    try
+    {
+        await explicitly.Account.CheckHealthAsync(new() { MaxRetries = 0 });
+        throw new Exception("the explicit base URL must win");
+    }
+    catch (ApiConnectionException e) when (e is not ApiTimeoutException) { }
+}
+Environment.SetEnvironmentVariable("FEATURES_API_KEY", null);
+Environment.SetEnvironmentVariable("FEATURES_BASE_URL", null);
 
 var events = new List<SseEvent>();
 await using (var stream = await client.Streaming.RetrieveEventsStreamAsync(new() { Topic = "news" }))
@@ -74,7 +120,21 @@ Equal(new SseEvent("greeting", "news", "1"), events[0]);
 Equal(new SseEvent("message", "line1\nline2", "1"), events[1]);
 Equal(new SseEvent("message", "{\"n\": 3}", "3", 1500), events[2]);
 
-var uploaded = await client.Streaming.CreateFileAsync(
+var completion = new CompletionRequest { Prompt = "hi" };
+Equal("HI", (await client.Streaming.CreateCompletionAsync(completion)).Text);
+var deltas = new List<string>();
+await using (var chunks = await client.Streaming.CreateCompletionStreamAsync(completion))
+{
+    await foreach (var chunk in chunks)
+    {
+        deltas.Add(chunk.Delta);
+        Equal("message", chunks.LastEvent!.Event);
+    }
+}
+Equal("h,i", string.Join(",", deltas));
+Equal(null, completion.Stream);
+
+var uploaded = await client.Streaming.UploadFileAsync(
     new()
     {
         File = Upload.FromBytes(Encoding.UTF8.GetBytes("hello"), "a.txt", "text/plain"),
@@ -90,12 +150,12 @@ Equal(
 );
 Equal(
     "application/octet-stream:raw bytes",
-    (await client.Streaming.UpdateFileContentAsync("f1", Encoding.UTF8.GetBytes("raw bytes"))).Status
+    (await client.Streaming.UploadContentAsync("f1", Encoding.UTF8.GetBytes("raw bytes"))).Status
 );
 using var streamed = new MemoryStream(Encoding.UTF8.GetBytes("streamed"));
 Equal(
     "application/octet-stream:streamed",
-    (await client.Streaming.UpdateFileContentAsync("f1", streamed)).Status
+    (await client.Streaming.UploadContentAsync("f1", streamed)).Status
 );
 
 var searched = await client.Wire.SearchAsync(
@@ -104,7 +164,7 @@ var searched = await client.Wire.SearchAsync(
         Filter = new Filter { Status = "open", Amount = new FilterAmount { Gte = 5 } },
         Expand = ["a", "b"],
         Metadata = new() { ["k"] = "v" },
-        Ids = new System.Text.Json.Nodes.JsonArray("x", "y"),
+        Ids = new List<string> { "x", "y" },
         Tags = ["t1", "t2"],
         Range = new SearchRange { Gte = 1, Lt = 9 },
     }
@@ -119,7 +179,7 @@ var charged = await client.Wire.CreateChargeAsync(
     {
         Amount = 100,
         Capture = true,
-        Metadata = new() { ["order"] = "7" },
+        Metadata = new Dictionary<string, string> { ["order"] = "7" },
         Items = [new ChargeItemsItem { Price = "p1", Quantity = 2 }, new ChargeItemsItem { Price = "p2" }],
         Expand = ["customer"],
         Statuses = ["a", "b"],

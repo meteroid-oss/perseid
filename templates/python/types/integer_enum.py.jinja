@@ -1,12 +1,20 @@
-{% from "types/macros.py.jinja" import docstring -%}
+{% from "types/macros.py.jinja" import docstring, literal_alias, py_str -%}
+import typing as t
+
 from ..serialization import IntEnum
 
 
 class {{ type.name | to_upper_camel_case }}(IntEnum):
-    {% if type.description is defined -%}
-        {{ docstring(type.description) | indent(4) }}
-    {% endif %}
+    {{ docstring(type.description if type.description is defined else "The values of `" ~ type.name ~ "`; others are kept as received.") | indent(4) }}
+
     {%- set members = type.variants | map("first") | list | idents("shouty", "python", "schema `" ~ type.name ~ "`") %}
     {%- for name, value in type.variants %}
     {{ members[loop.index0] }} = {{ value }}
     {%- endfor %}
+{%- set alias = literal_alias(type, type_names) %}
+{%- if alias %}
+
+
+{{ alias }}: t.TypeAlias = t.Literal[{% for _, value in type.variants %}{{ value }}{% if not loop.last %}, {% endif %}{% endfor %}]
+"""The values of :class:`{{ type.name | to_upper_camel_case }}`, which arguments take as plain {{ "strings" if type.kind == "string_enum" else "integers" }} too."""
+{%- endif %}

@@ -9,10 +9,10 @@ and dependency free.
   field that the API accepts as ``null`` defaults to :data:`UNSET` instead:
   ``UNSET`` is omitted, while ``None`` is sent as ``null`` (to clear a value).
   A required field is always sent.
-* Unknown JSON keys are ignored, except by models that declare
-  ``additionalProperties``: those keep them in ``additional_properties`` and
-  write them back. Enum values and union variants added to the API after this
-  SDK was generated are kept as received.
+* JSON properties, enum values and union variants added to the API after
+  this SDK was generated are kept as received, and sent back unchanged.
+  Models whose schema types its ``additionalProperties`` decode the
+  properties they do not declare into that type, in ``extra_fields``.
 * ``Decimal`` values travel as JSON strings, ``datetime`` values as RFC 3339
   strings. Only finite decimals are valid: ``NaN`` and ``Infinity`` are
   rejected in both directions.
@@ -32,12 +32,13 @@ import typing as t
 from decimal import Decimal
 
 __all__ = [
+    "FROM_CONTENT",
     "UNSET",
+    "@@CLIENT_NAME@@Error",
     "BaseModel",
     "Discriminator",
-    "FROM_CONTENT",
     "IntEnum",
-    "@@CLIENT_NAME@@Error",
+    "JSONValue",
     "ModelParseError",
     "StrEnum",
     "TaggedUnionModel",
@@ -52,6 +53,11 @@ __all__ = [
 
 _M = t.TypeVar("_M", bound="BaseModel")
 
+JSONValue: t.TypeAlias = (
+    "dict[str, JSONValue] | list[JSONValue] | str | int | float | bool | None"
+)
+"""A decoded JSON value."""
+
 
 # `@@CLIENT_NAME@@Error` is defined here rather than in `errors.py` because the
 # generated models import this module and `errors.py` imports the models. It is
@@ -65,7 +71,7 @@ class ModelParseError(@@CLIENT_NAME@@Error, ValueError):
 
     It is also a :class:`ValueError`. A client call never lets it escape on its
     own: a response body that fails to parse raises
-    :class:`@@PACKAGE_NAME@@.errors.ResponseDecodeError`, chained to this error.
+    :class:`@@PACKAGE_NAME@@.errors.APIResponseValidationError`, chained to this error.
     """
 
 
@@ -167,7 +173,10 @@ class Discriminator:
         model = self.mapping.get(tag)
         if model is None:
             return UnknownVariant(tag, dict(value))
-        return model.from_dict(value)
+        variant = model.from_dict(value)
+        # The tag is written back on serialization, from the variant's type.
+        variant.__dict__.get("_extra", {}).pop(self.property, None)
+        return variant
 
     def serialize(self, value: t.Any) -> t.Any:
         data = to_json_value(value)
@@ -304,6 +313,7 @@ def parse_datetime(value: t.Any) -> _datetime.datetime:
 # --------------------------------------------------------------------------
 
 _hints_cache: dict[type, dict[str, t.Any]] = {}
+_known_keys_cache: dict[type, frozenset[str] | None] = {}
 
 
 def _type_hints(cls: type) -> dict[str, t.Any]:
@@ -327,7 +337,8 @@ def _namespace(cls: type) -> dict[str, t.Any]:
     if namespace is None:
         namespace = {}
         if __package__:
-            namespace.update(vars(importlib.import_module(".models", __package__)))
+            models = importlib.import_module(".models", __package__)
+            namespace.update({name: getattr(models, name) for name in models.__all__})
         namespace.update(vars(sys.modules[cls.__module__]))
         _namespaces[cls.__module__] = namespace
     return namespace
@@ -500,24 +511,109 @@ class BaseModel:
     _JSON_KEYS: t.ClassVar[t.Mapping[str, str]] = {}
     #: Attribute names whose (model) value is merged into the parent object.
     _FLATTENED: t.ClassVar[tuple[str, ...]] = ()
-    #: Attribute collecting the JSON keys no field declares, when the schema keeps them.
-    _ADDITIONAL_PROPERTIES: t.ClassVar[str | None] = None
+    # A model whose schema types its `additionalProperties` declares the annotation of
+    # `extra_fields` as `_EXTRA_FIELDS: t.ClassVar[dict[str, Value]]`, without a value.
 
     @classmethod
     def _json_key(cls, name: str) -> str:
         return cls._JSON_KEYS.get(name, name)
 
+    @classmethod
+    def _extra_type(cls) -> t.Any:
+        """The annotation of :attr:`extra_fields`, ``t.Any`` when the schema does not type it."""
+        hint = _type_hints(cls).get("_EXTRA_FIELDS", t.Any)
+        if t.get_origin(hint) is t.ClassVar:
+            args = t.get_args(hint)
+            hint = args[0] if args else t.Any
+        return hint
+
+    @property
+    def extra_fields(self) -> dict[str, t.Any]:
+        """JSON properties this SDK version does not know, as received.
+
+        They are sent back with the model; add entries to send properties the
+        SDK does not declare yet.
+        """
+        extra: dict[str, t.Any] | None = self.__dict__.get("_extra")
+        if extra is None:
+            extra = self.__dict__["_extra"] = {}
+        return extra
+
+    if not t.TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> t.Any:
+            extra = self.__dict__.get("_extra")
+            if extra is not None and name in extra and not name.startswith("__"):
+                return extra[name]
+            raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+    @classmethod
+    def _known_keys(cls) -> frozenset[str] | None:
+        """The JSON keys of the fields and of flattened models, ``None`` when unbounded."""
+        if cls not in _known_keys_cache:
+            _known_keys_cache[cls] = cls._field_keys()
+        return _known_keys_cache[cls]
+
+    @classmethod
+    def _field_keys(cls) -> frozenset[str] | None:
+        keys: set[str] = set()
+        hints = _type_hints(cls)
+        for field in dataclasses.fields(cls):
+            if field.name not in cls._FLATTENED:
+                keys.add(cls._json_key(field.name))
+                continue
+            model = _model_of(hints.get(field.name))
+            inner = None if model is None else model._known_keys()
+            if inner is None:
+                return None
+            keys |= inner
+        return frozenset(keys)
+
+    def _keep_extra(
+        self, data: t.Mapping[str, t.Any], known: frozenset[str] | None, decoded: bool = False
+    ) -> None:
+        """Keeps the keys of ``data`` outside ``known``, decoded unless ``decoded`` already."""
+        extra = {k: v for k, v in data.items() if known is not None and k not in known}
+        annotation = type(self)._extra_type()
+        if extra and not decoded and annotation is not t.Any:
+            ctx = f"{type(self).__name__}.extra_fields"
+            extra = dict(_from_json_value(annotation, extra, ctx))
+        if extra or "_extra" in self.__dict__:
+            self.__dict__["_extra"] = extra
+
+    def _keep_nulls(self, data: t.Mapping[str, t.Any]) -> None:
+        """Remembers the optional fields received as ``null``, which ``None`` otherwise leaves out."""
+        nulls = {
+            field.name
+            for field in dataclasses.fields(self)
+            if field.default is None
+            and field.name not in self._FLATTENED
+            and data.get(self._json_key(field.name), UNSET) is None
+        }
+        if nulls:
+            self.__dict__["_nulls"] = nulls
+
+    def _with_extra(self, out: dict[str, t.Any]) -> dict[str, t.Any]:
+        extra: dict[str, t.Any] = self.__dict__.get("_extra") or {}
+        if extra:
+            # Entries may hold models, enums or datetimes, set by the caller or typed by
+            # `additionalProperties`.
+            extra = to_json_value(extra, type(self)._extra_type())
+        for key, value in extra.items():
+            out.setdefault(key, value)
+        return out
+
     def _fields_to_dict(self, skip: t.Container[str] = ()) -> dict[str, t.Any]:
         out: dict[str, t.Any] = {}
         hints = _type_hints(type(self))
-        extra_name = self._ADDITIONAL_PROPERTIES
+        nulls: t.Container[str] = self.__dict__.get("_nulls", ())
         for field in dataclasses.fields(self):
-            if field.name in skip or field.name == extra_name:
+            if field.name in skip:
                 continue
             value = getattr(self, field.name)
-            # `None` means "leave out" for optional fields that the API does
-            # not accept as `null`, which default to `None` rather than UNSET.
-            if value is UNSET or (value is None and field.default is None):
+            # `None` leaves out an optional field defaulting to `None` rather than UNSET,
+            # unless it was received as `null`.
+            if value is UNSET or (value is None and field.default is None and field.name not in nulls):
                 continue
             data = to_json_value(value, hints.get(field.name, t.Any))
             if field.name in self._FLATTENED:
@@ -528,10 +624,6 @@ class BaseModel:
                 out.update(data)
             else:
                 out[self._json_key(field.name)] = data
-        if extra_name is not None and extra_name not in skip:
-            extras = to_json_value(getattr(self, extra_name), hints.get(extra_name, t.Any))
-            for key, value in (extras or {}).items():
-                out.setdefault(key, value)
         return out
 
     @classmethod
@@ -540,14 +632,15 @@ class BaseModel:
     ) -> dict[str, t.Any]:
         hints = _type_hints(cls)
         kwargs: dict[str, t.Any] = {}
-        extra_name = cls._ADDITIONAL_PROPERTIES
         for field in dataclasses.fields(cls):
-            if field.name in skip or field.name == extra_name:
+            if field.name in skip:
                 continue
             annotation = hints.get(field.name, t.Any)
             ctx = f"{cls.__name__}.{field.name}"
             if field.name in cls._FLATTENED:
                 kwargs[field.name] = _from_json_value(annotation, data, ctx)
+                if isinstance(kwargs[field.name], BaseModel):
+                    kwargs[field.name]._keep_extra({}, None)
                 continue
             key = cls._json_key(field.name)
             if key in data:
@@ -556,33 +649,42 @@ class BaseModel:
                 if not _accepts_none(annotation):
                     raise ModelParseError(f"{cls.__name__}: missing required field {key!r}")
                 kwargs[field.name] = None
-        if extra_name is not None and extra_name not in skip:
-            known = {cls._json_key(f.name) for f in dataclasses.fields(cls) if f.name != extra_name}
-            extras = {key: value for key, value in data.items() if key not in known}
-            kwargs[extra_name] = _from_json_value(
-                hints.get(extra_name, t.Any), extras, f"{cls.__name__}.{extra_name}"
-            )
         return kwargs
 
     def to_dict(self) -> dict[str, t.Any]:
-        """Serialize into a JSON-compatible dict."""
-        return self._fields_to_dict()
+        """Serialize into a JSON-compatible dict, with :attr:`extra_fields`."""
+        return self._with_extra(self._fields_to_dict())
 
     def to_json(self) -> str:
+        """Serialize into a JSON string."""
         return json.dumps(self.to_dict())
 
     @classmethod
     def from_dict(cls: type[_M], data: t.Mapping[str, t.Any]) -> _M:
-        """Build a model from a decoded JSON object, ignoring unknown keys."""
+        """Build a model from a decoded JSON object, unknown keys in :attr:`extra_fields`."""
         if not isinstance(data, t.Mapping):
             raise ModelParseError(
                 f"{cls.__name__}: expected an object, got {type(data).__name__}"
             )
-        return cls(**cls._fields_from_dict(data))
+        model = cls(**cls._fields_from_dict(data))
+        model._keep_extra(data, cls._known_keys())
+        model._keep_nulls(data)
+        return model
 
     @classmethod
     def from_json(cls: type[_M], data: str | bytes) -> _M:
+        """Build a model from a JSON string."""
         return cls.from_dict(json.loads(data))
+
+
+def _model_of(annotation: t.Any) -> type[BaseModel] | None:
+    """The model class of an annotation such as ``Address`` or ``Address | None``."""
+    if t.get_origin(annotation) in _UNION_TYPES:
+        members = [a for a in t.get_args(annotation) if a not in (_NoneType, Unset)]
+        annotation = members[0] if len(members) == 1 else None
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    return None
 
 
 def _accepts_none(annotation: t.Any) -> bool:
@@ -612,16 +714,17 @@ class TaggedUnionModel(BaseModel):
     #: JSON key holding the variant payload; ``None`` when internally tagged
     #: (i.e. the payload's fields sit next to the discriminator).
     _CONTENT_KEY: t.ClassVar[str | None] = None
-    #: Variant name -> model, or model name in the models package (``None``
-    #: for variants without a payload).
-    _VARIANTS: t.ClassVar[t.Mapping[str, str | type[BaseModel] | None]] = {}
+    #: Variant name -> model name in the models package (``None`` for
+    #: variants without a payload).
+    _VARIANTS: t.ClassVar[t.Mapping[str, str | None]] = {}
 
     @classmethod
     def _variant(cls, tag: str) -> type[BaseModel] | None:
         variant = cls._VARIANTS[tag]
-        if isinstance(variant, str):
-            variant = _namespace(cls)[variant]
-        return variant
+        if variant is None:
+            return None
+        model: type[BaseModel] = _namespace(cls)[variant]
+        return model
 
     def __post_init__(self) -> None:
         if getattr(self, self._DISCRIMINATOR_ATTR) is None:
@@ -653,7 +756,15 @@ class TaggedUnionModel(BaseModel):
         elif content is not None:
             raise TypeError(f"{type(self).__name__}: variant {tag!r} must serialize to an object")
         out[self._DISCRIMINATOR] = tag
-        return out
+        return self._with_extra(out)
+
+    @classmethod
+    def _field_keys(cls) -> frozenset[str] | None:
+        keys = super()._field_keys()
+        if keys is None:
+            return None
+        content = set() if cls._CONTENT_KEY is None else {cls._CONTENT_KEY}
+        return keys - {cls._json_key(cls._CONTENT_ATTR)} | {cls._DISCRIMINATOR, *content}
 
     @classmethod
     def from_dict(cls: type[_M], data: t.Mapping[str, t.Any]) -> _M:
@@ -680,6 +791,13 @@ class TaggedUnionModel(BaseModel):
         kwargs = union._fields_from_dict(data, skip=skip)
         kwargs[union._DISCRIMINATOR_ATTR] = tag
         kwargs[union._CONTENT_ATTR] = content
-        return cls(**kwargs)
+        model = cls(**kwargs)
+        model._keep_nulls(data)
+        known = union._known_keys()
+        if union._CONTENT_KEY is not None:
+            model._keep_extra(data, known)
+        elif isinstance(content, BaseModel) and known is not None:
+            content._keep_extra(content.__dict__.get("_extra") or {}, known, decoded=True)
+        return model
 
 

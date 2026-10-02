@@ -5,7 +5,6 @@ package @@PACKAGE_NAME@@
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 )
 
 // BasicAuth holds HTTP basic credentials.
@@ -58,7 +57,7 @@ func (c *config) authenticate(ctx context.Context, req *request, security [][]st
 			if c.tokenProvider != nil {
 				var err error
 				if token, err = c.tokenProvider(ctx); err != nil {
-					return fmt.Errorf("@@PACKAGE_NAME@@: token provider: %w", err)
+					return requestError("token provider: %w", err)
 				}
 			}
 			req.SetHeader("Authorization", "Bearer "+token)

@@ -7,13 +7,10 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 {% set variants = type.variants | map(attribute=0) | map("to_upper_camel_case") | list -%}
 {% set unknown = unknown_variant(variants) -%}
 {{ doc_comment }}
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum {{ name }} {
     {% for name, value in type.variants -%}
-        {% if loop.first -%}
-        #[default]
-        {% endif -%}
         {{ name | to_upper_camel_case }},
     {% endfor -%}
     /// A value this version of the SDK does not know yet.
@@ -22,6 +19,7 @@ pub enum {{ name }} {
 
 impl {{ name }} {
     /// The value as sent on the wire.
+    #[must_use]
     pub fn value(self) -> i64 {
         match self {
             {% for name, value in type.variants -%}

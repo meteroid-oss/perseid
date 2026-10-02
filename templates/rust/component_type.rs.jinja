@@ -30,7 +30,7 @@
     {% if recursive_alias -%}
     {# A type alias cannot name itself, so a recursive one is a transparent newtype. #}
     {{ doc_comment }}
-    #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
     #[serde(transparent)]
     pub struct {{ type_name }}(pub {{ rust_type(type.target, union) }});
     {% else -%}

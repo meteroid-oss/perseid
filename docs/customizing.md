@@ -13,16 +13,18 @@ Four extension points, none of which needs a fork.
 4. **Ejected templates and runtime.** `perseid eject <lang>` copies the built-in Jinja templates and
    runtime to `.perseid/`. Files you keep there override the built-ins; delete the rest to keep
    receiving upstream updates. `context` tables in `perseid.toml` reach templates as `sdk.*`.
+   `api_reference.md.jinja` renders `api.md`, and `docs.jinja` names the API for it and for the
+   first README.
 
 ## Middleware
 
 | Language | Option |
 |---|---|
 | TypeScript | `middleware`: `(request, next) => Response` |
-| Python | `middleware` and `async_middleware` |
+| Python | `middleware=` of `Client(...)` and `AsyncClient(...)` |
 | Go | `Options.Middleware`, a `RoundTripper` wrapper |
-| Java | `getInterceptors()`, OkHttp interceptors, also added to a client given to `setHttpClient` |
-| Rust | `Middleware` trait, `options.middleware` |
+| Java | `addInterceptor`, OkHttp interceptors, also added to a client given to `httpClient` |
+| Rust | `Middleware` trait, `Client::builder().middleware(...)` |
 | C# | `Handlers`, `DelegatingHandler`s, also run in front of your own `HttpClient` |
 
 Middleware runs inside the retry loop, after credentials are set, and the first one registered is
@@ -32,7 +34,8 @@ A local cache for GET endpoints, in TypeScript:
 
 ```ts
 const cache = new Map<string, string>();
-const petstore = new Petstore("sk_live_...", {
+const petstore = new Petstore({
+  apiKey: "sk_live_...",
   middleware: [
     async (request, next) => {
       if (request.method !== "GET" || !new URL(request.url).pathname.startsWith("/pets")) {
@@ -51,6 +54,7 @@ const petstore = new Petstore("sk_live_...", {
 and in Rust:
 
 ```rust
+#[derive(Default)]
 struct Cache(Mutex<HashMap<String, Bytes>>);
 
 impl Middleware for Cache {
@@ -74,8 +78,7 @@ impl Middleware for Cache {
     }
 }
 
-let mut options = PetstoreOptions::default();
-options.middleware.push(Cache(Default::default()));
+let client = Petstore::builder().middleware(Cache::default()).build();
 ```
 
 ## Webhooks

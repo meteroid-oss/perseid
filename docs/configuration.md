@@ -49,8 +49,6 @@ tagline = "widgets as a service"
 [typescript]                        # overrides of a listed SDK
 package = "@acme/sdk"
 int64 = "bigint"
-[python]
-flat_unions = true
 [go]
 repo = "acme/acme-golang"           # its own repository name, over the top-level `repo`
 ```
@@ -145,7 +143,6 @@ And their own keys:
 |---|---|---|
 | `[typescript]` | `exports` | Modules re-exported from the entry point |
 | `[typescript]` | `int64` | TypeScript type of int64 values: `"number"` (default, exact up to 2^53), `"bigint"` or `"string"` |
-| `[python]` | `flat_unions` | `true` types discriminated unions as `Circle \| Square` instead of a wrapper model |
 | `[go]` | `module` | Module path, `github.com/{repo}/{path}` of the repository the SDK lives in by default (the `origin` remote, or `[metadata] repository`, for an SDK without `repo`); without either, `generate` warns and falls back to the kebab-case `name` |
 
 ## Renamed and removed keys
@@ -162,13 +159,19 @@ A key of an earlier version fails with what to write instead:
 | `include = "public-and-internal"` | `internal = true` |
 | `include = "only-internal"` | `only = [...]` listing them |
 | `version`, at the top or in a language table | the SDK's own manifest, bumped by release-please |
-| `[python.context] flat_unions = true` | `[python] flat_unions = true` |
+| `[python] flat_unions` | nothing: Python unions are the union of their variant models whenever they can be |
 
 ## Method names
 
 Methods are named after the HTTP method and the path within their resource: `list`, `create`,
-`retrieve`, `update`, `delete`, `list_sources`, `capture`. A name two operations of a resource
-would share falls back to the operation id. `[methods]` and `x-perseid-name` rename one.
+`retrieve`, `update`, `delete`, `list_sources`, `capture`. When the path only says CRUD, an
+operation id starting with another verb names the method, without the resource's own noun:
+`archive_customer` (`DELETE /customers/{id}`) is `customers.archive`, `upload_file` is
+`files.upload`. A `POST` to a singular noun (`/auth/session`) keeps an operation id's
+`create_session`, and a `GET /health` is `check` (`check_health` in another resource).
+Resources are named after tags in snake_case, a single letter staying with the next word
+(`OAuth` is `oauth`, `IPAddress` `ip_address`). A name two operations of a resource would share
+falls back to the operation id. `[methods]` and `x-perseid-name` rename one.
 
 ## Unions of objects
 
@@ -197,6 +200,15 @@ another variant than the one picked (see [languages](languages.md)).
 
 ## Templates
 
+Each language has templates for its resources (`api_resource`), client (`api_summary`) and
+models (`component_type`), and `api_reference.md.jinja`, which renders `api.md` at the root of
+the SDK: every method by resource, in the language's call syntax, with its HTTP request and the
+models it returns. A template picks its output file with `set_summary_filename("api.md")`.
+Generated Markdown is never formatted, and `generate --check` compares it like the code.
+`docs.jinja` holds the macros naming the API in that language, which `api.md` and the README
+share: the scaffolded `README.md` is rendered once, with `examples` (`call`, `list`, `stream` and
+`create`: the operations its snippets call, picked from the spec, each `null` when none fits).
+
 `perseid inspect` prints the model templates receive. In templates,
 `name | ident("snake", "rust")` turns a spec name into an identifier (cases `snake`, `camel`,
 `pascal` and `shouty`, keywords escaped for `rust`, `python`, `go`, `java` or `typescript`), and
@@ -208,6 +220,7 @@ The model also carries, for templates to use:
 - `op.errors`, the schema of each error response by status (`404`, `4XX`, `default`);
   `error_schemas` and `default_error` (the schema of nearly every operation's errors) on the API
   and in every template, and `is_error_schema` in type templates.
+- `types`, every schema by name, in resource templates, to read the fields of a request body.
 - Union field types (`is_union()`, `union_variants()`) for values of several types told apart by
   their JSON type, such as Stripe's expandable `string | Customer` or emptyable `object | ""`:
   each variant has a `name`, a `json_type`, `empty` for `""` and a `type`. They answer

@@ -1,5 +1,11 @@
 // this file is @generated
-#![allow(clippy::too_many_arguments)]
+//! The schemas of the API. Structs keep the properties they do not declare in `extra`.
+#![allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::default_trait_access,
+    clippy::doc_markdown
+)]
 
 #[path = "../codec.rs"]
 pub(crate) mod codec;
@@ -70,6 +76,7 @@ pub use self::{{ module }}::{{ nested }};
 
 impl {{ module }}::{{ union }} {
     /// The id of the object, expanded or not.
+    #[must_use]
     pub fn id(&self) -> Option<&str> {
         match self {
             Self::String(id) => Some(id.as_str()),
@@ -87,7 +94,7 @@ impl {{ module }}::{{ union }} {
 {% set module = type.name | to_rust_ident -%}
 {% set type_name = type.name | to_upper_camel_case -%}
 {% if type.kind == "struct" -%}
-{{ union_exports(module, type_name, type.fields) }}
+{{ union_exports(module, type_name, type.fields + ([{"name": "additional_properties", "type": type.additional_properties}] if type.additional_properties is defined else [])) }}
 {%- elif type.kind == "struct_enum" -%}
 {{ union_exports(module, type_name, type.fields | rejectattr("name", "equalto", type.discriminator_field)) }}
 {%- for variant in type.variants if variant.type == "struct" and variant.fields -%}

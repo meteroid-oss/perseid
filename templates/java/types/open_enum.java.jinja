@@ -1,12 +1,15 @@
-{#- An open enum: `members` name `values` (Java literals), then the unknown member. -#}
-{% set value_ty = "Long" if integer is defined else "String" -%}
+{#- An open enum: `members` name `values` (Java literals). -#}
+{% set raw_ty = "Long" if integer is defined else "String" -%}
+{% set raw_param = "long" if integer is defined else "String" -%}
+{% set as_raw = "asLong" if integer is defined else "asString" -%}
 {% set known_ty = "KnownValue" if ty_name == "Known" else "Known" -%}
+{% set value_ty = "ValueEnum" if ty_name == "Value" else "Value" -%}
+{% set unknown = "_UNKNOWN_VALUE" if "_UNKNOWN" in members else "_UNKNOWN" -%}
 package {{ sdk.java_package }}.models;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 import {{ sdk.java_internal_package }}.Utils.ToQueryParam;
-
 import java.util.Map;
 import java.util.Objects;
 
@@ -14,81 +17,81 @@ import java.util.Objects;
 {% if type.description is defined %}{{ m.html(type.description) }}
 
 {% endif -%}
-<p>Values this version of the SDK does not know are kept, and sent back unchanged: {@link #isKnown()}
-tells them apart, and {@link #known()} is an enum to switch on.
+<p>Values this version of the SDK does not know are kept, and sent back unchanged: {@link #value()}
+is an enum to switch on, {@code {{ unknown }}} for them, and {@link #known()} throws on them.
 {%- endset -%}
 {{ summary | to_doc_comment(style="java") }}
 {% if type.deprecated %}@Deprecated{% endif %}
 public final class {{ ty_name }} implements ToQueryParam {
     {% for value in values -%}
-    public static final {{ ty_name }} {{ members[loop.index0] }} = new {{ ty_name }}({{ value }}, {{ known_ty }}.{{ members[loop.index0] }});
+    /** The value {@code {{ value | replace("@", "&#64;") }}}. */
+    public static final {{ ty_name }} {{ members[loop.index0] }} = new {{ ty_name }}({{ value }}, {{ value_ty }}.{{ members[loop.index0] }});
     {% endfor %}
-    /** @deprecated unknown values are kept as they are: check {@link #isKnown()} instead. */
-    @Deprecated
-    public static final {{ ty_name }} {{ unknown }} = new {{ ty_name }}(null, {{ known_ty }}.{{ unknown }});
-
-    private static final Map<{{ value_ty }}, {{ ty_name }}> constants = Map.ofEntries(
+    private static final Map<{{ raw_ty }}, {{ ty_name }}> constants = Map.ofEntries(
         {% for value in values -%}
         Map.entry({{ value }}, {{ members[loop.index0] }}){% if not loop.last %},{% endif %}
         {% endfor -%}
     );
 
-    private final {{ value_ty }} value;
-    private final {{ known_ty }} known;
+    private final {{ raw_ty }} value;
+    private final {{ value_ty }} variant;
 
-    private {{ ty_name }}({{ value_ty }} value, {{ known_ty }} known) {
+    private {{ ty_name }}({{ raw_ty }} value, {{ value_ty }} variant) {
         this.value = value;
-        this.known = known;
+        this.variant = variant;
     }
 
-    /** The constant for {@code value}, or an unknown {{ ty_name }} holding it. */
+    /**
+     * The constant for {@code value}, or an unknown {{ ty_name }} holding it.
+     *
+     * @param value the value
+     * @return the constant
+     */
     @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
-    public static {{ ty_name }} of({{ "long" if integer is defined else "String" }} value) {
+    public static {{ ty_name }} of({{ raw_param }} value) {
         {{ ty_name }} constant = constants.get({% if integer is defined %}value{% else %}Objects.requireNonNull(value, "value"){% endif %});
-        return constant != null ? constant : new {{ ty_name }}(value, {{ known_ty }}.{{ unknown }});
+        return constant != null ? constant : new {{ ty_name }}(value, {{ value_ty }}.{{ unknown }});
     }
 
-    /** @deprecated use {@link #of}, which keeps unknown values. */
-    @Deprecated
-    public static {{ ty_name }} fromValue({{ "long" if integer is defined else "String" }} value) {
-        return {% if integer is not defined %}value == null ? {{ unknown }} : {% endif %}of(value);
-    }
-
-    /** The values this version of the SDK knows. */
-    public static {{ ty_name }}[] values() {
-        return new {{ ty_name }}[] { {{ members[:values | length] | join(", ") }} };
-    }
-
-    /** The constant named {@code name}, as for an enum. */
-    public static {{ ty_name }} valueOf(String name) {
-        {{ known_ty }} known = {{ known_ty }}.valueOf(name);
-        for ({{ ty_name }} constant : values()) {
-            if (constant.known == known) {
-                return constant;
-            }
-        }
-        return {{ unknown }};
-    }
-
-    /** The value as sent, which is null only for the deprecated {@code {{ unknown }}}. */
+    /**
+     * The value as sent.
+     *
+     * @return the value
+     */
     @JsonValue
-    public {{ value_ty }} getValue() {
+    public {{ raw_ty }} {{ as_raw }}() {
         return value;
     }
 
-    /** Whether this version of the SDK knows the value. */
+    /**
+     * Whether this version of the SDK knows the value.
+     *
+     * @return whether it is known
+     */
     public boolean isKnown() {
-        return known != {{ known_ty }}.{{ unknown }};
+        return variant != {{ value_ty }}.{{ unknown }};
     }
 
-    /** The value as an enum, {@code {{ unknown }}} when unknown. */
+    /**
+     * The value as an enum to switch on, unknown values included.
+     *
+     * @return the enum, {@code {{ unknown }}} when unknown
+     */
+    public {{ value_ty }} value() {
+        return variant;
+    }
+
+    /**
+     * The value as an enum of the known values only.
+     *
+     * @return the enum
+     * @throws {{ sdk.java_package }}.exceptions.InvalidDataException when this version of the SDK does not know the value
+     */
     public {{ known_ty }} known() {
-        return known;
-    }
-
-    /** The constant's name, as for an enum. */
-    public String name() {
-        return known.name();
+        if (!isKnown()) {
+            throw new {{ sdk.java_package }}.exceptions.InvalidDataException("unknown {{ ty_name }}: " + value);
+        }
+        return {{ known_ty }}.valueOf(variant.name());
     }
 
     @Override
@@ -111,10 +114,21 @@ public final class {{ ty_name }} implements ToQueryParam {
         return String.valueOf(value);
     }
 
-    /** The values this version of the SDK knows, and {@code {{ unknown }}}. */
+    /** The values this version of the SDK knows. */
     public enum {{ known_ty }} {
         {% for member in members -%}
+        /** The {@code {{ member }}} constant. */
         {{ member }}{% if not loop.last %},{% endif %}
         {% endfor -%}
+    }
+
+    /** The values this version of the SDK knows, and {@code {{ unknown }}} for the others. */
+    public enum {{ value_ty }} {
+        {% for member in members -%}
+        /** The {@code {{ member }}} constant. */
+        {{ member }},
+        {% endfor -%}
+        /** A value this version of the SDK does not know. */
+        {{ unknown }}
     }
 }

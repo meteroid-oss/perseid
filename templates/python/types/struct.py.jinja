@@ -1,8 +1,8 @@
-{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, py_field, py_type -%}
+{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, py_type -%}
 {#- A union variant's discriminator defaults to its tag: `Circle(radius=1)`. -#}
 {% set defaults = type.discriminator_defaults if type.discriminator_defaults is defined else {} -%}
 {% set runtime_names = ["BaseModel"] -%}
-{% if type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
+{% if request_schema and type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
     {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
 {% endif -%}
 {% set objects = namespace(any=false) -%}
@@ -20,7 +20,7 @@
 {% set json_keys %}
     {#- Keyed by the attribute name: a keyword field `class` is exposed as `class_`. -#}
     {%- for field in type.fields if not field.flatten -%}
-        {%- set attr = py_field(field.name) -%}
+        {%- set attr = field_ident(field) -%}
         {%- if attr != field.name -%}
             "{{ attr }}": {{ py_str(field.name) }},
         {%- endif -%}
@@ -36,16 +36,17 @@
 
 @dataclasses.dataclass(kw_only=True)
 class {{ type.name | to_upper_camel_case }}(BaseModel):
-    {% if type.description is defined -%}
-        {{ docstring(type.description) | indent(4) }}
-    {% endif %}
+    {{ docstring(type.description if type.description is defined else "The `" ~ type.name ~ "` object.") | indent(4) }}
+
 
     {%- if json_keys | trim %}
     _JSON_KEYS: t.ClassVar[t.Mapping[str, str]] = { {{ json_keys | trim }} }
     {%- endif %}
 
-    {%- if type.additional_properties is defined %}
-    _ADDITIONAL_PROPERTIES: t.ClassVar[str | None] = "additional_properties"
+    {%- set extra_type = py_type(type.additional_properties) if type.additional_properties is defined else "" %}
+    {%- if extra_type and extra_type != "dict[str, t.Any]" %}
+    _EXTRA_FIELDS: t.ClassVar[{{ extra_type }}]
+    """The type of :attr:`extra_fields`, from the schema's `additionalProperties`."""
     {%- endif %}
 
     {%- if flattened | trim %}
@@ -56,7 +57,7 @@ class {{ type.name | to_upper_camel_case }}(BaseModel):
     {%- for required_pass in [true, false] %}
         {%- for field in type.fields if field.required == required_pass %}
 
-    {{ field_ident(field) }}: {{ field_decl(field) }}
+    {{ field_ident(field) }}: {{ field_decl(field, request_schema) }}
             {%- if field.required and not field.nullable and field.name in defaults and field.type.to_python() == "str" %} = {{ py_str(defaults[field.name]) }}{% endif %}
             {%- if field.description is defined or field.deprecated %}
     {{ docstring(((field.description if field.description is defined else "") ~ ("\n\n.. deprecated:: This field is deprecated." if field.deprecated else "")) | trim) | indent(4) }}
@@ -64,13 +65,8 @@ class {{ type.name | to_upper_camel_case }}(BaseModel):
         {%- endfor %}
     {%- endfor %}
 
-    {%- if type.additional_properties is defined %}
 
-    additional_properties: {{ py_type(type.additional_properties) }} = dataclasses.field(default_factory=dict)
-    """Properties beyond the declared ones, kept as received."""
-    {%- endif %}
-
-    {%- if type.fields | length == 0 and type.additional_properties is not defined %}
+    {%- if type.fields | length == 0 %}
 
     pass
     {%- endif %}

@@ -1,6 +1,10 @@
-{% from "types/macros.go.jinja" import go_deprecated, go_ident, go_export, go_const, go_field_type, go_json_tag, go_union_name, go_union -%}
+{% from "types/macros.go.jinja" import go_deprecated, go_ident, go_export, go_const, go_field_type, go_json_tag, go_union_name, go_union, go_article -%}
 {% set type_name = go_ident(type.name) -%}
 {% set disc_field = go_export(type.discriminator_field) -%}
+{% set ns_tag = namespace(consts=[]) -%}
+{% for variant in type.variants %}{% set ns_tag.consts = ns_tag.consts + [go_const(type.name, variant.name, type_names)] %}{% endfor -%}
+{% set tag_type = (type_name ~ disc_field) | go_name -%}
+{% if tag_type in type_names or tag_type in ns_tag.consts %}{% set tag_type = (type_name ~ "Discriminator") | go_name %}{% endif -%}
 {#- Go has no sum types: a tagged union is a struct holding the discriminator,
     the fields every variant shares and one pointer per variant. -#}
 {% if type.repr != "internally_tagged" -%}
@@ -34,20 +38,25 @@ package {{ sdk.package_name }}
 {% else %}import "encoding/json"
 {% endif %}
 
-{{ doc_comment }}
-{% if type.deprecated %}{{ go_deprecated("type") }}
-{% endif %}// {{ type_name }} is a tagged union discriminated by the {{ type.discriminator_field }} field.
+{% if named %}{{ doc_comment }}
 //
+// It is a tagged union discriminated by the {{ type.discriminator_field }} field.
+{% else %}// {{ type_name }} is a tagged union discriminated by the {{ type.discriminator_field }} field.
+{% if doc_comment %}//
+{{ doc_comment }}
+{% endif %}{% endif %}//
 // When [{{ type_name }}.IsKnown] reports true, exactly one variant pointer is
 // set, matching {{ disc_field }}. A variant added to the API after this SDK
 // version was released still decodes without error, but with every variant
 // pointer nil: always give a `switch` on {{ disc_field }} a `default:` branch (or
 // check IsKnown first) instead of dereferencing a pointer unconditionally. The
 // unknown variant's JSON is available from [{{ type_name }}.Raw].
-type {{ type_name }} struct {
+{% if type.deprecated %}//
+{{ go_deprecated("type") }}
+{% endif %}type {{ type_name }} struct {
 // {{ disc_field }} selects the active variant. Compare it against the
 // {{ type_name }}* constants.
-{{ disc_field }} string `json:"{{ type.discriminator_field | go_tag }}"`
+{{ disc_field }} {{ tag_type }} `json:"{{ type.discriminator_field | go_tag }}"`
 {% for field in shared %}
 {% if field.description is defined %}{{ field.description | to_doc_comment(style="go") }}
 {% endif %}{{ go_export(field.name) }} {{ shared_type(field) }} {{ go_json_tag(field) }}
@@ -62,9 +71,13 @@ type {{ type_name }} struct {
 raw json.RawMessage
 }
 
+// {{ tag_type }} is the {{ type.discriminator_field }} of {{ go_article(type_name) }} [{{ type_name }}], one of the {{ type_name }}*
+// constants for a variant this SDK version knows.
+type {{ tag_type }} string
+
 // Discriminator values for {{ type_name }}.
 const (
-{% for variant in type.variants %}{{ go_const(type.name, variant.name, type_names) }} = {{ variant.name | tojson }}
+{% for variant in type.variants %}{{ go_const(type.name, variant.name, type_names) }} {{ tag_type }} = {{ variant.name | tojson }}
 {% endfor %})
 
 {% for variant in known %}// New{{ type_name }}{{ go_export(variant.name) }} builds a {{ type_name }} holding the {{ variant.name }} variant.
@@ -103,9 +116,9 @@ func (u {{ type_name }}) MarshalJSON() ([]byte, error) {
 {% endif %}	switch u.{{ disc_field }} {
 {% for variant in known %}	case {{ go_const(type.name, variant.name, type_names) }}:
 		if u.{{ variant_field(variant) }} == nil {
-			return nil, &UnionError{Union: "{{ type_name }}", Discriminator: u.{{ disc_field }}, Reason: "variant payload is nil"}
+			return nil, &UnionError{Union: "{{ type_name }}", Discriminator: string(u.{{ disc_field }}), Reason: "variant payload is nil"}
 		}
-		return marshalUnionVariant({{ type.discriminator_field | tojson }}, u.{{ disc_field }}, u.{{ variant_field(variant) }}{% if shared %}, shared{% endif %})
+		return marshalUnionVariant({{ type.discriminator_field | tojson }}, string(u.{{ disc_field }}), u.{{ variant_field(variant) }}{% if shared %}, shared{% endif %})
 {% endfor %}	}
 
 	if len(u.raw) > 0 {
@@ -114,7 +127,7 @@ func (u {{ type_name }}) MarshalJSON() ([]byte, error) {
 	if u.{{ disc_field }} == "" {
 		return nil, &UnionError{Union: "{{ type_name }}", Discriminator: "", Reason: "no variant set"}
 	}
-	return nil, &UnionError{Union: "{{ type_name }}", Discriminator: u.{{ disc_field }}, Reason: "unknown discriminator"}
+	return nil, &UnionError{Union: "{{ type_name }}", Discriminator: string(u.{{ disc_field }}), Reason: "unknown discriminator"}
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -125,7 +138,7 @@ func (u {{ type_name }}) MarshalJSON() ([]byte, error) {
 // bytes: `encoding/json` compacts whitespace and escapes `<`, `>` and `&`.
 func (u *{{ type_name }}) UnmarshalJSON(data []byte) error {
 	var tag struct {
-		{{ disc_field }} string `json:"{{ type.discriminator_field | go_tag }}"`
+		{{ disc_field }} {{ tag_type }} `json:"{{ type.discriminator_field | go_tag }}"`
 {% for field in shared %}		{{ go_export(field.name) }} {{ shared_type(field) }} {{ go_json_tag(field) }}
 {% endfor %}	}
 	if err := json.Unmarshal(data, &tag); err != nil {
