@@ -12,7 +12,7 @@
 {% set f.body = m.param(op.request_body_schema_name | default("body")) -%}
 {% if f.body in ["options", "requestOptions", "cancellationToken", "request", "form"] or f.body in (op.path_params | map("to_lower_camel_case") | list) %}{% set f.body = "body" %}{% endif -%}
 {% set f.response_type = m.response_type(op, types) -%}
-{% if op.response_is_event_stream and op.event_schema_name is defined %}{% set f.value = "EventStream<" ~ m.model(op.event_schema_name) ~ ">" -%}
+{% if op.response_is_event_stream and op.event_schema_name is defined %}{% set f.value = "EventStream<" ~ m.event_type(op, types) ~ ">" -%}
 {% elif op.response_is_event_stream %}{% set f.value = "EventStream" -%}
 {% elif op.response_is_binary %}{% set f.value = "byte[]" -%}
 {% elif op.response_is_text %}{% set f.value = "string" -%}
@@ -108,7 +108,7 @@ AsyncPager<{{ m.response_type(op, types) }}, {{ m.model(op.pagination.item_schem
 {#- The unions of inline JSON bodies, declared after the classes: a named alias is declared with the models. -#}
 {% set bu = namespace(names=[], fields=[]) -%}
 {% for op in resource.operations -%}
-{% for union, ty in [(op.request_body_union | default(""), op.request_body_json_type | default(none)), (op.response_body_union | default(""), op.response_body_json_type | default(none))] -%}
+{% for union, ty in [(op.request_body_union | default(""), op.request_body_json_type | default(none)), (op.response_body_union | default(""), op.response_body_json_type | default(none)), (m.event_union(op), op.event_json_type | default(none))] -%}
 {% if union and ty is not none and union not in types and (union | to_upper_camel_case) not in bu.names -%}
 {% set bu.names = bu.names + [union | to_upper_camel_case] -%}
 {% set bu.fields = bu.fields + [{"name": union, "union_name": union | to_upper_camel_case, "type": ty, "required": true, "nullable": false}] -%}
@@ -452,7 +452,7 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
 {%- endif %}
 {%- endif %}
 {%- if op.response_is_event_stream and op.event_schema_name is defined %}
-{%- set send = ["_transport.SendEventStreamAsync", ["request", context ~ "." ~ m.type_info(m.model(op.event_schema_name)), "requestOptions", "cancellationToken"]] %}
+{%- set send = ["_transport.SendEventStreamAsync", ["request", context ~ "." ~ m.type_info(m.event_type(op, types)), "requestOptions", "cancellationToken"]] %}
 {%- elif op.response_is_event_stream %}
 {%- set send = ["_transport.SendEventStreamAsync", ["request", "requestOptions", "cancellationToken"]] %}
 {%- elif op.response_is_binary %}

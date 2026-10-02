@@ -23,7 +23,7 @@
     ({{ args.list | join(", ") }})
 {%- endmacro -%}
 {% macro returned(op) -%}
-    {%- if op.response_is_event_stream %}EventStream{% if op.event_schema_name is defined %}<{{ docs.model_name(op.event_schema_name) }}>{% endif %}
+    {%- if op.response_is_event_stream %}EventStream{% if op.event_json_type is defined %}<{{ m.event_type(op, api.types) | replace("Models.", "") }}>{% elif op.event_schema_name is defined %}<{{ docs.model_name(op.event_schema_name) }}>{% endif %}
     {%- elif op.response_is_binary %}byte[]
     {%- elif op.response_is_text %}string
     {%- else -%}
@@ -32,7 +32,7 @@
     {%- endif -%}
 {%- endmacro -%}
 {% macro returns(op) -%}
-    {%- if op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
+    {%- if op.response_is_event_stream %}{% if op.event_json_type is defined %}stream of `{{ m.event_type(op, api.types) | replace("Models.", "") }}`{% elif op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
     {%- elif op.response_is_binary %}bytes
     {%- elif op.response_is_text %}text
     {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}

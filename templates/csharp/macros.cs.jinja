@@ -129,6 +129,27 @@
 {%- endif %}
 {%- endmacro %}
 
+{# The union named after the event schema of an event stream, when that schema is an alias whose
+   target holds a union: declared like the union of a JSON body. Empty otherwise. -#}
+{% macro event_union(op) -%}
+{% if op.event_json_type is defined -%}
+{% set t = namespace(ty=op.event_json_type) -%}
+{% for _ in range(8) -%}
+{% if t.ty.is_list() or t.ty.is_set() or t.ty.is_nullable() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
+{% endfor -%}
+{% if t.ty.is_union() %}{{ op.event_schema_name }}{% endif -%}
+{% endif -%}
+{%- endmacro %}
+
+{# The C# type of each event of an event stream naming its schema: the model, or the target of an alias. -#}
+{% macro event_type(op, types={}) -%}
+{% if op.event_json_type is defined -%}
+{{ json_body_type(op.event_json_type, event_union(op), types) }}
+{%- else -%}
+{{ model(op.event_schema_name) }}
+{%- endif %}
+{%- endmacro %}
+
 {# The C# type of an operation's JSON response, empty without one. -#}
 {% macro response_type(op, types={}) -%}
 {% if op.response_body_json_type is defined -%}

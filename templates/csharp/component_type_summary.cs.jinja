@@ -14,11 +14,11 @@
 {% endfor -%}
 {% endfor -%}
 {% endfor -%}
-{#- The unions of JSON bodies that name a schema alias, declared here with the models; the others are declared with their resource. -#}
+{#- The unions of JSON bodies and events that name a schema alias, declared here with the models; the others are declared with their resource. -#}
 {% set bodies = namespace(names=[], aliases=[]) -%}
 {% for resource in all.resources -%}
 {% for op in resource.operations -%}
-{% for union, ty in [(op.request_body_union | default(""), op.request_body_json_type | default(none)), (op.response_body_union | default(""), op.response_body_json_type | default(none))] -%}
+{% for union, ty in [(op.request_body_union | default(""), op.request_body_json_type | default(none)), (op.response_body_union | default(""), op.response_body_json_type | default(none)), (m.event_union(op), op.event_json_type | default(none))] -%}
 {% if union and ty is not none and union in api.types and (union | to_upper_camel_case) not in bodies.names -%}
 {% set bodies.names = bodies.names + [union | to_upper_camel_case] -%}
 {% set bodies.aliases = bodies.aliases + [{"name": union, "union_name": union | to_upper_camel_case, "type": ty, "required": true, "nullable": false}] -%}
@@ -128,6 +128,7 @@ namespace {{ sdk.package_name }}.Models;
 {% for resource in all.resources -%}
 {% for op in resource.operations -%}
 {% set op_types = namespace(list=[m.body_type(op, api.types), m.response_type(op, api.types)]) -%}
+{% if op.event_json_type is defined %}{% set op_types.list = op_types.list + [m.event_type(op, api.types)] %}{% endif -%}
 {% for field in op.multipart_fields if not field.is_file -%}
 {% set op_types.list = op_types.list + [field.type.to_csharp()] -%}
 {% endfor -%}
@@ -140,7 +141,7 @@ namespace {{ sdk.package_name }}.Models;
 {% for name, ps in op.path_styles | default({}) | items if ps.type is defined -%}
 {% set op_types.list = op_types.list + [ps.type.to_csharp()] -%}
 {% endfor -%}
-{% for union, body in [(op.request_body_union | default(""), op.request_body_json_type | default(none)), (op.response_body_union | default(""), op.response_body_json_type | default(none))] -%}
+{% for union, body in [(op.request_body_union | default(""), op.request_body_json_type | default(none)), (op.response_body_union | default(""), op.response_body_json_type | default(none)), (m.event_union(op), op.event_json_type | default(none))] -%}
 {% if union and body is not none and (union | to_upper_camel_case) not in registered.unions -%}
 {% set registered.unions = registered.unions + [union | to_upper_camel_case] -%}
 {% if union in api.types -%}
