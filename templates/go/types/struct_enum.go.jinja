@@ -47,7 +47,7 @@ package {{ sdk.package_name }}
 type {{ type_name }} struct {
 // {{ disc_field }} selects the active variant. Compare it against the
 // {{ type_name }}* constants.
-{{ disc_field }} string `json:"{{ type.discriminator_field }}"`
+{{ disc_field }} string `json:"{{ type.discriminator_field | go_tag }}"`
 {% for field in shared %}
 {% if field.description is defined %}{{ field.description | to_doc_comment(style="go") }}
 {% endif %}{{ go_export(field.name) }} {{ shared_type(field) }} {{ go_json_tag(field) }}
@@ -105,7 +105,7 @@ func (u {{ type_name }}) MarshalJSON() ([]byte, error) {
 		if u.{{ variant_field(variant) }} == nil {
 			return nil, &UnionError{Union: "{{ type_name }}", Discriminator: u.{{ disc_field }}, Reason: "variant payload is nil"}
 		}
-		return marshalUnionVariant("{{ type.discriminator_field }}", u.{{ disc_field }}, u.{{ variant_field(variant) }}{% if shared %}, shared{% endif %})
+		return marshalUnionVariant({{ type.discriminator_field | tojson }}, u.{{ disc_field }}, u.{{ variant_field(variant) }}{% if shared %}, shared{% endif %})
 {% endfor %}	}
 
 	if len(u.raw) > 0 {
@@ -125,7 +125,7 @@ func (u {{ type_name }}) MarshalJSON() ([]byte, error) {
 // bytes: `encoding/json` compacts whitespace and escapes `<`, `>` and `&`.
 func (u *{{ type_name }}) UnmarshalJSON(data []byte) error {
 	var tag struct {
-		{{ disc_field }} string `json:"{{ type.discriminator_field }}"`
+		{{ disc_field }} string `json:"{{ type.discriminator_field | go_tag }}"`
 {% for field in shared %}		{{ go_export(field.name) }} {{ shared_type(field) }} {{ go_json_tag(field) }}
 {% endfor %}	}
 	if err := json.Unmarshal(data, &tag); err != nil {

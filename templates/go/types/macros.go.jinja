@@ -310,11 +310,11 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
 {%- endmacro %}
 
 {% macro go_security(security) -%}
-[][]string{ {%- for names in security %}{% if not loop.first %}, {% endif %}{ {%- for name in names %}{% if not loop.first %}, {% endif %}"{{ name }}"{% endfor -%} }{% endfor -%} }
+[][]string{ {%- for names in security %}{% if not loop.first %}, {% endif %}{ {%- for name in names %}{% if not loop.first %}, {% endif %}{{ name | tojson }}{% endfor -%} }{% endfor -%} }
 {%- endmacro %}
 
 {% macro go_strings(values) -%}
-[]string{ {%- for v in values %}{% if not loop.first %}, {% endif %}"{{ v }}"{% endfor -%} }
+[]string{ {%- for v in values %}{% if not loop.first %}, {% endif %}{{ v | tojson }}{% endfor -%} }
 {%- endmacro %}
 
 {#- A resource name in prose, without a trailing "api" that the text adds. -#}
