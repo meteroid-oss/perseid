@@ -1,6 +1,7 @@
 package torture
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -90,8 +91,8 @@ func TestPatchBodiesTellAbsentFromNull(t *testing.T) {
 		want  string
 	}{
 		{ThingPatch{}, `{}`},
-		{ThingPatch{Description: Null[string]()}, `{"description":null}`},
-		{ThingPatch{Description: Set("d"), Count: Set(int64(2)), Name: Ptr("n")}, `{"count":2,"description":"d","name":"n"}`},
+		{ThingPatch{Description: ExplicitNull[string]()}, `{"description":null}`},
+		{ThingPatch{Description: NewNullable("d"), Count: NewNullable(int64(2)), Name: Ptr("n")}, `{"count":2,"description":"d","name":"n"}`},
 	} {
 		got, err := json.Marshal(tc.patch)
 		if err != nil {
@@ -125,10 +126,9 @@ func TestQueryParameters(t *testing.T) {
 		io.WriteString(w, `{"data":[]}`)
 	})
 	since := time.Date(2024, 1, 2, 3, 4, 5, 123456789, time.FixedZone("x", 3600))
-	_, err := client.Things().List(context.Background(), ThingsListOptions{
-		IDs:       []string{"a", "b"},
-		Since:     &since,
-		XRequired: "r",
+	_, err := client.Things().List(context.Background(), "r", &ThingsListOptions{
+		IDs:   []string{"a", "b"},
+		Since: &since,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -165,8 +165,19 @@ func TestRequestOptions(t *testing.T) {
 		<-r.Context().Done()
 	})
 	_, err = slow.Things().Retrieve(context.Background(), "t1", WithTimeout(20*time.Millisecond), WithMaxRetries(0))
-	if !errors.Is(err, context.DeadlineExceeded) {
+	var timeout *TimeoutError
+	if !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &timeout) {
 		t.Errorf("err = %v, want a deadline", err)
+	}
+
+	var transport *TransportError
+	_, err = New("token", &Options{ServerURL: "http://127.0.0.1:1", NumRetries: -1}).Things().Retrieve(context.Background(), "t1")
+	if !errors.As(err, &transport) || errors.As(err, &timeout) {
+		t.Errorf("err = %v, want a connection error", err)
+	}
+	var sdkErr SDKError
+	if !errors.As(err, &sdkErr) {
+		t.Errorf("err = %v, want an SDKError", err)
 	}
 }
 
@@ -195,8 +206,8 @@ func TestRetries(t *testing.T) {
 	}
 }
 
-func TestNonIdempotentRequestsAreOnlyRetriedOn429(t *testing.T) {
-	for status, attempts := range map[int]int32{http.StatusBadGateway: 1, http.StatusTooManyRequests: 3} {
+func TestNonIdempotentRequestsAreNotRetried(t *testing.T) {
+	for status, attempts := range map[int]int32{http.StatusBadGateway: 1, http.StatusTooManyRequests: 1} {
 		client, rec := server(t, func(_ int32, w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("X-Request-Id", "req_1")
 			w.WriteHeader(status)
@@ -241,6 +252,63 @@ func TestRetryAfterOverridesTheSchedule(t *testing.T) {
 	}
 }
 
+func TestRetryAfterMsAndPerRequestRetries(t *testing.T) {
+	client, rec := server(t, func(n int32, w http.ResponseWriter, _ *http.Request) {
+		if n == 1 {
+			w.Header().Set("Retry-After-Ms", "30")
+			w.Header().Set("Retry-After", "3600")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		io.WriteString(w, thingJSON)
+	})
+	client.cfg.retrySchedule = []time.Duration{time.Hour}
+	start := time.Now()
+	var resp *http.Response
+	if _, err := client.Things().Retrieve(context.Background(), "t1", WithResponseInto(&resp)); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < 30*time.Millisecond || elapsed > 10*time.Second {
+		t.Errorf("waited %v", elapsed)
+	}
+	if resp.StatusCode != http.StatusOK || rec.requests.Load() != 2 {
+		t.Errorf("status %d after %d attempts", resp.StatusCode, rec.requests.Load())
+	}
+
+	failing, rec := server(t, func(_ int32, w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	})
+	_, err := failing.Things().Retrieve(context.Background(), "t1", WithMaxRetries(0), WithResponseInto(&resp))
+	if err == nil || rec.requests.Load() != 1 || resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("err %v after %d attempts", err, rec.requests.Load())
+	}
+}
+
+func TestUnknownPropertiesRoundTrip(t *testing.T) {
+	var thing Thing
+	if err := json.Unmarshal([]byte(strings.Replace(thingJSON, `{`, `{"future":{"a":[1]},`, 1)), &thing); err != nil {
+		t.Fatal(err)
+	}
+	if string(thing.ExtraFields["future"]) != `{"a":[1]}` {
+		t.Fatalf("extra fields: %v", thing.ExtraFields)
+	}
+	out, err := json.Marshal(thing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, string(out), strings.Replace(thingJSON, `{`, `{"future":{"a":[1]},`, 1))
+
+	create := ThingCreate{Name: "n", Kind: KindAlpha, ExtraFields: map[string]json.RawMessage{"beta": []byte(`true`), "name": []byte(`"ignored"`)}}
+	out, err = json.Marshal(create)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(out, &fields); err != nil || fields["beta"] != true || fields["name"] != "n" {
+		t.Fatalf("%s %v", out, err)
+	}
+}
+
 func TestRetryAfterParsing(t *testing.T) {
 	now := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
 	for value, want := range map[string]time.Duration{
@@ -272,5 +340,35 @@ func TestDefaultBackoffIsJittered(t *testing.T) {
 	}
 	if d := call.delay(0, 2*time.Hour); d > 500*time.Millisecond {
 		t.Errorf("Retry-After beyond a minute should fall back to the schedule: %v", d)
+	}
+}
+
+func TestEventStreams(t *testing.T) {
+	events := func(body string) *EventStream {
+		return &EventStream{reader: bufio.NewReader(strings.NewReader(body)), status: http.StatusOK}
+	}
+	long := events("data: " + strings.Repeat("x", 2<<20) + "\n\n")
+	var decodeErr *DecodeError
+	if long.Next() || !errors.As(long.Err(), &decodeErr) {
+		t.Fatalf("a line over 1 MiB: %v", long.Err())
+	}
+
+	stream := &Stream[map[string]int]{events: events("event: delta\ndata: {\"a\":1}\n\ndata: [DONE]\n\ndata: {\"b\":2}\n\n")}
+	var got []map[string]int
+	for value, err := range stream.All() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stream.Event().Event != "delta" {
+			t.Errorf("event %+v", stream.Event())
+		}
+		got = append(got, value)
+	}
+	if !reflect.DeepEqual(got, []map[string]int{{"a": 1}}) {
+		t.Errorf("got %v", got)
+	}
+	broken := &Stream[map[string]int]{events: events("data: nope\n\n")}
+	if broken.Next() || !errors.As(broken.Err(), &decodeErr) {
+		t.Errorf("err %v", broken.Err())
 	}
 }

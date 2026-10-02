@@ -2,8 +2,10 @@ package features
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"reflect"
 	"strings"
@@ -46,7 +48,7 @@ func TestSmoke(t *testing.T) {
 	expect(t, status(client.Account().RetrieveMachine(ctx)), "Bearer tok||")
 	widget := func(w Widget) string { return w.ID }
 	expect(t, ids(t, client.Widgets().ListIter(ctx, nil), widget), []string{"w1", "w2", "w3"})
-	events := client.Widgets().ListEventsIter(ctx, "w1", WidgetsListEventsOptions{Kind: "created"})
+	events := client.Widgets().ListEventsIter(ctx, "w1", "created", nil)
 	expect(t, ids(t, events, func(e Event) string { return e.ID }), []string{"e1", "e2", "e3"})
 	gadgets := client.Gadgets().ListIter(ctx, nil)
 	var gadgetIds []string
@@ -59,6 +61,11 @@ func TestSmoke(t *testing.T) {
 
 	_, err := New("", &Options{ServerURL: url}).Widgets().List(ctx, nil)
 	expect(t, errors.Is(err, ErrUnauthorized) && !errors.Is(err, ErrNotFound), true)
+	var sdkErr SDKError
+	var apiErr *APIError
+	expect(t, errors.As(err, &sdkErr) && errors.As(err, &apiErr), true)
+	expect(t, apiErr.Body, map[string]any{"error": "unauthorized"})
+	expect(t, apiErr.RequestID(), "req_mock")
 
 	basic := New("", &Options{ServerURL: url, BasicAuth: &BasicAuth{Username: "u", Password: "p"}})
 	expect(t, status(basic.Account().Session(ctx)), "Basic dTpw||")
@@ -73,6 +80,72 @@ func TestSmoke(t *testing.T) {
 	}
 }
 
+func TestSmokeParity(t *testing.T) {
+	ctx := context.Background()
+	url := os.Getenv("FEATURES_URL")
+	client := New("tok", &Options{ServerURL: url})
+
+	var resp *http.Response
+	page, err := client.Widgets().ListPage(ctx, nil, WithResponseInto(&resp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, resp.StatusCode, 200)
+	expect(t, resp.Header.Get("X-Request-Id"), "req_mock")
+	expect(t, len(page.Items), 2)
+	expect(t, page.Items[0].ExtraFields["color"], json.RawMessage(`"red"`))
+	encoded, err := json.Marshal(page.Items[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, string(encoded), `{"id":"w1","name":"w1","color":"red"}`)
+	expect(t, page.HasNextPage(), true)
+	if page, err = page.NextPage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, page.Items[0].ID, "w3")
+	expect(t, page.HasNextPage(), false)
+	if page, err = page.NextPage(ctx); page != nil || err != nil {
+		t.Fatalf("after the last page: %v %v", page, err)
+	}
+
+	completion, err := client.Streaming().CreateCompletion(ctx, CompletionRequest{Prompt: "ab"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, completion.Text, "AB")
+	request := CompletionRequest{Prompt: "ab"}
+	stream, err := client.Streaming().CreateCompletionStream(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	var deltas []string
+	for chunk, err := range stream.All() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		expect(t, stream.Event().Event, "message")
+		expect(t, chunk.ExtraFields["index"] != nil, true)
+		deltas = append(deltas, chunk.Delta)
+	}
+	expect(t, deltas, []string{"a", "b"})
+	expect(t, request.Stream, (*bool)(nil))
+
+	t.Setenv("FEATURES_BASE_URL", url)
+	t.Setenv("FEATURES_API_KEY", "env")
+	health, err := New("", nil).Account().RetrieveMachine(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, health.Status, "Bearer env||")
+	health, err = New("tok", &Options{ServerURL: url}).Account().RetrieveMachine(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, health.Status, "Bearer tok||")
+}
+
 func TestSmokeStreaming(t *testing.T) {
 	ctx := context.Background()
 	client := New("tok", &Options{ServerURL: os.Getenv("FEATURES_URL")})
@@ -82,12 +155,12 @@ func TestSmokeStreaming(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stream.Close()
-	var events []SseEvent
+	var events []SSEEvent
 	for stream.Next() {
 		events = append(events, stream.Event())
 	}
 	expect(t, stream.Err(), nil)
-	expect(t, events, []SseEvent{
+	expect(t, events, []SSEEvent{
 		{Event: "greeting", Data: "news", ID: "1"},
 		{Event: "message", Data: "line1\nline2", ID: "1"},
 		{Event: "message", Data: `{"n": 3}`, ID: "3", Retry: 1500 * time.Millisecond},
@@ -132,7 +205,7 @@ func TestSmokeWire(t *testing.T) {
 		Filter:   &Filter{Status: Ptr("open"), Amount: &FilterAmount{Gte: Ptr[int64](5)}},
 		Expand:   []string{"a", "b"},
 		Metadata: map[string]string{"k": "v"},
-		IDs:      []byte(`["x", "y"]`),
+		IDs:      Ptr(NewWireSearchIDsFromList([]string{"x", "y"})),
 		Tags:     []string{"t1", "t2"},
 		Range:    &SearchRange{Gte: Ptr[int64](1), Lt: Ptr[int64](9)},
 	}
