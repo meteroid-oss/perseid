@@ -66,7 +66,7 @@ async fn smoke() {
     let anonymous = client("");
     let error = anonymous.widgets().list_iter(None).next().await.unwrap().unwrap_err();
     assert_eq!(error.kind(), Some(ApiErrorKind::Unauthorized));
-    assert_eq!(error.api().unwrap().payload().unwrap()["error"], "unauthorized");
+    assert_eq!(error.api().unwrap().payload().unwrap().error, "unauthorized");
 }
 
 #[tokio::test]
