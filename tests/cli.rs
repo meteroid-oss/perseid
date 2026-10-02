@@ -430,8 +430,15 @@ fn csharp_init_and_generate_lay_out_a_dotnet_project() {
         assert!(sdk.join("Petstore").join(file).exists(), "{file}: {out}");
     }
     let api = fs::read_to_string(sdk.join("Petstore/Api/PetsApi.cs")).unwrap();
-    assert!(api.contains("public Task<Pet> RetrieveAsync("), "{api}");
-    assert!(api.contains("public Task<Pet> CreateAsync("), "{api}");
+    assert!(api.contains("public interface IPetsApi"), "{api}");
+    assert!(
+        api.contains("public async Task<Pet> RetrieveAsync("),
+        "{api}"
+    );
+    assert!(
+        api.contains("public Task<ApiResponse<Pet>> CreateAsync("),
+        "{api}"
+    );
 }
 
 #[test]
@@ -443,7 +450,15 @@ fn csharp_generates_streaming_auth_and_pagination() {
         |path: &str| fs::read_to_string(dir.path().join("csharp/Features").join(path)).unwrap();
     let streaming = read("Api/StreamingApi.cs");
     assert!(
-        streaming.contains("public Task<EventStream> RetrieveEventsStreamAsync("),
+        streaming.contains("public async Task<EventStream> RetrieveEventsStreamAsync("),
+        "{streaming}"
+    );
+    assert!(
+        streaming.contains("Task<EventStream<CompletionChunk>> CreateCompletionStreamAsync("),
+        "{streaming}"
+    );
+    assert!(
+        streaming.contains("(completionRequest with { Stream = true })"),
         "{streaming}"
     );
     assert!(
@@ -453,7 +468,11 @@ fn csharp_generates_streaming_auth_and_pagination() {
     assert!(streaming.contains("Upload body,"), "{streaming}");
     let widgets = read("Api/WidgetsApi.cs");
     assert!(
-        widgets.contains("public IAsyncEnumerable<Widget> ListIterAsync("),
+        widgets.contains("public AsyncPager<WidgetList, Widget> ListAutoPagingAsync("),
+        "{widgets}"
+    );
+    assert!(
+        widgets.contains("(page, _) => page.NextCursor"),
         "{widgets}"
     );
     let client = read("FeaturesClient.cs");
@@ -2300,9 +2319,9 @@ fn csharp_types_unions_errors_and_timeout() {
         |path: &str| fs::read_to_string(dir.path().join("csharp/RealWorld").join(path)).unwrap();
     let charge = read("Models/Charge.cs");
     for expected in [
-        "public required ChargeCustomer? Customer { get; set; }",
+        "public required ChargeCustomer? Customer { get; init; }",
         "public sealed record Customer(global::RealWorld.Models.Customer Value) : ChargeCustomer;",
-        "public static implicit operator ChargeCustomer(string value) => new String(value);",
+        "public static implicit operator ChargeCustomer(string value) => new StringValue(value);",
         "public sealed record Empty() : ChargeAmount;",
         "/// A <c>Charge</c> moves money from a card.",
     ] {
@@ -2315,7 +2334,7 @@ fn csharp_types_unions_errors_and_timeout() {
     let charges = read("Api/ChargesApi.cs");
     assert!(charges.contains("RetrieveAsync("), "{charges}");
     assert!(
-        charges.contains("/// <exception cref=\"NotFoundException\">404: <c>GetError()</c> reads the <see cref=\"Models.Error\"/> body.</exception>"),
+        charges.contains("/// <exception cref=\"NotFoundException\">404: <c>Error</c> is the <see cref=\"Models.Error\"/> body.</exception>"),
         "{charges}"
     );
     assert!(

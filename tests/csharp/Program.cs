@@ -90,6 +90,11 @@ try
 catch (ApiException e)
 {
     Check(e.StatusCode == HttpStatusCode.NotFound && e.Body.Contains("not_found"), "ApiException");
+    Check(e is NotFoundException and PetstoreException, "status class under the SDK's base exception");
+    Check(
+        e.Error is JsonElement error && error.GetProperty("code").GetString() == "not_found",
+        "error body parsed as JSON"
+    );
     Check(seen[^1].Url == "/pets/missing%2Fone", $"path escaping {seen[^1].Url}");
 }
 
@@ -108,7 +113,7 @@ using var impatient = new PetstoreClient(
     {
         BaseUrl = $"http://127.0.0.1:{port}",
         Timeout = TimeSpan.FromMilliseconds(100),
-        NumRetries = 0,
+        MaxRetries = 0,
     }
 );
 try
@@ -116,7 +121,7 @@ try
     await impatient.Pets.RetrieveAsync("slow");
     Check(false, "timeout must throw");
 }
-catch (TimeoutException) { }
+catch (ApiTimeoutException) { }
 
 Console.WriteLine("csharp smoke test passed");
 return 0;

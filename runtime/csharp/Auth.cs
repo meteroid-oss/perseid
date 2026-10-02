@@ -8,8 +8,12 @@ using System.Threading.Tasks;
 namespace @@PACKAGE_NAME@@;
 
 /// <summary>HTTP basic credentials.</summary>
+/// <param name="Username">The user name.</param>
+/// <param name="Password">The password, left out of <see cref="ToString"/>.</param>
 public sealed record BasicCredentials(string Username, string Password)
 {
+    /// <summary>The user name, without the password.</summary>
+    /// <returns>The description.</returns>
     public override string ToString() => $"BasicCredentials {{ Username = {Username} }}";
 }
 
