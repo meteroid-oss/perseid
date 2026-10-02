@@ -50,6 +50,13 @@ internal sealed class ApiTransport : IDisposable
         HttpClient? http
     )
     {
+        _baseUrl =
+            options.BaseUrl
+            ?? NonEmpty(Environment.GetEnvironmentVariable("@@ENV_PREFIX@@_BASE_URL"))
+            ?? @@CLIENT_NAME@@ClientOptions.DefaultBaseUrl
+            ?? throw new @@CLIENT_NAME@@Exception(
+                "no base URL: set BaseUrl in the @@CLIENT_NAME@@ClientOptions or the @@ENV_PREFIX@@_BASE_URL environment variable"
+            );
         HttpMessageHandler handler = http is not null
             ? new Forwarder(http, owned: false)
             : options.HttpMessageHandler is { } custom
@@ -63,10 +70,6 @@ internal sealed class ApiTransport : IDisposable
         _pipeline = new HttpMessageInvoker(handler);
         _auth = auth;
         _credentials = credentials;
-        _baseUrl =
-            options.BaseUrl
-            ?? NonEmpty(Environment.GetEnvironmentVariable("@@ENV_PREFIX@@_BASE_URL"))
-            ?? @@CLIENT_NAME@@ClientOptions.DefaultBaseUrl;
         _timeout = options.Timeout;
         _retrySchedule = options.RetrySchedule;
         _maxRetries = Math.Max(0, options.MaxRetries);

@@ -8,15 +8,12 @@ namespace @@PACKAGE_NAME@@;
 /// <summary>Configures a <see cref="@@CLIENT_NAME@@Client"/>. Every property has a sensible default.</summary>
 public sealed partial class @@CLIENT_NAME@@ClientOptions
 {
-    /// <summary>The API endpoint used when neither <see cref="BaseUrl"/> nor the
-    /// <c>@@ENV_PREFIX@@_BASE_URL</c> environment variable is set.</summary>
-    public const string DefaultBaseUrl = "@@DEFAULT_BASE_URL@@";
-
     /// <summary>The name of the <see cref="System.Diagnostics.ActivitySource"/> tracing each call,
     /// to listen to with OpenTelemetry's <c>AddSource</c>.</summary>
     public const string ActivitySourceName = "@@PACKAGE_NAME@@";
 
-    /// <summary>The API base URL, else <c>@@ENV_PREFIX@@_BASE_URL</c>, else <see cref="DefaultBaseUrl"/>.</summary>
+    /// <summary>The API base URL, else <c>@@ENV_PREFIX@@_BASE_URL</c>, else the default of the API when it
+    /// declares one.</summary>
     public string? BaseUrl { get; set; }
 
     /// <summary>The credential when the constructor gets none, else <c>@@ENV_PREFIX@@_API_KEY</c>:

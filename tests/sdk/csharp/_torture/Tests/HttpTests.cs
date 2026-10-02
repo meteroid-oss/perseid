@@ -47,6 +47,26 @@ public class HttpTests
         request.Headers.TryGetValues(name, out var values) ? string.Join(",", values) : null;
 
     [Fact]
+    public async Task WithoutAServerTheBaseUrlIsRequired()
+    {
+        var error = Assert.Throws<TortureException>(() => new TortureClient("token"));
+        Assert.Contains("BaseUrl", error.Message);
+        Assert.Contains("TORTURE_BASE_URL", error.Message);
+        Environment.SetEnvironmentVariable("TORTURE_BASE_URL", "https://env.test/v2");
+        try
+        {
+            var server = new Server((_, _, _) => Task.FromResult(Reply(HttpStatusCode.OK, ThingJson)));
+            using var client = new TortureClient("token", new() { HttpMessageHandler = server });
+            await client.Things.RetrieveAsync("t1");
+            Assert.Equal("https://env.test/v2/things/t1", server.Seen[0].Request.RequestUri!.ToString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TORTURE_BASE_URL", null);
+        }
+    }
+
+    [Fact]
     public async Task KeepsTheBasePathAndEscapesPathParameters()
     {
         var (client, server) = Client(_ => Reply(HttpStatusCode.OK, ThingJson));
@@ -238,7 +258,12 @@ public class HttpTests
         var server = new Server((_, _, _) => throw new HttpRequestException("refused"));
         using var client = new TortureClient(
             "token",
-            new() { HttpMessageHandler = server, RetrySchedule = [TimeSpan.Zero] }
+            new()
+            {
+                BaseUrl = "https://torture.test/v1",
+                HttpMessageHandler = server,
+                RetrySchedule = [TimeSpan.Zero],
+            }
         );
         var error = await Assert.ThrowsAsync<ApiConnectionException>(() => client.Things.RetrieveAsync("t1"));
         Assert.IsType<HttpRequestException>(error.InnerException);
@@ -305,7 +330,12 @@ public class HttpTests
         });
         using var client = new TortureClient(
             "token",
-            new() { HttpMessageHandler = server, RetrySchedule = [TimeSpan.Zero] }
+            new()
+            {
+                BaseUrl = "https://torture.test/v1",
+                HttpMessageHandler = server,
+                RetrySchedule = [TimeSpan.Zero],
+            }
         );
         await Assert.ThrowsAsync<ApiTimeoutException>(
             () => client.Things.RetrieveAsync("t1", new() { Timeout = TimeSpan.FromMilliseconds(20) })

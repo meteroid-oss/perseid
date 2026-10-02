@@ -194,7 +194,9 @@ operation that may answer a bodiless 2xx returns an `Optional`. The HTTP plumbin
 
 Targets .NET 8 with nullable reference types and System.Text.Json source generation (trimming and
 AOT safe); generated code builds clean with `AnalysisLevel` `latest-recommended` and documents every
-public member. `new AcmeClient()` reads `ACME_API_KEY` and `ACME_BASE_URL`. Every method is async
+public member. `new AcmeClient()` reads `ACME_API_KEY` and `ACME_BASE_URL`, and throws an
+`AcmeException` when neither the options nor `ACME_BASE_URL` set a base URL and the spec declares
+no server (`AcmeClientOptions.DefaultBaseUrl` otherwise). Every method is async
 and takes a `RequestOptions` (`Headers`, `Timeout`, `MaxRetries`, `IdempotencyKey`) then a
 `CancellationToken`. Each resource implements an interface (`IAcmeClient.Customers` is an
 `ICustomersApi`) to mock in tests, and `client.Customers.WithRawResponse.RetrieveAsync(id)` returns

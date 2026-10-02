@@ -106,11 +106,18 @@ public sealed partial class {{ sdk.client_name }}Client : I{{ sdk.client_name }}
     /// <summary>Releases the connection pool and middleware, unless the caller owns the <see cref="HttpClient"/>.</summary>
     public void Dispose() => _transport.Dispose();
 }
-{% if kinds %}
 
-/// <summary>The credentials the API's security schemes take.</summary>
+/// <summary>The default base URL{% if kinds %} and the credentials the API's security schemes take{% endif %}.</summary>
 public sealed partial class {{ options_type }}
 {
+{% if sdk.base_url %}
+    /// <summary>The API endpoint used when neither <see cref="BaseUrl"/> nor the
+    /// <c>{{ sdk.env_prefix }}_BASE_URL</c> environment variable is set.</summary>
+    public const string DefaultBaseUrl = {{ sdk.base_url | tojson }};
+{% else %}
+    /// <summary>None: the API declares no server.</summary>
+    internal const string? DefaultBaseUrl = null;
+{% endif -%}
 {% if "bearer" in kinds %}
     /// <summary>Called before each request for a fresh bearer token, e.g. an OAuth2 access token,
     /// instead of the constructor token.</summary>
@@ -125,7 +132,6 @@ public sealed partial class {{ options_type }}
     public {{ keys_type }} ApiKeys { get; set; } = new();
 {% endif -%}
 }
-{% endif -%}
 {% if "api_key" in kinds %}
 
 /// <summary>API keys by security scheme, for <see cref="{{ options_type }}.ApiKeys"/>.</summary>
