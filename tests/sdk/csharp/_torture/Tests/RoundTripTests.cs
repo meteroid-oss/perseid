@@ -95,6 +95,21 @@ public class RoundTripTests
     }
 
     [Fact]
+    public void KnownEnumValuesAreConstantsToSwitchOn()
+    {
+        static string Describe(Kind kind) =>
+            kind.Value switch
+            {
+                Kind.Values.Alpha => "first",
+                Kind.Values.Beta2 => "second",
+                _ => "other",
+            };
+        Assert.Equal("second", Describe(Kind.Beta2));
+        Assert.Equal("other", Describe(Kind.FromValue("brand-new")));
+        Assert.Equal(Priority.Values.Negative, Priority.Negative.Value);
+    }
+
+    [Fact]
     public void UnknownVariantsKeepTheirJson()
     {
         var shape = JsonSerializer.Deserialize("""{"type":"triangle","a":1}""", Context.Shape);
