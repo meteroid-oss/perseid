@@ -2988,8 +2988,8 @@ fn samples_command_is_hidden_from_help() {
 }
 
 #[test]
-fn adjacent_unions_repeating_the_discriminator_generate() {
-    let dir = project_from("petstore.yaml", &["python"]);
+fn adjacent_unions_repeating_the_discriminator_generate_and_go_types_them_as_json() {
+    let dir = project_from("petstore.yaml", &["python", "go"]);
     let spec = r##"
 openapi: 3.1.0
 info: { title: Adjacent, version: "1.0.0" }
@@ -3027,5 +3027,9 @@ components:
     fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
+    assert!(
+        out.contains("schema `Event`: the union is adjacently tagged"),
+        "{out}"
+    );
     assert!(generated_text(dir.path(), "python").contains("class Event"));
 }

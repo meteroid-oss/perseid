@@ -159,6 +159,11 @@ impl Api {
         types::settle_object_unions(&mut self.types, best_match)
     }
 
+    /// Types as untyped JSON the unions the Go templates cannot express yet.
+    pub(crate) fn untype_unions_go_lacks(&mut self) {
+        types::untype_unions_go_lacks(&mut self.types);
+    }
+
     pub(crate) fn inline_flattened_fields(&mut self) -> anyhow::Result<()> {
         types::inline_flattened_fields(&mut self.types)
     }

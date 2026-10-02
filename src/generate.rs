@@ -158,6 +158,9 @@ fn render(
     let filters = config.filters_for(sdk);
     let mut produced = Vec::new();
     let mut api = spec::api(spec, &filters)?;
+    if language == "go" {
+        api.untype_unions_go_lacks();
+    }
     let (best_match, untyped) = api.settle_object_unions(context);
     if best_match > 0 {
         tracing::warn!(

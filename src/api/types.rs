@@ -166,6 +166,37 @@ pub(crate) fn untag_unions_with_non_object_variants(types: &mut Types) {
     }
 }
 
+/// Types as untyped JSON the tagged unions the Go templates cannot express yet: adjacently
+/// tagged ones, and those with an inline object variant.
+pub(crate) fn untype_unions_go_lacks(types: &mut Types) {
+    for (name, ty) in types.iter_mut() {
+        let TypeData::StructEnum { repr, .. } = &ty.data else {
+            continue;
+        };
+        let reason = match repr {
+            StructEnumRepr::AdjacentlyTagged { .. } => {
+                "is adjacently tagged (`oneOf` next to properties)"
+            }
+            StructEnumRepr::InternallyTagged { variants } => {
+                if variants
+                    .iter()
+                    .all(|v| matches!(v.content, EnumVariantType::Ref { .. }))
+                {
+                    continue;
+                }
+                "has an inline object variant"
+            }
+        };
+        tracing::warn!(
+            "schema `{name}`: the union {reason}, which the Go SDK does not support yet, so Go \
+             types it as an untyped JSON value"
+        );
+        ty.data = TypeData::Alias {
+            target: Box::new(FieldType::JsonObject),
+        };
+    }
+}
+
 /// Settles the JSON type of the variants of every union referencing a schema, typing the unions
 /// whose variants cannot be told apart as untyped JSON. Operations only take untyped JSON.
 pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
