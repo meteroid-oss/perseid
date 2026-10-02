@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context as _, bail, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::types::{FieldType, Type, TypeData, Types};
+use super::types::{Field, FieldType, Type, TypeData, Types};
 use crate::config;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -32,6 +34,10 @@ pub(crate) struct Pagination {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) total: Option<Vec<String>>,
     pub(crate) first_page: i64,
+    /// For each path above (`item_cursor` within an item), whether each of its properties may
+    /// be absent or null, for SDKs that read them through typed fields.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) optional: BTreeMap<String, Vec<bool>>,
 }
 
 /// What an operation exposes to pagination.
@@ -122,6 +128,22 @@ impl Pagination {
                 "item cursor `{name}` must be a string"
             );
         }
+        let item_cursor = spec.item_cursor.clone().map(|name| vec![name]);
+        let mut optional = BTreeMap::new();
+        for (key, schema, path) in [
+            ("items", response, Some(&items)),
+            ("next_cursor", response, next_cursor.as_ref()),
+            ("has_more", response, has_more.as_ref()),
+            ("total_pages", response, total_pages.as_ref()),
+            ("total", response, total.as_ref()),
+            ("item_cursor", item_schema.as_str(), item_cursor.as_ref()),
+        ] {
+            if let Some(path) = path {
+                let along = fields(types, schema, path)?;
+                let flags = along.iter().map(|f| !f.required || f.nullable).collect();
+                optional.insert(key.to_owned(), flags);
+            }
+        }
         Ok(Self {
             style,
             param: param.clone(),
@@ -133,6 +155,7 @@ impl Pagination {
             total_pages,
             total,
             first_page: spec.first_page.unwrap_or(1),
+            optional,
         })
     }
 }
@@ -142,27 +165,36 @@ fn split(path: &str) -> Vec<String> {
 }
 
 fn field<'a>(types: &'a Types, schema: &'a str, path: &[String]) -> anyhow::Result<&'a FieldType> {
+    let along = fields(types, schema, path)?;
+    Ok(&along.last().context("empty path")?.r#type)
+}
+
+/// The properties `path` goes through, from `schema`.
+fn fields<'a>(
+    types: &'a Types,
+    schema: &'a str,
+    path: &[String],
+) -> anyhow::Result<Vec<&'a Field>> {
     let mut schema = schema;
-    let mut found: Option<&'a FieldType> = None;
+    let mut along: Vec<&'a Field> = Vec::new();
     for segment in path {
-        if let Some(FieldType::SchemaRef { name, .. }) = found {
-            schema = name.as_str();
-        } else if found.is_some() {
-            bail!("`{}` crosses a non-object value", path.join("."));
+        match along.last().map(|f| &f.r#type) {
+            Some(FieldType::SchemaRef { name, .. }) => schema = name.as_str(),
+            Some(_) => bail!("`{}` crosses a non-object value", path.join(".")),
+            None => {}
         }
         let fields = match types.get(schema).map(|t: &Type| &t.data) {
             Some(TypeData::Struct { fields }) => fields,
             _ => bail!("`{schema}` is not an object schema"),
         };
-        found = Some(
-            &fields
+        along.push(
+            fields
                 .iter()
                 .find(|f| f.name == *segment)
-                .with_context(|| format!("`{schema}` has no `{segment}` property"))?
-                .r#type,
+                .with_context(|| format!("`{schema}` has no `{segment}` property"))?,
         );
     }
-    found.context("empty path")
+    Ok(along)
 }
 
 fn is_integer(t: &FieldType) -> bool {
