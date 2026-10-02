@@ -426,7 +426,10 @@ class RoundTripTest {
         assertTrue(unions.sources().orElseThrow().get(0).isUrlSource());
         assertTrue(unions.sources().orElseThrow().get(1).isUnrecognized());
         assertTrue(unions.document().orElseThrow().isArticle());
-        assertInstanceOf(java.util.Map.class, unions.loose().orElseThrow());
+        // Best match is the default for unions no property tells apart, even without
+        // `x-perseid-union`: the tie goes to the first variant.
+        assertTrue(unions.loose().orElseThrow().isDraft());
+        assertEquals("t", unions.loose().orElseThrow().asDraft().title());
         assertEquals(PLAIN.readTree(json), PLAIN.readTree(unions.toJson()));
         ObjectUnions draft = ObjectUnions.fromJson("{\"document\":{\"title\":\"t\"}}");
         assertTrue(draft.document().orElseThrow().isDraft(), "ties go to the first variant");
