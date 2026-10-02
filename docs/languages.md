@@ -114,7 +114,8 @@ decoded into its schema (else its JSON), and `request_id`. No response raises
 Needs Go 1.23+. Required query and header parameters are arguments, optional ones go in a
 `*...Options` struct (pointers, `nil` to omit); every method also takes trailing options for one
 call: `WithHeader`, `WithTimeout`, `WithIdempotencyKey`, `WithMaxRetries` and
-`WithResponseInto(&resp)`, which hands over the `*http.Response` (status, headers). Names spell
+`WithResponseInto(&resp)`, which hands over the `*http.Response` (status, headers). A method whose
+operation may also answer a bodiless 2xx returns nil for it, scalars as a pointer. Names spell
 initialisms the Go way (`CustomerID`, `APIKey`), and the package of a multi-word name is one word
 (`realworld`). `allOf` parts are inlined into flat structs, and every struct keeps the properties
 it does not know in `ExtraFields`, sent back when encoding. Nullable optional PATCH fields are

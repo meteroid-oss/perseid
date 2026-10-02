@@ -160,3 +160,21 @@ func TestUnionsOfObjects(t *testing.T) {
 		t.Fatalf("%+v", untitled)
 	}
 }
+
+func TestBodilessSuccessReturnsNil(t *testing.T) {
+	client, _ := server(t, func(n int32, w http.ResponseWriter, _ *http.Request) {
+		if n == 1 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		io.WriteString(w, `{"id":"w1","name":"n"}`)
+	})
+	widget, err := client.Widgets().Update(context.Background(), "w1", WidgetUpdate{})
+	if err != nil || widget != nil {
+		t.Fatalf("202: %+v %v", widget, err)
+	}
+	widget, err = client.Widgets().Update(context.Background(), "w1", WidgetUpdate{})
+	if err != nil || widget == nil || widget.ID != "w1" {
+		t.Fatalf("200: %+v %v", widget, err)
+	}
+}
