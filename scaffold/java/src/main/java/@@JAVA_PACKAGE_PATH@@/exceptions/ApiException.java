@@ -11,7 +11,10 @@ import okhttp3.Headers;
 public class ApiException extends @@CLIENT_NAME@@Exception {
     private static final long serialVersionUID = 1L;
 
+    /** The HTTP status. */
     private final int statusCode;
+
+    /** The response body. */
     private final String body;
     private final transient Headers headers;
     private final transient Object error;

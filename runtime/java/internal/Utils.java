@@ -362,7 +362,11 @@ public final class Utils {
         return mapper;
     }
 
-    /** Reads a union of values told apart by their JSON type, such as {@code string | Customer}. */
+    /**
+     * Reads a union of values told apart by their JSON type, such as {@code string | Customer}.
+     *
+     * @param <T> the union class
+     */
     public abstract static class UnionDeserializer<T> extends StdDeserializer<T> {
         private static final long serialVersionUID = 1L;
 
