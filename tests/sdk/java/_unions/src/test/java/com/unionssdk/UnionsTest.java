@@ -1,4 +1,4 @@
-package com.unions;
+package com.unionssdk;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -8,21 +8,21 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
-import com.unions.api.Grades;
-import com.unions.api.Transcriptions;
-import com.unions.models.Completion;
-import com.unions.models.CreateCompletionRequest;
-import com.unions.models.CreateTranscriptionRequest;
-import com.unions.models.GradeByScore;
-import com.unions.models.GradeByText;
-import com.unions.models.ImageRef;
-import com.unions.models.Include;
-import com.unions.models.ModelIds;
-import com.unions.models.ModelIdsWithRef;
-import com.unions.models.Response;
-import com.unions.models.Untypable;
-import com.unions.models.Voice;
-import com.unions.models.VoiceWithOpen;
+import com.unionssdk.api.Grades;
+import com.unionssdk.api.Transcriptions;
+import com.unionssdk.models.Completion;
+import com.unionssdk.models.CreateCompletionRequest;
+import com.unionssdk.models.CreateTranscriptionRequest;
+import com.unionssdk.models.GradeByScore;
+import com.unionssdk.models.GradeByText;
+import com.unionssdk.models.ImageRef;
+import com.unionssdk.models.Include;
+import com.unionssdk.models.ModelIds;
+import com.unionssdk.models.ModelIdsWithRef;
+import com.unionssdk.models.ResponseModel;
+import com.unionssdk.models.Untypable;
+import com.unionssdk.models.Voice;
+import com.unionssdk.models.VoiceWithOpen;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -80,9 +80,9 @@ class UnionsTest {
         exchange.close();
     }
 
-    private Unions client() {
-        return new Unions(
-                null, UnionsOptions.builder().baseUrl(base).clientCredentials("id", "secret").maxRetries(0).build());
+    private UnionsSdk client() {
+        return new UnionsSdk(
+                null, UnionsSdkOptions.builder().baseUrl(base).clientCredentials("id", "secret").maxRetries(0).build());
     }
 
     private static Completion completion(String extra) {
@@ -168,9 +168,9 @@ class UnionsTest {
             "{\"type\":\"web_search\"}",
             "{\"name\":\"f\",\"arguments\":\"{}\"}",
         };
-        Response[] picked = new Response[cases.length];
+        ResponseModel[] picked = new ResponseModel[cases.length];
         for (int i = 0; i < cases.length; i++) {
-            picked[i] = Response.fromJson("{\"id\":\"r\",\"model\":\"alpha-1\",\"tool_choice\":" + cases[i] + "}");
+            picked[i] = ResponseModel.fromJson("{\"id\":\"r\",\"model\":\"alpha-1\",\"tool_choice\":" + cases[i] + "}");
             assertJson(cases[i], PLAIN.readTree(picked[i].toJson()).get("tool_choice").toString());
         }
         assertTrue(picked[0].toolChoice().get().isString());
@@ -182,7 +182,7 @@ class UnionsTest {
 
     @Test
     void objectsNoVariantMatchesAreKept() {
-        Response r = Response.fromJson("{\"id\":\"r\",\"model\":\"alpha-1\",\"tool_choice\":{\"unrelated\":true}}");
+        ResponseModel r = ResponseModel.fromJson("{\"id\":\"r\",\"model\":\"alpha-1\",\"tool_choice\":{\"unrelated\":true}}");
         assertTrue(r.toolChoice().get().isUnrecognized());
         assertTrue(r.toJson().contains("\"unrelated\":true"));
     }
@@ -242,7 +242,7 @@ class UnionsTest {
 
     @Test
     void unionResponseBodiesDecodeAsTheirVariant() {
-        try (Unions client = client()) {
+        try (UnionsSdk client = client()) {
             reply = "{\"text\":\"hello\"}";
             Transcriptions.CreateTranscriptionResponse plain =
                     client.transcriptions()
@@ -261,7 +261,7 @@ class UnionsTest {
 
     @Test
     void listsOfUnionsDecodeEachItem() {
-        try (Unions client = client()) {
+        try (UnionsSdk client = client()) {
             reply = "[{\"text\":\"a\"},{\"text\":\"b\",\"duration\":2,\"language\":\"fr\"}]";
             List<Transcriptions.TranscriptionResult> results = client.transcriptions().list();
             assertEquals(2, results.size());
@@ -272,7 +272,7 @@ class UnionsTest {
 
     @Test
     void unionRequestBodiesAreSentAsTheirVariant() throws IOException {
-        try (Unions client = client()) {
+        try (UnionsSdk client = client()) {
             reply = "{\"id\":\"g\"}";
             client.grades().create(Grades.CreateGradeRequest.ofGradeByText(GradeByText.builder().text("t").build()));
             client.grades().create(Grades.CreateGradeRequest.ofGradeByScore(GradeByScore.builder().score(0.5).build()));
