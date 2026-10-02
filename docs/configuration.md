@@ -208,6 +208,7 @@ The model also carries, for templates to use:
 - `op.errors`, the schema of each error response by status (`404`, `4XX`, `default`);
   `error_schemas` and `default_error` (the schema of nearly every operation's errors) on the API
   and in every template, and `is_error_schema` in type templates.
+- `types`, every schema by name, in resource templates, to read the fields of a request body.
 - Union field types (`is_union()`, `union_variants()`) for values of several types told apart by
   their JSON type, such as Stripe's expandable `string | Customer` or emptyable `object | ""`:
   each variant has a `name`, a `json_type`, `empty` for `""` and a `type`. They answer
