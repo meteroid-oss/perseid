@@ -94,6 +94,7 @@ impl Api {
 
         resources::rename_resources_named_like_types(&mut resources, &types, &filters.reserved);
         resources::mark_structured_query_params(&mut resources, &types);
+        resources::name_body_unions(&mut resources, &types);
 
         // Resolve string alias references in operation query params
         // This must happen after types are created so we know which types are string aliases
@@ -155,8 +156,16 @@ impl Api {
     /// are untyped JSON unless best match is on. Returns how many are decided by best match
     /// and how many best match would type.
     pub(crate) fn settle_object_unions(&mut self, sdk: &serde_json::Value) -> (usize, usize) {
-        let best_match = sdk["untagged_unions"].as_str() == Some("best-match");
-        types::settle_object_unions(&mut self.types, best_match)
+        let best_match = sdk["untagged_unions"].as_str() != Some("json");
+        let mut counts = types::settle_object_unions(&mut self.types, best_match);
+        let mut stack: Vec<&mut resources::Resource> = self.resources.values_mut().collect();
+        while let Some(resource) = stack.pop() {
+            for op in &mut resource.operations {
+                op.settle_object_unions(best_match, &mut counts);
+            }
+            stack.extend(resource.subresources.values_mut());
+        }
+        counts
     }
 
     /// Types as untyped JSON the unions the Go templates cannot express yet.

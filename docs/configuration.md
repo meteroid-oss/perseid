@@ -18,7 +18,7 @@ repo = "acme/acme-{lang}"           # one repository per SDK ({lang}: typescript
 base_url = "https://api.acme.com"   # first server of the spec by default
 timeout = 60                        # seconds
 webhooks = false                    # install the Standard Webhooks verifier
-untagged_unions = "json"            # or "best-match", see "Unions of objects"
+untagged_unions = "best-match"       # or "json" for untyped JSON, see "Unions of objects"
 header_prefix = "acme"              # SDK headers: acme-idempotency-key...; kebab-case name by default
 user_agent = "acme"                 # User-Agent prefix; kebab-case name by default
 
@@ -86,7 +86,7 @@ Each is also a key of the [language tables](#language-tables), which override it
 | `base_url` | The API base URL clients default to: the spec's first server, by `perseid init` |
 | `timeout` | Default request timeout in seconds, 60 by default |
 | `webhooks` | `true` installs the [webhook verifier](customizing.md#webhooks) |
-| `untagged_unions` | How unions of objects that no property tells apart decode: `"json"` (default, untyped JSON) or `"best-match"`; see [unions of objects](#unions-of-objects) |
+| `untagged_unions` | How unions of objects that no property tells apart decode: `"best-match"` (default) or `"json"` (untyped JSON); see [unions of objects](#unions-of-objects) |
 | `header_prefix` | Prefix of the headers the SDKs send on their own (`acme-idempotency-key`), the kebab-case `name` by default |
 | `user_agent` | Prefix of the `User-Agent` header, the kebab-case `name` by default |
 | `[methods]` | Method names by operation id, over the [resource-style names](#method-names) (as does `x-perseid-name` on an operation) |
@@ -186,13 +186,16 @@ object variants can be told apart from their schemas: perseid looks for the fewe
 single-value `enum` properties (`deleted: true`) and required properties only one variant
 declares (`file_id`), and checks the most specific variant first. `DeletedCustomer` is picked
 when `deleted` is `true`, else `Customer` when `object` is `"customer"`. The JSON type still
-tells strings, numbers and lists apart.
+tells strings, numbers and lists apart; variants sharing a JSON type (`string | string[] |
+integer[]`, `date-time | string`) are told apart by the type of the first item of a list, else
+tried in order, the plain `string` last.
 
-When no such rule exists, the union is untyped JSON unless `untagged_unions = "best-match"`
-(top level or a language table): an object is then the variant whose required properties are all
-present and which has the most of its properties, the first declared one on ties. Generation
-warns with the number of unions decoded that way, or left untyped. `x-perseid-union: best-match`
-or `x-perseid-union: json` on the `oneOf`/`anyOf` schema overrides the setting for one union.
+When no such rule exists, an object is the variant whose required properties are all present and
+which has the most of its properties, the first declared one on ties. With
+`untagged_unions = "json"` (top level or a language table) such a union is untyped JSON
+instead. Generation warns with the number of unions decoded that way, or left untyped.
+`x-perseid-union: best-match` or `x-perseid-union: json` on the `oneOf`/`anyOf` schema overrides
+the setting for one union.
 
 Either way, an object no variant matches, or that its variant cannot decode, is kept as received
 in the union's unknown variant and serialized back unchanged, and every SDK can read the value as
@@ -222,9 +225,12 @@ The model also carries, for templates to use:
   `error_schemas` and `default_error` (the schema of nearly every operation's errors, inferred as
   [described above](#spec-support)) on the API and in every template, and `is_error_schema` in type templates.
 - `types`, every schema by name, in resource templates, to read the fields of a request body.
-- Union field types (`is_union()`, `union_variants()`) for values of several types told apart by
-  their JSON type, such as Stripe's expandable `string | Customer` or emptyable `object | ""`:
-  each variant has a `name`, a `json_type`, `empty` for `""` and a `type`. They answer
+- Union field types (`is_union()`, `union_variants()`, `try_variants()`, `union_decode()`) for
+  values of several types, such as Stripe's expandable `string | Customer` or emptyable
+  `object | ""`: each variant has a `name`, a `json_type`, `items` (what the items of a list
+  look like), `empty` for `""` and a `type`. `union_decode()` is `json-type` when no two variants
+  share a JSON type, else `try`: decoders go through `try_variants()` and keep the first variant
+  that matches and decodes. They answer
   `is_json_object()` too, so templates not handling them keep untyped JSON; `union_refs` lists
   the schemas they reference. `union_mode()` is `json` when the JSON type decides, else `rules`
   (object variants have `when` conditions, `{property, value}` with no `value` for presence,

@@ -34,6 +34,33 @@ impl UnionMode {
     }
 }
 
+/// How a decoder picks the variant of a JSON value in a union.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum UnionDecode {
+    /// By JSON type alone: no two variants share one.
+    #[default]
+    JsonType,
+    /// By trying the variants in `try_variants()` order: some share a JSON type.
+    Try,
+}
+
+impl UnionDecode {
+    pub(crate) fn is_json_type(&self) -> bool {
+        *self == Self::JsonType
+    }
+}
+
+/// The JSON type of a value, and of the items of an array when it has to be told apart.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub(crate) struct JsonShape {
+    /// `string`, `integer`, `number`, `boolean`, `array` or `object`.
+    pub json_type: String,
+    /// What the items of an `array` look like, absent when any item is accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub items: Option<Box<JsonShape>>,
+}
+
 /// A property a JSON object must have, equal to `value` when set.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub(crate) struct Condition {

@@ -1544,10 +1544,10 @@ fn unions_of_objects_follow_untagged_unions_and_x_perseid_union() {
     };
     let out = generate();
     assert!(
-        out.contains("decoded as their best-matching variant: 1"),
+        out.contains("decoded as their best-matching variant: 3"),
         "{out}"
     );
-    assert!(out.contains("left as untyped JSON: 1"), "{out}");
+    assert!(!out.contains("left as untyped JSON"), "{out}");
     let unions = read("object_unions");
     for text in [
         "pubenumObjectUnionsAccount",
@@ -1557,23 +1557,23 @@ fn unions_of_objects_follow_untagged_unions_and_x_perseid_union() {
     ] {
         assert!(unions.contains(text), "no `{text}` in {unions}");
     }
-    assert!(read("document").contains("pubtypeDocument=serde_json::Value;"));
+    assert!(read("document").contains("ranked(&value,"));
 
     edit_config(dir.path(), |text| {
-        format!("untagged_unions = \"best-match\"\n{text}")
+        format!("untagged_unions = \"json\"\n{text}")
     });
     let out = generate();
     assert!(
-        out.contains("decoded as their best-matching variant: 2"),
+        out.contains("decoded as their best-matching variant: 1"),
         "{out}"
     );
-    assert!(!out.contains("left as untyped JSON"), "{out}");
-    assert!(read("document").contains("best_match(&value,"));
+    assert!(out.contains("left as untyped JSON: 2"), "{out}");
+    assert!(read("document").contains("pubtypeDocument=serde_json::Value;"));
 
     edit_config(dir.path(), |text| {
-        text.replace("[rust]\n", "[rust]\nuntagged_unions = \"json\"\n")
+        text.replace("[rust]\n", "[rust]\nuntagged_unions = \"best-match\"\n")
     });
-    assert!(generate().contains("left as untyped JSON: 1"));
+    assert!(generate().contains("decoded as their best-matching variant: 3"));
 
     edit_config(dir.path(), |text| text.replace("\"json\"", "\"guess\""));
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
@@ -1587,9 +1587,14 @@ fn torture_fixture_generates_every_language() {
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
     assert_eq!(
-        out.matches("schema `MapOrAddress`: `oneOf`").count(),
+        out.matches("decoded as their best-matching variant")
+            .count(),
         1,
         "warnings are printed once for all languages: {out}"
+    );
+    assert!(
+        !out.contains("MapOrAddress"),
+        "a map or an object is a typed union: {out}"
     );
 
     let (ok, model) = perseid(dir.path(), &["inspect"]);
@@ -3258,5 +3263,124 @@ paths:
     assert!(
         rust.contains("fn retrieve(") && rust.contains("fn get_other_thing("),
         "{rust}"
+    );
+}
+
+#[test]
+fn unions_sharing_json_types_and_union_bodies_stay_typed() {
+    let dir = project_from("petstore.yaml", &["python"]);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Unions, version: "1.0.0" }
+servers: [{ url: "https://x.example.com" }]
+paths:
+  /completions:
+    post:
+      operationId: createCompletion
+      tags: [completions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CompletionRequest" }
+      responses: { "204": { description: ok } }
+  /transcriptions:
+    post:
+      operationId: createTranscription
+      tags: [transcriptions]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - { $ref: "#/components/schemas/Plain" }
+                - { type: string }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/Plain" }
+                  - { $ref: "#/components/schemas/Verbose" }
+components:
+  schemas:
+    CompletionRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          anyOf:
+            - { type: string }
+            - { type: array, items: { type: string } }
+            - { type: array, items: { type: integer } }
+            - { type: array, items: { type: array, items: { type: integer } } }
+    Plain:
+      type: object
+      required: [text]
+      properties: { text: { type: string } }
+    Verbose:
+      type: object
+      required: [text, segments]
+      properties:
+        text: { type: string }
+        segments: { type: array, items: { type: string } }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, model) = perseid(dir.path(), &["inspect"]);
+    assert!(ok, "{model}");
+    let model: serde_json::Value = serde_json::from_str(&model).unwrap();
+    let fields = model["types"]["CompletionRequest"]["fields"]
+        .as_array()
+        .unwrap();
+    let prompt = &fields[0]["type"];
+    assert_eq!(prompt["id"], "Union");
+    assert_eq!(prompt["decode"], "try");
+    let names: Vec<_> = prompt["variants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "string",
+            "array_of_strings",
+            "array_of_integers",
+            "array_of_integer_arrays"
+        ]
+    );
+    assert_eq!(prompt["variants"][2]["items"]["json_type"], "integer");
+    assert_eq!(
+        prompt["variants"][3]["items"]["items"]["json_type"],
+        "integer"
+    );
+
+    // Inline body unions are named after the operation, and stay typed unions.
+    let transcription = operation(&model, "createTranscription");
+    assert_eq!(
+        transcription["request_body_schema_name"],
+        "CreateTranscriptionRequest"
+    );
+    let request = &model["types"]["CreateTranscriptionRequest"]["target"];
+    assert_eq!(request["id"], "Union");
+    assert_eq!(
+        transcription["response_body_schema_name"],
+        "CreateTranscriptionResponse"
+    );
+    let response = &model["types"]["CreateTranscriptionResponse"]["target"];
+    assert_eq!(response["id"], "Union");
+    assert_eq!(response["mode"], "rules");
+    assert!(model["types"].get("Verbose").is_some());
+
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let python = generated_text(dir.path(), "python");
+    assert!(
+        python.contains("decode_response(response, CreateTranscriptionResponse)"),
+        "{python}"
     );
 }

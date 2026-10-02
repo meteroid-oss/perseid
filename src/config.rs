@@ -298,10 +298,10 @@ pub enum Int64 {
 #[serde(rename_all = "kebab-case")]
 pub enum UntaggedUnions {
     /// Untyped JSON.
-    #[default]
     Json,
     /// The variant whose required properties are all present and which knows the most
     /// properties, the first declared on ties.
+    #[default]
     BestMatch,
 }
 

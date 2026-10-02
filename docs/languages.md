@@ -14,8 +14,8 @@ API-wide error schema when [one is inferred](configuration.md#spec-support).
 
 Values told apart by their JSON type, such as Stripe's expandable `string | Customer` or
 `ChargeShipping | ""`, are typed rather than untyped JSON. So are unions of several object types
-without a discriminator when their properties tell them apart
-(`string | Customer | DeletedCustomer`), or with `untagged_unions = "best-match"`; see
+without a discriminator (`string | Customer | DeletedCustomer`), told apart by their properties,
+else by their best match (`untagged_unions = "json"` leaves the latter untyped); see
 [unions of objects](configuration.md#unions-of-objects). An object no variant matches is kept as
 received, and each SDK reads a value as another variant than the one picked.
 

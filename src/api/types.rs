@@ -20,7 +20,7 @@ use heck::{ToSnakeCase as _, ToUpperCamelCase as _};
 use super::{
     get_schema_name,
     resources::{self, Resource, Resources},
-    unions::{self, Condition, UnionMode},
+    unions::{self, Condition, JsonShape, UnionDecode, UnionMode},
 };
 
 /// Named types referenced by API operations.
@@ -221,6 +221,7 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
                 variants,
                 mode,
                 requested,
+                decode,
             } => {
                 let mut settled = true;
                 for variant in variants.iter_mut() {
@@ -231,21 +232,30 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
                             None => settled = false,
                         }
                     }
+                    variant.items = match &variant.r#type {
+                        FieldType::List { inner } | FieldType::Set { inner } => {
+                            json_shape(inner, &known.kinds).map(Box::new)
+                        }
+                        _ => None,
+                    };
                 }
                 let _span = tracing::warn_span!("schema", name = %owner).entered();
                 if *requested == Some(UnionMode::Json) {
                     *ty = FieldType::JsonObject;
-                } else if settled && distinct_json_types(variants) {
-                } else if let Some(decided) = settled
-                    .then(|| decide_objects(variants, &known.shapes))
-                    .flatten()
-                {
-                    *mode = decided;
-                } else {
+                } else if !settled {
                     tracing::warn!(
                         "`oneOf`/`anyOf` without a discriminator is typed as an untyped JSON value"
                     );
                     *ty = FieldType::JsonObject;
+                } else {
+                    *decode = if distinct_json_types(variants) {
+                        UnionDecode::JsonType
+                    } else {
+                        UnionDecode::Try
+                    };
+                    if variants.iter().filter(|v| v.json_type == "object").count() > 1 {
+                        *mode = decide_objects(variants, &known.shapes);
+                    }
                 }
             }
             FieldType::List { inner }
@@ -278,6 +288,13 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
             // Settled first, so that `typed_union` tells references apart by their JSON type.
             for param in &mut op.query_params {
                 settle(&mut param.r#type, &known, &op.id);
+            }
+            for ty in op
+                .request_body_json_type
+                .iter_mut()
+                .chain(op.response_body_json_type.iter_mut())
+            {
+                settle(ty, &known, &op.id);
             }
             op.untype_unions();
             op.forget_typed_unions_of_unknown_types(types);
@@ -326,41 +343,70 @@ pub(crate) fn set_union_ids(types: &mut Types) {
     }
 }
 
-/// The mode of a union whose object variants, all structs, have rules telling them apart,
-/// else best match; `None` when its other variants share a JSON type or an object variant
-/// is not a struct.
+/// What the items of an array of `ty` look like, `None` when any value is accepted.
+fn json_shape(ty: &FieldType, kinds: &BTreeMap<String, Option<&'static str>>) -> Option<JsonShape> {
+    let leaf = |json_type: &str| JsonShape {
+        json_type: json_type.to_owned(),
+        items: None,
+    };
+    match ty.non_null() {
+        FieldType::SchemaRef { name, .. } => kinds.get(name).copied().flatten().map(leaf),
+        FieldType::List { inner } | FieldType::Set { inner } => Some(JsonShape {
+            json_type: "array".to_owned(),
+            items: json_shape(inner, kinds).map(Box::new),
+        }),
+        // Any JSON value.
+        FieldType::JsonObject | FieldType::Union { .. } => None,
+        other => UnionVariant::json_type_of(other).map(leaf),
+    }
+}
+
+/// The mode of a union of several objects: rules when the structs among them have some telling
+/// them apart, else best match. The objects that are no struct, free-form maps and unions, are
+/// tried last and accept any object.
 fn decide_objects(
     variants: &mut [UnionVariant],
     shapes: &BTreeMap<String, Option<Vec<unions::Property>>>,
-) -> Option<UnionMode> {
-    let (mut objects, others): (Vec<_>, Vec<_>) =
-        variants.iter_mut().partition(|v| v.json_type == "object");
-    let others: Vec<UnionVariant> = others.into_iter().map(|v| v.clone()).collect();
-    if objects.len() < 2 || !distinct_json_types(&others) {
-        return None;
-    }
-    let object_shapes = objects
+) -> UnionMode {
+    let objects = variants.iter_mut().filter(|v| v.json_type == "object");
+    let shape_of = |v: &UnionVariant| match &v.r#type {
+        FieldType::SchemaRef { name, .. } => shapes.get(name).cloned().flatten(),
+        _ => None,
+    };
+    let (mut structs, mut others): (Vec<_>, Vec<_>) = objects
+        .map(|v| (shape_of(v), v))
+        .partition(|(shape, _)| shape.is_some());
+    let struct_shapes: Vec<Vec<unions::Property>> = structs
         .iter()
-        .map(|v| match &v.r#type {
-            FieldType::SchemaRef { name, .. } => shapes.get(name).cloned().flatten(),
-            _ => None,
-        })
-        .collect::<Option<Vec<_>>>()?;
-    match unions::infer(&object_shapes) {
+        .map(|(shape, _)| shape.clone().unwrap_or_default())
+        .collect();
+    let rules = if struct_shapes.len() > 1 {
+        unions::infer(&struct_shapes)
+    } else {
+        None
+    };
+    let count = structs.len();
+    let mode = match rules {
         Some(rules) => {
-            for (variant, (rank, when)) in objects.iter_mut().zip(rules) {
+            for ((_, variant), (rank, when)) in structs.iter_mut().zip(rules) {
                 variant.rank = rank;
                 variant.when = when;
             }
-            Some(UnionMode::Rules)
+            UnionMode::Rules
         }
         None => {
-            for (variant, shape) in objects.iter_mut().zip(&object_shapes) {
+            for (rank, ((_, variant), shape)) in structs.iter_mut().zip(&struct_shapes).enumerate()
+            {
+                variant.rank = rank;
                 (variant.required, variant.properties) = unions::best_match(shape);
             }
-            Some(UnionMode::BestMatch)
+            UnionMode::BestMatch
         }
+    };
+    for (index, (_, variant)) in others.iter_mut().enumerate() {
+        variant.rank = count + index;
     }
+    mode
 }
 
 /// Sets the `discriminator_defaults` of the structs that are variants of internally tagged unions.
@@ -1906,12 +1952,17 @@ pub(crate) struct SimpleVariant {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub(crate) struct UnionVariant {
     /// Unique in its union: the snake_case schema name of a reference, else `string`,
-    /// `integer`, `number`, `boolean`, `date_time`, `decimal`, `list`, `object` or `empty`.
+    /// `integer`, `number`, `boolean`, `date_time`, `decimal`, `object`, `empty` or
+    /// `array_of_<items>` (`array_of_strings`, `array_of_integer_arrays`, `array_of_items`);
+    /// a repeated name gets a numeric suffix (`string_2`).
     pub name: String,
-    /// JSON type deciding the variant when decoding: `string`, `integer`, `number`, `boolean`,
-    /// `array` or `object`. No two variants of a union share one (`integer` and `number` count
-    /// as one).
+    /// JSON type a value must have to be this variant: `string`, `integer`, `number`,
+    /// `boolean`, `array` or `object`. Variants may share one, see `UnionDecode`.
     pub json_type: String,
+    /// What the items of an `array` variant look like, to tell it from the other arrays of its
+    /// union by its first item; absent when any item is accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub items: Option<Box<JsonShape>>,
     /// Only the empty string, which Stripe accepts to unset a value (`enum: [""]`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub empty: bool,
@@ -1946,6 +1997,7 @@ impl UnionVariant {
             return Some(Self {
                 name: "empty".into(),
                 json_type: "string".into(),
+                items: None,
                 empty: true,
                 r#type: FieldType::String,
                 when: Vec::new(),
@@ -1963,14 +2015,12 @@ impl UnionVariant {
         };
         let (name, json_type) = match &r#type {
             FieldType::SchemaRef { name, .. } => (name.to_snake_case(), String::new()),
-            ty => (
-                Self::name_of(ty)?.to_owned(),
-                Self::json_type_of(ty)?.to_owned(),
-            ),
+            ty => (Self::name_of(ty)?, Self::json_type_of(ty)?.to_owned()),
         };
         Some(Self {
             name,
             json_type,
+            items: None,
             empty: false,
             r#type,
             when: Vec::new(),
@@ -1981,27 +2031,85 @@ impl UnionVariant {
         })
     }
 
-    fn name_of(ty: &FieldType) -> Option<&'static str> {
+    /// The variant name of a scalar, list or map: `string`, `integer`, `number`, `boolean`,
+    /// `date_time`, `decimal`, `object`, or `array_of_<items>` such as `array_of_strings` and
+    /// `array_of_integer_arrays`.
+    fn name_of(ty: &FieldType) -> Option<String> {
         Some(match ty {
-            FieldType::Bool => "boolean",
+            FieldType::List { inner } | FieldType::Set { inner } => {
+                let items = Self::item_name_of(inner).unwrap_or_else(|| "value".into());
+                let plural = if items.ends_with('s') { "es" } else { "s" };
+                format!("array_of_{items}{plural}")
+            }
+            ty => Self::item_name_of(ty)?,
+        })
+    }
+
+    /// The singular name of values of `ty`, as the items of an array.
+    fn item_name_of(ty: &FieldType) -> Option<String> {
+        Some(match ty {
+            FieldType::Bool => "boolean".into(),
             FieldType::Int16
             | FieldType::UInt16
             | FieldType::Int32
             | FieldType::Int64
-            | FieldType::UInt64 => "integer",
-            FieldType::Float | FieldType::Double => "number",
-            FieldType::String | FieldType::Uri | FieldType::Date => "string",
-            FieldType::DateTime => "date_time",
-            FieldType::Decimal => "decimal",
-            FieldType::List { .. } | FieldType::Set { .. } => "list",
-            FieldType::Map { .. } | FieldType::JsonObject => "object",
-            FieldType::Nullable { inner } => return Self::name_of(inner),
-            FieldType::SchemaRef { .. }
-            | FieldType::Union { .. }
-            | FieldType::StringEnum { .. } => {
-                return None;
+            | FieldType::UInt64 => "integer".into(),
+            FieldType::Float | FieldType::Double => "number".into(),
+            FieldType::String | FieldType::Uri | FieldType::Date => "string".into(),
+            FieldType::DateTime => "date_time".into(),
+            FieldType::Decimal => "decimal".into(),
+            FieldType::List { inner } | FieldType::Set { inner } => {
+                let items = Self::item_name_of(inner).unwrap_or_else(|| "value".into());
+                format!("{items}_array")
             }
+            FieldType::Map { .. } | FieldType::JsonObject => "object".into(),
+            FieldType::SchemaRef { name, .. } => name.to_snake_case(),
+            FieldType::Nullable { inner } => return Self::item_name_of(inner),
+            FieldType::Union { .. } | FieldType::StringEnum { .. } => return None,
         })
+    }
+
+    /// Variants without the repeated ones, with `integer` folded into `number`, and unique
+    /// names (`string`, `string_2`).
+    fn merge(mut variants: Vec<Self>) -> Vec<Self> {
+        let mut seen: Vec<(FieldType, bool)> = Vec::new();
+        variants.retain(|v| {
+            let key = (v.r#type.clone(), v.empty);
+            let new = !seen.contains(&key);
+            seen.push(key);
+            new
+        });
+        // A JSON number is read as the wider type.
+        let plain = |v: &Self, kind: &str| {
+            v.json_type == kind && !matches!(v.r#type, FieldType::SchemaRef { .. })
+        };
+        if variants.iter().any(|v| plain(v, "number")) {
+            variants.retain(|v| !plain(v, "integer"));
+        }
+        let mut used = BTreeSet::new();
+        for variant in &mut variants {
+            let base = variant.name.clone();
+            let mut n = 1;
+            while !used.insert(variant.name.clone()) {
+                n += 1;
+                variant.name = format!("{base}_{n}");
+            }
+        }
+        variants
+    }
+
+    /// Where the variant stands in the order decoders try them: the plain strings come last,
+    /// after the variants that parse them, and objects follow their rank.
+    fn try_key(&self) -> (bool, usize) {
+        let plain = !self.empty && matches!(self.r#type, FieldType::String | FieldType::Uri);
+        (
+            plain,
+            if self.json_type == "object" {
+                self.rank
+            } else {
+                0
+            },
+        )
     }
 
     /// The JSON type of values of `ty`, unknown for references.
@@ -2094,8 +2202,9 @@ pub(crate) enum FieldType {
         inner: Option<Type>,
     },
 
-    /// A value of one of several types told apart by their JSON type, such as Stripe's
-    /// expandable `string | Customer`. Templates render it as untyped JSON (it answers
+    /// A value of one of several types, such as Stripe's expandable `string | Customer` or
+    /// `string | string[] | integer[]`, told apart by their JSON type, the items of lists and
+    /// the properties of objects. Templates render it as untyped JSON (it answers
     /// `is_json_object`) unless they check `is_union` first.
     Union {
         variants: Vec<UnionVariant>,
@@ -2105,6 +2214,10 @@ pub(crate) enum FieldType {
         /// The mode `x-perseid-union` asks for.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         requested: Option<UnionMode>,
+        /// How the variant of any JSON value is picked: by JSON type alone, or by trying the
+        /// variants in order when some share a JSON type.
+        #[serde(default, skip_serializing_if = "UnionDecode::is_json_type")]
+        decode: UnionDecode,
     },
 
     /// An inline string enum that will be promoted to a named top-level type
@@ -2222,18 +2335,20 @@ impl FieldType {
                     .filter(|v| !is_null_schema(v))
                     .map(UnionVariant::from_schema)
                     .collect();
-                if let Some(variants) = members
-                    && variants.len() > 1
-                    && distinct_json_types(&variants)
-                {
-                    return Ok((
-                        Self::Union {
-                            variants,
-                            mode: UnionMode::Json,
-                            requested,
-                        },
-                        nullable,
-                    ));
+                if let Some(variants) = members.map(UnionVariant::merge) {
+                    return Ok(match <[UnionVariant; 1]>::try_from(variants) {
+                        Ok([only]) => (only.r#type, nullable),
+                        Err(variants) if variants.len() > 1 => (
+                            Self::Union {
+                                variants,
+                                mode: UnionMode::Json,
+                                requested,
+                                decode: UnionDecode::JsonType,
+                            },
+                            nullable,
+                        ),
+                        Err(_) => (Self::JsonObject, nullable),
+                    });
                 }
                 tracing::warn!(
                     "`oneOf`/`anyOf` without a discriminator is typed as an untyped JSON value"
@@ -2539,6 +2654,18 @@ impl FieldType {
         }
     }
 
+    /// Whether this type is a union, or a list of, a map of or a nullable one.
+    pub(crate) fn contains_union(&self) -> bool {
+        match self {
+            Self::Union { .. } => true,
+            Self::List { inner } | Self::Set { inner } | Self::Nullable { inner } => {
+                inner.contains_union()
+            }
+            Self::Map { value_ty } => value_ty.contains_union(),
+            _ => false,
+        }
+    }
+
     /// Schemas the variants of the unions in this type reference.
     pub(crate) fn union_refs(&self) -> BTreeSet<&str> {
         match self {
@@ -2558,12 +2685,13 @@ impl FieldType {
         }
     }
 
-    fn settle_object_unions(&mut self, best_match: bool, counts: &mut (usize, usize)) {
+    pub(crate) fn settle_object_unions(&mut self, best_match: bool, counts: &mut (usize, usize)) {
         match self {
             Self::Union {
                 variants,
                 mode,
                 requested,
+                ..
             } => {
                 for variant in variants.iter_mut() {
                     variant.r#type.settle_object_unions(best_match, counts);
@@ -2901,6 +3029,24 @@ impl minijinja::value::Object for FieldType {
                 Ok(match &**self {
                     Self::Union { mode, .. } => minijinja::Value::from_serialize(mode),
                     _ => minijinja::Value::from(()),
+                })
+            }
+            "union_decode" => {
+                ensure_no_args(args, "union_decode")?;
+                Ok(match &**self {
+                    Self::Union { decode, .. } => minijinja::Value::from_serialize(decode),
+                    _ => minijinja::Value::from(()),
+                })
+            }
+            "try_variants" => {
+                ensure_no_args(args, "try_variants")?;
+                Ok(match &**self {
+                    Self::Union { variants, .. } => {
+                        let mut ordered: Vec<_> = variants.iter().collect();
+                        ordered.sort_by_key(|v| v.try_key());
+                        minijinja::Value::from_serialize(ordered)
+                    }
+                    _ => minijinja::Value::from(Vec::<minijinja::Value>::new()),
                 })
             }
             "object_variants" => {
@@ -3373,13 +3519,50 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_unions_are_untyped_json() {
-        let f = field(
-            json!({"anyOf": [{"type": "string"}, {"type": "string", "format": "date-time"}]}),
+    fn unions_sharing_json_types_are_typed_and_named_after_their_items() {
+        let f = field(json!({"anyOf": [
+            {"type": "string"},
+            {"type": "array", "items": {"type": "string"}},
+            {"type": "array", "items": {"type": "integer"}},
+            {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}}
+        ]}));
+        assert_eq!(
+            variants(&f.r#type),
+            [
+                ("string", "string"),
+                ("array_of_strings", "array"),
+                ("array_of_integers", "array"),
+                ("array_of_integer_arrays", "array")
+            ]
         );
-        assert_eq!(f.r#type, FieldType::JsonObject);
+        let f = field(json!({"anyOf": [
+            {"type": "string"}, {"type": "string", "format": "date-time"}
+        ]}));
+        assert_eq!(
+            variants(&f.r#type),
+            [("string", "string"), ("date_time", "string")]
+        );
+        let FieldType::Union { variants, .. } = &f.r#type else {
+            unreachable!()
+        };
+        let mut order: Vec<_> = variants.iter().collect();
+        order.sort_by_key(|v| v.try_key());
+        assert_eq!(order[0].name, "date_time");
+    }
+
+    #[test]
+    fn integers_fold_into_numbers_and_repeats_into_one_variant() {
         let f = field(json!({"anyOf": [{"type": "integer"}, {"type": "number"}]}));
-        assert_eq!(f.r#type, FieldType::JsonObject);
+        assert_eq!(f.r#type, FieldType::Double);
+        let f = field(json!({"anyOf": [{"type": "string"}, {"type": "string"}]}));
+        assert_eq!(f.r#type, FieldType::String);
+        let f = field(json!({"anyOf": [
+            {"type": "integer"}, {"type": "number"}, {"type": "string"}
+        ]}));
+        assert_eq!(
+            variants(&f.r#type),
+            [("number", "number"), ("string", "string")]
+        );
         let f = field(json!({"anyOf": [{"type": "string"}, {}]}));
         assert_eq!(f.r#type, FieldType::JsonObject);
         let f = field(json!({"type": ["string", "integer"]}));
@@ -3387,7 +3570,84 @@ mod tests {
     }
 
     #[test]
-    fn union_references_settle_their_json_type_or_untype_the_union() {
+    fn variants_sharing_a_json_type_are_tried_in_order_and_arrays_told_apart_by_items() {
+        let mut types = types_from(json!({
+            "Holder": {"type": "object", "properties": {
+                "prompt": {"anyOf": [
+                    {"type": "string"},
+                    {"type": "array", "items": {"type": "string"}},
+                    {"type": "array", "items": {"type": "integer"}},
+                    {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
+                    {"type": "array", "items": {"$ref": "#/components/schemas/Part"}}
+                ]},
+                "plain": {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+            }},
+            "Part": {"type": "object", "properties": {"x": {"type": "string"}}}
+        }));
+        resolve_unions(&mut types, &mut Resources::new());
+        let FieldType::Union {
+            variants, decode, ..
+        } = field_type(&types, "Holder", "prompt")
+        else {
+            panic!("not a union");
+        };
+        assert_eq!(*decode, UnionDecode::Try);
+        let items: Vec<_> = variants
+            .iter()
+            .map(|v| {
+                v.items.as_ref().map(|i| {
+                    (
+                        i.json_type.as_str(),
+                        i.items.as_ref().map(|i| i.json_type.as_str()),
+                    )
+                })
+            })
+            .collect();
+        assert_eq!(
+            items,
+            [
+                None,
+                Some(("string", None)),
+                Some(("integer", None)),
+                Some(("array", Some("integer"))),
+                Some(("object", None))
+            ]
+        );
+        let FieldType::Union { decode, .. } = field_type(&types, "Holder", "plain") else {
+            panic!("not a union");
+        };
+        assert_eq!(*decode, UnionDecode::JsonType);
+    }
+
+    #[test]
+    fn objects_that_are_no_struct_are_tried_after_the_structs() {
+        let mut types = types_from(json!({
+            "Holder": {"type": "object", "properties": {
+                "value": {"oneOf": [
+                    {"type": "object", "additionalProperties": {"type": "string"}},
+                    {"$ref": "#/components/schemas/Item"},
+                    {"type": "string"}
+                ]}
+            }},
+            "Item": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}}}
+        }));
+        resolve_unions(&mut types, &mut Resources::new());
+        let FieldType::Union { variants, mode, .. } = field_type(&types, "Holder", "value") else {
+            panic!("not a union");
+        };
+        assert_eq!(*mode, UnionMode::BestMatch);
+        let mut order: Vec<_> = variants
+            .iter()
+            .filter(|v| v.json_type == "object")
+            .collect();
+        order.sort_by_key(|v| v.try_key());
+        let names: Vec<_> = order.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["item", "object"]);
+        assert_eq!(order[0].required, ["id"]);
+    }
+
+    #[test]
+    fn union_references_settle_their_json_type() {
         let customer = |a: &str, b: &str| {
             json!({"anyOf": [
                 {"$ref": format!("#/components/schemas/{a}")},
@@ -3423,10 +3683,17 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(field_type(&types, "Charge", "code"), &FieldType::JsonObject);
+        assert_eq!(
+            variants(field_type(&types, "Charge", "code")),
+            [
+                ("code", "string"),
+                ("customer", "object"),
+                ("string", "string")
+            ]
+        );
         assert_eq!(
             types["Charge"].union_refs(),
-            BTreeSet::from(["Customer", "Deleted", "Tier"])
+            BTreeSet::from(["Code", "Customer", "Deleted", "Tier"])
         );
         assert!(types["Charge"].referenced_components().is_empty());
         assert_eq!(settle_object_unions(&mut types, false), (0, 1));

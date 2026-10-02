@@ -177,6 +177,23 @@ pub(crate) fn mark_structured_query_params(resources: &mut Resources, types: &Ty
     }
 }
 
+/// Names the unions of the JSON bodies that no schema names, after the operation and avoiding
+/// the names of `types`.
+pub(crate) fn name_body_unions(resources: &mut Resources, types: &Types) {
+    fn visit(resource: &mut Resource, taken: &BTreeSet<String>) {
+        for op in &mut resource.operations {
+            op.name_body_unions(taken);
+        }
+        for sub in resource.subresources.values_mut() {
+            visit(sub, taken);
+        }
+    }
+    let taken: BTreeSet<String> = types.keys().map(|k| k.to_upper_camel_case()).collect();
+    for resource in resources.values_mut() {
+        visit(resource, &taken);
+    }
+}
+
 /// The schemas sent in requests and those received in responses, before following references.
 pub(crate) fn request_and_response_roots(
     resources: &Resources,
@@ -205,7 +222,7 @@ pub(crate) fn request_and_response_roots(
             responses.extend(
                 op.response_body_json_type
                     .iter()
-                    .filter_map(FieldType::referenced_schema),
+                    .flat_map(|ty| ty.referenced_schema().into_iter().chain(ty.union_refs())),
             );
             responses.extend(op.error_response_schema_names.iter().map(String::as_str));
         }
@@ -375,6 +392,7 @@ impl Resource {
                 if let Some(name) = param.r#type.referenced_schema() {
                     res.insert(name);
                 }
+                res.extend(param.r#type.union_refs());
             }
             for param in operation.path_styles.values() {
                 if let Some(name) = param.r#type.as_ref().and_then(FieldType::referenced_schema) {
@@ -399,7 +417,7 @@ impl Resource {
                 ]
                 .into_iter()
                 .flatten()
-                .filter_map(FieldType::referenced_schema),
+                .flat_map(|ty| ty.referenced_schema().into_iter().chain(ty.union_refs())),
             );
             if let Some(pagination) = &operation.pagination {
                 res.insert(&pagination.item_schema);
@@ -597,7 +615,12 @@ pub(crate) struct Operation {
         serialize_with = "serialize_optional_field_type",
         skip_serializing_if = "Option::is_none"
     )]
-    request_body_json_type: Option<FieldType>,
+    pub(crate) request_body_json_type: Option<FieldType>,
+    /// Name of the union a JSON request body holds, directly or as list items or map values:
+    /// the schema when the body is a named union, else `<OperationId>Request`. Set when
+    /// `request_body_json_type` contains a union.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request_body_union: Option<String>,
     /// Name of the response body type, if any (only for JSON responses).
     #[serde(skip_serializing_if = "Option::is_none")]
     response_body_schema_name: Option<String>,
@@ -611,7 +634,11 @@ pub(crate) struct Operation {
         serialize_with = "serialize_optional_field_type",
         skip_serializing_if = "Option::is_none"
     )]
-    response_body_json_type: Option<FieldType>,
+    pub(crate) response_body_json_type: Option<FieldType>,
+    /// Name of the union a JSON response holds, as `request_body_union` for the request: the
+    /// schema when the body is a named union, else `<OperationId>Response`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) response_body_union: Option<String>,
     /// True if the response is binary (e.g., application/pdf, application/octet-stream).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     response_is_binary: bool,
@@ -889,6 +916,7 @@ impl Operation {
             request_body_schema_name: request.schema_name,
             request_body_is_list: request.is_list,
             request_body_json_type: request.json_type,
+            request_body_union: None,
             request_body_all_optional: request.all_optional,
             request_body_optional,
             request_body_is_form: request.kind == RequestBodyKind::Form,
@@ -900,6 +928,7 @@ impl Operation {
             response_body_schema_name: response.schema_name,
             response_body_is_list: response.is_list,
             response_body_json_type: response.json_type,
+            response_body_union: None,
             response_is_binary: response.kind == ResponseKind::Binary,
             response_is_text: response.kind == ResponseKind::Text,
             response_is_event_stream: response.kind == ResponseKind::EventStream,
@@ -926,6 +955,7 @@ impl Operation {
             response_body_schema_name: None,
             response_body_is_list: false,
             response_body_json_type: None,
+            response_body_union: None,
             response_is_event_stream: true,
             response_may_be_empty: false,
             stream_property: self.body_stream_property.clone(),
@@ -943,9 +973,10 @@ impl Operation {
         if let Some(name) = self.response_body_schema_name.clone()
             && let Some(target) = aliases.get(&name)
         {
-            let mut target = target.clone();
-            target.untype_unions();
-            let target = &target;
+            let target = &target.clone();
+            if matches!(target.non_null(), FieldType::Union { .. }) {
+                self.response_body_union = Some(name.clone());
+            }
             match target {
                 FieldType::List { inner }
                     if !self.response_body_is_list
@@ -976,9 +1007,10 @@ impl Operation {
         if let Some(name) = self.request_body_schema_name.clone()
             && let Some(target) = aliases.get(&name)
         {
-            let mut target = target.clone();
-            target.untype_unions();
-            let target = &target;
+            let target = &target.clone();
+            if matches!(target.non_null(), FieldType::Union { .. }) {
+                self.request_body_union = Some(name.clone());
+            }
             match target {
                 FieldType::List { inner }
                     if !self.request_body_is_list
@@ -1060,7 +1092,8 @@ impl Operation {
         Ok(())
     }
 
-    /// Types the unions of its parameters and bodies as untyped JSON.
+    /// Types the unions of its parameters as untyped JSON, keeping those of query parameters in
+    /// `typed_union`. Bodies keep their unions, and multipart fields cannot have any.
     pub(crate) fn untype_unions(&mut self) {
         for param in &mut self.query_params {
             // A JSON `content` parameter is sent as JSON text, whatever its type.
@@ -1068,19 +1101,55 @@ impl Operation {
                 param.typed_union = Some(param.r#type.clone());
             }
         }
+        let types = self.query_params.iter_mut().map(|p| &mut p.r#type).chain(
+            self.multipart_fields
+                .iter_mut()
+                .map(|f| &mut f.field.r#type),
+        );
+        for ty in types {
+            ty.untype_unions();
+        }
+    }
+
+    /// Settles the unions of objects that no property tells apart: typed as best match when
+    /// `best_match`, else untyped JSON, counting each in `counts`.
+    pub(crate) fn settle_object_unions(&mut self, best_match: bool, counts: &mut (usize, usize)) {
         let types = self
             .query_params
             .iter_mut()
-            .map(|p| &mut p.r#type)
-            .chain(
-                self.multipart_fields
-                    .iter_mut()
-                    .map(|f| &mut f.field.r#type),
-            )
+            .flat_map(|p| std::iter::once(&mut p.r#type).chain(p.typed_union.as_mut()))
             .chain(self.request_body_json_type.as_mut())
             .chain(self.response_body_json_type.as_mut());
         for ty in types {
-            ty.untype_unions();
+            ty.settle_object_unions(best_match, counts);
+        }
+    }
+
+    /// Names the unions of its JSON bodies that no schema names, avoiding the `taken` names.
+    fn name_body_unions(&mut self, taken: &BTreeSet<String>) {
+        let base = self.id.to_upper_camel_case();
+        let name = |suffix: &str| {
+            let mut name = format!("{base}{suffix}");
+            while taken.contains(&name) {
+                name.push_str("Body");
+            }
+            name
+        };
+        if self.request_body_union.is_none()
+            && self
+                .request_body_json_type
+                .as_ref()
+                .is_some_and(FieldType::contains_union)
+        {
+            self.request_body_union = Some(name("Request"));
+        }
+        if self.response_body_union.is_none()
+            && self
+                .response_body_json_type
+                .as_ref()
+                .is_some_and(FieldType::contains_union)
+        {
+            self.response_body_union = Some(name("Response"));
         }
     }
 
@@ -2420,6 +2489,44 @@ mod tests {
         op.untype_unions();
         op.forget_typed_unions_of_unknown_types(&Types::new());
         assert!(op.query_params[0].typed_union.is_none());
+    }
+
+    #[test]
+    fn union_bodies_keep_their_union_and_get_a_name() {
+        let op = json!({
+            "operationId": "create_thing",
+            "requestBody": { "content": { "application/json": { "schema": { "oneOf": [
+                { "type": "string" }, { "type": "array", "items": { "type": "string" } }] } } } },
+            "responses": { "200": { "description": "", "content": { "application/json": {
+                "schema": { "type": "array", "items": { "oneOf": [
+                    { "type": "string" }, { "type": "integer" }] } } } } } }
+        });
+        let (_, mut op) = Operation::from_openapi(
+            "/x",
+            "post",
+            serde_json::from_value(op).unwrap(),
+            &IndexMap::new(),
+            IncludeMode::OnlyPublic,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap()
+        .unwrap();
+        op.untype_unions();
+        op.name_body_unions(&BTreeSet::from(["CreateThingResponse".to_owned()]));
+        assert!(matches!(
+            op.request_body_json_type,
+            Some(FieldType::Union { .. })
+        ));
+        assert_eq!(op.request_body_union.as_deref(), Some("CreateThingRequest"));
+        assert!(matches!(
+            op.response_body_json_type,
+            Some(FieldType::List { .. })
+        ));
+        assert_eq!(
+            op.response_body_union.as_deref(),
+            Some("CreateThingResponseBody")
+        );
     }
 }
 
