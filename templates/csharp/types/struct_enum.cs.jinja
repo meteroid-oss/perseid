@@ -10,13 +10,15 @@
 {% set name = m.member(variant.name, type_name) -%}
 {% if name in [tag_prop, "Unrecognized"] %}{{ name }}Variant{% else %}{{ name }}{% endif %}
 {%- endmacro -%}
+{#- The base fields of a decoded variant, as an object initializer inside the `Read` switch. -#}
 {% macro base_init() -%}
-{% if type.fields | length > 0 %} {
-    {% for field in type.fields -%}
-    {% set ty = m.field_type(field, m.union_class(field, type_name, type_names)) -%}
-    {{ m.member(field.name, type_name) }} = {% if field.required %}Json.Deserialize<{{ ty }}>(Json.Property(root, "{{ field.name }}"), options){% else %}Json.Optional<{{ ty }}>(root, "{{ field.name }}", options){% endif %},
-    {% endfor -%}
-}{% endif %}
+{% if type.fields | length > 0 %}
+            {
+{%- for field in type.fields %}
+{%- set ty = m.field_type(field, m.union_class(field, type_name, type_names)) %}
+                {{ m.member(field.name, type_name) }} = {% if field.required %}Json.Deserialize<{{ ty }}>(Json.Property(root, "{{ field.name }}"), options){% else %}Json.Optional<{{ ty }}>(root, "{{ field.name }}", options){% endif %},
+{%- endfor %}
+            }{% endif %}
 {%- endmacro -%}
 {% set nested = namespace(names="|") -%}
 {% for variant in type.variants %}{% set nested.names = nested.names ~ variant_class(variant) ~ "|" %}{% endfor -%}
@@ -30,8 +32,9 @@
 namespace {{ sdk.package_name }}.Models;
 
 {{ m.doc(type.description, remarks="Match on the nested variant records. <see cref=\"Unrecognized\"/> holds variants added to the API\nafter this SDK version, as raw JSON.") }}
-{% if type.deprecated %}[Obsolete("Deprecated by the API.")]
-{% endif -%}
+{%- if type.deprecated %}
+[Obsolete("Deprecated by the API.")]
+{%- endif %}
 [JsonConverter(typeof({{ type_name }}Converter))]
 public abstract partial record {{ type_name }}
 {
@@ -39,34 +42,41 @@ public abstract partial record {{ type_name }}
 
     /// <summary>The <c>{{ tag_json }}</c> tag of this variant.</summary>
     public abstract string {{ tag_prop }} { get; }
-{% with fields = type.fields, owner = type_name, union_owner = type_name %}{% include "types/fields.cs.jinja" %}{% endwith %}
-{% if type.fields %}{% with fields = type.fields, owner = type_name, extension = false, sealed = false %}{% include "types/members.cs.jinja" %}{% endwith %}{% endif %}
-{% for variant in type.variants -%}
-{% set class = variant_class(variant) %}
+{%- filter indent(4) %}
+{%- with fields = type.fields, owner = type_name, union_owner = type_name %}{% include "types/fields.cs.jinja" %}{% endwith %}
+{%- if type.fields %}{% with fields = type.fields, owner = type_name, extension = false, sealed = false %}{% include "types/members.cs.jinja" %}{% endwith %}{% endif %}
+{%- endfilter %}
+{%- for variant in type.variants %}
+{%- set class = variant_class(variant) %}
+
     /// <summary>The <c>{{ variant.name }}</c> variant.</summary>
-{% if (variant.type == "ref" and variant.schema_ref is defined) or (variant.type == "struct" and variant.fields | default([]) | length > 0) -%}
+{%- if (variant.type == "ref" and variant.schema_ref is defined) or (variant.type == "struct" and variant.fields | default([]) | length > 0) %}
     /// <param name="Value">The fields of the variant.</param>
-{% endif -%}
-{% if variant.type == "ref" and variant.schema_ref is defined -%}
+{%- endif %}
+{%- if variant.type == "ref" and variant.schema_ref is defined %}
     public sealed record {{ class }}({{ ref_type(variant.schema_ref) }} Value) : {{ type_name }}
-{% elif variant.type == "struct" and variant.fields | default([]) | length > 0 -%}
+{%- elif variant.type == "struct" and variant.fields | default([]) | length > 0 %}
     public sealed record {{ class }}({{ class }}Data Value) : {{ type_name }}
-{% else -%}
+{%- else %}
     public sealed record {{ class }}() : {{ type_name }}
-{% endif -%}
+{%- endif %}
     {
         /// <inheritdoc/>
         public override string {{ tag_prop }} => "{{ variant.name }}";
     }
-{% if variant.type == "struct" and variant.fields | default([]) | length > 0 %}
+{%- if variant.type == "struct" and variant.fields | default([]) | length > 0 %}
+
     /// <summary>The fields of the <c>{{ variant.name }}</c> variant.</summary>
     public sealed partial record {{ class }}Data
     {
-{% with fields = variant.fields, owner = class ~ "Data", union_owner = type_name ~ class %}{% include "types/fields.cs.jinja" %}{% endwith %}
-{% with fields = variant.fields, owner = class ~ "Data", extension = true, sealed = true %}{% include "types/members.cs.jinja" %}{% endwith %}
+{%- filter indent(8) %}
+{%- with fields = variant.fields, owner = class ~ "Data", union_owner = type_name ~ class, lead = false %}{% include "types/fields.cs.jinja" %}{% endwith %}
+{%- with fields = variant.fields, owner = class ~ "Data", extension = true, sealed = true, depth = 8 %}{% include "types/members.cs.jinja" %}{% endwith %}
+{%- endfilter %}
     }
-{% endif -%}
-{% endfor %}
+{%- endif %}
+{%- endfor %}
+
     /// <summary>A variant unknown to this SDK version, kept as the raw JSON object.</summary>
     /// <param name="Tag">The <c>{{ tag_json }}</c> of the variant.</param>
     /// <param name="Raw">The whole JSON object.</param>
@@ -76,8 +86,13 @@ public abstract partial record {{ type_name }}
         public override string {{ tag_prop }} => Tag;
 
         /// <inheritdoc/>
+{%- set terms = ["other is not null", "base.Equals(other)", "Tag == other.Tag", "global::" ~ sdk.package_name ~ ".Equality.Equal(Raw, other.Raw)"] %}
+{%- if 12 + (terms | join(" && ") | length) + 1 <= 120 %}
+        {{ m.arrow("public bool Equals(Unrecognized? other)", terms | join(" && "), 8) }}
+{%- else %}
         public bool Equals(Unrecognized? other) =>
-            other is not null && base.Equals(other) && Tag == other.Tag && global::{{ sdk.package_name }}.Equality.Equal(Raw, other.Raw);
+            {{ terms | join("\n            && ") }};
+{%- endif %}
 
         /// <inheritdoc/>
         public override int GetHashCode() => HashCode.Combine(base.GetHashCode(), Tag);
@@ -86,36 +101,29 @@ public abstract partial record {{ type_name }}
 
 internal sealed class {{ type_name }}Converter : JsonConverter<{{ type_name }}>
 {
-    public override {{ type_name }} Read(
-        ref Utf8JsonReader reader,
-        Type typeToConvert,
-        JsonSerializerOptions options
-    )
+    {{ m.wrap("public override " ~ type_name ~ " Read", ["ref Utf8JsonReader reader", "Type typeToConvert", "JsonSerializerOptions options"], 4) }}
     {
         using var document = JsonDocument.ParseValue(ref reader);
         var root = document.RootElement;
         return Json.Tag(root, "{{ tag_json }}") switch
         {
-{% for variant in type.variants -%}
-{% set class = variant_class(variant) -%}
-{% set source %}{% if adjacent %}Json.Property(root, "{{ type.content_field }}"){% else %}root{% endif %}{% endset -%}
-            "{{ variant.name }}" => new {{ type_name }}.{{ class }}(
-{%- if variant.type == "ref" and variant.schema_ref is defined -%}
-                Json.Deserialize<{{ variant.schema_ref | to_upper_camel_case }}>({{ source }}, options)
-{%- elif variant.type == "struct" and variant.fields | default([]) | length > 0 -%}
-                Json.Deserialize<{{ type_name }}.{{ class }}Data>({{ source }}, options)
-{%- endif -%}
-            ){{ base_init() }},
-{% endfor -%}
+{%- for variant in type.variants %}
+{%- set class = variant_class(variant) %}
+{%- set source %}{% if adjacent %}Json.Property(root, "{{ type.content_field }}"){% else %}root{% endif %}{% endset %}
+{%- if variant.type == "ref" and variant.schema_ref is defined %}
+{%- set args = ["Json.Deserialize<" ~ (variant.schema_ref | to_upper_camel_case) ~ ">(" ~ source ~ ", options)"] %}
+{%- elif variant.type == "struct" and variant.fields | default([]) | length > 0 %}
+{%- set args = ["Json.Deserialize<" ~ type_name ~ "." ~ class ~ "Data>(" ~ source ~ ", options)"] %}
+{%- else %}
+{%- set args = [] %}
+{%- endif %}
+            {{ m.wrap("\"" ~ variant.name ~ "\" => new " ~ type_name ~ "." ~ class, args, 12, "" if type.fields else ",") }}{{ base_init() }}{% if type.fields %},{% endif %}
+{%- endfor %}
             var tag => new {{ type_name }}.Unrecognized(tag ?? string.Empty, root.Clone()){{ base_init() }},
         };
     }
 
-    public override void Write(
-        Utf8JsonWriter writer,
-        {{ type_name }} value,
-        JsonSerializerOptions options
-    )
+    {{ m.wrap("public override void Write", ["Utf8JsonWriter writer", type_name ~ " value", "JsonSerializerOptions options"], 4) }}
     {
         if (value is {{ type_name }}.Unrecognized unrecognized)
         {
@@ -123,36 +131,37 @@ internal sealed class {{ type_name }}Converter : JsonConverter<{{ type_name }}>
             return;
         }
         var fields = new List<KeyValuePair<string, JsonNode?>>();
-{% for field in type.fields -%}
-{% set prop = m.member(field.name, type_name) -%}
-{% if field.required -%}
+{%- for field in type.fields %}
+{%- set prop = m.member(field.name, type_name) %}
+{%- if field.required %}
         fields.Add(new("{{ field.name }}", Json.ToNode(value.{{ prop }}, options)));
-{% else -%}
+{%- else %}
         if (value.{{ prop }} is not null)
         {
             fields.Add(new("{{ field.name }}", Json.ToNode(value.{{ prop }}, options)));
         }
-{% endif -%}
-{% endfor -%}
+{%- endif %}
+{%- endfor %}
         switch (value)
         {
-{% for variant in type.variants -%}
-{% set class = variant_class(variant) -%}
-{% if (variant.type == "ref" and variant.schema_ref is defined) or (variant.type == "struct" and variant.fields | default([]) | length > 0) -%}
+{%- for variant in type.variants %}
+{%- set class = variant_class(variant) %}
+{%- if (variant.type == "ref" and variant.schema_ref is defined) or (variant.type == "struct" and variant.fields | default([]) | length > 0) %}
             case {{ type_name }}.{{ class }} variant:
-{% if adjacent -%}
+{%- if adjacent %}
                 fields.Add(new("{{ type.content_field }}", Json.ToNode(variant.Value, options)));
-{% else -%}
+{%- else %}
                 fields.AddRange(Json.ToObject(variant.Value, options));
-{% endif -%}
+{%- endif %}
                 break;
-{% endif -%}
-{% endfor -%}
+{%- endif %}
+{%- endfor %}
         }
         Json.WriteTagged(writer, "{{ tag_json }}", value.{{ tag_prop }}, fields, options);
     }
 }
-{% with fields = type.fields, union_owner = type_name %}{% include "types/unions.cs.jinja" %}{% endwith %}
-{% for variant in type.variants if variant.type == "struct" -%}
-{% with fields = variant.fields | default([]), union_owner = type_name ~ variant_class(variant) %}{% include "types/unions.cs.jinja" %}{% endwith %}
-{% endfor -%}
+{%- with fields = type.fields, union_owner = type_name %}{% include "types/unions.cs.jinja" %}{% endwith %}
+{%- for variant in type.variants if variant.type == "struct" %}
+{%- with fields = variant.fields | default([]), union_owner = type_name ~ variant_class(variant) %}{% include "types/unions.cs.jinja" %}{% endwith %}
+{%- endfor %}
+

@@ -480,7 +480,22 @@ fn csharp_generates_streaming_auth_and_pagination() {
         client.contains("public FeaturesApiKeys ApiKeys"),
         "{client}"
     );
-    assert!(read("Api/RecordsApi.cs").contains(r#"request.Security = [["api_key_query"]];"#));
+    assert!(
+        read("Api/RecordsApi.cs").contains(
+            "request.Security =\n        [\n            [\"api_key_query\"],\n        ];"
+        )
+    );
+    for entry in fs::read_dir(dir.path().join("csharp/Features/Api")).unwrap() {
+        let code = fs::read_to_string(entry.unwrap().path()).unwrap();
+        assert!(
+            !code.contains("\n\n\n") && !code.contains("{\n\n") && !code.contains("\n\n    }"),
+            "stray blank lines before CSharpier:\n{code}"
+        );
+        assert!(
+            !code.contains("\nTask") && !code.contains("\npublic async") && code.ends_with("}\n"),
+            "broken indentation before CSharpier:\n{code}"
+        );
+    }
 }
 
 #[test]

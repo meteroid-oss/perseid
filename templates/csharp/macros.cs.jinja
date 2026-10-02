@@ -149,3 +149,20 @@
     "429": "RateLimitException", "5XX": "ServerErrorException"} -%}
 {{ classes[status] | default("ServerErrorException" if status is startingwith("5") else "ApiException") }}
 {%- endmacro %}
+
+{# A declaration or call `head(args)` then `tail`, on one line when it fits in 120 columns at
+   `depth`, else one argument per line as CSharpier lays it out. -#}
+{% macro wrap(head, args, depth, tail="") -%}
+{% set flat = head ~ "(" ~ (args | join(", ")) ~ ")" ~ tail -%}
+{% if depth + (flat | length) <= 120 or not args %}{{ flat }}{% else %}{{ head }}(
+{%- for a in args %}
+{{ " " * (depth + 4) }}{{ a }}{% if not loop.last %},{% endif %}
+{%- endfor %}
+{{ " " * depth }}){{ tail }}{% endif %}
+{%- endmacro %}
+
+{# An expression-bodied member `head => body;`, broken after `=>` when longer than 120 columns. -#}
+{% macro arrow(head, body, depth) -%}
+{{ head }} =>{% if depth + (head | length) + (body | length) + 5 <= 120 %} {% else %}
+{{ " " * (depth + 4) }}{% endif %}{{ body }};
+{%- endmacro %}

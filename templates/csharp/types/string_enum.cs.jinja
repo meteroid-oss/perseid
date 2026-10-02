@@ -1,41 +1,44 @@
 {% import "macros.cs.jinja" as m -%}
 {% set type_name = type.name | to_upper_camel_case -%}
 {% set values_class = "KnownValues" if type_name == "Values" else "Values" -%}
+{% macro name(value) -%}
+{% set id = m.member(value, type_name) -%}
+{{ id }}{% if id in ["Value", values_class, "IsKnown", "Equals", "GetHashCode", "ToString"] %}Variant{% endif %}
+{%- endmacro -%}
 // this file is @generated
 #pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
 using System.Text.Json.Serialization;
 
 namespace {{ sdk.package_name }}.Models;
-
-{% if type.description is defined -%}
+{% if type.description is defined %}
 {{ m.doc(type.description) }}
-{% else -%}
+{%- else %}
 /// <summary>
 /// One of the known values below, or any other string a newer API version sends.
 /// </summary>
-{% endif -%}
+{%- endif %}
 /// <param name="Value">The JSON value.</param>
 [JsonConverter(typeof(StringEnumConverter<{{ type_name }}>))]
 public readonly partial record struct {{ type_name }}(string Value) : IStringEnum<{{ type_name }}>
 {
-{% for value in type.values -%}
-{% set name = m.member(value, type_name) -%}
-{% if name in ["Value", values_class, "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
+{%- for value in type.values %}
+{%- if not loop.first %}{{ "\n" }}{% endif %}
     /// <summary><c>{{ value }}</c></summary>
-    public static {{ type_name }} {{ name }} { get; } = new("{{ value }}");
-{% endfor %}
+    public static {{ type_name }} {{ name(value) }} { get; } = new("{{ value }}");
+{%- endfor %}
+
     /// <summary>Whether this SDK version knows the value.</summary>
-    public bool IsKnown => Value is {% for value in type.values %}"{{ value }}"{% if not loop.last %} or {% endif %}{% endfor %};
+{%- set known %}Value is {% for value in type.values %}"{{ value }}"{% if not loop.last %} or {% endif %}{% endfor %}{% endset %}
+    {{ m.arrow("public bool IsKnown", known, 4) }}
 
     /// <summary>The known values as constants, to <c>switch</c> on <see cref="Value"/>.</summary>
     public static class {{ values_class }}
     {
-{% for value in type.values -%}
-{% set name = m.member(value, type_name) -%}
-{% if name in ["Value", values_class, "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
+{%- for value in type.values %}
+{%- if not loop.first %}{{ "\n" }}{% endif %}
         /// <summary><c>{{ value }}</c></summary>
-        public const string {{ name }} = {{ value | tojson }};
-{% endfor -%}
+        public const string {{ name(value) }} = {{ value | tojson }};
+{%- endfor %}
     }
 
     static {{ type_name }} IStringEnum<{{ type_name }}>.FromValue(string value) => new(value);
@@ -47,3 +50,4 @@ public readonly partial record struct {{ type_name }}(string Value) : IStringEnu
     /// <inheritdoc/>
     public override string ToString() => Value ?? string.Empty;
 }
+
