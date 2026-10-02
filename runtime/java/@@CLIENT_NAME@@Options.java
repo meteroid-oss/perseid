@@ -20,9 +20,6 @@ import okhttp3.OkHttpClient;
  * }</pre>
  */
 public final class @@CLIENT_NAME@@Options {
-    /** The base URL of the API when neither {@link Builder#baseUrl} nor the environment sets one. */
-    public static final String DEFAULT_URL = "@@DEFAULT_BASE_URL@@";
-
     /** The timeout of each attempt when {@link Builder#timeout} sets none. */
     public static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(@@TIMEOUT@@);
 
@@ -94,7 +91,7 @@ public final class @@CLIENT_NAME@@Options {
     /**
      * The base URL set on the builder.
      *
-     * @return the URL, empty to read {@value #BASE_URL_ENV} or use {@link #DEFAULT_URL}
+     * @return the URL, empty to read {@value #BASE_URL_ENV}, else use the API's default if it has one
      */
     public Optional<String> baseUrl() {
         return Optional.ofNullable(baseUrl);
@@ -231,7 +228,7 @@ public final class @@CLIENT_NAME@@Options {
 
         /**
          * The API root, path included (e.g. {@code https://api.example.com/v1}), over {@value
-         * @@CLIENT_NAME@@Options#BASE_URL_ENV} and {@link @@CLIENT_NAME@@Options#DEFAULT_URL}.
+         * @@CLIENT_NAME@@Options#BASE_URL_ENV} and the API's default URL, if it has one.
          *
          * @param baseUrl the URL
          * @return this builder

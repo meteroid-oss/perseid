@@ -108,6 +108,15 @@ class HttpTest {
     }
 
     @Test
+    void withoutServersTheBaseUrlIsRequired() {
+        IllegalStateException missing =
+                assertThrows(IllegalStateException.class, () -> new Torture("token", TortureOptions.builder().build()));
+        assertTrue(missing.getMessage().contains("baseUrl(...)"), missing.getMessage());
+        assertTrue(missing.getMessage().contains("TORTURE_BASE_URL"), missing.getMessage());
+        assertThrows(NoSuchFieldException.class, () -> Torture.class.getField("DEFAULT_BASE_URL"));
+    }
+
+    @Test
     void pathsKeepTheServerPrefixAndEscapeParameters() {
         client().things().retrieve("a/b?c=d");
         client().things().retrieve("100%");

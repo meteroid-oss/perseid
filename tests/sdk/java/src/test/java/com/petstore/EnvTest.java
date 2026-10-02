@@ -1,6 +1,7 @@
 package com.petstore;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.net.httpserver.HttpServer;
 import java.io.File;
@@ -68,6 +69,11 @@ class EnvTest {
         String url = "http://127.0.0.1:" + server.getAddress().getPort();
         assertEquals("Rex", run(url));
         assertEquals(List.of("Bearer from-env"), authorizations);
+    }
+
+    @Test
+    void theServerOfTheSpecIsTheDefaultBaseUrl() {
+        assertTrue(Petstore.DEFAULT_BASE_URL.startsWith("https://petstore.example.com"), Petstore.DEFAULT_BASE_URL);
     }
 
     @Test
