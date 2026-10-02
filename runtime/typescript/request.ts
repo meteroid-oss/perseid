@@ -321,10 +321,11 @@ export class @@CLIENT_NAME@@Request {
     const url = new URL(ctx.baseUrl + this.path);
     const baseName = (name: string) => name.split("[")[0] ?? name;
     const overrides = options.query ?? {};
-    const query = this.queryParams.filter(([name]) => !Object.hasOwn(overrides, baseName(name)));
+    const overridden = (name: string) => Object.prototype.hasOwnProperty.call(overrides, name);
+    const query = this.queryParams.filter(([name]) => !overridden(baseName(name)));
     const own = new Set(query.map(([name]) => baseName(name)));
     for (const [name, value] of Object.entries(ctx.defaultQuery ?? {})) {
-      if (!own.has(name) && !Object.hasOwn(overrides, name)) {
+      if (!own.has(name) && !overridden(name)) {
         flattenParam(name, value, query);
       }
     }
