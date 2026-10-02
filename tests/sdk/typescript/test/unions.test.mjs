@@ -7,7 +7,7 @@ import { after, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import { generate } from "./_sdk.mjs";
 
-const { dir, sdk, cleanup } = await generate("edge-unions.yaml", { name: "Unions" });
+const { dir, sdk, cleanup } = await generate("edge-unions.yaml", { name: "UnionsSdk" });
 after(cleanup);
 const { unionTry } = await import(
   pathToFileURL(join(dir, "typescript", "dist/esm/unions.js")).href
@@ -26,7 +26,7 @@ function client(reply) {
     calls.push({ url: String(url), method: init.method, body: init.body && JSON.parse(init.body) });
     return json(reply);
   };
-  return { calls, api: new sdk.Unions({ fetch, tokenProvider: () => "tok", maxRetries: 0 }) };
+  return { calls, api: new sdk.UnionsSdk({ fetch, tokenProvider: () => "tok", maxRetries: 0 }) };
 }
 
 /** The method of `resource` whose name starts with `prefix`, bound. */
@@ -152,7 +152,8 @@ describe("generated unions", () => {
     const free = sdk.CompletionSerializer.parse({ ...COMPLETION, created_at: "next week", expires_at: null });
     assert.equal(free.createdAt, "next week");
     assert.equal(free.expiresAt, null);
-    const out = sdk.CompletionSerializer.serialize(parsed);
+    // Dates are left to `JSON.stringify`, as in every model.
+    const out = plain(sdk.CompletionSerializer.serialize(parsed));
     assert.equal(out.created_at, "2024-01-02T03:04:05.000Z");
     assert.equal(sdk.CompletionSerializer.serialize(free).created_at, "next week");
   });
@@ -192,9 +193,10 @@ describe("generated unions", () => {
       { type: "web_search" },
       { name: "f", arguments: "{}" },
     ]) {
-      const parsed = sdk.ResponseSerializer.parse({ ...base, tool_choice });
+      // `Response` would shadow the fetch global: the model is `ResponseModel`.
+      const parsed = sdk.ResponseModelSerializer.parse({ ...base, tool_choice });
       assert.deepEqual(plain(parsed.toolChoice), tool_choice);
-      assert.deepEqual(plain(sdk.ResponseSerializer.serialize(parsed).tool_choice), tool_choice);
+      assert.deepEqual(plain(sdk.ResponseModelSerializer.serialize(parsed).tool_choice), tool_choice);
     }
   });
 
