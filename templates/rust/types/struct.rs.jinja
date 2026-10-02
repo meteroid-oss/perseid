@@ -18,6 +18,9 @@ use super::{
 {% set has_default = (required | length) == (defaulted | length) -%}
 {{ doc_comment }}
 #[derive(Clone, Debug, {% if has_default and not defaulted %}Default, {% endif %}PartialEq, Deserialize, Serialize)]
+{% if not request_schema -%}
+#[non_exhaustive]
+{% endif -%}
 {% set extra = extra_name(type.fields) -%}
 pub struct {{ type_name }} {
     {{ struct_fields(type.fields, recursive, patch_body, owner=type_name) }}
