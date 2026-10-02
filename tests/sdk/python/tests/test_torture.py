@@ -338,7 +338,9 @@ class ModelTest(unittest.TestCase):
         self.assertIsInstance(unions.sources[0], models.UrlSource)
         self.assertEqual(unions.sources[1], UnknownVariant("", {"path": "p"}))
         self.assertIsInstance(unions.document, models.Article)
-        self.assertEqual(unions.loose, {"title": "t"})
+        # Best match is the default for unions no property tells apart, even without
+        # `x-perseid-union`: the tie goes to the first variant.
+        self.assertEqual(unions.loose, models.Draft(title="t"))
         self.assertEqual(unions.to_dict(), payload)
         draft = models.ObjectUnions.from_dict({"document": {"title": "t"}}).document
         self.assertIsInstance(draft, models.Draft, "ties go to the first variant")
