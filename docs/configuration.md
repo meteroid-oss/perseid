@@ -277,7 +277,7 @@ Every SDK makes spec names valid identifiers:
 | A name starting with a digit | `N` prefix for types (`3DModel` is `N3dModel`), `value` prefix for identifiers |
 | A type name the SDK or its runtime uses (`Upload`, `Options`, the client name, standard types) | `Model` suffix |
 | Punctuation | Words: `created<` is `created_lt`, `-` is `minus` |
-| Keywords | Escaped: `type` is `r#type` in Rust, `type_` elsewhere |
+| Keywords of the language | Escaped: `r#type` in Rust, `lambda_` in Python, `final_` in Java |
 | A name Go cannot export | `X` prefix |
 | Enum values sharing an identifier | Numeric suffix: `bps` and `Bps` are `Bps` and `Bps2`. Repeated values are dropped |
 | Parameters sharing a name | `_query`, `_header` or `_cookie` suffix |

@@ -1,4 +1,4 @@
-# Auth, pagination, streaming and encoding
+# Auth, pagination, streaming, raw responses and encoding
 
 What the SDKs do on the wire, from what the spec declares. See [languages](languages.md) for
 each SDK's syntax.

@@ -285,6 +285,7 @@ client.customers.retrieve("cus_1", timeout=5.0, max_retries=0)
 - Every method takes `extra_headers=`, `extra_query=`, `extra_body=`, `timeout=` and
   `max_retries=`, prefixed with `request_` when a parameter has that name.
 - These headers, like `default_headers`, win over the client's credentials.
+- Multipart file fields take bytes, a binary file, or `Upload(content, filename, content_type)`.
 - An operation that also declares a bodiless 2xx returns `Model | None`.
 
 ### Pagination
@@ -307,8 +308,7 @@ with client.completions.create_stream(prompt="hi") as stream:
 ```
 
 Events with a documented schema yield models until `[DONE]`, with `stream.last_event` the raw
-event. Other streams yield `SseEvent`s. Multipart bodies take `Upload(content, filename,
-content_type)`.
+event. Other streams yield `SseEvent`s.
 
 ### Errors
 
@@ -350,6 +350,10 @@ The message quotes the start of the body: `Error code: 404 - {"error": ...}`.
 - Expandable fields are `str | Customer`, and `expandable_id(value)` gives the id either way.
 - A union of objects is `t.Annotated[Customer | DeletedCustomer | UnknownVariant,
   ObjectUnion(...)]`. `as_variant(value, Customer)` reads it as another variant.
+
+### Notes
+
+- `errors.py`, which re-exports the error types, is yours after the first generation.
 
 ## Go
 
@@ -526,7 +530,7 @@ Event streams are `EventStream<Chunk>`s, ending at `[DONE]`, with `lastEvent()` 
 | Exception | When |
 |---|---|
 | `AcmeException` | Base of every exception, all unchecked |
-| `ApiException` | Error response: `statusCode()`, `headers()`, `body()`, `requestId()`, `error(Type.class)`, `error()` as a `JsonNode` |
+| `ApiException` | Error response: `statusCode()`, `headers()`, `body()`, `requestId()`, `error()` (the body parsed into the status's error schema, else a `JsonNode`), `error(Type.class)` |
 | `BadRequestException`, `AuthenticationException`, `PermissionDeniedException`, `NotFoundException`, `ConflictException`, `UnprocessableEntityException`, `RateLimitException`, `InternalServerException` | Subclasses by status |
 | `ApiConnectionException`, `ApiTimeoutException` | No response, or none within the timeout |
 | `InvalidDataException` | A response that is not what the API describes, such as a missing required property, thrown by its getter |
