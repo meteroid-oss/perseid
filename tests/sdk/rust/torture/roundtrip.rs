@@ -363,7 +363,7 @@ fn primitive_or_object_unions_are_enums() {
         "inline_union": ["a", "b"], "str_or_int": 7,
     }))
     .unwrap();
-    assert_eq!(holder.inline_union.as_ref().and_then(|u| u.as_list()), Some(&vec!["a".to_owned(), "b".to_owned()]));
+    assert_eq!(holder.inline_union.as_ref().and_then(|u| u.as_array_of_strings()), Some(&vec!["a".to_owned(), "b".to_owned()]));
     assert_eq!(holder.str_or_int, Some(StringOrInt::Integer(7)));
     for input in [json!("text"), json!(""), json!(3), json!(true), json!(null)] {
         assert_eq!(round_trip::<StringOrInt>(input.clone()), input);
@@ -453,7 +453,9 @@ fn unions_of_objects_pick_their_variant_and_keep_unknown_shapes() {
     assert!(sources[0].as_url_source().is_some() && sources[1].as_file_source().is_some());
     assert_eq!(sources[2], ObjectUnionsSources::Unknown(json!({"path": "p"})));
     assert!(unions.document.as_ref().and_then(|d| d.as_article()).is_some());
-    assert_eq!(unions.loose, Some(json!({"title": "t"})));
+    // Best match is the default for unions no property tells apart, even without
+    // `x-perseid-union`: the tie goes to the first variant.
+    assert!(unions.loose.as_ref().and_then(|d| d.as_draft()).is_some_and(|d| d.title == "t"));
     let draft: ObjectUnionsDocument = serde_json::from_value(json!({"title": "t"})).unwrap();
     assert!(draft.as_draft().is_some(), "ties go to the first variant");
     let untitled: ObjectUnionsDocument = serde_json::from_value(json!({"body": "b"})).unwrap();
