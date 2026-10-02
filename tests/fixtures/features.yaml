@@ -125,6 +125,23 @@ paths:
           content:
             text/event-stream:
               schema: { type: string }
+  /completions:
+    post:
+      operationId: create_completion
+      tags: [streaming]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompletionRequest' }
+      responses:
+        '200':
+          description: the completion, or its chunks as server-sent events with `stream`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Completion' }
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/CompletionChunk' }
   /files:
     post:
       operationId: upload_file
@@ -347,6 +364,22 @@ components:
           type: array
           items: { $ref: '#/components/schemas/Entry' }
         total: { type: integer, format: int64 }
+    CompletionRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt: { type: string }
+        stream: { type: boolean }
+    Completion:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string }
+    CompletionChunk:
+      type: object
+      required: [delta]
+      properties:
+        delta: { type: string }
     Health:
       type: object
       required: [status]

@@ -295,7 +295,10 @@ fn webhooks_verifier_is_opt_in() {
     let dir = project();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
-    assert!(!dir.path().join("rust/src/webhooks.rs").exists());
+    assert!(
+        dir.path().join("rust/src/webhooks.rs").exists(),
+        "the `webhooks` cargo feature is the opt-in in Rust"
+    );
     assert!(!dir.path().join("go/webhooks.go").exists());
 
     let config = dir.path().join("perseid.toml");

@@ -338,6 +338,9 @@ impl Resource {
             if let Some(pagination) = &operation.pagination {
                 res.insert(&pagination.item_schema);
             }
+            if let Some(name) = &operation.event_schema_name {
+                res.insert(name);
+            }
             res.extend(
                 operation
                     .error_response_schema_names
@@ -519,6 +522,12 @@ pub(crate) struct Operation {
     response_is_text: bool,
     #[serde(default)]
     response_is_event_stream: bool,
+    /// Schema of the JSON `data` of each event, when the `text/event-stream` response names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) event_schema_name: Option<String>,
+    /// Boolean body property the `_stream` twin sets to `true`, such as OpenAI's `stream`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stream_property: Option<String>,
     /// Schemas of the JSON bodies this operation returns on 4xx/5xx responses.
     ///
     /// Not rendered per operation: collected so that `referenced_components` pulls the error
@@ -538,6 +547,9 @@ pub(crate) struct Operation {
     /// Whether the JSON response may be an event stream instead, which a `_stream` twin reads.
     #[serde(skip)]
     json_or_event_stream: bool,
+    /// Boolean `stream` property of the request body, which asks for the event stream.
+    #[serde(skip)]
+    body_stream_property: Option<String>,
 }
 
 impl Operation {
@@ -678,6 +690,11 @@ impl Operation {
         let (response, errors) = responses_from_openapi(responses, component_schemas)?;
         let error_response_schema_names = errors.values().cloned().collect();
 
+        let body_stream_property = request
+            .schema_name
+            .as_deref()
+            .filter(|_| response.also_event_stream)
+            .and_then(|name| stream_property(name, component_schemas));
         let x_pagination = op.extensions.get("x-pagination").cloned();
         let x_perseid_name = match op.extensions.get("x-perseid-name") {
             None => None,
@@ -715,7 +732,10 @@ impl Operation {
             response_is_binary: response.kind == ResponseKind::Binary,
             response_is_text: response.kind == ResponseKind::Text,
             response_is_event_stream: response.kind == ResponseKind::EventStream,
+            event_schema_name: response.event_schema_name,
+            stream_property: None,
             json_or_event_stream: response.also_event_stream,
+            body_stream_property,
             error_response_schema_names,
             errors,
             security: None,
@@ -735,6 +755,7 @@ impl Operation {
             response_body_is_list: false,
             response_body_json_type: None,
             response_is_event_stream: true,
+            stream_property: self.body_stream_property.clone(),
             json_or_event_stream: false,
             x_pagination: Some(serde_json::Value::Bool(false)),
             ..self.clone()
@@ -1144,6 +1165,28 @@ struct ResponseBody {
     json_type: Option<FieldType>,
     /// A JSON body that may also come as `text/event-stream`, depending on the request.
     also_event_stream: bool,
+    /// Named schema of the JSON `data` of each event of a `text/event-stream` body.
+    event_schema_name: Option<String>,
+}
+
+/// The boolean `stream` property of the body schema `name`, which switches the response from
+/// JSON to an event stream.
+fn stream_property(
+    name: &str,
+    schemas: &IndexMap<String, openapi::SchemaObject>,
+) -> Option<String> {
+    let Schema::Object(obj) = &schemas.get(name)?.json_schema else {
+        return None;
+    };
+    let Schema::Object(prop) = obj.object.as_ref()?.properties.get("stream")? else {
+        return None;
+    };
+    let boolean = SingleOrVec::Single(Box::new(InstanceType::Boolean));
+    (prop.instance_type.as_ref() == Some(&boolean)
+        || prop.instance_type.as_ref().is_some_and(
+            |t| matches!(t, SingleOrVec::Vec(v) if v.contains(&InstanceType::Boolean)),
+        ))
+    .then(|| "stream".to_owned())
 }
 
 /// Picks the body the SDK decodes on success: the lowest 2xx status with content, or `default`
@@ -1226,9 +1269,20 @@ impl ResponseBody {
         if content.is_empty() {
             return Ok(Self::default());
         }
-        let also_event_stream = content.contains_key("text/event-stream");
+        let event_stream = content.get("text/event-stream");
+        let also_event_stream = event_stream.is_some();
+        let event_schema_name = event_stream
+            .and_then(|media| media.schema.as_ref())
+            .and_then(|schema| match &schema.json_schema {
+                Schema::Object(obj) => get_schema_name(obj.reference.as_deref()),
+                Schema::Bool(_) => None,
+            })
+            .filter(|name| schemas.contains_key(name));
         if also_event_stream && !content.contains_key("application/json") {
-            return Ok(kind(ResponseKind::EventStream));
+            return Ok(Self {
+                event_schema_name,
+                ..kind(ResponseKind::EventStream)
+            });
         }
         if let Some(json) = content.get("application/json") {
             let Some(schema) = &json.schema else {
@@ -1244,6 +1298,7 @@ impl ResponseBody {
                     is_list,
                     json_type: None,
                     also_event_stream,
+                    event_schema_name,
                 });
             }
             let json_type = FieldType::from_schema_object(obj.clone())?;
@@ -1256,6 +1311,7 @@ impl ResponseBody {
                 kind: ResponseKind::Json,
                 json_type: Some(json_type),
                 also_event_stream,
+                event_schema_name,
                 ..Self::default()
             });
         }
@@ -1513,6 +1569,40 @@ mod tests {
         );
         assert!(stream.response_is_event_stream && stream.response_body_schema_name.is_none());
         assert_eq!(op.response_body_schema_name.as_deref(), Some("Widget"));
+    }
+
+    #[test]
+    fn stream_twins_type_their_events_and_ask_for_the_stream() {
+        let op = serde_json::from_value(json!({
+            "operationId": "chat",
+            "requestBody": { "content": { "application/json": { "schema": {
+                "$ref": "#/components/schemas/ChatRequest" } } } },
+            "responses": { "200": { "description": "", "content": {
+                "application/json": { "schema": widget() },
+                "text/event-stream": { "schema": { "$ref": "#/components/schemas/Chunk" } },
+            } } },
+        }))
+        .unwrap();
+        let schemas = schemas(json!({
+            "Widget": { "type": "object", "properties": {} },
+            "Chunk": { "type": "object", "properties": {} },
+            "ChatRequest": { "type": "object", "properties": { "stream": { "type": "boolean" } } },
+        }));
+        let (_, op) = Operation::from_openapi(
+            "/chat",
+            "post",
+            op,
+            &schemas,
+            IncludeMode::OnlyPublic,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(op.stream_property, None);
+        let stream = op.event_stream_variant().unwrap();
+        assert_eq!(stream.event_schema_name.as_deref(), Some("Chunk"));
+        assert_eq!(stream.stream_property.as_deref(), Some("stream"));
     }
 
     #[test]

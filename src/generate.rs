@@ -226,7 +226,7 @@ fn feature_path<'a>(relative: &'a Path, context: &Value) -> Option<&'a Path> {
     (context.get(feature) == Some(&Value::Bool(true))).then_some(parts.as_path())
 }
 
-/// Substitutes `@@UPPER_SNAKE@@` tokens with `sdk` context values.
+/// Substitutes `@@UPPER_SNAKE@@` tokens (digits allowed after the first letter) with `sdk` context values.
 pub(crate) fn tokens(source: &str, context: &Value) -> Result<String> {
     let mut out = String::with_capacity(source.len());
     let mut rest = source;
@@ -235,7 +235,11 @@ pub(crate) fn tokens(source: &str, context: &Value) -> Result<String> {
             break;
         };
         let key = &rest[start + 2..start + 2 + len];
-        if key.is_empty() || !key.bytes().all(|b| b.is_ascii_uppercase() || b == b'_') {
+        if !key.starts_with(|c: char| c.is_ascii_uppercase())
+            || !key
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        {
             out.push_str(&rest[..start + 2]);
             rest = &rest[start + 2..];
             continue;
@@ -424,4 +428,20 @@ pub fn summary(
         }
     }
     out.trim_end().to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::tokens;
+
+    #[test]
+    fn tokens_with_digits_are_substituted() {
+        let context = json!({ "int64": "bigint", "client_name": "Acme" });
+        assert_eq!(
+            tokens("@@INT64@@ @@CLIENT_NAME@@ a@@b@@ @@1@@", &context).unwrap(),
+            "bigint Acme a@@b@@ @@1@@"
+        );
+    }
 }

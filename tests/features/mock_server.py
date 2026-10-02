@@ -36,6 +36,7 @@ class Handler(BaseHTTPRequestHandler):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(status)
         self.send_header("content-type", content_type)
+        self.send_header("x-request-id", "req_mock")
         self.send_header("content-length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -88,6 +89,12 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if path == "/completions":
+            request = json.loads(self.body() or b"{}")
+            if not request.get("stream"):
+                return self.reply(200, {"text": request["prompt"].upper()})
+            chunks = "".join(f'data: {{"delta": "{c}", "index": {i}}}\n\n' for i, c in enumerate(request["prompt"]))
+            return self.reply(200, (chunks + "data: [DONE]\n\n").encode(), "text/event-stream")
         if path == "/files":
             return self.reply(200, {"status": self.multipart()})
         if path == "/files/f1/content":
@@ -111,7 +118,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.auth() == "||":
                 return self.reply(401, {"error": "unauthorized"})
             ids, cursor = WIDGETS[query.get("cursor")]
-            return self.reply(200, {"data": [{"id": i, "name": i} for i in ids], "next_cursor": cursor})
+            widgets = [{"id": i, "name": i, "color": "red"} for i in ids]
+            return self.reply(200, {"data": widgets, "next_cursor": cursor})
         if path == "/widgets/w1/events":
             if query.get("kind") != "created":
                 return self.reply(400, {"error": "kind"})
