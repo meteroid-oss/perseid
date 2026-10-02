@@ -11,7 +11,6 @@ test("the exports map serves ESM to import and CommonJS to require", async () =>
   for (const sdk of [esm, cjs]) {
     assert.equal(typeof sdk.Petstore, "function");
     assert.equal(typeof sdk.APIError, "function");
-    assert.equal(sdk.ApiException, sdk.APIError);
     assert.equal(sdk.PetStatus.Available, "available");
     assert.equal(typeof sdk.PetSerializer.parse, "function");
   }

@@ -34,10 +34,12 @@ export type HttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "DELETE" | "OPTIONS" 
 export interface RequestOptions {
   /** Aborts the call, including the wait before a retry, with an `APIUserAbortError`. */
   signal?: AbortSignal | undefined;
-  /** Extra headers, sent in place of the SDK's own headers of the same name. */
-  headers?: Record<string, string> | Headers | undefined;
+  /** Extra headers, sent in place of the SDK's own headers of the same name; `null` removes one. */
+  headers?: Record<string, string | null | undefined> | Headers | undefined;
+  /** Extra query parameters, sent in place of the method's own parameters of the same name. */
+  query?: Record<string, unknown> | undefined;
   /**
-   * Time in milliseconds to wait for each attempt, instead of the client's `requestTimeout`.
+   * Time in milliseconds to wait for each attempt, instead of the client's `timeout`.
    * `Infinity` waits forever.
    */
   timeout?: number | undefined;
@@ -63,6 +65,8 @@ export interface @@CLIENT_NAME@@RequestContext extends Credentials {
   middleware?: Middleware[] | undefined;
   retryScheduleInMs?: number[] | undefined;
   maxRetries?: number | undefined;
+  defaultHeaders?: Record<string, string | null | undefined> | undefined;
+  defaultQuery?: Record<string, string | undefined> | undefined;
 }
 
 /** @internal The variable `name` of the environment, in Node.js, Deno or Bun; none in browsers. */
@@ -315,7 +319,12 @@ export class @@CLIENT_NAME@@Request {
     stream = false
   ): Promise<Response> {
     const url = new URL(ctx.baseUrl + this.path);
-    for (const [name, value] of this.queryParams) {
+    const extra: Record<string, unknown> = { ...ctx.defaultQuery, ...options.query };
+    const query = this.queryParams.filter(([name]) => !((name.split("[")[0] ?? name) in extra));
+    for (const [name, value] of Object.entries(extra)) {
+      flattenParam(name, value, query);
+    }
+    for (const [name, value] of query) {
       url.searchParams.append(name, value);
     }
 
@@ -327,14 +336,13 @@ export class @@CLIENT_NAME@@Request {
       ...authHeaders,
       "user-agent": USER_AGENT,
       "@@HEADER_PREFIX@@-req-id": Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString(),
-      ...this.headers,
     };
+    mergeHeaders(headers, ctx.defaultHeaders);
+    Object.assign(headers, this.headers);
     if (options.idempotencyKey !== undefined) {
       headers["idempotency-key"] = options.idempotencyKey;
     }
-    new Headers(options.headers).forEach((value, name) => {
-      headers[name] = value;
-    });
+    mergeHeaders(headers, options.headers);
     if (this.method === "POST" && headers["idempotency-key"] === undefined) {
       headers["idempotency-key"] = `auto_${randomUUID()}`;
     }
@@ -430,6 +438,26 @@ export class @@CLIENT_NAME@@Request {
       }
     }
     return apiError(response.status, body, response.headers, error);
+  }
+}
+
+/** Sets the headers of `extra` on `headers` by lowercase name, removing those set to `null`. */
+function mergeHeaders(
+  headers: Record<string, string>,
+  extra: Record<string, string | null | undefined> | Headers | undefined
+) {
+  if (extra instanceof Headers) {
+    extra.forEach((value, name) => {
+      headers[name] = value;
+    });
+    return;
+  }
+  for (const [name, value] of Object.entries(extra ?? {})) {
+    if (value === null) {
+      delete headers[name.toLowerCase()];
+    } else if (value !== undefined) {
+      headers[name.toLowerCase()] = value;
+    }
   }
 }
 

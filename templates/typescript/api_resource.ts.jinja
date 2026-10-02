@@ -190,11 +190,6 @@ export class {{ resource_type_name }} {
             );
         }
 
-        /** @deprecated Iterate `{{ method }}(...)` with `for await`. */
-        public {{ op.name | to_lower_camel_case }}Iter({{ params }}): AsyncIterableIterator<{{ item_type }}> {
-            return this.{{ method }}({{ leading_args }}{% if op | has_query_or_header_params %}options, {% endif %}requestOptions)[Symbol.asyncIterator]();
-        }
-
         #{{ method }}({{ params }}): {{ runtime("APIPromise") }}<{{ page_type }}> {
         {% else -%}
         {{ op_doc(op) }}public {{ method }}({{ params }}): {{ runtime("APIPromise") }}<{{ response_type }}> {

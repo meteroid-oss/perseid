@@ -32,7 +32,8 @@ A local cache for GET endpoints, in TypeScript:
 
 ```ts
 const cache = new Map<string, string>();
-const petstore = new Petstore("sk_live_...", {
+const petstore = new Petstore({
+  apiKey: "sk_live_...",
   middleware: [
     async (request, next) => {
       if (request.method !== "GET" || !new URL(request.url).pathname.startsWith("/pets")) {

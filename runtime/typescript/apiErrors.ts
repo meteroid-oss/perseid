@@ -122,19 +122,6 @@ export class APIDecodeError extends @@CLIENT_NAME@@Error {
   }
 }
 
-/** @deprecated Use `APIError`. */
-export const ApiError = APIError;
-/** @deprecated Use `APIError`. */
-export type ApiError<E = @@CLIENT_NAME@@ErrorBody> = APIError<E>;
-/** @deprecated Use `APIError`. */
-export const ApiException = APIError;
-/** @deprecated Use `APIError`. */
-export type ApiException<E = @@CLIENT_NAME@@ErrorBody> = APIError<E>;
-/** @deprecated Use `APIConnectionTimeoutError`. */
-export const ApiTimeoutError = APIConnectionTimeoutError;
-/** @deprecated Use `APIConnectionTimeoutError`. */
-export type ApiTimeoutError = APIConnectionTimeoutError;
-
 const ERRORS_BY_STATUS: Record<number, typeof APIError | undefined> = {
   400: BadRequestError,
   401: AuthenticationError,

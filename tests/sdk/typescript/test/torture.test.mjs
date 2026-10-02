@@ -134,7 +134,7 @@ function client(responses, options = {}) {
     const next = responses[Math.min(calls.length - 1, responses.length - 1)];
     return typeof next === "function" ? next(init) : next.clone();
   };
-  return { calls, torture: new sdk.Torture("token", { fetch, ...options }) };
+  return { calls, torture: new sdk.Torture({ apiKey: "token", fetch, ...options }) };
 }
 
 const json = (body, status = 200, headers = {}) =>
@@ -151,7 +151,7 @@ describe("client", () => {
 
   it("ignores a trailing slash in the server URL", async () => {
     const { calls, torture } = client([new Response(SAMPLES.Thing)], {
-      serverUrl: "https://torture.test/v2/",
+      baseURL: "https://torture.test/v2/",
     });
     await torture.things.retrieve("t");
     assert.equal(calls[0].url.pathname, "/v2/things/t");
@@ -176,6 +176,24 @@ describe("client", () => {
     await torture.things.retrieve("t1", { headers: new Headers({ "X-Extra": "1" }) });
     assert.equal(calls[0].init.headers["x-extra"], "1");
     assert.equal(calls[0].init.headers.authorization, "Bearer token");
+  });
+
+  it("sends default headers and query, overridden or removed per request", async () => {
+    const { calls, torture } = client([json(THING)], {
+      defaultHeaders: { "X-Team": "core", "User-Agent": null },
+      defaultQuery: { tenant: "t1" },
+    });
+    await torture.things.retrieve("t1");
+    await torture.things.retrieve("t1", {
+      headers: { "x-team": null, "X-Trace": "1" },
+      query: { tenant: "t2", debug: true },
+    });
+    assert.equal(calls[0].init.headers["x-team"], "core");
+    assert.equal(calls[0].init.headers["user-agent"], undefined);
+    assert.equal(calls[0].url.search, "?tenant=t1");
+    assert.equal(calls[1].init.headers["x-team"], undefined);
+    assert.equal(calls[1].init.headers["x-trace"], "1");
+    assert.equal(calls[1].url.search, "?tenant=t2&debug=true");
   });
 
   it("retries a 429 after its Retry-After delay", async () => {
@@ -221,14 +239,14 @@ describe("client", () => {
   it("times out each attempt", async () => {
     const hang = (init) =>
       new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
-    const { calls, torture } = client([hang], { numRetries: 1 });
+    const { calls, torture } = client([hang], { maxRetries: 1 });
     // Node does not keep the process alive for `AbortSignal.timeout` alone.
     const alive = setInterval(() => {}, 1000);
     await assert.rejects(
       torture.things.retrieve("t1", { timeout: 10 }),
       (error) =>
         error instanceof sdk.APIConnectionTimeoutError &&
-        error instanceof sdk.ApiTimeoutError &&
+        error instanceof sdk.APIConnectionError &&
         error.name === "APIConnectionTimeoutError"
     );
     clearInterval(alive);
@@ -258,7 +276,7 @@ describe("client", () => {
       assert.equal(error.body, "gone");
       return true;
     });
-    const { torture: other } = client([json({}, 418), json({}, 503)], { numRetries: 0 });
+    const { torture: other } = client([json({}, 418), json({}, 503)], { maxRetries: 0 });
     await assert.rejects(other.things.retrieve("t1"), (error) => {
       assert.equal(error.constructor, sdk.APIError);
       assert.deepEqual(error.error, {});
@@ -272,7 +290,7 @@ describe("client", () => {
     const { calls, torture } = client([json(THING)]);
     await torture.things.retrieve("t1");
     assert.ok(calls[0].init.signal instanceof AbortSignal);
-    const { calls: unbounded, torture: patient } = client([json(THING)], { requestTimeout: Infinity });
+    const { calls: unbounded, torture: patient } = client([json(THING)], { timeout: Infinity });
     await patient.things.retrieve("t1");
     assert.equal(unbounded[0].init.signal, undefined);
   });

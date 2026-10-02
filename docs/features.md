@@ -13,8 +13,8 @@ alternative that is fully configured:
 | `apiKey` in a header, query parameter or cookie | the constructor token, or per scheme in `apiKeys` / `api_keys` / `ApiKeys` |
 
 ```ts
-new Acme("sk_live_...");                                          // unchanged
-new Acme(null, { tokenProvider: () => oauth.accessToken() });     // OAuth2, refreshed by you
+new Acme({ apiKey: "sk_live_..." });                              // unchanged
+new Acme({ tokenProvider: () => oauth.accessToken() });           // OAuth2, refreshed by you
 ```
 
 Without a token, clients read `ACME_API_KEY`, and `ACME_BASE_URL` overrides the base URL. The

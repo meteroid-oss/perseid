@@ -13,7 +13,7 @@ import { readEnv, type {{ sdk.client_name }}RequestContext } from "./request.js"
 {% set ns = namespace(models=[]) -%}
 {% for _, type in api.types | items %}{% set ns.models = ns.models + [type.name | to_upper_camel_case] %}{% endfor -%}
 {% set model_names = ns.models -%}
-{% set error_classes = [sdk.client_name ~ "Error", "APIError", "BadRequestError", "AuthenticationError", "PermissionDeniedError", "NotFoundError", "ConflictError", "UnprocessableEntityError", "RateLimitError", "InternalServerError", "APIConnectionError", "APIConnectionTimeoutError", "APIUserAbortError", "APIDecodeError", "ApiError", "ApiException", "ApiTimeoutError"] -%}
+{% set error_classes = [sdk.client_name ~ "Error", "APIError", "BadRequestError", "AuthenticationError", "PermissionDeniedError", "NotFoundError", "ConflictError", "UnprocessableEntityError", "RateLimitError", "InternalServerError", "APIConnectionError", "APIConnectionTimeoutError", "APIUserAbortError", "APIDecodeError"] -%}
 {% set exported_errors = error_classes | reject("in", model_names) | list -%}
 import {
     {% for name in error_classes %}{{ name }}{% if name in model_names %} as {{ name }}Class{% endif %},{% endfor %}
@@ -74,29 +74,31 @@ export type {{ sdk.client_name }}Options = {
    * API key of every scheme{% endif %}. Defaults to the `{{ sdk.env_prefix }}_API_KEY` environment variable.
    */
   apiKey?: string | null | undefined;
-  /** Write a one-line summary of every request and response to stderr. */
-  debug?: boolean | undefined;
   /**
-   * Custom API server URL. Defaults to the `{{ sdk.env_prefix }}_BASE_URL` environment variable, then
-   * `{{ sdk.default_base_url }}`.
+   * The API server URL. Defaults to the `{{ sdk.env_prefix }}_BASE_URL` environment variable{% if sdk.has_default_base_url %}, then
+   * `{{ sdk.default_base_url }}`{% else %}; one of them is required{% endif %}.
    */
-  serverUrl?: string | undefined;
+  baseURL?: string | null | undefined;
   /**
    * Time in milliseconds to wait for each attempt to get a response. Default:
    * {{ (sdk.timeout * 1000) | int }} ({{ sdk.timeout }} seconds); `Infinity` waits forever.
    */
-  requestTimeout?: number | undefined;
-  /** Custom fetch implementation, for tests or non-standard runtimes. */
-  fetch?: typeof fetch | undefined;
-  /** Wraps every HTTP attempt: caching, logging, custom headers. */
-  middleware?: Middleware[] | undefined;
+  timeout?: number | undefined;
   /**
    * How many times a failed request is retried: connection errors, timeouts, 408, 429
    * and 5xx responses. Default: 2, or the length of `retryScheduleInMs`.
    */
   maxRetries?: number | undefined;
-  /** @deprecated Use `maxRetries`. */
-  numRetries?: number | undefined;
+  /** Headers sent with every request; `null` removes a header the SDK sets. */
+  defaultHeaders?: Record<string, string | null | undefined> | undefined;
+  /** Query parameters sent with every request. */
+  defaultQuery?: Record<string, string | undefined> | undefined;
+  /** Custom fetch implementation, for tests or non-standard runtimes. */
+  fetch?: typeof fetch | undefined;
+  /** Wraps every HTTP attempt: caching, logging, custom headers. */
+  middleware?: Middleware[] | undefined;
+  /** Write a one-line summary of every request and response to stderr. */
+  debug?: boolean | undefined;
   /** Delays in milliseconds before each retry, instead of the default backoff. */
   retryScheduleInMs?: number[] | undefined;
   {% if "bearer" in kinds -%}
@@ -121,7 +123,9 @@ export type {{ sdk.client_name }}Options = {
   {% endif -%}
 };
 
+{% if sdk.has_default_base_url -%}
 const DEFAULT_BASE_URL = "{{ sdk.default_base_url }}";
+{% endif -%}
 const DEFAULT_TIMEOUT_MS = {{ (sdk.timeout * 1000) | int }};
 
 const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
@@ -139,7 +143,7 @@ const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
  *
  * @example
  * ```typescript
- * const {{ sdk.client_name | to_lower_camel_case }} = new {{ sdk.client_name }}({ apiKey: "your-api-key" });
+ * const {{ sdk.client_name | to_lower_camel_case }} = new {{ sdk.client_name }}({ apiKey: "your-api-key"{% if not sdk.has_default_base_url %}, baseURL: "https://api.example.com"{% endif %} });
  *
  {% if sdk.example -%}
  {% for line in sdk.example | lines -%}
@@ -159,23 +163,20 @@ export class {{ sdk.client_name }} {
   private _{{ resource.name | to_lower_camel_case }}?: {{ resource.name | to_upper_camel_case }};
   {% endfor %}
 
-  /** Reads the API key from `{{ sdk.env_prefix }}_API_KEY` unless `options.apiKey` is set. */
-  public constructor(options?: {{ sdk.client_name }}Options);
   /**
-   * @param token The API key or bearer token, `null` to read `{{ sdk.env_prefix }}_API_KEY`
-   * @param options Client configuration options
+   * Reads the API key from `{{ sdk.env_prefix }}_API_KEY` and the base URL from `{{ sdk.env_prefix }}_BASE_URL`
+   * unless `options` sets them.
    */
-  public constructor(token: string | null, options?: {{ sdk.client_name }}Options);
-  public constructor(
-    tokenOrOptions?: string | null | {{ sdk.client_name }}Options,
-    maybeOptions: {{ sdk.client_name }}Options = {}
-  ) {
-    const options =
-      typeof tokenOrOptions === "object" && tokenOrOptions !== null ? tokenOrOptions : maybeOptions;
-    const token =
-      (typeof tokenOrOptions === "string" ? tokenOrOptions : options.apiKey) ??
-      readEnv("{{ sdk.env_prefix }}_API_KEY");
-    const baseUrl = options.serverUrl ?? readEnv("{{ sdk.env_prefix }}_BASE_URL") ?? DEFAULT_BASE_URL;
+  public constructor(options: {{ sdk.client_name }}Options = {}) {
+    const token = options.apiKey ?? readEnv("{{ sdk.env_prefix }}_API_KEY");
+    const baseUrl = options.baseURL ?? readEnv("{{ sdk.env_prefix }}_BASE_URL"){% if sdk.has_default_base_url %} ?? DEFAULT_BASE_URL{% endif %};
+    {% if not sdk.has_default_base_url -%}
+    if (baseUrl === undefined) {
+      throw new {{ sdk.client_name }}Error{% if sdk.client_name ~ "Error" in model_names %}Class{% endif %}(
+        "No base URL: pass the `baseURL` option or set the `{{ sdk.env_prefix }}_BASE_URL` environment variable."
+      );
+    }
+    {% endif -%}
     this.requestCtx = {
       auth: AUTH,
       token,
@@ -189,7 +190,7 @@ export class {{ sdk.client_name }} {
       },
       {% endif -%}
       baseUrl: baseUrl.replace(/\/+$/, ""),
-      timeout: options.requestTimeout ?? DEFAULT_TIMEOUT_MS,
+      timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
       {% if api.default_error -%}
       parseError: {{ api.default_error | to_upper_camel_case }}Serializer.parse,
       {% endif -%}
@@ -197,7 +198,9 @@ export class {{ sdk.client_name }} {
       fetch: options.fetch,
       middleware: options.middleware,
       retryScheduleInMs: options.retryScheduleInMs,
-      maxRetries: options.maxRetries ?? options.numRetries,
+      maxRetries: options.maxRetries,
+      defaultHeaders: options.defaultHeaders,
+      defaultQuery: options.defaultQuery,
     };
   }
 
