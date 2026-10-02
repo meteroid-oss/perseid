@@ -84,8 +84,33 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/PetBase'}
+  /hyphenated-unions:
+    post:
+      operationId: echo_hyphenated_union
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/issue-event-for-issue'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/timeline-issue-events'}
 components:
   schemas:
+    issue-event-for-issue:
+      oneOf:
+        - {$ref: '#/components/schemas/labeled-issue-event'}
+        - {$ref: '#/components/schemas/renamed-issue-event'}
+    timeline-issue-events:
+      anyOf:
+        - {$ref: '#/components/schemas/labeled-issue-event'}
+        - {$ref: '#/components/schemas/renamed-issue-event'}
+    labeled-issue-event: {type: object, required: [event, label], properties: {event: {type: string}, label: {type: string}}}
+    renamed-issue-event: {type: object, required: [event, rename], properties: {event: {type: string}, rename: {type: object, properties: {from: {type: string}, to: {type: string}}}}}
     Annotated: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
     Any: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
     ApiBase: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
