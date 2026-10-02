@@ -45,3 +45,14 @@ export function isJsonObject<T>(
     typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date)
   );
 }
+
+/** @internal The members of a JSON object other than `known`: its additional properties. */
+export function omitKeys(json: any, known: readonly string[]): { [key: string]: any } {
+  const rest: { [key: string]: any } = {};
+  for (const key of Object.keys(json)) {
+    if (!known.includes(key)) {
+      rest[key] = json[key];
+    }
+  }
+  return rest;
+}

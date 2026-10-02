@@ -90,6 +90,139 @@ internal sealed class ApiRequest(HttpMethod method, string path)
     public void AddStructuredQuery(string name, JsonNode? value, bool deepObject, bool explode) =>
         EncodeParam(name, value, deepObject, explode, _query);
 
+    /// <summary>Adds the items of a list joined by <paramref name="delimiter"/>
+    /// (<c>pipeDelimited</c>, <c>spaceDelimited</c>).</summary>
+    public void AddDelimitedQuery<T>(
+        string name,
+        object? value,
+        JsonTypeInfo<T> typeInfo,
+        string delimiter
+    )
+    {
+        if (value is not null)
+        {
+            AddDelimitedQuery(name, JsonSerializer.SerializeToNode((T)value, typeInfo), delimiter);
+        }
+    }
+
+    public void AddDelimitedQuery(string name, JsonNode? value, string delimiter)
+    {
+        if (value is JsonArray items)
+        {
+            var texts = items.OfType<JsonNode>().Select(ScalarText).ToList();
+            if (texts.Count > 0)
+            {
+                _query.Add(new(name, string.Join(delimiter, texts)));
+            }
+        }
+    }
+
+    /// <summary>Adds a <c>content: application/json</c> parameter as compact JSON text.</summary>
+    public void AddJsonQuery<T>(string name, object? value, JsonTypeInfo<T> typeInfo)
+    {
+        if (value is not null)
+        {
+            _query.Add(new(name, JsonSerializer.Serialize((T)value, typeInfo)));
+        }
+    }
+
+    public void AddJsonQuery(string name, JsonNode? value)
+    {
+        if (value is not null)
+        {
+            _query.Add(new(name, value.ToJsonString()));
+        }
+    }
+
+    /// <summary>A path parameter in its OpenAPI <paramref name="style"/> (<c>simple</c>,
+    /// <c>label</c>, <c>matrix</c>; <c>json</c> for <c>content</c> values), percent-encoded.</summary>
+    public static string EncodePathParam<T>(
+        string name,
+        object value,
+        JsonTypeInfo<T> typeInfo,
+        string style,
+        bool explode
+    ) => EncodePathParam(name, JsonSerializer.SerializeToNode((T)value, typeInfo), style, explode);
+
+    public static string EncodePathParam(string name, string value, string style, bool explode) =>
+        EncodePathParam(name, JsonValue.Create(value), style, explode);
+
+    public static string EncodePathParam(string name, JsonNode? value, string style, bool explode)
+    {
+        if (style == "json")
+        {
+            return Uri.EscapeDataString(value?.ToJsonString() ?? "");
+        }
+        string Encode(JsonNode? node) =>
+            Uri.EscapeDataString(
+                node is null ? "" : IsNested(node) ? node.ToJsonString() : ScalarText(node)
+            );
+        var head = style switch { "label" => ".", "matrix" => ";", _ => "" };
+        var separator = style switch { "label" => ".", "matrix" => ";", _ => "," };
+        var key = Uri.EscapeDataString(name);
+        switch (value)
+        {
+            case JsonArray items:
+                var values = items.Select(Encode).ToList();
+                if (style == "matrix")
+                {
+                    return explode
+                        ? string.Concat(values.Select(item => $";{key}={item}"))
+                        : $";{key}=" + string.Join(",", values);
+                }
+                return head + string.Join(explode ? separator : ",", values);
+            case JsonObject fields:
+                var pairs = fields
+                    .Select(field => (Key: Uri.EscapeDataString(field.Key), Value: Encode(field.Value)))
+                    .ToList();
+                var flat = string.Join(",", pairs.SelectMany(pair => new[] { pair.Key, pair.Value }));
+                if (style == "matrix")
+                {
+                    return explode
+                        ? string.Concat(pairs.Select(pair => $";{pair.Key}={pair.Value}"))
+                        : $";{key}={flat}";
+                }
+                return head
+                    + (explode ? string.Join(separator, pairs.Select(pair => $"{pair.Key}={pair.Value}")) : flat);
+            default:
+                var text = Encode(value);
+                return style switch
+                {
+                    "label" => "." + text,
+                    "matrix" => text.Length == 0 ? $";{key}" : $";{key}={text}",
+                    _ => text,
+                };
+        }
+    }
+
+    /// <summary>The cookie parameters, merged into one <c>Cookie</c> header when sending.</summary>
+    public List<string> Cookies { get; } = new();
+
+    public void SetCookie(string name, string? value)
+    {
+        if (value is not null)
+        {
+            Cookies.Add($"{name}={Uri.EscapeDataString(value)}");
+        }
+    }
+
+    /// <summary>Sets a <c>content: application/json</c> header as compact JSON text.</summary>
+    public void SetJsonHeader<T>(string name, object? value, JsonTypeInfo<T> typeInfo)
+    {
+        if (value is not null)
+        {
+            Headers[name] = JsonSerializer.Serialize((T)value, typeInfo);
+        }
+    }
+
+    public void SetJsonHeader(string name, JsonNode? value)
+    {
+        if (value is not null)
+        {
+            Headers[name] = value.ToJsonString();
+        }
+    }
+
     public void SetHeader(string name, string? value)
     {
         if (value is not null)

@@ -85,5 +85,15 @@ expand[]=a&expand[]=b                         # lists with `style: deepObject`
 ```
 
 Form body properties follow their `encoding` (`style`, `explode`). Paths with a query of their
-own, such as `/responses?beta=true`, keep it. Header and path parameters are strings: unions of
-scalars are accepted, and a list or `content` header is sent as the caller writes it.
+own, such as `/responses?beta=true`, keep it.
+
+`pipeDelimited` and `spaceDelimited` lists without `explode` are sent as `ids=a|b|c` and
+`ids=a b c`; with `explode` they repeat the parameter like `form`. A parameter with
+`content: application/json` (query, path or header) is typed by its schema and sent as compact JSON,
+percent-encoded where it needs to be.
+
+Plain path parameters are strings: unions of scalars are accepted. Other path parameters follow
+their `style` and `explode` as the OpenAPI table has it: `label` (`.a.b`), `matrix` (`;id=a,b`),
+and lists and objects (`a,b,c`, `k,v,k2,v2`, or `k=v,k2=v2` exploded) are typed values. Header
+lists are sent as the caller writes them. Operations using a construct perseid does not support are
+skipped with a warning naming them.

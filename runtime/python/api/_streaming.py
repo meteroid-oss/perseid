@@ -30,6 +30,9 @@ UploadContent = t.Union[bytes, t.IO[bytes], t.Iterable[bytes], t.AsyncIterable[b
 """A raw body. Only ``bytes`` are retried; streams and files are sent once."""
 
 
+_OCTET_STREAM = "application/octet-stream"
+
+
 class Upload(t.NamedTuple):
     """A multipart file with its filename and content type."""
 
@@ -177,23 +180,32 @@ def _scalar(value: t.Any) -> str:
     return str(value)
 
 
-def multipart_files(fields: t.Sequence[tuple[str, t.Any, bool]]) -> list[t.Any]:
-    """Renders ``(name, value, is_file)`` fields as ``httpx`` multipart files, skipping ``None``."""
+def multipart_files(fields: t.Sequence[tuple[str, t.Any, bool, str | None]]) -> list[t.Any]:
+    """Renders ``(name, value, is_file, content_type)`` fields as ``httpx`` multipart files.
+
+    ``None`` values are skipped. A list of files is sent as repeated parts of the same name.
+    ``content_type`` is the media type the spec declares for the part: it applies to files
+    whose :class:`Upload` does not set its own, and to every item of a field.
+    """
     files: list[t.Any] = []
-    for name, value, is_file in fields:
+    for name, value, is_file, content_type in fields:
         if value is None:
             continue
         if is_file:
-            upload = value if isinstance(value, Upload) else Upload(value)
-            filename = upload.filename or os.path.basename(getattr(upload.content, "name", "file"))
-            files.append((name, (filename, upload.content, upload.content_type)))
+            many = isinstance(value, list) or (isinstance(value, tuple) and not isinstance(value, Upload))
+            for item in value if many else [value]:
+                upload = item if isinstance(item, Upload) else Upload(item)
+                if content_type and upload.content_type == _OCTET_STREAM:
+                    upload = upload._replace(content_type=content_type)
+                filename = upload.filename or os.path.basename(getattr(upload.content, "name", "file"))
+                files.append((name, (filename, upload.content, upload.content_type)))
             continue
         value = to_json_value(value)
         for item in value if isinstance(value, list) else [value]:
             if isinstance(item, (dict, list)):
-                files.append((name, (None, json.dumps(item), "application/json")))
+                files.append((name, (None, json.dumps(item), content_type or "application/json")))
             elif item is not None:
-                files.append((name, (None, _scalar(item), None)))
+                files.append((name, (None, _scalar(item), content_type)))
     return files
 
 

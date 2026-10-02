@@ -300,7 +300,9 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
     The spec currently declares no header parameters at all, so neither branch is
     reached today. -#}
 {% macro go_header_type(p) -%}
-    {%- if p.type is not defined -%}
+    {%- if p.json -%}
+        {{ go_type(p.type) }}
+    {%- elif p.type is not defined -%}
         string
     {%- elif p.type.to_go() == "string" -%}
         string

@@ -85,6 +85,7 @@ pub(crate) struct Credentials {
 pub(crate) struct Applied {
     pub(crate) headers: Vec<(&'static str, String)>,
     pub(crate) query: Vec<(&'static str, String)>,
+    pub(crate) cookies: Vec<(&'static str, String)>,
 }
 
 impl Credentials {
@@ -132,7 +133,7 @@ impl Credentials {
                     let key = self.api_key(name, token).unwrap_or_default().to_owned();
                     match *location {
                         "query" => applied.query.push((param, key)),
-                        "cookie" => applied.headers.push(("cookie", format!("{param}={key}"))),
+                        "cookie" => applied.cookies.push((param, key)),
                         _ => applied.headers.push((param, key)),
                     }
                 }

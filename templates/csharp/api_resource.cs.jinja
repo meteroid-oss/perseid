@@ -70,7 +70,7 @@ public sealed partial class {{ resource_type_name }}
 {% if op.deprecated %}    [Obsolete]
 {% endif -%}
     public {{ returns }} {{ method_name }}(
-{% for p in op.path_params %}        string {{ m.param(p) }},
+{% for p in op.path_params %}        {% if p in op.path_styles and op.path_styles[p].type is defined %}{{ op.path_styles[p].type.to_csharp() }}{% else %}string{% endif %} {{ m.param(p) }},
 {% endfor -%}
 {% if takes_body -%}
 {% if op.request_body_optional and required_options %}        {{ body_type }}? {{ body }},
@@ -87,15 +87,29 @@ public sealed partial class {{ resource_type_name }}
         CancellationToken cancellationToken = default
     )
     {
-{% for p in op.path_params %}        ArgumentException.ThrowIfNullOrEmpty({{ m.param(p) }});
-{% endfor -%}
+{% for p in op.path_params %}{% if p in op.path_styles and op.path_styles[p].type is defined %}        ArgumentNullException.ThrowIfNull({{ m.param(p) }});
+{% else %}        ArgumentException.ThrowIfNullOrEmpty({{ m.param(p) }});
+{% endif %}{% endfor -%}
 {% if takes_body and not op.request_body_optional %}        ArgumentNullException.ThrowIfNull({{ body }});
 {% endif -%}
 {% if required_options %}        ArgumentNullException.ThrowIfNull(options);
 {% endif -%}
 {% set path = namespace(value=op.path) -%}
 {% for p in op.path_params -%}
+{% if p in op.path_styles -%}
+{% set ps = op.path_styles[p] -%}
+{% set segment = (m.param(p) | replace("@", "")) ~ "Segment" -%}
+{% if ps.type is defined and ps.type.to_csharp() == "JsonNode" -%}
+        var {{ segment }} = ApiRequest.EncodePathParam({{ p | tojson }}, {{ m.param(p) }}, {{ ps.style | tojson }}, {{ ps.explode | lower }});
+{% elif ps.type is defined -%}
+        var {{ segment }} = ApiRequest.EncodePathParam({{ p | tojson }}, {{ m.param(p) }}, {{ context }}.{{ m.type_info(ps.type.to_csharp()) }}, {{ ps.style | tojson }}, {{ ps.explode | lower }});
+{% else -%}
+        var {{ segment }} = ApiRequest.EncodePathParam({{ p | tojson }}, {{ m.param(p) }}, {{ ps.style | tojson }}, {{ ps.explode | lower }});
+{% endif -%}
+{% set path.value = path.value | replace("{" ~ p ~ "}", "{" ~ segment ~ "}") -%}
+{% else -%}
 {% set path.value = path.value | replace("{" ~ p ~ "}", "{Uri.EscapeDataString(" ~ m.param(p) ~ ")}") -%}
+{% endif -%}
 {% endfor %}
         var request = new ApiRequest(HttpMethod.{{ op.method | to_upper_camel_case }}, {% if op.path_params %}${% endif %}"{{ path.value }}");
 {% if op.security is defined -%}
@@ -104,7 +118,15 @@ public sealed partial class {{ resource_type_name }}
 {% for p in op.query_params -%}
 {% set explode = p.explode | default(true) -%}
 {% set value %}options{% if not required_options %}?{% endif %}.{{ m.member(p.ident, options_type) }}{% endset -%}
-{% if p.structured and p.type.to_csharp() == "JsonNode" -%}
+{% if p.structured and p.json and p.type.to_csharp() == "JsonNode" -%}
+        request.AddJsonQuery("{{ p.name }}", {{ value }});
+{% elif p.structured and p.json -%}
+        request.AddJsonQuery("{{ p.name }}", {{ value }}, {{ context }}.{{ m.type_info(p.type.to_csharp()) }});
+{% elif p.structured and p.delimiter is defined and p.type.to_csharp() == "JsonNode" -%}
+        request.AddDelimitedQuery("{{ p.name }}", {{ value }}, {{ p.delimiter | tojson }});
+{% elif p.structured and p.delimiter is defined -%}
+        request.AddDelimitedQuery("{{ p.name }}", {{ value }}, {{ context }}.{{ m.type_info(p.type.to_csharp()) }}, {{ p.delimiter | tojson }});
+{% elif p.structured and p.type.to_csharp() == "JsonNode" -%}
         request.AddStructuredQuery("{{ p.name }}", {{ value }}, {{ p.deep_object | lower }}, {{ explode | lower }});
 {% elif p.structured -%}
         request.AddStructuredQuery("{{ p.name }}", {{ value }}, {{ context }}.{{ m.type_info(p.type.to_csharp()) }}, {{ p.deep_object | lower }}, {{ explode | lower }});
@@ -113,7 +135,13 @@ public sealed partial class {{ resource_type_name }}
 {% endif -%}
 {% endfor -%}
 {% for p in op.header_params -%}
-        request.SetHeader("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.ident, options_type) }});
+{% if p.json and p.type.to_csharp() == "JsonNode" -%}
+        request.SetJsonHeader("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.ident, options_type) }});
+{% elif p.json -%}
+        request.SetJsonHeader("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.ident, options_type) }}, {{ context }}.{{ m.type_info(p.type.to_csharp()) }});
+{% else -%}
+        request.Set{{ "Cookie" if p.cookie else "Header" }}("{{ p.name }}", options{% if not required_options %}?{% endif %}.{{ m.member(p.ident, options_type) }});
+{% endif -%}
 {% endfor -%}
 {% if has_body -%}
 {% set setter = "SetFormBody" if op.request_body_is_form else "SetJsonBody" -%}
@@ -140,7 +168,11 @@ public sealed partial class {{ resource_type_name }}
 {% endif %}        var form = new MultipartBody();
 {% for field in op.multipart_fields -%}
 {% set value = body ~ "." ~ m.member(field.name, body_type) -%}
-{% set add %}form.{% if field.is_file %}File("{{ field.name }}", {{ value }}){% else %}Field("{{ field.name }}", {{ value }}, {{ context }}.Options){% endif %};{% endset -%}
+{% set part_type %}{% if field.content_type is defined %}, {{ field.content_type | tojson }}{% endif %}{% endset -%}
+{% if field.is_file and field.is_file_list %}{% set add %}foreach (var file in {{ value }}) { form.File("{{ field.name }}", file{{ part_type }}); }{% endset -%}
+{% elif field.is_file %}{% set add %}form.File("{{ field.name }}", {{ value }}{{ part_type }});{% endset -%}
+{% else %}{% set add %}form.Field("{{ field.name }}", {{ value }}, {{ context }}.Options{% if field.content_type is defined %}, {{ field.content_type | tojson }}{% endif %});{% endset -%}
+{% endif -%}
 {% if field.required and not field.nullable %}        {{ add }}
 {% else %}        if ({{ value }} is not null)
         {
@@ -167,7 +199,7 @@ public sealed partial class {{ resource_type_name }}
 {% if op.deprecated %}    [Obsolete]
 {% endif -%}
     public IAsyncEnumerable<{{ m.model(pg.item_schema) }}> {{ op.name | to_upper_camel_case }}IterAsync(
-{% for p in op.path_params %}        string {{ m.param(p) }},
+{% for p in op.path_params %}        {% if p in op.path_styles and op.path_styles[p].type is defined %}{{ op.path_styles[p].type.to_csharp() }}{% else %}string{% endif %} {{ m.param(p) }},
 {% endfor -%}
 {% if takes_body -%}
 {% if op.request_body_optional and required_options %}        {{ body_type }}? {{ body }},
@@ -182,8 +214,9 @@ public sealed partial class {{ resource_type_name }}
         CancellationToken cancellationToken = default
     )
     {
-{% for p in op.path_params %}        ArgumentException.ThrowIfNullOrEmpty({{ m.param(p) }});
-{% endfor -%}
+{% for p in op.path_params %}{% if p in op.path_styles and op.path_styles[p].type is defined %}        ArgumentNullException.ThrowIfNull({{ m.param(p) }});
+{% else %}        ArgumentException.ThrowIfNullOrEmpty({{ m.param(p) }});
+{% endif %}{% endfor -%}
 {% if takes_body and not op.request_body_optional %}        ArgumentNullException.ThrowIfNull({{ body }});
 {% endif -%}
 {% if required_options %}        ArgumentNullException.ThrowIfNull(options);
@@ -235,7 +268,9 @@ public sealed class {{ class_name }}
 {% if field.description is defined %}
     {{ m.doc(field.description) }}
 {% endif -%}
-{% if field.is_file -%}
+{% if field.is_file and field.is_file_list -%}
+    public {% if field.required %}required {% endif %}List<Upload>{% if field.nullable or not field.required %}?{% endif %} {{ m.member(field.name, class_name) }} { get; set; }
+{% elif field.is_file -%}
     public {% if field.required %}required {% endif %}Upload{% if field.nullable or not field.required %}?{% endif %} {{ m.member(field.name, class_name) }} { get; set; }
 {% else -%}
     public {% if field.required %}required {% endif %}{{ m.field_type(field) }} {{ m.member(field.name, class_name) }} { get; set; }

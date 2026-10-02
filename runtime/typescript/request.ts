@@ -106,6 +106,66 @@ function flattenParam(prefix: string, value: unknown, out: [string, string][]) {
   }
 }
 
+/** Percent-encodes everything but the unreserved characters, so that `,` `.` `;` `=` stay structural. */
+function encodeUnreserved(text: string): string {
+  return encodeURIComponent(text).replace(
+    /[!'()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+}
+
+function pathParamText(value: unknown): string {
+  if (value === undefined || value === null) {
+    return "";
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  return isNested(value) ? stringifyJson(value) : String(value);
+}
+
+function flatPairs(pairs: [string, string][]): string {
+  return pairs.map(([field, item]) => `${field},${item}`).join(",");
+}
+
+/**
+ * A path parameter in its OpenAPI `style` (`simple`, `label`, `matrix`; `json` for `content`),
+ * each part percent-encoded.
+ */
+function encodePathParam(name: string, value: unknown, style: string, explode: boolean): string {
+  if (style === "json") {
+    return encodeUnreserved(stringifyJson(value) ?? "");
+  }
+  const encode = (item: unknown) => encodeUnreserved(pathParamText(item));
+  const separator = style === "label" ? "." : style === "matrix" ? ";" : ",";
+  const head = style === "label" ? "." : style === "matrix" ? ";" : "";
+  const key = encodeUnreserved(name);
+  if (Array.isArray(value)) {
+    const values = value.map(encode);
+    if (style === "matrix") {
+      return explode ? values.map((item) => `;${key}=${item}`).join("") : `;${key}=${values.join(",")}`;
+    }
+    return head + values.join(explode ? separator : ",");
+  }
+  if (isNested(value)) {
+    const pairs = Object.entries(value).map(([field, item]): [string, string] => [encodeUnreserved(field), encode(item)]);
+    if (style === "matrix") {
+      return explode
+        ? pairs.map(([field, item]) => `;${field}=${item}`).join("")
+        : `;${key}=${flatPairs(pairs)}`;
+    }
+    return head + (explode ? pairs.map(([field, item]) => `${field}=${item}`).join(separator) : flatPairs(pairs));
+  }
+  const text = encode(value);
+  if (style === "label") {
+    return `.${text}`;
+  }
+  if (style === "matrix") {
+    return text === "" ? `;${key}` : `;${key}=${text}`;
+  }
+  return text;
+}
+
 /** @internal */
 export class @@CLIENT_NAME@@Request {
   private body?: BodyInit;
@@ -114,6 +174,7 @@ export class @@CLIENT_NAME@@Request {
   private errors?: ErrorParsers;
   private readonly queryParams: [string, string][] = [];
   private readonly headers: Record<string, string> = {};
+  private readonly cookieParams: string[] = [];
 
   constructor(
     private readonly method: HttpMethod,
@@ -122,6 +183,15 @@ export class @@CLIENT_NAME@@Request {
 
   public setPathParam(name: string, value: string) {
     const newPath = this.path.replace(`{${name}}`, encodeURIComponent(value));
+    if (this.path === newPath) {
+      throw new Error(`path parameter ${name} not found`);
+    }
+    this.path = newPath;
+  }
+
+  /** Substitutes a path parameter serialized by its OpenAPI `style`. */
+  public setStyledPathParam(name: string, value: unknown, style: string, explode: boolean) {
+    const newPath = this.path.replace(`{${name}}`, encodePathParam(name, value, style, explode));
     if (this.path === newPath) {
       throw new Error(`path parameter ${name} not found`);
     }
@@ -158,6 +228,23 @@ export class @@CLIENT_NAME@@Request {
     encodeParam(name, value, deepObject, explode, this.queryParams);
   }
 
+  /** Sends the items of a list joined by `delimiter` (`pipeDelimited`, `spaceDelimited`). */
+  public setDelimitedQueryParam(name: string, value: unknown, delimiter: string) {
+    if (Array.isArray(value)) {
+      const texts = value.filter((item) => item != null).map((item) => encodeQueryParamValue(item));
+      if (texts.length > 0) {
+        this.queryParams.push([name, texts.join(delimiter)]);
+      }
+    }
+  }
+
+  /** Sends a `content: application/json` parameter as compact JSON text. */
+  public setJsonQueryParam(name: string, value: unknown) {
+    if (value !== undefined) {
+      this.queryParams.push([name, stringifyJson(value)]);
+    }
+  }
+
   /** Overrides the API-wide security requirement for this operation. */
   public setSecurity(security: Security) {
     this.security = security;
@@ -171,6 +258,19 @@ export class @@CLIENT_NAME@@Request {
   public setHeaderParam(name: string, value?: string) {
     if (value !== undefined) {
       this.headers[name.toLowerCase()] = value;
+    }
+  }
+
+  /** A `content: application/json` header, sent as compact JSON text. */
+  public setJsonHeaderParam(name: string, value: unknown) {
+    if (value !== undefined) {
+      this.headers[name.toLowerCase()] = stringifyJson(value);
+    }
+  }
+
+  public setCookieParam(name: string, value?: string) {
+    if (value !== undefined) {
+      this.cookieParams.push(`${name}=${encodeURIComponent(value)}`);
     }
   }
 
@@ -306,6 +406,12 @@ export class @@CLIENT_NAME@@Request {
     new Headers(options.headers).forEach((value, name) => {
       headers[name] = value;
     });
+    // Cookie parameters, the API key cookie and a `Cookie` header of the call share one header.
+    const cookies = [...this.cookieParams];
+    if (authHeaders.cookie) cookies.push(authHeaders.cookie);
+    if (headers.cookie && headers.cookie !== authHeaders.cookie) cookies.push(headers.cookie);
+    delete headers.cookie;
+    if (cookies.length > 0) headers.cookie = cookies.join("; ");
     if (this.method === "POST" && headers["idempotency-key"] === undefined) {
       headers["idempotency-key"] = `auto_${randomUUID()}`;
     }

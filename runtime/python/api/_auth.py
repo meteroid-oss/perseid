@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import typing as t
+import urllib.parse
 
 __all__ = ["SecurityScheme", "Security", "TokenProvider", "chosen_schemes", "apply_auth"]
 
@@ -89,7 +90,7 @@ def apply_auth(
             if scheme.location == "query":
                 request_kwargs.setdefault("params", []).append((scheme.param, key))
             elif scheme.location == "cookie":
-                cookie = f"{scheme.param}={key}"
+                cookie = f"{scheme.param}={urllib.parse.quote(key, safe='')}"
                 headers["cookie"] = f"{headers['cookie']}; {cookie}" if "cookie" in headers else cookie
             else:
                 headers[scheme.param.lower()] = key

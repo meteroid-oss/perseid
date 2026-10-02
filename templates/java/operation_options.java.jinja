@@ -22,11 +22,11 @@ import {{ sdk.java_package }}.models.{{ c | to_upper_camel_case }};
 /** Optional parameters of {@code {{ operation.name | ident("camel", "java") }}}. */
 public class {{ class_name }} {
     {% for p in params -%}
-    private {% if loop.index0 < operation.query_params | length %}{{ p.type.to_java() }}{% else %}String{% endif %} {{ fields[loop.index0] }};
+    private {% if loop.index0 < operation.query_params | length or p.json %}{{ p.type.to_java() }}{% else %}String{% endif %} {{ fields[loop.index0] }};
     {% endfor %}
 
     {% for p in params -%}
-    {% set ty = p.type.to_java() if loop.index0 < operation.query_params | length else "String" -%}
+    {% set ty = p.type.to_java() if loop.index0 < operation.query_params | length or p.json else "String" -%}
     {% set field = fields[loop.index0] -%}
     {% set accessor = accessors[loop.index0] ~ ("_" if accessors[loop.index0] == "Class" else "") -%}
     {% if p.description is defined -%}

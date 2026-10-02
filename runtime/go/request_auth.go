@@ -74,7 +74,7 @@ func (c *config) authenticate(ctx context.Context, req *request, security [][]st
 			case "query":
 				req.SetQueryParam(scheme.param, key)
 			case "cookie":
-				req.headers.Add("Cookie", scheme.param+"="+key)
+				req.SetCookie(scheme.param, key)
 			default:
 				req.SetHeader(scheme.param, key)
 			}

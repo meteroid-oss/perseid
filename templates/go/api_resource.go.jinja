@@ -12,6 +12,7 @@ package {{ sdk.package_name }}
 {% if "time." in go_field_type(field) %}{% set ns.time = true %}{% endif -%}
 {% endfor -%}
 {% for t in [op.request_body_json_type, op.response_body_json_type] if t is defined and "json." in go_type(t) %}{% set ns.json = true %}{% endfor -%}
+{% for t in [op.request_body_json_type, op.response_body_json_type] if t is defined and "time." in go_type(t) %}{% set ns.time = true %}{% endfor -%}
 {% for p in op.query_params if "time.Time" in p.type.to_go() %}{% set ns.time = true %}{% endfor -%}
 {% for p in op.query_params if "json." in go_type(p.type) %}{% set ns.json = true %}{% endfor -%}
 {% endfor -%}
@@ -29,7 +30,7 @@ import (
 // {{ resource_type_name }}.{{ go_export(op.name) }}.
 type {{ body_type_name }} struct {
 {% for field in op.multipart_fields %}{% if field.description is defined %}{{ field.description | to_doc_comment(style="go") }}
-{% endif %}{{ go_export(field.name) }} {% if field.is_file %}{% if not field.required or field.nullable %}*{% endif %}Upload{% else %}{{ go_field_type(field) }}{% endif %}
+{% endif %}{{ go_export(field.name) }} {% if field.is_file and field.is_file_list %}[]Upload{% elif field.is_file %}{% if not field.required or field.nullable %}*{% endif %}Upload{% else %}{{ go_field_type(field) }}{% endif %}
 {% endfor %}}
 {% endfor %}
 {% for op in resource.operations %}{% if op | has_query_or_header_params %}
@@ -43,7 +44,7 @@ type {{ options_type_name }} struct {
 {% endif %}{% if p.description is defined %}{{ p.description | to_doc_comment(style="go") }}
 {% endif %}{{ go_export(p.ident) }} {% if not p.required and not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}*{% endif %}{{ go_type(p.type) }}
 {% endfor %}{% for p in op.header_params %}
-{{ go_export(p.ident) }} {% if not p.required %}*{% endif %}{{ go_header_type(p) }}
+{{ go_export(p.ident) }} {% if not p.required and not (p.json and (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object())) %}*{% endif %}{{ go_header_type(p) }}
 {% endfor %}}
 {% endif %}{% endfor %}
 
@@ -70,10 +71,11 @@ type {{ resource_type_name }} struct {
 {% endif %}// An error response is an [*APIError] whose [ErrorBody] is
 {%- for schema in errors | dictsort | map(attribute=1) | unique %}{% if not loop.first %}{{ " or" if loop.last else "," }}{% endif %} {{ go_article(go_ident(schema)) }} [{{ go_ident(schema) }}] ({% for status, s in errors | dictsort if s == schema %}{% if not loop.first %}, {% endif %}{{ "any other status" if status == "default" else status }}{% endfor %}){% endfor %}.
 {% endif %}{% if op.deprecated %}// Deprecated: this operation is deprecated in the {{ sdk.client_name }} API.
-{% endif %}func (a *{{ resource_type_name }}) {{ go_export(op.name) }}(ctx context.Context{% for p in op.path_params %}, {{ go_local(p) }} string{% endfor %}{% if op.request_body_schema_name is defined %}, {{ body_var }} {% if op.request_body_is_list %}[]{% endif %}{{ go_ident(op.request_body_schema_name) }}{% elif op.request_body_json_type is defined %}, body {{ go_type(op.request_body_json_type) }}{% elif op.request_body_kind == "binary" %}, body io.Reader{% elif op.request_body_kind == "multipart" %}, body {% if op.request_body_optional %}*{% endif %}{{ body_type_name }}{% endif %}{% if has_params %}, options {% if not has_required_params %}*{% endif %}{{ options_type_name }}{% endif %}, opts ...RequestOption) ({% if ret_type %}{{ ret_type }}, {% endif %}error) {
+{% endif %}func (a *{{ resource_type_name }}) {{ go_export(op.name) }}(ctx context.Context{% for p in op.path_params %}, {{ go_local(p) }} {% if p in op.path_styles and op.path_styles[p].type is defined %}{{ go_type(op.path_styles[p].type) }}{% else %}string{% endif %}{% endfor %}{% if op.request_body_schema_name is defined %}, {{ body_var }} {% if op.request_body_is_list %}[]{% endif %}{{ go_ident(op.request_body_schema_name) }}{% elif op.request_body_json_type is defined %}, body {{ go_type(op.request_body_json_type) }}{% elif op.request_body_kind == "binary" %}, body io.Reader{% elif op.request_body_kind == "multipart" %}, body {% if op.request_body_optional %}*{% endif %}{{ body_type_name }}{% endif %}{% if has_params %}, options {% if not has_required_params %}*{% endif %}{{ options_type_name }}{% endif %}, opts ...RequestOption) ({% if ret_type %}{{ ret_type }}, {% endif %}error) {
 	req := newRequest(http.Method{{ op.method | to_upper_camel_case }}, {{ op.path | tojson }}, opts)
-{% for p in op.path_params %}	req.SetPathParam({{ p | tojson }}, {{ go_local(p) }})
-{% endfor %}
+{% for p in op.path_params %}{% if p in op.path_styles %}	req.SetStyledPathParam({{ p | tojson }}, {{ go_local(p) }}, {{ op.path_styles[p].style | tojson }}, {{ op.path_styles[p].explode | lower }})
+{% else %}	req.SetPathParam({{ p | tojson }}, {{ go_local(p) }})
+{% endif %}{% endfor %}
 {%- if op.security is defined %}	req.SetSecurity({{ go_security(op.security) }})
 {% endif %}
 {%- if has_params %}
@@ -82,9 +84,10 @@ type {{ resource_type_name }} struct {
 {%- for p in op.query_params %}
 {%- set field = "options." ~ go_export(p.ident) %}
 {%- if p.structured %}
-{%- if p.required and not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}	req.AddStructuredQueryParam({{ p.name | tojson }}, {{ field }}, {{ p.deep_object | lower }}, {{ p.explode | lower }})
+{%- set call = "AddJSONQueryParam(" ~ (p.name | tojson) ~ ", " ~ field ~ ")" if p.json else ("AddDelimitedQueryParam(" ~ (p.name | tojson) ~ ", " ~ field ~ ", " ~ (p.delimiter | tojson) ~ ")" if p.delimiter is defined else "AddStructuredQueryParam(" ~ (p.name | tojson) ~ ", " ~ field ~ ", " ~ (p.deep_object | lower) ~ ", " ~ (p.explode | lower) ~ ")") %}
+{%- if p.required and not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}	req.{{ call }}
 {% else %}	if {{ field }} != nil {
-		req.AddStructuredQueryParam({{ p.name | tojson }}, {{ field }}, {{ p.deep_object | lower }}, {{ p.explode | lower }})
+		req.{{ call }}
 	}
 {% endif %}
 {%- elif p.type.is_list() or p.type.is_set() %}
@@ -108,9 +111,16 @@ type {{ resource_type_name }} struct {
 {%- endfor %}
 {%- for p in op.header_params %}
 {%- set field = "options." ~ go_export(p.ident) %}
-{%- if p.required %}	req.SetHeader({{ p.name | tojson }}, {{ field }})
+{%- set setter = "SetCookie" if p.cookie else "SetHeader" %}
+{%- if p.json %}
+{%- if p.required and not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}	req.SetJSONHeader({{ p.name | tojson }}, {{ field }})
 {% else %}	if {{ field }} != nil {
-		req.SetHeader({{ p.name | tojson }}, *{{ field }})
+		req.SetJSONHeader({{ p.name | tojson }}, {{ field }})
+	}
+{% endif %}
+{%- elif p.required %}	req.{{ setter }}({{ p.name | tojson }}, {{ field }})
+{% else %}	if {{ field }} != nil {
+		req.{{ setter }}({{ p.name | tojson }}, *{{ field }})
 	}
 {% endif %}
 {%- endfor %}
@@ -129,7 +139,7 @@ type {{ resource_type_name }} struct {
 {% if op.request_body_optional %}	}
 {% endif %}{% elif op.request_body_kind == "multipart" %}{% if op.request_body_optional %}	if body != nil {
 	{% endif %}	req.SetMultipartBody([]multipartField{
-{% for field in op.multipart_fields %}		{name: {{ field.name | tojson }}, {% if field.is_file %}file: {% if field.required and not field.nullable %}&{% endif %}body.{{ go_export(field.name) }}{% else %}value: body.{{ go_export(field.name) }}{% endif %}},
+{% for field in op.multipart_fields %}		{name: {{ field.name | tojson }}, {% if field.is_file and field.is_file_list %}files: body.{{ go_export(field.name) }}{% elif field.is_file %}file: {% if field.required and not field.nullable %}&{% endif %}body.{{ go_export(field.name) }}{% else %}value: body.{{ go_export(field.name) }}{% endif %}{% if field.content_type is defined %}, contentType: {{ field.content_type | tojson }}{% endif %}},
 {% endfor %}	})
 {% if op.request_body_optional %}	}
 {% endif %}{% endif %}
@@ -166,7 +176,7 @@ type {{ resource_type_name }} struct {
 {% set field = go_export(param.ident) %}
 {% set item_type = go_ident(pg.item_schema) %}
 // {{ go_export(op.name) }}Iter iterates over every item of {{ go_export(op.name) }}, fetching further pages on demand.
-func (a *{{ resource_type_name }}) {{ go_export(op.name) }}Iter(ctx context.Context{% for p in op.path_params %}, {{ go_local(p) }} string{% endfor %}{% if op.request_body_schema_name is defined %}, {{ body_var }} {% if op.request_body_is_list %}[]{% endif %}{{ go_ident(op.request_body_schema_name) }}{% elif op.request_body_json_type is defined %}, body {{ go_type(op.request_body_json_type) }}{% endif %}, options {% if not has_required_params %}*{% endif %}{{ options_type_name }}, opts ...RequestOption) *Pager[{{ item_type }}] {
+func (a *{{ resource_type_name }}) {{ go_export(op.name) }}Iter(ctx context.Context{% for p in op.path_params %}, {{ go_local(p) }} {% if p in op.path_styles and op.path_styles[p].type is defined %}{{ go_type(op.path_styles[p].type) }}{% else %}string{% endif %}{% endfor %}{% if op.request_body_schema_name is defined %}, {{ body_var }} {% if op.request_body_is_list %}[]{% endif %}{{ go_ident(op.request_body_schema_name) }}{% elif op.request_body_json_type is defined %}, body {{ go_type(op.request_body_json_type) }}{% endif %}, options {% if not has_required_params %}*{% endif %}{{ options_type_name }}, opts ...RequestOption) *Pager[{{ item_type }}] {
 {% if has_required_params %}	params := options
 {% else %}	var params {{ options_type_name }}
 	if options != nil {

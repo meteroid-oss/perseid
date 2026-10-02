@@ -27,6 +27,7 @@ type request struct {
 	pathParams  map[string]string
 	query       url.Values
 	headers     http.Header
+	cookies     []string
 	body        []byte
 	contentType string
 	// err records a failure that happened while building the request (for
@@ -88,6 +89,38 @@ func (r *request) SetHeader(name, value string) {
 	r.headers.Set(name, value)
 }
 
+// SetJSONHeader sets a content: application/json header as compact JSON text.
+func (r *request) SetJSONHeader(name string, v any) {
+	text, err := compactJSON(v)
+	if err != nil {
+		r.err = fmt.Errorf("@@PACKAGE_NAME@@: encoding header %q: %w", name, err)
+		return
+	}
+	r.headers.Set(name, text)
+}
+
+// SetCookie adds a cookie, sent in the single Cookie header with the others.
+func (r *request) SetCookie(name, value string) {
+	r.cookies = append(r.cookies, name+"="+cookieEscape(value))
+}
+
+// cookieEscape percent-encodes everything but the unreserved characters, which keeps a cookie
+// value RFC 6265 safe.
+func cookieEscape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			c == '-', c == '.', c == '_', c == '~':
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
+
 // SetJSONBody serializes v as the JSON request body.
 func (r *request) SetJSONBody(v any) {
 	body, err := json.Marshal(v)
@@ -108,6 +141,160 @@ func (r *request) AddStructuredQueryParam(name string, v any, deepObject, explod
 		return
 	}
 	encodeParam(name, value, deepObject, explode, r.query)
+}
+
+// AddDelimitedQueryParam sends the items of a list joined by delimiter (pipeDelimited,
+// spaceDelimited).
+func (r *request) AddDelimitedQueryParam(name string, v any, delimiter string) {
+	value, err := jsonValue(v)
+	if err != nil {
+		r.err = fmt.Errorf("@@PACKAGE_NAME@@: encoding query parameter %q: %w", name, err)
+		return
+	}
+	list, _ := value.([]any)
+	texts := make([]string, 0, len(list))
+	for _, item := range list {
+		if text, ok := paramText(item); ok {
+			texts = append(texts, text)
+		}
+	}
+	if len(texts) > 0 {
+		r.query.Set(name, strings.Join(texts, delimiter))
+	}
+}
+
+// AddJSONQueryParam sends a content: application/json parameter as compact JSON text.
+func (r *request) AddJSONQueryParam(name string, v any) {
+	text, err := compactJSON(v)
+	if err != nil {
+		r.err = fmt.Errorf("@@PACKAGE_NAME@@: encoding query parameter %q: %w", name, err)
+		return
+	}
+	r.query.Set(name, text)
+}
+
+// SetStyledPathParam substitutes a {name} placeholder with v serialized by its OpenAPI
+// style: simple, label or matrix, or json for a content: application/json value.
+func (r *request) SetStyledPathParam(name string, v any, style string, explode bool) {
+	value, err := jsonValue(v)
+	if err != nil {
+		r.err = fmt.Errorf("@@PACKAGE_NAME@@: encoding path parameter %q: %w", name, err)
+		return
+	}
+	encoded, err := encodePathParam(name, value, style, explode)
+	if err != nil {
+		r.err = fmt.Errorf("@@PACKAGE_NAME@@: encoding path parameter %q: %w", name, err)
+		return
+	}
+	r.path = strings.ReplaceAll(r.path, "{"+name+"}", encoded)
+}
+
+// compactJSON is v as JSON text without insignificant whitespace, with <, > and & left as is.
+func compactJSON(v any) (string, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(v); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(buf.String(), "\n"), nil
+}
+
+// escapeUnreserved percent-encodes everything but the unreserved characters, so that
+// "," "." ";" and "=" are structural in a path parameter.
+func escapeUnreserved(text string) string {
+	return strings.ReplaceAll(url.QueryEscape(text), "+", "%20")
+}
+
+func pathText(value any) (string, error) {
+	if value == nil {
+		return "", nil
+	}
+	if isNested(value) {
+		return compactJSON(value)
+	}
+	text, _ := paramText(value)
+	return text, nil
+}
+
+// encodePathParam serializes a JSON value as a path parameter, each part percent-encoded.
+func encodePathParam(name string, value any, style string, explode bool) (string, error) {
+	if style == "json" {
+		text, err := compactJSON(value)
+		return escapeUnreserved(text), err
+	}
+	encode := func(item any) (string, error) {
+		text, err := pathText(item)
+		return escapeUnreserved(text), err
+	}
+	head, separator := "", ","
+	switch style {
+	case "label":
+		head, separator = ".", "."
+	case "matrix":
+		head, separator = ";", ";"
+	}
+	key := escapeUnreserved(name)
+	switch typed := value.(type) {
+	case []any:
+		values := make([]string, 0, len(typed))
+		for _, item := range typed {
+			text, err := encode(item)
+			if err != nil {
+				return "", err
+			}
+			values = append(values, text)
+		}
+		if style == "matrix" {
+			if !explode {
+				return ";" + key + "=" + strings.Join(values, ","), nil
+			}
+			var b strings.Builder
+			for _, text := range values {
+				b.WriteString(";" + key + "=" + text)
+			}
+			return b.String(), nil
+		}
+		if explode {
+			return head + strings.Join(values, separator), nil
+		}
+		return head + strings.Join(values, ","), nil
+	case map[string]any:
+		fields := make([]string, 0, len(typed))
+		for field := range typed {
+			fields = append(fields, field)
+		}
+		slices.Sort(fields)
+		pairs := make([]string, 0, len(fields))
+		flat := make([]string, 0, 2*len(fields))
+		for _, field := range fields {
+			text, err := encode(typed[field])
+			if err != nil {
+				return "", err
+			}
+			pairs = append(pairs, escapeUnreserved(field)+"="+text)
+			flat = append(flat, escapeUnreserved(field), text)
+		}
+		switch {
+		case style == "matrix" && explode:
+			return ";" + strings.Join(pairs, ";"), nil
+		case style == "matrix":
+			return ";" + key + "=" + strings.Join(flat, ","), nil
+		case explode:
+			return head + strings.Join(pairs, separator), nil
+		}
+		return head + strings.Join(flat, ","), nil
+	}
+	text, err := encode(value)
+	switch {
+	case style == "label":
+		return "." + text, err
+	case style == "matrix" && text == "":
+		return ";" + key, err
+	case style == "matrix":
+		return ";" + key + "=" + text, err
+	}
+	return text, err
 }
 
 // SetFormBody serializes v as an application/x-www-form-urlencoded body, given the
@@ -226,6 +413,10 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 	}
 	for name, values := range call.headers {
 		req.headers[name] = values
+	}
+	// Cookie parameters, the API key cookie and a Cookie header of the call share one header.
+	if cookies := append(slices.Clone(req.cookies), req.headers.Values("Cookie")...); len(cookies) > 0 {
+		req.headers.Set("Cookie", strings.Join(cookies, "; "))
 	}
 
 	// POSTs are made idempotent by default so that a retried request cannot

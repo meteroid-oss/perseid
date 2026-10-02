@@ -175,11 +175,27 @@ type Upload struct {
 	ContentType string
 }
 
-// multipartField is a form field: a JSON-encodable value, or a file.
+// multipartField is a form field: a JSON-encodable value, one file, or a list of
+// files sent as repeated parts. contentType is the media type the spec declares
+// for the part; a file's own ContentType takes precedence.
 type multipartField struct {
-	name  string
-	value any
-	file  *Upload
+	name        string
+	value       any
+	file        *Upload
+	files       []Upload
+	contentType string
+}
+
+// uploads lists the files of a field, in order.
+func (f multipartField) uploads() []*Upload {
+	var uploads []*Upload
+	if f.file != nil {
+		uploads = append(uploads, f.file)
+	}
+	for i := range f.files {
+		uploads = append(uploads, &f.files[i])
+	}
+	return uploads
 }
 
 // SetUploadBody sends body as is, with the operation's media type.
@@ -200,8 +216,8 @@ func (r *request) SetMultipartBody(fields []multipartField) {
 	r.contentType = "multipart/form-data; boundary=" + boundary
 	var rewinds []func() (io.Reader, error)
 	for _, field := range fields {
-		if field.file != nil {
-			rewinds = append(rewinds, rewinder(field.file.Reader))
+		for _, upload := range field.uploads() {
+			rewinds = append(rewinds, rewinder(upload.Reader))
 		}
 	}
 	r.newBody = func() (io.Reader, error) {
@@ -227,8 +243,8 @@ func (r *request) SetMultipartBody(fields []multipartField) {
 		return reader, nil
 	}
 	for _, field := range fields {
-		if field.file != nil {
-			if _, ok := field.file.Reader.(io.Seeker); !ok {
+		for _, upload := range field.uploads() {
+			if _, ok := upload.Reader.(io.Seeker); !ok {
 				r.oneShot = true
 			}
 		}
@@ -253,22 +269,31 @@ func rewinder(body io.Reader) func() (io.Reader, error) {
 
 func writeMultipartField(form *multipart.Writer, field multipartField) error {
 	header := textproto.MIMEHeader{}
-	if field.file != nil {
-		filename := field.file.Filename
-		if filename == "" {
-			filename = "file"
+	if uploads := field.uploads(); len(uploads) > 0 {
+		for _, upload := range uploads {
+			filename := upload.Filename
+			if filename == "" {
+				filename = "file"
+			}
+			contentType := upload.ContentType
+			if contentType == "" {
+				contentType = field.contentType
+			}
+			if contentType == "" {
+				contentType = "application/octet-stream"
+			}
+			header := textproto.MIMEHeader{}
+			header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": field.name, "filename": filename}))
+			header.Set("Content-Type", contentType)
+			part, err := form.CreatePart(header)
+			if err == nil {
+				_, err = io.Copy(part, upload.Reader)
+			}
+			if err != nil {
+				return err
+			}
 		}
-		contentType := field.file.ContentType
-		if contentType == "" {
-			contentType = "application/octet-stream"
-		}
-		header.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": field.name, "filename": filename}))
-		header.Set("Content-Type", contentType)
-		part, err := form.CreatePart(header)
-		if err == nil {
-			_, err = io.Copy(part, field.file.Reader)
-		}
-		return err
+		return nil
 	}
 	encoded, err := json.Marshal(field.value)
 	if err != nil || string(encoded) == "null" {
@@ -280,7 +305,7 @@ func writeMultipartField(form *multipart.Writer, field multipartField) error {
 			return err
 		}
 		for _, item := range items {
-			if err := writeMultipartField(form, multipartField{name: field.name, value: item}); err != nil {
+			if err := writeMultipartField(form, multipartField{name: field.name, value: item, contentType: field.contentType}); err != nil {
 				return err
 			}
 		}
@@ -299,6 +324,9 @@ func writeMultipartField(form *multipart.Writer, field multipartField) error {
 	}
 	if err != nil {
 		return err
+	}
+	if field.contentType != "" {
+		header.Set("Content-Type", field.contentType)
 	}
 	part, err := form.CreatePart(header)
 	if err == nil {

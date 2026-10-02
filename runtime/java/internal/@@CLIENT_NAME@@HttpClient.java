@@ -223,6 +223,15 @@ public class @@CLIENT_NAME@@HttpClient {
             }
         }
 
+        private String executeText() throws IOException, ApiException {
+            try (Response response = sendRequest(client)) {
+                if (!response.isSuccessful()) {
+                    throw error(response);
+                }
+                return response.body() == null ? "" : response.body().string();
+            }
+        }
+
         /** Opens a {@code text/event-stream} response; read and call timeouts do not apply. */
         private EventStream executeEventStream() throws IOException, ApiException {
             OkHttpClient.Builder streaming = client.newBuilder();
@@ -265,6 +274,15 @@ public class @@CLIENT_NAME@@HttpClient {
         public byte[] sendBytes() throws ApiException {
             try {
                 return executeBytes();
+            } catch (IOException e) {
+                throw transportError(e);
+            }
+        }
+
+        /** The response body as text, in the charset the response declares, UTF-8 by default. */
+        public String sendText() throws ApiException {
+            try {
+                return executeText();
             } catch (IOException e) {
                 throw transportError(e);
             }
@@ -411,6 +429,14 @@ public class @@CLIENT_NAME@@HttpClient {
         }
     }
 
+    private static void setHeader(Request.Builder request, String name, String value) {
+        if (name.equalsIgnoreCase("Cookie")) {
+            request.addHeader(name, value);
+        } else {
+            request.header(name, value);
+        }
+    }
+
     private Response dispatch(
             String method,
             HttpUrl url,
@@ -429,17 +455,22 @@ public class @@CLIENT_NAME@@HttpClient {
             auth.apply(request, url, security);
         }
         if (headers != null) {
-            headers.forEach(pair -> request.header(pair.getFirst(), pair.getSecond()));
+            headers.forEach(pair -> setHeader(request, pair.getFirst(), pair.getSecond()));
         }
         int retries = retrySchedule.size();
         if (options != null) {
-            options.getHeaders().forEach(request::header);
+            options.getHeaders().forEach((name, value) -> setHeader(request, name, value));
             if (options.getIdempotencyKey() != null) {
                 request.header("idempotency-key", options.getIdempotencyKey());
             }
             if (options.getMaxRetries() != null) {
                 retries = options.getMaxRetries();
             }
+        }
+        // Cookie parameters, the API key cookie and a Cookie header of the call share one header.
+        List<String> cookies = request.build().headers("Cookie");
+        if (cookies.size() > 1) {
+            request.header("Cookie", String.join("; ", cookies));
         }
         String idempotencyKey = request.build().header("idempotency-key");
         if ((idempotencyKey == null || idempotencyKey.isEmpty()) && verb.equals("POST")) {

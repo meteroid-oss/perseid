@@ -9,18 +9,27 @@
 {% set ns.unions = ns.unions + [m.union_name(field, class_ty, pascals[loop.index0])] -%}
 {% endfor -%}
 {% set unions = ns.unions -%}
+{#- Properties beyond the declared ones, kept in a map. -#}
+{% set has_extra = type.additional_properties is defined -%}
+{% set extra_field = {"name": "additional_properties", "type": type.additional_properties, "flatten": false} if has_extra else none -%}
+{% set extra_union = m.union_name(extra_field, class_ty, "AdditionalProperties") if has_extra else "" -%}
+{% set extra_value = m.java_type(type.additional_properties.value_type(), extra_union) if has_extra else "" -%}
+{% set extra_type = m.java_type(type.additional_properties, extra_union) if has_extra else "" -%}
+{% set all_vars = vars + ["additionalProperties"] if has_extra else vars -%}
 {% set defaults = type.discriminator_defaults | default({}) -%}
 package {{ sdk.java_package }}.models;
 
 import {{ sdk.java_internal_package }}.Utils;
 
+import com.fasterxml.jackson.annotation.JsonAnyGetter;
+import com.fasterxml.jackson.annotation.JsonAnySetter;
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonAutoDetect.Visibility;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonUnwrapped;
-{% if unions | select | list -%}
+{% if (unions | select | list) or extra_union -%}
 import com.fasterxml.jackson.annotation.JsonValue;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationContext;
@@ -63,11 +72,18 @@ public class {{ class_ty }} {
     {{ m.accessors(field, vars[loop.index0], pascals[loop.index0], class_ty, unions[loop.index0]) }}
 
 {% endfor -%}
-    {{ m.value_methods(class_ty, vars) }}
+{% if has_extra -%}
+    {{ m.additional_properties(class_ty, extra_type, extra_value) }}
+
+{% endif -%}
+    {{ m.value_methods(class_ty, all_vars) }}
 
     {{ m.json_methods(class_ty) }}
 {% for field in type.fields %}{% if unions[loop.index0] %}
 
     {{ m.union_class(field.type, unions[loop.index0]) }}
-{%- endif %}{% endfor %}
+{%- endif %}{% endfor %}{% if extra_union %}
+
+    {{ m.union_class(type.additional_properties, extra_union) }}
+{%- endif %}
 }

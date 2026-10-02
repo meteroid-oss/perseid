@@ -151,7 +151,7 @@ fn field<'a>(types: &'a Types, schema: &'a str, path: &[String]) -> anyhow::Resu
             bail!("`{}` crosses a non-object value", path.join("."));
         }
         let fields = match types.get(schema).map(|t: &Type| &t.data) {
-            Some(TypeData::Struct { fields }) => fields,
+            Some(TypeData::Struct { fields, .. }) => fields,
             _ => bail!("`{schema}` is not an object schema"),
         };
         found = Some(

@@ -228,8 +228,14 @@ internal sealed class MultipartBody
     public bool IsOneShot => _parts.Exists(p => p.File?.IsStream == true);
 
     /// <summary>Adds a field: strings, numbers and enums as text, objects as JSON, lists as one
-    /// part per item.</summary>
-    public void Field(string name, object value, JsonSerializerOptions options)
+    /// part per item. <paramref name="contentType"/> is the media type the spec declares for the
+    /// part.</summary>
+    public void Field(
+        string name,
+        object value,
+        JsonSerializerOptions options,
+        string? contentType = null
+    )
     {
         var text = value switch
         {
@@ -253,15 +259,15 @@ internal sealed class MultipartBody
                 : [root];
             foreach (var item in items)
             {
-                AddJsonPart(name, item);
+                AddJsonPart(name, item, contentType);
             }
             return;
         }
         var utf8 = Encoding.UTF8.GetBytes(text);
-        _parts.Add((name, () => new ByteArrayContent(utf8), null));
+        _parts.Add((name, () => Typed(new ByteArrayContent(utf8), contentType), null));
     }
 
-    private void AddJsonPart(string name, JsonElement value)
+    private void AddJsonPart(string name, JsonElement value, string? contentType)
     {
         switch (value.ValueKind)
         {
@@ -269,19 +275,21 @@ internal sealed class MultipartBody
                 return;
             case JsonValueKind.Object or JsonValueKind.Array:
                 var json = Encoding.UTF8.GetBytes(value.GetRawText());
-                _parts.Add((name, () => Json(json), null));
+                _parts.Add((name, () => Json(json, contentType), null));
                 return;
             default:
                 var text = Encoding.UTF8.GetBytes(
                     value.ValueKind == JsonValueKind.String ? value.GetString()! : value.GetRawText()
                 );
-                _parts.Add((name, () => new ByteArrayContent(text), null));
+                _parts.Add((name, () => Typed(new ByteArrayContent(text), contentType), null));
                 return;
         }
     }
 
-    public void File(string name, Upload upload) =>
-        _parts.Add((name, () => upload.CreateContent(), upload));
+    /// <summary>Adds a file. <paramref name="contentType"/> is the media type the spec declares,
+    /// used unless the upload sets its own.</summary>
+    public void File(string name, Upload upload, string? contentType = null) =>
+        _parts.Add((name, () => upload.CreateContent(contentType ?? "application/octet-stream"), upload));
 
     public HttpContent CreateContent()
     {
@@ -299,10 +307,15 @@ internal sealed class MultipartBody
         return form;
     }
 
-    private static ByteArrayContent Json(byte[] bytes)
+    private static ByteArrayContent Json(byte[] bytes, string? contentType) =>
+        Typed(new ByteArrayContent(bytes), contentType ?? "application/json");
+
+    private static ByteArrayContent Typed(ByteArrayContent content, string? contentType)
     {
-        var content = new ByteArrayContent(bytes);
-        content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        if (contentType is not null)
+        {
+            content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
+        }
         return content;
     }
 

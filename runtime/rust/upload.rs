@@ -12,6 +12,8 @@ use std::{
 };
 use tokio::io::{AsyncRead, ReadBuf};
 
+const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
+
 /// A file or raw request body. Byte buffers can be retried; readers cannot.
 ///
 /// `reader` accepts an asynchronous reader and an optional exact length.
@@ -60,7 +62,7 @@ impl Upload {
         Self {
             source: Source::Bytes(bytes.into()),
             filename: None,
-            content_type: "application/octet-stream".into(),
+            content_type: DEFAULT_CONTENT_TYPE.into(),
         }
     }
 
@@ -71,7 +73,7 @@ impl Upload {
                 length,
             },
             filename: None,
-            content_type: "application/octet-stream".into(),
+            content_type: DEFAULT_CONTENT_TYPE.into(),
         }
     }
 
@@ -153,18 +155,42 @@ impl Multipart {
     }
 
     /// Adds a field: scalars as text, objects as JSON, lists as one part per item.
-    pub fn field(mut self, name: &str, value: impl serde::Serialize) -> Result<Self, Error> {
+    pub fn field(self, name: &str, value: impl serde::Serialize) -> Result<Self, Error> {
+        self.field_with(name, value, None)
+    }
+
+    /// Like [`Self::field`], with the media type the spec declares for the part.
+    pub fn field_as(
+        self,
+        name: &str,
+        value: impl serde::Serialize,
+        content_type: &str,
+    ) -> Result<Self, Error> {
+        self.field_with(name, value, Some(content_type))
+    }
+
+    fn field_with(
+        mut self,
+        name: &str,
+        value: impl serde::Serialize,
+        declared: Option<&str>,
+    ) -> Result<Self, Error> {
         let value = serde_json::to_value(value).map_err(request_error)?;
         if let serde_json::Value::Array(items) = value {
             for item in items {
-                self = self.field(name, item)?;
+                self = self.field_with(name, item, declared)?;
             }
             return Ok(self);
         }
-        let content_type = if value.is_object() || value.is_array() {
-            "Content-Type: application/json\r\n"
-        } else {
-            ""
+        let content_type = match declared {
+            Some(declared) => {
+                http1::HeaderValue::from_str(declared).map_err(request_error)?;
+                format!("Content-Type: {declared}\r\n")
+            }
+            None if value.is_object() || value.is_array() => {
+                "Content-Type: application/json\r\n".to_owned()
+            }
+            None => String::new(),
         };
         let value = match value {
             serde_json::Value::String(s) => s,
@@ -177,6 +203,20 @@ impl Multipart {
         );
         self.parts.push((Bytes::from(header), Upload::bytes(value)));
         Ok(self)
+    }
+
+    /// Like [`Self::file`], with the media type the spec declares for the part, used unless
+    /// the upload sets its own.
+    pub fn file_as(
+        self,
+        name: &str,
+        mut upload: Upload,
+        content_type: &str,
+    ) -> Result<Self, Error> {
+        if upload.content_type == DEFAULT_CONTENT_TYPE {
+            upload.content_type = content_type.to_owned();
+        }
+        self.file(name, upload)
     }
 
     pub fn file(mut self, name: &str, upload: Upload) -> Result<Self, Error> {

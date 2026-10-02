@@ -103,4 +103,10 @@ public final class Upload {
     RequestBody part() {
         return toRequestBody(contentType);
     }
+
+    /** The multipart part, sent with {@code declared} unless the upload sets its own content type. */
+    RequestBody part(String declared) {
+        boolean unset = "application/octet-stream".equals(contentType);
+        return toRequestBody(declared != null && unset ? declared : contentType);
+    }
 }

@@ -13,7 +13,7 @@ use http1::{
     header::{CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, USER_AGENT},
     HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
 };
-use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS, NON_ALPHANUMERIC};
 use serde::de::DeserializeOwned;
 
 use crate::api::{
@@ -128,7 +128,10 @@ pub(crate) struct Request {
     path: &'static str,
     query_params: Vec<(String, String)>,
     path_params: Vec<(&'static str, String)>,
+    /// Path parameters already serialized and percent-encoded by their style.
+    encoded_path_params: Vec<(&'static str, String)>,
     headers: HeaderMap,
+    cookies: Vec<(String, String)>,
     serialized_body: Option<Bytes>,
     body_is_form: bool,
     upload: Option<Upload>,
@@ -148,7 +151,9 @@ impl Request {
             path,
             query_params: Vec::new(),
             path_params: Vec::new(),
+            encoded_path_params: Vec::new(),
             headers: HeaderMap::new(),
+            cookies: Vec::new(),
             serialized_body: None,
             body_is_form: false,
             upload: None,
@@ -259,9 +264,36 @@ impl Request {
         self
     }
 
+    /// A `content: application/json` header, sent as compact JSON text.
+    pub fn with_json_header_param<T: serde::Serialize>(
+        mut self,
+        name: &'static str,
+        value: Option<T>,
+    ) -> Self {
+        match value.map(|value| serde_json::to_string(&value)).transpose() {
+            Ok(Some(json)) => return self.with_header_param(name, json),
+            Ok(None) => {}
+            Err(error) => self.fail(error),
+        }
+        self
+    }
+
     pub fn with_optional_header_param(self, name: &'static str, value: Option<String>) -> Self {
         match value {
             Some(value) => self.with_header_param(name, value),
+            None => self,
+        }
+    }
+
+    /// A cookie parameter, sent in the single `Cookie` header with the other cookies.
+    pub fn with_cookie_param(mut self, name: &'static str, value: String) -> Self {
+        self.cookies.push((name.to_owned(), value));
+        self
+    }
+
+    pub fn with_optional_cookie_param(self, name: &'static str, value: Option<String>) -> Self {
+        match value {
+            Some(value) => self.with_cookie_param(name, value),
             None => self,
         }
     }
@@ -284,6 +316,44 @@ impl Request {
             Ok(Some(value)) => {
                 encode_param(name, &value, deep_object, explode, &mut self.query_params)
             }
+            Ok(None) => {}
+            Err(error) => self.fail(error),
+        }
+        self
+    }
+
+    /// Sends the items of a list joined by `delimiter` (`pipeDelimited`, `spaceDelimited`).
+    pub fn with_delimited_query_param<T: serde::Serialize>(
+        mut self,
+        name: &'static str,
+        param: Option<T>,
+        delimiter: &str,
+    ) -> Self {
+        match param.map(serde_json::to_value).transpose() {
+            Ok(Some(serde_json::Value::Array(items))) => {
+                let joined = items
+                    .iter()
+                    .filter_map(scalar_text)
+                    .collect::<Vec<_>>()
+                    .join(delimiter);
+                if !joined.is_empty() {
+                    self.query_params.push((name.to_owned(), joined));
+                }
+            }
+            Ok(_) => {}
+            Err(error) => self.fail(error),
+        }
+        self
+    }
+
+    /// Sends a `content: application/json` parameter as compact JSON text.
+    pub fn with_json_query_param<T: serde::Serialize>(
+        mut self,
+        name: &'static str,
+        param: Option<T>,
+    ) -> Self {
+        match param.map(|param| serde_json::to_string(&param)).transpose() {
+            Ok(Some(json)) => self.query_params.push((name.to_owned(), json)),
             Ok(None) => {}
             Err(error) => self.fail(error),
         }
@@ -326,6 +396,24 @@ impl Request {
 
     pub fn with_path_param(mut self, name: &'static str, value: impl fmt::Display) -> Self {
         self.path_params.push((name, value.to_string()));
+        self
+    }
+
+    /// A path parameter in its OpenAPI `style`: `simple`, `label`, `matrix`, or `json` for a
+    /// `content: application/json` value.
+    pub fn with_styled_path_param<T: serde::Serialize>(
+        mut self,
+        name: &'static str,
+        value: T,
+        style: &str,
+        explode: bool,
+    ) -> Self {
+        match serde_json::to_value(value) {
+            Ok(value) => self
+                .encoded_path_params
+                .push((name, encode_path_param(name, &value, style, explode))),
+            Err(error) => self.fail(error),
+        }
         self
     }
 
@@ -394,6 +482,23 @@ impl Request {
             let mut value = HeaderValue::try_from(value).map_err(request_error)?;
             value.set_sensitive(true);
             self.headers.insert(name, value);
+        }
+        self.cookies
+            .extend(auth.cookies.into_iter().map(|(name, value)| (name.to_owned(), value)));
+        let mut cookie = self
+            .cookies
+            .iter()
+            .map(|(name, value)| format!("{name}={}", utf8_percent_encode(value, COOKIE_VALUE)))
+            .collect::<Vec<_>>();
+        // A `Cookie` header of the call is merged with the cookies instead of replacing them.
+        for value in self.overrides.get_all("cookie") {
+            cookie.push(String::from_utf8_lossy(value.as_bytes()).into_owned());
+        }
+        self.overrides.remove("cookie");
+        if !cookie.is_empty() {
+            let mut value = HeaderValue::try_from(cookie.join("; ")).map_err(request_error)?;
+            value.set_sensitive(true);
+            self.headers.insert("cookie", value);
         }
         for name in self.overrides.keys() {
             self.headers.remove(name);
@@ -483,6 +588,9 @@ impl Request {
             let value = utf8_percent_encode(value, PATH_SEGMENT).to_string();
             path = path.replace(&format!("{{{name}}}"), &value);
         }
+        for (name, value) in &self.encoded_path_params {
+            path = path.replace(&format!("{{{name}}}"), value);
+        }
         let mut uri = format!("{}{path}", conf.base_path.trim_end_matches('/'));
         if !self.query_params.is_empty() {
             let mut query = url::form_urlencoded::Serializer::new(String::new());
@@ -531,6 +639,13 @@ impl Request {
         Ok(request)
     }
 }
+
+/// Everything but the unreserved characters, which keeps a cookie value RFC 6265 safe.
+const COOKIE_VALUE: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 
 fn header(name: &str, value: &str) -> Result<(HeaderName, HeaderValue), BoxError> {
     Ok((HeaderName::from_bytes(name.as_bytes())?, HeaderValue::try_from(value)?))
@@ -654,6 +769,79 @@ fn flatten_param(prefix: String, value: &serde_json::Value, out: &mut Vec<(Strin
             }
         }
         value => out.extend(scalar_text(value).map(|text| (prefix, text))),
+    }
+}
+
+/// A path parameter serialized by its OpenAPI `style` (`simple`, `label`, `matrix`; `json` for
+/// `content`), each part percent-encoded.
+fn encode_path_param(
+    name: &str,
+    value: &serde_json::Value,
+    style: &str,
+    explode: bool,
+) -> String {
+    const UNRESERVED: &AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+        .remove(b'-')
+        .remove(b'.')
+        .remove(b'_')
+        .remove(b'~');
+    let encode = |text: &str| utf8_percent_encode(text, UNRESERVED).to_string();
+    let text = |value: &serde_json::Value| match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => value.to_string(),
+        value => scalar_text(value).unwrap_or_default(),
+    };
+    if style == "json" {
+        return encode(&value.to_string());
+    }
+    let name = encode(name);
+    let (head, separator) = match style {
+        "label" => (".", "."),
+        "matrix" => (";", ";"),
+        _ => ("", ","),
+    };
+    match value {
+        serde_json::Value::Array(items) => {
+            let values: Vec<String> = items.iter().map(|item| encode(&text(item))).collect();
+            match (style, explode) {
+                ("matrix", true) => values.iter().map(|v| format!(";{name}={v}")).collect(),
+                ("matrix", false) => format!(";{name}={}", values.join(",")),
+                (_, explode) => {
+                    format!("{head}{}", values.join(if explode { separator } else { "," }))
+                }
+            }
+        }
+        serde_json::Value::Object(fields) => {
+            let pairs: Vec<(String, String)> = fields
+                .iter()
+                .map(|(key, value)| (encode(key), encode(&text(value))))
+                .collect();
+            let flat = || {
+                let flat: Vec<&str> = pairs
+                    .iter()
+                    .flat_map(|(k, v)| [k.as_str(), v.as_str()])
+                    .collect();
+                flat.join(",")
+            };
+            match (style, explode) {
+                ("matrix", true) => pairs.iter().map(|(k, v)| format!(";{k}={v}")).collect(),
+                ("matrix", false) => format!(";{name}={}", flat()),
+                (_, true) => {
+                    let pairs: Vec<String> = pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    format!("{head}{}", pairs.join(separator))
+                }
+                (_, false) => format!("{head}{}", flat()),
+            }
+        }
+        scalar => {
+            let value = encode(&text(scalar));
+            match style {
+                "label" => format!(".{value}"),
+                "matrix" if value.is_empty() => format!(";{name}"),
+                "matrix" => format!(";{name}={value}"),
+                _ => value,
+            }
+        }
     }
 }
 

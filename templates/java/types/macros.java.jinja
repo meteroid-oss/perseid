@@ -121,6 +121,38 @@ private {% if is_optional(field) %}Optional<{{ ty }}>{% else %}{{ ty }}{% endif 
 }
 {%- endmacro %}
 
+{#- The map of the properties beyond the declared ones, of `ty` (a Java map type) in `cls`:
+    decoded by Jackson into the any-setter and encoded from the any-getter. -#}
+{% macro additional_properties(cls, ty, value_ty) -%}
+private {{ ty }} additionalProperties = new HashMap<>();
+
+/** Properties beyond the declared ones, as received. */
+public {{ cls }} additionalProperties({{ ty }} additionalProperties) {
+    this.additionalProperties = additionalProperties == null ? new HashMap<>() : additionalProperties;
+    return this;
+}
+
+public {{ cls }} putAdditionalPropertiesItem(String key, {{ value_ty }} item) {
+    this.additionalProperties.put(key, item);
+    return this;
+}
+
+@JsonAnyGetter
+@javax.annotation.Nonnull
+public {{ ty }} getAdditionalProperties() {
+    return additionalProperties;
+}
+
+public void setAdditionalProperties({{ ty }} additionalProperties) {
+    this.additionalProperties = additionalProperties == null ? new HashMap<>() : additionalProperties;
+}
+
+@JsonAnySetter
+public void setAdditionalProperty(String key, {{ value_ty }} value) {
+    this.additionalProperties.put(key, value);
+}
+{%- endmacro %}
+
 {#- equals, hashCode and toString over `vars`, for `cls`; `base` compares the superclass too. -#}
 {% macro value_methods(cls, vars, base=false) -%}
 @Override

@@ -35,6 +35,14 @@ from .common import (
     ApiBaseAsync,
     ApiBaseSync,
     decode_response,
+{%- if resource.operations | selectattr("path_styles") | list | length > 0 %}
+    encode_path_param,
+{%- endif %}
+{%- set uses = namespace(json_header=false) %}
+{%- for op in resource.operations %}{% for p in op.header_params if p.json %}{% set uses.json_header = true %}{% endfor %}{% endfor %}
+{%- if uses.json_header %}
+    json_header,
+{%- endif %}
     serialize_form_body,
     serialize_query_params,
 )
@@ -63,7 +71,7 @@ class {{ resource_class_name }}{{ op.name | to_upper_camel_case }}Body:
     """Multipart form fields of `{{ op.name | to_snake_case }}`."""
 {% for required_pass in [true, false] %}
 {%- for field in op.multipart_fields if (field.required and not field.nullable) == required_pass %}
-    {{ py_field(field.name) }}: {% if not required_pass %}t.Optional[{% endif %}{% if field.is_file %}FileInput{% else %}{{ py_type(field.type) }}{% endif %}{% if not required_pass %}] = None{% endif %}
+    {{ py_field(field.name) }}: {% if not required_pass %}t.Optional[{% endif %}{% if field.is_file and field.is_file_list %}t.List[FileInput]{% elif field.is_file %}FileInput{% else %}{{ py_type(field.type) }}{% endif %}{% if not required_pass %}] = None{% endif %}
 {%- if field.description is defined %}
     """{{ field.description }}"""
 {%- endif %}
@@ -137,7 +145,12 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 
 {%- set signature %}
 {%- for p in op.path_params %}
-        {{ py_ident(p) }}: str,
+{%- set path_type = "str" %}
+{%- if p in op.path_styles and op.path_styles[p].type is defined %}
+{%- set path_type = py_type(op.path_styles[p].type) %}
+{%- if shadows_builtins %}{% set path_type = path_type | replace("list[", "t.List[") | replace("dict[", "t.Dict[") %}{% endif %}
+{%- endif %}
+        {{ py_ident(p) }}: {{ path_type }},
 {%- endfor %}
 {%- if body_param is not none %}
         {{ body_param }}: {{ body_type }}{% if op.request_body_optional %} | None = None{% endif %},
@@ -151,7 +164,12 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
         {{ py_ident(p.ident) }}: {{ param_type }}{% if not p.required %} | None = None{% endif %},
 {%- endfor %}
 {%- for p in op.header_params if p.required == required_pass %}
-        {{ py_ident(p.ident) }}: {% if p.required %}str,{% else %}str | None = None,{% endif %}
+{%- set header_type = "str" %}
+{%- if p.json %}
+{%- set header_type = py_type(p.type) %}
+{%- if shadows_builtins %}{% set header_type = header_type | replace("list[", "t.List[") | replace("dict[", "t.Dict[") %}{% endif %}
+{%- endif %}
+        {{ py_ident(p.ident) }}: {% if p.required %}{{ header_type }},{% else %}{{ header_type }} | None = None,{% endif %}
 {%- endfor %}
 {%- endfor %}
         {{ headers_kw }}: t.Mapping[str, str] | None = None,
@@ -191,7 +209,11 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- if op.path_params | length > 0 %}
             path_params={
 {%- for p in op.path_params %}
+{%- if p in op.path_styles %}
+                {{ py_str(p) }}: encode_path_param({{ py_str(p) }}, {{ py_ident(p) }}, {{ py_str(op.path_styles[p].style) }}, {{ "True" if op.path_styles[p].explode else "False" }}),
+{%- else %}
                 {{ py_str(p) }}: {{ py_ident(p) }},
+{%- endif %}
 {%- endfor %}
             },
 {%- endif %}
@@ -226,11 +248,34 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- if deep_object | trim %}
                 deep_object=({{ deep_object | trim }}),
 {%- endif %}
+{%- set delimited %}
+{%- for p in op.query_params if p.delimiter is defined -%}
+{{ py_str(p.name) }}: {{ py_str(p.delimiter) }},
+{%- endfor -%}
+{%- endset %}
+{%- if delimited | trim %}
+                delimited={ {{- delimited | trim -}} },
+{%- endif %}
+{%- set json_params %}
+{%- for p in op.query_params if p.json -%}
+{{ py_str(p.name) }},
+{%- endfor -%}
+{%- endset %}
+{%- if json_params | trim %}
+                json_params=({{ json_params | trim }}),
+{%- endif %}
             ),
 {%- endif %}
-{%- if op.header_params | length > 0 %}
+{%- if op.header_params | rejectattr("cookie") | list | length > 0 %}
             header_params={
-{%- for p in op.header_params %}
+{%- for p in op.header_params if not p.cookie %}
+                {{ py_str(p.name) }}: {% if p.json %}json_header({{ py_ident(p.ident) }}){% else %}{{ py_ident(p.ident) }}{% endif %},
+{%- endfor %}
+            },
+{%- endif %}
+{%- if op.header_params | selectattr("cookie") | list | length > 0 %}
+            cookie_params={
+{%- for p in op.header_params if p.cookie %}
                 {{ py_str(p.name) }}: {{ py_ident(p.ident) }},
 {%- endfor %}
             },
@@ -246,7 +291,7 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- elif op.request_body_kind == "multipart" %}
             multipart={% if op.request_body_optional %}None if body is None else {% endif %}[
 {%- for field in op.multipart_fields %}
-                ({{ py_str(field.name) }}, body.{{ py_field(field.name) }}, {{ "True" if field.is_file else "False" }}),
+                ({{ py_str(field.name) }}, body.{{ py_field(field.name) }}, {{ "True" if field.is_file else "False" }}, {{ py_str(field.content_type) if field.content_type is defined else "None" }}),
 {%- endfor %}
             ],
 {%- elif body_param is not none %}

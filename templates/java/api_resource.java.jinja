@@ -27,6 +27,26 @@ import {{ sdk.java_package }}.streaming.EventStream;
 import java.util.List;
 import java.util.Map;
 
+{% set body_types = namespace(all="") -%}
+{% for op in resource.operations -%}
+    {% if op.request_body_json_type is defined %}{% set body_types.all = body_types.all ~ " " ~ op.request_body_json_type.to_java() %}{% endif -%}
+    {% if op.response_body_json_type is defined %}{% set body_types.all = body_types.all ~ " " ~ op.response_body_json_type.to_java() %}{% endif -%}
+    {% for name, ps in op.path_styles | items if ps.type is defined -%}
+        {% set body_types.all = body_types.all ~ " " ~ ps.type.to_java() -%}
+    {% endfor -%}
+{% endfor -%}
+{% if "BigDecimal" in body_types.all -%}
+import java.math.BigDecimal;
+{% endif -%}
+{% if "URI" in body_types.all -%}
+import java.net.URI;
+{% endif -%}
+{% if "OffsetDateTime" in body_types.all -%}
+import java.time.OffsetDateTime;
+{% endif -%}
+{% if "Set<" in body_types.all -%}
+import java.util.Set;
+{% endif -%}
 {% if resource.operations | selectattr("response_body_json_type", "defined") | list | length > 0 -%}
 import com.fasterxml.jackson.core.type.TypeReference;
 {% endif -%}
@@ -59,10 +79,10 @@ public class {{ resource_type_name }} {
     /** Multipart form fields of {@link #{{ op.name | ident("camel", "java") }}}. */
     public static class {{ op.name | to_upper_camel_case }}Body {
         {% for field in op.multipart_fields -%}
-        private {% if field.is_file %}Upload{% else %}{{ field.type.to_java() }}{% endif %} {{ fields[loop.index0] }};
+        private {% if field.is_file and field.is_file_list %}List<Upload>{% elif field.is_file %}Upload{% else %}{{ field.type.to_java() }}{% endif %} {{ fields[loop.index0] }};
         {% endfor %}
         {% for field in op.multipart_fields -%}
-        {% set ty = "Upload" if field.is_file else field.type.to_java() -%}
+        {% set ty = ("List<Upload>" if field.is_file_list else "Upload") if field.is_file else field.type.to_java() -%}
         {% set accessor = accessors[loop.index0] ~ ("_" if accessors[loop.index0] == "Class" else "") -%}
         {% if field.description is defined -%}
         {{ m.javadoc(field.description) }}
@@ -86,6 +106,8 @@ public class {{ resource_type_name }} {
         {% set res_type = "EventStream" -%}
     {% elif op.response_is_binary -%}
         {% set res_type = "byte[]" -%}
+    {% elif op.response_is_text -%}
+        {% set res_type = "String" -%}
     {% elif op.response_body_json_type is defined -%}
         {% set res_type = op.response_body_json_type.to_java() -%}
         {% set res_java_type = "client.typeOf(new TypeReference<" ~ res_type ~ ">() {})" -%}
@@ -138,7 +160,8 @@ public class {{ resource_type_name }} {
     {%- endset -%}
     {% set func_args -%}
         {% for p in path_args -%}
-            final String {{ p }},
+            {% set path_name = op.path_params[loop.index0] -%}
+            final {% if path_name in op.path_styles and op.path_styles[path_name].type is defined %}{{ op.path_styles[path_name].type.to_java() }}{% else %}String{% endif %} {{ p }},
         {% endfor -%}
         {% if has_body -%}
             final {{ req_body_type }} {{ req_body_field_name }},
@@ -176,7 +199,7 @@ public class {{ resource_type_name }} {
             {{ func_args }}
             {%- if has_options %}final {{ options_type }} options, {% endif -%}
             final {{ request_options }} requestOptions) {
-        {% set ns = namespace(literal=[], calls=[], expr="") -%}
+        {% set ns = namespace(literal=[], calls=[], expr="", styled=false) -%}
         {% set path_and_query = op.path | split("?") | list -%}
         {% for segment in (path_and_query[0] | split("/") | list)[1:] -%}
             {% if "{" in segment -%}
@@ -185,12 +208,27 @@ public class {{ resource_type_name }} {
                     {% set ns.literal = [] -%}
                 {% endif -%}
                 {% set ns.expr = segment | tojson -%}
+                {% set ns.styled = false -%}
+                {% for p in op.path_params if p in op.path_styles and ("{" ~ p ~ "}") in segment -%}
+                    {% set ns.styled = true -%}
+                {% endfor -%}
                 {% for p in op.path_params -%}
-                    {% set ns.expr = ns.expr | replace("{" ~ p ~ "}", "\" + " ~ path_args[loop.index0] ~ " + \"") -%}
+                    {% if p in op.path_styles -%}
+                        {% set ps = op.path_styles[p] -%}
+                        {% set ns.expr = ns.expr | replace("{" ~ p ~ "}", "\" + Utils.encodePathParam(" ~ (p | tojson) ~ ", " ~ path_args[loop.index0] ~ ", " ~ (ps.style | tojson) ~ ", " ~ (ps.explode | lower) ~ ") + \"") -%}
+                    {% elif ns.styled -%}
+                        {% set ns.expr = ns.expr | replace("{" ~ p ~ "}", "\" + Utils.encodePathValue(" ~ (p | tojson) ~ ", " ~ path_args[loop.index0] ~ ") + \"") -%}
+                    {% else -%}
+                        {% set ns.expr = ns.expr | replace("{" ~ p ~ "}", "\" + " ~ path_args[loop.index0] ~ " + \"") -%}
+                    {% endif -%}
                 {% endfor -%}
                 {% set expr = ns.expr | replace("\"\" + ", "") | replace(" + \"\"", "") -%}
                 {% set name = segment[1:-1] if segment[1:-1] in op.path_params else segment -%}
-                {% set ns.calls = ns.calls + [".addPathSegment(Utils.pathSegment(" ~ (name | tojson) ~ ", " ~ expr ~ "))"] -%}
+                {% if ns.styled -%}
+                    {% set ns.calls = ns.calls + [".addEncodedPathSegment(Utils.encodedPathSegment(" ~ (name | tojson) ~ ", " ~ expr ~ "))"] -%}
+                {% else -%}
+                    {% set ns.calls = ns.calls + [".addPathSegment(Utils.pathSegment(" ~ (name | tojson) ~ ", " ~ expr ~ "))"] -%}
+                {% endif -%}
             {% else -%}
                 {% set ns.literal = ns.literal + [segment] -%}
             {% endif -%}
@@ -211,7 +249,11 @@ public class {{ resource_type_name }} {
         {% set getter = "options.get" ~ query_fields[loop.index0] ~ ("_" if query_fields[loop.index0] == "Class" else "") ~ "()" -%}
         {% set explode = p.explode | default(true) -%}
         if ({{ getter }} != null) {
-            {% if p.structured -%}
+            {% if p.json -%}
+            Utils.addJsonQueryParameter(url, {{ p.name | tojson }}, {{ getter }});
+            {% elif p.delimiter is defined -%}
+            Utils.addDelimitedQueryParameter(url, {{ p.name | tojson }}, {{ getter }}, {{ p.delimiter | tojson }});
+            {% elif p.structured -%}
             Utils.addStructuredQueryParameter(url, {{ p.name | tojson }}, {{ getter }}, {{ p.deep_object | lower }}, {{ explode | lower }});
             {% elif (p.type.is_list() or p.type.is_set()) and explode -%}
             Utils.addExplodedQueryParameter(url, {{ p.name | tojson }}, {{ getter }});
@@ -229,7 +271,11 @@ public class {{ resource_type_name }} {
         {% for p in op.header_params -%}
         {% set getter = "options.get" ~ header_fields[loop.index0] ~ ("_" if header_fields[loop.index0] == "Class" else "") ~ "()" -%}
         if ({{ getter }} != null) {
-            headers.set({{ p.name | tojson }}, {{ getter }});
+            {% if p.cookie -%}
+            headers.add("Cookie", Utils.cookiePair({{ p.name | tojson }}, {{ getter }}));
+            {%- else -%}
+            headers.set({{ p.name | tojson }}, {% if p.json %}Utils.json({{ getter }}){% else %}{{ getter }}{% endif %});
+            {%- endif %}
         }
         {% endfor -%}
         {% endif -%}
@@ -242,7 +288,7 @@ public class {{ resource_type_name }} {
             {% set body_expr -%}
                 new Multipart()
                 {%- for field in op.multipart_fields %}
-                    .{% if field.is_file %}file{% else %}field{% endif %}({{ field.name | tojson }}, body.get{{ multipart_accessors[loop.index0] }}())
+                    .{% if field.is_file and field.is_file_list %}files{% elif field.is_file %}file{% else %}field{% endif %}({{ field.name | tojson }}, body.get{{ multipart_accessors[loop.index0] }}(){% if field.content_type is defined %}, {{ field.content_type | tojson }}{% elif field.is_file and field.is_file_list %}, null{% endif %})
                 {%- endfor %}
                     .build()
             {%- endset -%}
@@ -267,6 +313,8 @@ public class {{ resource_type_name }} {
             {% set chain = chain + [".sendEventStream()"] -%}
         {% elif op.response_is_binary -%}
             {% set chain = chain + [".sendBytes()"] -%}
+        {% elif op.response_is_text -%}
+            {% set chain = chain + [".sendText()"] -%}
         {% else -%}
             {% set chain = chain + [".send(" ~ (res_java_type or "Void.class") ~ ")"] -%}
         {% endif -%}

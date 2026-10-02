@@ -65,7 +65,7 @@ fn recursively_resolve_type(ty_name: &str, api: &Api) -> Type {
         }
     };
     match ty.data {
-        TypeData::Struct { ref mut fields } => {
+        TypeData::Struct { ref mut fields, .. } => {
             update_fields(fields, api);
         }
         TypeData::StringEnum { .. } => (),

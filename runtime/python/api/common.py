@@ -21,6 +21,7 @@ import dataclasses
 import datetime as _datetime
 import email.utils
 import enum
+import json
 import random
 import time
 import typing as t
@@ -68,8 +69,11 @@ __all__ = [
     "DEFAULT_NUM_RETRIES",
     "DEFAULT_SERVER_URL",
     "DEFAULT_TIMEOUT",
+    "EncodedPathParam",
     "decode_response",
     "default_retry_schedule",
+    "encode_path_param",
+    "json_header",
     "serialize_form_body",
     "serialize_query_params",
 ]
@@ -105,19 +109,29 @@ def serialize_query_params(
     comma_joined: t.Collection[str] = (),
     structured: t.Collection[str] = (),
     deep_object: t.Collection[str] = (),
+    delimited: t.Mapping[str, str] | None = None,
+    json_params: t.Collection[str] = (),
 ) -> QueryParams:
     """Render query parameters, dropping the ones left unset.
 
     List values are exploded into repeated parameters (OpenAPI ``explode=true``)
     unless their name is listed in ``comma_joined``. ``structured`` ones are sent
     from their JSON value, objects as ``name[key]=value``, and ``deep_object``
-    lists as ``name[]=item``.
+    lists as ``name[]=item``. ``delimited`` lists are joined by their delimiter
+    (``pipeDelimited``, ``spaceDelimited``) and ``json_params`` are sent as
+    compact JSON text (``content: application/json``).
     """
     out: QueryParams = []
     for key, value in params.items():
         if value is None or value is UNSET:
             continue
-        if key in structured:
+        if key in json_params:
+            out.append((key, _compact_json(to_json_value(value))))
+        elif delimited and key in delimited:
+            items = [_serialize_scalar(v) for v in to_json_value(value) if v is not None]
+            if items:
+                out.append((key, delimited[key].join(items)))
+        elif key in structured:
             encode_param(
                 key, to_json_value(value), key in deep_object, key not in comma_joined, out
             )
@@ -130,6 +144,70 @@ def serialize_query_params(
         else:
             out.append((key, _serialize_scalar(value)))
     return out
+
+
+def _compact_json(value: t.Any) -> str:
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
+def json_header(value: t.Any) -> str | None:
+    """A ``content: application/json`` header value as compact JSON text."""
+    if value is None or value is UNSET:
+        return None
+    return _compact_json(to_json_value(value))
+
+
+class EncodedPathParam(str):
+    """A path parameter serialized and percent-encoded by its OpenAPI style."""
+
+
+def _quote_unreserved(text: str) -> str:
+    return urllib.parse.quote(text, safe="")
+
+
+def _path_text(value: t.Any) -> str:
+    if value is None:
+        return ""
+    if _nested(value):
+        return _compact_json(value)
+    return _serialize_scalar(value)
+
+
+def encode_path_param(name: str, value: t.Any, style: str, explode: bool) -> EncodedPathParam:
+    """A path parameter in its OpenAPI ``style`` (``simple``, ``label``, ``matrix``).
+
+    ``json`` is for ``content: application/json`` values. Every part is
+    percent-encoded, so that ``,`` ``.`` ``;`` and ``=`` are structural.
+    """
+    value = to_json_value(value)
+    if style == "json":
+        return EncodedPathParam(_quote_unreserved(_compact_json(value)))
+    quote = lambda item: _quote_unreserved(_path_text(item))  # noqa: E731
+    head, separator = {"label": (".", "."), "matrix": (";", ";")}.get(style, ("", ","))
+    key = _quote_unreserved(name)
+    if isinstance(value, list):
+        values = [quote(item) for item in value]
+        if style == "matrix":
+            if explode:
+                return EncodedPathParam("".join(f";{key}={item}" for item in values))
+            return EncodedPathParam(f";{key}=" + ",".join(values))
+        return EncodedPathParam(head + (separator if explode else ",").join(values))
+    if isinstance(value, dict):
+        pairs = [(_quote_unreserved(field), quote(item)) for field, item in value.items()]
+        flat = ",".join(part for pair in pairs for part in pair)
+        if style == "matrix":
+            if explode:
+                return EncodedPathParam("".join(f";{field}={item}" for field, item in pairs))
+            return EncodedPathParam(f";{key}={flat}")
+        if explode:
+            return EncodedPathParam(head + separator.join(f"{f}={i}" for f, i in pairs))
+        return EncodedPathParam(head + flat)
+    text = quote(value)
+    if style == "label":
+        return EncodedPathParam(f".{text}")
+    if style == "matrix":
+        return EncodedPathParam(f";{key}" if text == "" else f";{key}={text}")
+    return EncodedPathParam(text)
 
 
 def serialize_form_body(
@@ -313,19 +391,22 @@ class ApiBase:
         path_params: t.Mapping[str, str] | None = None,
         query_params: QueryParams | None = None,
         header_params: t.Mapping[str, str | None] | None = None,
+        cookie_params: t.Mapping[str, str | None] | None = None,
         json_body: t.Any = None,
         form_body: QueryParams | None = None,
         extra_headers: t.Mapping[str, str] | None = None,
         timeout: float | None | Unset = UNSET,
         upload_body: UploadContent | None = None,
         upload_content_type: str = "application/octet-stream",
-        multipart: t.Sequence[tuple[str, t.Any, bool]] | None = None,
+        multipart: t.Sequence[tuple[str, t.Any, bool, str | None]] | None = None,
         security: Security | None = None,
     ) -> dict[str, t.Any]:
         if path_params:
             path = path.format(
                 **{
-                    key: urllib.parse.quote(str(value), safe="")
+                    key: value
+                    if isinstance(value, EncodedPathParam)
+                    else urllib.parse.quote(str(value), safe="")
                     for key, value in path_params.items()
                 }
             )
@@ -336,6 +417,17 @@ class ApiBase:
             if value is not None:
                 headers[key] = value
         headers.update(extra_headers or {})
+        # Cookie parameters share one `Cookie` header with the cookie of a call's own headers
+        # and, once authenticated, with the API key cookie.
+        cookies = [
+            f"{key}={urllib.parse.quote(value, safe='')}"
+            for key, value in (cookie_params or {}).items()
+            if value is not None
+        ]
+        if cookies:
+            for key in [key for key in headers if key.lower() == "cookie"]:
+                cookies.append(headers.pop(key))
+            headers["cookie"] = "; ".join(cookies)
         if method.upper() == "POST" and "idempotency-key" not in headers:
             headers["idempotency-key"] = f"auto_{uuid.uuid4()}"
 

@@ -58,7 +58,7 @@ pub(crate) fn shape(types: &Types, name: &str) -> Option<Vec<Property>> {
             return None;
         }
         match &types.get(name)?.data {
-            TypeData::Struct { fields } => {
+            TypeData::Struct { fields, .. } => {
                 for field in fields {
                     match &field.r#type {
                         FieldType::SchemaRef { name, .. } if field.flatten => {

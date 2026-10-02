@@ -13,7 +13,7 @@ use crate::{error::Result, models::*, Configuration};
         {% if field.description is defined -%}
         {{ field.description | to_doc_comment(style="rust") }}
         {% endif -%}
-        pub {{ field.name | to_rust_ident }}: {% if not field.required or field.nullable %}Option<{% endif %}{% if field.is_file %}crate::api::Upload{% else %}{{ rust_type(field.type) }}{% endif %}{% if not field.required or field.nullable %}>{% endif %},
+        pub {{ field.name | to_rust_ident }}: {% if not field.required or field.nullable %}Option<{% endif %}{% if field.is_file and field.is_file_list %}Vec<crate::api::Upload>{% elif field.is_file %}crate::api::Upload{% else %}{{ rust_type(field.type) }}{% endif %}{% if not field.required or field.nullable %}>{% endif %},
         {% endfor -%}
     }
     {% endif -%}
@@ -29,7 +29,7 @@ use crate::{error::Result, models::*, Configuration};
             pub {{ p.ident | to_rust_ident }}: {{ ty }},
         {% endfor -%}
         {% for p in op.header_params -%}
-            {% set ty = "String" -%}
+            {% set ty = rust_type(p.type) if p.json else "String" -%}
             {% if not p.required %}{% set ty %}Option<{{ ty }}>{% endset %}{% endif %}
             {% if p.description is defined -%}
                 {{ p.description | to_doc_comment(style="rust") }}
@@ -88,7 +88,11 @@ impl<'a> {{ resource_type_name }}<'a> {
 
         {#- path parameters -#}
         {% for p in op.path_params -%}
+            {% if p in op.path_styles and op.path_styles[p].type is defined -%}
+            {{ p | to_rust_ident }}: {{ rust_type(op.path_styles[p].type) }},
+            {% else -%}
             {{ p | to_rust_ident }}: impl std::fmt::Display,
+            {% endif -%}
         {% endfor -%}
 
         {% if op.request_body_kind == "binary" -%}
@@ -131,12 +135,24 @@ impl<'a> {{ resource_type_name }}<'a> {
         let make_form = |body: {{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body| -> Result<crate::api::upload::Multipart> {
             let mut form = crate::api::upload::Multipart::new();
             {% for field in op.multipart_fields -%}
-            {% if not field.required or field.nullable -%}
+            {% set optional = not field.required or field.nullable -%}
+            {% set value = "value" if optional else "body." ~ (field.name | to_rust_ident) -%}
+            {% set suffix = "_as" if field.content_type is defined else "" -%}
+            {% set content_type = (", " ~ (field.content_type | tojson)) if field.content_type is defined else "" -%}
+            {% if optional -%}
             if let Some(value) = body.{{ field.name | to_rust_ident }} {
-                form = form.{% if field.is_file %}file{% else %}field{% endif %}("{{ field.name }}", value)?;
+            {% endif -%}
+            {% if field.is_file and field.is_file_list -%}
+            for item in {{ value }} {
+                form = form.file{{ suffix }}("{{ field.name }}", item{{ content_type }})?;
             }
+            {% elif field.is_file -%}
+            form = form.file{{ suffix }}("{{ field.name }}", {{ value }}{{ content_type }})?;
             {% else -%}
-            form = form.{% if field.is_file %}file{% else %}field{% endif %}("{{ field.name }}", body.{{ field.name | to_rust_ident }})?;
+            form = form.field{{ suffix }}("{{ field.name }}", {{ value }}{{ content_type }})?;
+            {% endif -%}
+            {% if optional -%}
+            }
             {% endif -%}
             {% endfor -%}
             Ok(form)
@@ -148,7 +164,12 @@ impl<'a> {{ resource_type_name }}<'a> {
         crate::request::Request::new(http1::Method::{{ op.method | upper }}, "{{ op.path }}")
 
         {% for p in op.path_params -%}
+            {% if p in op.path_styles -%}
+            {% set ps = op.path_styles[p] -%}
+            .with_styled_path_param("{{ p }}", {% if ps.type is defined %}&{{ p | to_rust_ident }}{% else %}{{ p | to_rust_ident }}.to_string(){% endif %}, "{{ ps.style }}", {{ ps.explode | lower }})
+            {% else -%}
             .with_path_param("{{ p }}", {{ p | to_rust_ident }})
+            {% endif -%}
         {% endfor -%}
 
         {% if op.security is defined -%}
@@ -160,7 +181,11 @@ impl<'a> {{ resource_type_name }}<'a> {
                entirely when the codegen binary predates the `explode` IR field. -#}
             {% set explode = p.explode | default(true) -%}
             {% set is_exploded_list = (p.type.is_list() or p.type.is_set()) and explode -%}
-            {% if p.structured -%}
+            {% if p.json -%}
+                .with_json_query_param("{{ p.name }}", {% if p.required %}Some({{ p.ident | to_rust_ident }}){% else %}{{ p.ident | to_rust_ident }}{% endif %})
+            {% elif p.delimiter is defined -%}
+                .with_delimited_query_param("{{ p.name }}", {% if p.required %}Some({{ p.ident | to_rust_ident }}){% else %}{{ p.ident | to_rust_ident }}{% endif %}, {{ p.delimiter | tojson }})
+            {% elif p.structured -%}
                 .with_structured_query_param("{{ p.name }}", {% if p.required %}Some({{ p.ident | to_rust_ident }}){% else %}{{ p.ident | to_rust_ident }}{% endif %}, {{ p.deep_object | lower }}, {{ explode | lower }})
             {% else -%}
             {% if p.required and is_exploded_list -%}
@@ -177,7 +202,11 @@ impl<'a> {{ resource_type_name }}<'a> {
         {% endfor -%}
 
         {% for p in op.header_params -%}
-            .{% if p.required %}with_header_param{% else %}with_optional_header_param{% endif %}("{{ p.name }}", {{ p.ident | to_rust_ident }})
+            {% if p.json -%}
+            .with_json_header_param("{{ p.name }}", {% if p.required %}Some({{ p.ident | to_rust_ident }}){% else %}{{ p.ident | to_rust_ident }}{% endif %})
+            {% else -%}
+            .{% if p.required %}with_{{ "cookie" if p.cookie else "header" }}_param{% else %}with_optional_{{ "cookie" if p.cookie else "header" }}_param{% endif %}("{{ p.name }}", {{ p.ident | to_rust_ident }})
+            {% endif -%}
         {% endfor -%}
 
         {% if op.request_body_kind == "binary" -%}
@@ -226,7 +255,7 @@ impl<'a> {{ resource_type_name }}<'a> {
     pub fn {{ op.name | to_snake_case }}_iter(
         &self,
         {% for p in op.path_params -%}
-            {{ p | to_rust_ident }}: String,
+            {{ p | to_rust_ident }}: {% if p in op.path_styles and op.path_styles[p].type is defined %}{{ rust_type(op.path_styles[p].type) }}{% else %}String{% endif %},
         {% endfor -%}
         {% if op.request_body_schema_name is defined -%}
             {{ body_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},

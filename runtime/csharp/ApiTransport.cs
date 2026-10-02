@@ -186,6 +186,7 @@ internal sealed class ApiTransport : IDisposable
         await _auth
             .ApplyAsync(request.Security, _credentials, headers, authQuery, cancellationToken)
             .ConfigureAwait(false);
+        headers.Remove("Cookie", out var authCookie);
         headers["User-Agent"] = _userAgent;
         headers["@@HEADER_PREFIX@@-req-id"] = ((ulong)Random.Shared.NextInt64()).ToString(
             CultureInfo.InvariantCulture
@@ -201,6 +202,20 @@ internal sealed class ApiTransport : IDisposable
         foreach (var (name, value) in options?.Headers ?? new Dictionary<string, string>())
         {
             headers[name] = value;
+        }
+        // Cookie parameters, the API key cookie and a Cookie header of the call share one header.
+        var cookies = new List<string>(request.Cookies);
+        if (authCookie is not null)
+        {
+            cookies.Add(authCookie);
+        }
+        if (headers.Remove("Cookie", out var callCookie))
+        {
+            cookies.Add(callCookie);
+        }
+        if (cookies.Count > 0)
+        {
+            headers["Cookie"] = string.Join("; ", cookies);
         }
         if (request.Method == HttpMethod.Post && !headers.ContainsKey("Idempotency-Key"))
         {

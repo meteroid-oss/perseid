@@ -17,20 +17,26 @@ public final class Multipart {
 
     /** Adds a field: scalars as text, objects as JSON, lists as one part per item. */
     public Multipart field(String name, Object value) {
+        return field(name, value, null);
+    }
+
+    /** Like {@link #field(String, Object)}, with the media type the spec declares for the part. */
+    public Multipart field(String name, Object value, String contentType) {
         if (value == null) {
             return this;
         }
         JsonNode node = Utils.getObjectMapper().valueToTree(value);
         if (node.isArray()) {
-            node.forEach(item -> field(name, item));
+            node.forEach(item -> field(name, item, contentType));
         } else if (node.isNull()) {
             return this;
-        } else if (node.isContainerNode()) {
+        } else if (node.isContainerNode() || contentType != null) {
+            String text = node.isContainerNode() || !node.isTextual() ? node.toString() : node.asText();
             builder.addPart(
                     Headers.of("Content-Disposition", "form-data; name=\"" + name + "\""),
                     RequestBody.create(
-                            node.toString().getBytes(StandardCharsets.UTF_8),
-                            MediaType.get("application/json")));
+                            text.getBytes(StandardCharsets.UTF_8),
+                            MediaType.get(contentType != null ? contentType : "application/json")));
         } else {
             builder.addFormDataPart(name, node.isTextual() ? node.asText() : node.toString());
         }
@@ -38,9 +44,22 @@ public final class Multipart {
     }
 
     public Multipart file(String name, Upload upload) {
+        return file(name, upload, null);
+    }
+
+    /** Adds a file; {@code contentType} is the media type the spec declares, used unless the upload sets its own. */
+    public Multipart file(String name, Upload upload, String contentType) {
         if (upload != null) {
             String filename = upload.getFilename() != null ? upload.getFilename() : "file";
-            builder.addFormDataPart(name, filename, upload.part());
+            builder.addFormDataPart(name, filename, upload.part(contentType));
+        }
+        return this;
+    }
+
+    /** Adds several files as repeated parts of the same name. */
+    public Multipart files(String name, java.util.List<Upload> uploads, String contentType) {
+        if (uploads != null) {
+            uploads.forEach(upload -> file(name, upload, contentType));
         }
         return this;
     }

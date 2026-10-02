@@ -10,6 +10,9 @@ use super::{
 {% endif %}
 {{ union_imports() }}
 
+{#- The properties beyond the declared ones are a flattened map. -#}
+{% set extra = [{"name": "additional_properties", "type": type.additional_properties, "required": true, "nullable": false, "flatten": true, "description": "Properties beyond the declared ones, as received."}] if type.additional_properties is defined else [] -%}
+{% set fields = type.fields + extra -%}
 {% set recursive = recursive_refs | map("to_upper_camel_case") | list -%}
 {% set type_name = type.name | to_upper_camel_case -%}
 {% set defaults = type.discriminator_defaults | default({}) -%}
@@ -17,11 +20,11 @@ use super::{
 {{ doc_comment }}
 #[derive(Clone, Debug, {% if not defaulted %}Default, {% endif %}PartialEq, Deserialize, Serialize)]
 pub struct {{ type_name }} {
-    {{ struct_fields(type.fields, recursive, patch_body, owner=type_name) }}
+    {{ struct_fields(fields, recursive, patch_body, owner=type_name) }}
 }
 
 impl {{ type_name }} {
-    {{ struct_new(type.fields, recursive, owner=type_name, defaults=defaults) }}
+    {{ struct_new(fields, recursive, owner=type_name, defaults=defaults) }}
 }
 {% if defaulted %}
 
@@ -32,7 +35,7 @@ impl {{ default_trait() }} for {{ type_name }} {
         #[allow(deprecated)]
         {% endif -%}
         Self {
-            {% for field in type.fields -%}
+            {% for field in fields -%}
             {% if field.name in defaulted -%}
             {{ field.name | to_rust_ident }}: {{ defaults[field.name] | rust_str }}.into(),
             {% else -%}
@@ -43,4 +46,4 @@ impl {{ default_trait() }} for {{ type_name }} {
     }
 }
 {% endif %}
-{{ union_enums(type_name, type.fields) }}
+{{ union_enums(type_name, fields) }}

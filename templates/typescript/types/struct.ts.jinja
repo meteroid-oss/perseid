@@ -28,6 +28,10 @@ export interface {{ type_name }}{% if base_names %} extends {{ ns.parents | join
     {% for field in type.fields if not field.flatten -%}
     {{ m.field_decl(field) }}
     {% endfor -%}
+    {% if type.additional_properties is defined -%}
+    /** Properties beyond the declared ones. */
+    additionalProperties?: {{ m.js_type(type.additional_properties) }};
+    {% endif -%}
 }{% if intersect %};{% endif %}
 
 export const {{ type_name }}Serializer = {
@@ -36,12 +40,18 @@ export const {{ type_name }}Serializer = {
             {%- for base in base_names %}
             ...{{ base }}Serializer.parse(json),
             {%- endfor %}
+            {%- if type.additional_properties is defined %}
+            additionalProperties: {{ m.from_json("omitKeys(json, " ~ (type.fields | rejectattr("flatten") | map(attribute="name") | list | tojson) ~ ")", type.additional_properties) }},
+            {%- endif %}
             {{- m.parse_fields(type.fields, "json", type.discriminator_defaults | default({})) }}
         };
     },
 
     serialize(value: {{ type_name }}): any {
         return {
+            {%- if type.additional_properties is defined %}
+            ...{{ m.to_json("(value.additionalProperties ?? {})", type.additional_properties) }},
+            {%- endif %}
             {%- for base in base_names %}
             ...{{ base }}Serializer.serialize({% if overridden %}value as unknown as {{ base }}{% else %}value{% endif %}),
             {%- endfor %}

@@ -100,7 +100,13 @@ namespace {{ sdk.package_name }}.Models;
 {% for p in op.query_params if p.structured -%}
 {% set op_types.list = op_types.list + [p.type.to_csharp()] -%}
 {% endfor -%}
-{% set scalars = ["string", "bool", "int", "long", "short", "ushort", "ulong", "float", "double", "decimal"] -%}
+{% for p in op.header_params if p.json -%}
+{% set op_types.list = op_types.list + [p.type.to_csharp()] -%}
+{% endfor -%}
+{% for name, ps in op.path_styles | items if ps.type is defined -%}
+{% set op_types.list = op_types.list + [ps.type.to_csharp()] -%}
+{% endfor -%}
+{% set scalars = ["string", "bool", "int", "long", "short", "ushort", "ulong", "float", "double", "decimal", "DateTimeOffset"] -%}
 {% for ty in op_types.list if ("<" in ty or ty in scalars) and ty not in generic.types -%}
 {% set generic.types = generic.types + [ty] -%}
 [JsonSerializable(typeof({{ ty }}), TypeInfoPropertyName = "{{ m.type_info(ty) }}")]

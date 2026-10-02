@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, py_field -%}
+{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, py_field, py_type -%}
 {#- A union variant's discriminator defaults to its tag: `Circle(radius=1)`. -#}
 {% set defaults = type.discriminator_defaults if type.discriminator_defaults is defined else {} -%}
 {% set runtime_names = ["BaseModel"] -%}
@@ -9,6 +9,9 @@
 {% for field in type.fields if has_object_union(field.type) -%}
     {% set objects.any = true -%}
 {% endfor -%}
+{% if type.additional_properties is defined and has_object_union(type.additional_properties) -%}
+    {% set objects.any = true -%}
+{% endif -%}
 {% if objects.any -%}
     {% set runtime_names = runtime_names + ["ObjectUnion", "UnknownVariant"] -%}
 {% endif -%}
@@ -41,6 +44,10 @@ class {{ type.name | to_upper_camel_case }}(BaseModel):
     _JSON_KEYS: t.ClassVar[t.Mapping[str, str]] = { {{ json_keys | trim }} }
     {%- endif %}
 
+    {%- if type.additional_properties is defined %}
+    _ADDITIONAL_PROPERTIES: t.ClassVar[str | None] = "additional_properties"
+    {%- endif %}
+
     {%- if flattened | trim %}
     _FLATTENED: t.ClassVar[tuple[str, ...]] = ( {{ flattened | trim }} )
     {%- endif %}
@@ -57,7 +64,13 @@ class {{ type.name | to_upper_camel_case }}(BaseModel):
         {%- endfor %}
     {%- endfor %}
 
-    {%- if type.fields | length == 0 %}
+    {%- if type.additional_properties is defined %}
+
+    additional_properties: {{ py_type(type.additional_properties) }} = dataclasses.field(default_factory=dict)
+    """Properties beyond the declared ones, kept as received."""
+    {%- endif %}
+
+    {%- if type.fields | length == 0 and type.additional_properties is not defined %}
 
     pass
     {%- endif %}

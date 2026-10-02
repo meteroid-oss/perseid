@@ -9,8 +9,10 @@ and dependency free.
   field that the API accepts as ``null`` defaults to :data:`UNSET` instead:
   ``UNSET`` is omitted, while ``None`` is sent as ``null`` (to clear a value).
   A required field is always sent.
-* Unknown JSON keys are ignored, and so are enum values and union variants
-  added to the API after this SDK was generated: they are kept as received.
+* Unknown JSON keys are ignored, except by models that declare
+  ``additionalProperties``: those keep them in ``additional_properties`` and
+  write them back. Enum values and union variants added to the API after this
+  SDK was generated are kept as received.
 * ``Decimal`` values travel as JSON strings, ``datetime`` values as RFC 3339
   strings. Only finite decimals are valid: ``NaN`` and ``Infinity`` are
   rejected in both directions.
@@ -498,6 +500,8 @@ class BaseModel:
     _JSON_KEYS: t.ClassVar[t.Mapping[str, str]] = {}
     #: Attribute names whose (model) value is merged into the parent object.
     _FLATTENED: t.ClassVar[tuple[str, ...]] = ()
+    #: Attribute collecting the JSON keys no field declares, when the schema keeps them.
+    _ADDITIONAL_PROPERTIES: t.ClassVar[str | None] = None
 
     @classmethod
     def _json_key(cls, name: str) -> str:
@@ -506,8 +510,9 @@ class BaseModel:
     def _fields_to_dict(self, skip: t.Container[str] = ()) -> dict[str, t.Any]:
         out: dict[str, t.Any] = {}
         hints = _type_hints(type(self))
+        extra_name = self._ADDITIONAL_PROPERTIES
         for field in dataclasses.fields(self):
-            if field.name in skip:
+            if field.name in skip or field.name == extra_name:
                 continue
             value = getattr(self, field.name)
             # `None` means "leave out" for optional fields that the API does
@@ -523,6 +528,10 @@ class BaseModel:
                 out.update(data)
             else:
                 out[self._json_key(field.name)] = data
+        if extra_name is not None and extra_name not in skip:
+            extras = to_json_value(getattr(self, extra_name), hints.get(extra_name, t.Any))
+            for key, value in (extras or {}).items():
+                out.setdefault(key, value)
         return out
 
     @classmethod
@@ -531,8 +540,9 @@ class BaseModel:
     ) -> dict[str, t.Any]:
         hints = _type_hints(cls)
         kwargs: dict[str, t.Any] = {}
+        extra_name = cls._ADDITIONAL_PROPERTIES
         for field in dataclasses.fields(cls):
-            if field.name in skip:
+            if field.name in skip or field.name == extra_name:
                 continue
             annotation = hints.get(field.name, t.Any)
             ctx = f"{cls.__name__}.{field.name}"
@@ -546,6 +556,12 @@ class BaseModel:
                 if not _accepts_none(annotation):
                     raise ModelParseError(f"{cls.__name__}: missing required field {key!r}")
                 kwargs[field.name] = None
+        if extra_name is not None and extra_name not in skip:
+            known = {cls._json_key(f.name) for f in dataclasses.fields(cls) if f.name != extra_name}
+            extras = {key: value for key, value in data.items() if key not in known}
+            kwargs[extra_name] = _from_json_value(
+                hints.get(extra_name, t.Any), extras, f"{cls.__name__}.{extra_name}"
+            )
         return kwargs
 
     def to_dict(self) -> dict[str, t.Any]:

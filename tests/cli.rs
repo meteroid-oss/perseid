@@ -1692,7 +1692,7 @@ paths:
     get:
       operationId: search
       parameters:
-        - { name: ids, in: query, style: pipeDelimited, schema: { type: array, items: { type: string } } }
+        - { name: ids, in: query, style: pipeDelimited, explode: false, schema: { type: array, items: { type: string } } }
         - { name: session, in: cookie, schema: { type: string } }
       responses: { "204": { description: ok } }
   /render/{spec}:
@@ -1718,13 +1718,8 @@ components:
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(!ok);
     assert!(!out.contains("panicked"), "{out}");
-    for line in [
-        "operation `search` (GET /search): query parameter `ids`: style \"pipeDelimited\" is not supported",
-        "operation `post_render_by_spec` (POST /render/{spec}): path parameter `spec`: only scalar values are supported, not type `object`",
-        "schema `Clash`: `@type` and `type` both become the identifier `type`",
-    ] {
-        assert!(out.contains(line), "missing `{line}` in:\n{out}");
-    }
+    let line = "schema `Clash`: `@type` and `type` both become the identifier `type`";
+    assert!(out.contains(line), "missing `{line}` in:\n{out}");
 }
 
 #[test]
@@ -2455,6 +2450,322 @@ fn nullable_items_values_and_optional_responses_are_typed_in_every_language() {
     for (language, needles) in expected {
         let text = generated_text(dir.path(), language);
         for needle in needles {
+            assert!(text.contains(needle), "{language}: missing `{needle}`");
+        }
+    }
+}
+
+#[test]
+fn cookie_parameters_are_sent_in_the_cookie_header_in_every_language() {
+    let languages = ["rust", "typescript", "python", "go", "java", "csharp"];
+    let dir = project_from("petstore.yaml", &languages);
+    let spec = "openapi: 3.1.0\ninfo: {title: Cookies, version: 1.0.0}\n\
+        servers: [{url: https://x.example.com}]\n\
+        paths:\n\
+        \x20 /x:\n    get:\n      operationId: get_x\n      tags: [x]\n      parameters:\n        \
+        - {name: sid, in: cookie, required: true, schema: {type: string}}\n        \
+        - {name: sid, in: query, schema: {type: string}}\n      responses:\n        '204': {description: ok}\n\
+        components:\n  securitySchemes:\n    session: {type: apiKey, in: cookie, name: auth}\n\
+        security: [{session: []}]\n";
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let expected: [(&str, &str); 6] = [
+        ("rust", "with_cookie_param(\"sid\""),
+        ("typescript", "setCookieParam(\"sid\""),
+        ("python", "cookie_params="),
+        ("go", "SetCookie(\"sid\""),
+        ("java", "Utils.cookiePair(\"sid\""),
+        ("csharp", "SetCookie(\"sid\""),
+    ];
+    for (language, needle) in expected {
+        let text = generated_text(dir.path(), language);
+        assert!(text.contains(needle), "{language}: missing `{needle}`");
+    }
+}
+
+#[test]
+fn any_json_body_and_multipart_file_lists_are_generated_in_every_language() {
+    let languages = ["rust", "typescript", "python", "go", "java", "csharp"];
+    let dir = project_from("petstore.yaml", &languages);
+    let spec = "openapi: 3.1.0\ninfo: {title: Shapes, version: 1.0.0}\n\
+        servers: [{url: https://x.example.com}]\n\
+        paths:\n\
+        \x20 /any:\n    get:\n      operationId: get_any\n      tags: [x]\n      responses:\n        \
+        '200': {description: ok, content: {application/json: {}}}\n\
+        \x20 /map:\n    get:\n      operationId: get_map\n      tags: [x]\n      responses:\n        \
+        '200': {description: ok, content: {application/json: {schema: {type: object, additionalProperties: {$ref: '#/components/schemas/V'}}}}}\n\
+        \x20 /text:\n    get:\n      operationId: get_text\n      tags: [x]\n      responses:\n        \
+        '200': {description: ok, content: {text/plain: {schema: {type: string}}}}\n\
+        \x20 /upload:\n    post:\n      operationId: upload\n      tags: [x]\n      requestBody:\n        \
+        content:\n          multipart/form-data:\n            schema:\n              type: object\n              \
+        properties:\n                files: {type: array, items: {type: string, format: binary}}\n            \
+        encoding:\n              files: {contentType: image/png}\n      responses:\n        '204': {description: ok}\n\
+        components:\n  schemas:\n    V: {type: object, properties: {v: {type: string}}}\n";
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(!out.contains("skipping the operation"), "{out}");
+    let expected: [(&str, &[&str]); 6] = [
+        (
+            "rust",
+            &["HashMap<String, V>", "Vec<crate::api::Upload>", "file_as("],
+        ),
+        (
+            "typescript",
+            &["{ [key: string]: V }", "Upload[]", "\"image/png\""],
+        ),
+        (
+            "python",
+            &["dict[str, V]", "t.List[FileInput]", "\"image/png\""],
+        ),
+        (
+            "go",
+            &["map[string]V", "[]Upload", "contentType: \"image/png\""],
+        ),
+        (
+            "java",
+            &[
+                "Map<String,V>",
+                "List<Upload>",
+                "\"image/png\"",
+                "sendText()",
+            ],
+        ),
+        (
+            "csharp",
+            &["Dictionary<string, V>", "List<Upload>", "\"image/png\""],
+        ),
+    ];
+    for (language, needles) in expected {
+        let text = generated_text(dir.path(), language);
+        for needle in needles {
+            assert!(text.contains(needle), "{language}: missing `{needle}`");
+        }
+    }
+}
+
+#[test]
+fn parameter_styles_and_content_are_generated_in_every_language() {
+    let languages = ["rust", "typescript", "python", "go", "java", "csharp"];
+    let dir = project_from("petstore.yaml", &languages);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Styles, version: "1.0.0" }
+servers: [{ url: "https://x.example.com" }]
+paths:
+  /search:
+    get:
+      operationId: search
+      tags: [x]
+      parameters:
+        - { name: ids, in: query, style: pipeDelimited, explode: false, schema: { type: array, items: { type: string } } }
+        - { name: words, in: query, style: spaceDelimited, explode: false, schema: { type: array, items: { type: string } } }
+        - name: filter
+          in: query
+          content: { application/json: { schema: { type: object, properties: { a: { type: string } } } } }
+        - name: X-Filter
+          in: header
+          content: { application/json: { schema: { type: object, properties: { b: { type: string } } } } }
+      responses: { "204": { description: ok } }
+  /items/{tags}/{color}/{point}:
+    get:
+      operationId: get_item
+      tags: [x]
+      parameters:
+        - { name: tags, in: path, required: true, style: label, explode: true, schema: { type: array, items: { type: string } } }
+        - { name: color, in: path, required: true, style: matrix, schema: { type: string } }
+        - { name: point, in: path, required: true, schema: { type: object, properties: { x: { type: integer } } } }
+      responses: { "204": { description: ok } }
+  /blobs/{spec}:
+    get:
+      operationId: get_blob
+      tags: [x]
+      parameters:
+        - name: spec
+          in: path
+          required: true
+          content: { application/json: { schema: { type: object, properties: { a: { type: string } } } } }
+      responses: { "204": { description: ok } }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(!out.contains("skipping the operation"), "{out}");
+    let expected: [(&str, &[&str]); 6] = [
+        (
+            "rust",
+            &[
+                "with_delimited_query_param(\"ids\"",
+                "with_json_query_param(\"filter\"",
+                "with_json_header_param(\"X-Filter\"",
+                "with_styled_path_param(\"spec\"",
+                "\"matrix\"",
+            ],
+        ),
+        (
+            "typescript",
+            &[
+                "setDelimitedQueryParam(\"ids\"",
+                "setJsonQueryParam(\"filter\"",
+                "setJsonHeaderParam(\"X-Filter\"",
+                "setStyledPathParam(\"tags\"",
+            ],
+        ),
+        (
+            "python",
+            &[
+                "delimited={\"ids\": \"|\"",
+                "json_params=(\"filter\"",
+                "json_header(",
+                "encode_path_param(\"spec\"",
+            ],
+        ),
+        (
+            "go",
+            &[
+                "AddDelimitedQueryParam(\"ids\"",
+                "AddJSONQueryParam(\"filter\"",
+                "SetJSONHeader(\"X-Filter\"",
+                "SetStyledPathParam(\"tags\"",
+            ],
+        ),
+        (
+            "java",
+            &[
+                "addDelimitedQueryParameter(url, \"ids\"",
+                "addJsonQueryParameter(url, \"filter\"",
+                "Utils.encodePathParam(\"spec\"",
+                "addEncodedPathSegment",
+            ],
+        ),
+        (
+            "csharp",
+            &[
+                "AddDelimitedQuery(\"ids\"",
+                "AddJsonQuery(\"filter\"",
+                "SetJsonHeader(\"X-Filter\"",
+                "ApiRequest.EncodePathParam(\"tags\"",
+            ],
+        ),
+    ];
+    for (language, needles) in expected {
+        let text = generated_text(dir.path(), language);
+        for needle in needles {
+            assert!(text.contains(needle), "{language}: missing `{needle}`");
+        }
+    }
+}
+
+#[test]
+fn unsupported_operations_are_skipped_with_a_warning() {
+    let dir = project_from("petstore.yaml", &["rust"]);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Skips, version: "1.0.0" }
+servers: [{ url: "https://x.example.com" }]
+paths:
+  /ok:
+    get:
+      operationId: get_ok
+      tags: [x]
+      responses: { "204": { description: ok } }
+  /bad:
+    get:
+      operationId: get_bad
+      tags: [x]
+      parameters:
+        - name: q
+          in: query
+          content: { text/csv: { schema: { type: string } } }
+      responses: { "204": { description: ok } }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("skipping the operation"), "{out}");
+    assert!(out.contains("get_bad"), "{out}");
+    let text = generated_text(dir.path(), "rust");
+    assert!(text.contains("\"/ok\"") && !text.contains("/bad"), "{text}");
+}
+
+#[test]
+fn models_with_extra_properties_keep_them_in_every_language() {
+    let dir = project_from(
+        "petstore.yaml",
+        &["rust", "typescript", "python", "go", "java", "csharp"],
+    );
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Extras, version: "1.0.0" }
+servers: [{ url: "https://x.example.com" }]
+paths:
+  /things:
+    get:
+      operationId: get_thing
+      tags: [x]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Thing" }
+components:
+  schemas:
+    Thing:
+      type: object
+      properties:
+        name: { type: string }
+      additionalProperties: { type: integer }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(!out.contains("dropped when decoding"), "{out}");
+    let expected: &[(&str, &[&str])] = &[
+        (
+            "rust",
+            &[
+                "#[serde(flatten)]",
+                ": std::collections::HashMap<String, i64>,",
+            ],
+        ),
+        (
+            "typescript",
+            &[
+                "additionalProperties?: { [key: string]: number }",
+                "omitKeys(json, [\"name\"])",
+            ],
+        ),
+        (
+            "python",
+            &[
+                "_ADDITIONAL_PROPERTIES",
+                "additional_properties: dict[str, int]",
+            ],
+        ),
+        (
+            "go",
+            &[
+                "AdditionalProperties map[string]int64",
+                "unmarshalAdditionalProperties(",
+            ],
+        ),
+        (
+            "java",
+            &["@JsonAnyGetter", "@JsonAnySetter", "Map<String,Long>"],
+        ),
+        (
+            "csharp",
+            &[
+                "[JsonExtensionData]",
+                "Dictionary<string, JsonElement>? AdditionalProperties",
+            ],
+        ),
+    ];
+    for (language, needles) in expected {
+        let text = generated_text(dir.path(), language);
+        for needle in *needles {
             assert!(text.contains(needle), "{language}: missing `{needle}`");
         }
     }
