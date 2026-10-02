@@ -715,6 +715,19 @@ class ScoresTest(unittest.TestCase):
         self.assertIsInstance(raised.exception, APIStatusError)
         self.assertEqual(raised.exception.body, models.ValidationError(message="bad", fields={"name": ["short"]}))
         self.assertEqual(raised.exception.request_id, "r1")
+        self.assertEqual(
+            str(raised.exception),
+            'Error code: 422 - {"message":"bad","fields":{"name":["short"]}}',
+        )
+        long = httpx.Response(404, text="x" * 600)
+        with client(self.respond(long)) as api:
+            with self.assertRaises(NotFoundError) as raised:
+                api.things.retrieve("t")
+        self.assertEqual(str(raised.exception), f"Error code: 404 - {'x' * 500}...")
+        with client(self.respond(httpx.Response(404))) as api:
+            with self.assertRaises(NotFoundError) as raised:
+                api.things.retrieve("t")
+        self.assertEqual(str(raised.exception), "Error code: 404 - Not Found")
         for status, error in ((404, NotFoundError), (500, InternalServerError), (418, APIStatusError)):
             with self.subTest(status=status):
                 response = httpx.Response(status, json={"title": "t"})

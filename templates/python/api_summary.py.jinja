@@ -453,6 +453,8 @@ __all__ = [
     "error_class",
 ]
 
+_MAX_DETAIL = 500
+
 {% if api.error_schemas | length > 0 -%}
 ErrorBody: t.TypeAlias = {% for name in api.error_schemas %}{% if not loop.first %} | {% endif %}_models.{{ name | to_upper_camel_case }}{% endfor %}
 """The error responses the API declares."""
@@ -477,8 +479,8 @@ class APIStatusError(APIError):
 {%- endif %}
 
     def __init__(self, response: httpx.Response, body: object) -> None:
-        reason = response.reason_phrase or "error"
-        super().__init__(f"Error code: {response.status_code} - {reason}", request_of(response))
+        detail = _body_text(response) or response.reason_phrase or "error"
+        super().__init__(f"Error code: {response.status_code} - {detail}", request_of(response))
         self.response = response
         self.status_code = response.status_code
         self.body = t.cast("ErrorBody | JSONValue", body)
@@ -497,6 +499,15 @@ class APIStatusError(APIError):
     def raw_body(self) -> bytes:
         """The response body."""
         return self.response.content
+
+
+def _body_text(response: httpx.Response) -> str:
+    """The start of the response body, for the error message."""
+    try:
+        text = response.text.strip()
+    except httpx.ResponseNotRead:
+        return ""
+    return text if len(text) <= _MAX_DETAIL else f"{text[:_MAX_DETAIL]}..."
 
 
 class BadRequestError(APIStatusError):
