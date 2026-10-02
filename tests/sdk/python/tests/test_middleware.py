@@ -48,7 +48,7 @@ class MiddlewareTest(unittest.TestCase):
         return origin
 
     def test_cache_answers_repeated_gets_without_reaching_the_origin(self):
-        with Petstore("token", middleware=[make_cache(), self.origin()]) as client:
+        with Petstore(api_key="token", middleware=[make_cache(), self.origin()]) as client:
             for _ in range(3):
                 self.assertEqual(client.pets.retrieve("1").name, "Rex")
             self.assertEqual(len(self.seen), 1)
@@ -60,7 +60,7 @@ class MiddlewareTest(unittest.TestCase):
             request.headers["x-tag"] = "yes"
             return next(request)
 
-        with Petstore("token", middleware=[tag, self.origin()]) as client:
+        with Petstore(api_key="token", middleware=[tag, self.origin()]) as client:
             client.pets.retrieve("1")
         self.assertEqual(self.seen[0].headers["x-tag"], "yes")
         self.assertEqual(self.seen[0].headers["authorization"], "Bearer token")
@@ -73,7 +73,7 @@ class MiddlewareTest(unittest.TestCase):
             return httpx.Response(200, json=PET)
 
         async def run():
-            async with AsyncPetstore("token", middleware=[make_async_cache(), origin]) as client:
+            async with AsyncPetstore(api_key="token", middleware=[make_async_cache(), origin]) as client:
                 for _ in range(3):
                     self.assertEqual((await client.pets.retrieve("1")).name, "Rex")
 

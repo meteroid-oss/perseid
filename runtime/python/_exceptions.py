@@ -19,8 +19,6 @@ __all__ = [
     "APITimeoutError",
     "@@CLIENT_NAME@@Error",
     "ModelParseError",
-    "NetworkException",
-    "ResponseDecodeError",
 ]
 
 
@@ -94,9 +92,3 @@ def connection_error(error: httpx.RequestError) -> APIConnectionError:
         return APITimeoutError(request)
     return APIConnectionError(request, str(error) or "Connection error.")
 
-
-NetworkException = APIConnectionError
-"""Deprecated alias of :class:`APIConnectionError`."""
-
-ResponseDecodeError = APIResponseValidationError
-"""Deprecated alias of :class:`APIResponseValidationError`."""

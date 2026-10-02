@@ -69,7 +69,7 @@ class ModelParseError(@@CLIENT_NAME@@Error, ValueError):
 
     It is also a :class:`ValueError`. A client call never lets it escape on its
     own: a response body that fails to parse raises
-    :class:`@@PACKAGE_NAME@@.errors.ResponseDecodeError`, chained to this error.
+    :class:`@@PACKAGE_NAME@@.errors.APIResponseValidationError`, chained to this error.
     """
 
 
@@ -171,7 +171,10 @@ class Discriminator:
         model = self.mapping.get(tag)
         if model is None:
             return UnknownVariant(tag, dict(value))
-        return model.from_dict(value)
+        variant = model.from_dict(value)
+        # The tag is written back on serialization, from the variant's type.
+        variant.__dict__.get("_extra", {}).pop(self.property, None)
+        return variant
 
     def serialize(self, value: t.Any) -> t.Any:
         data = to_json_value(value)
@@ -558,6 +561,18 @@ class BaseModel:
         if extra or "_extra" in self.__dict__:
             self.__dict__["_extra"] = extra
 
+    def _keep_nulls(self, data: t.Mapping[str, t.Any]) -> None:
+        """Remembers the optional fields received as ``null``, which ``None`` otherwise leaves out."""
+        nulls = {
+            field.name
+            for field in dataclasses.fields(self)
+            if field.default is None
+            and field.name not in self._FLATTENED
+            and data.get(self._json_key(field.name), UNSET) is None
+        }
+        if nulls:
+            self.__dict__["_nulls"] = nulls
+
     def _with_extra(self, out: dict[str, t.Any]) -> dict[str, t.Any]:
         extra: dict[str, t.Any] = self.__dict__.get("_extra") or {}
         for key, value in extra.items():
@@ -567,13 +582,14 @@ class BaseModel:
     def _fields_to_dict(self, skip: t.Container[str] = ()) -> dict[str, t.Any]:
         out: dict[str, t.Any] = {}
         hints = _type_hints(type(self))
+        nulls: t.Container[str] = self.__dict__.get("_nulls", ())
         for field in dataclasses.fields(self):
             if field.name in skip:
                 continue
             value = getattr(self, field.name)
-            # `None` means "leave out" for optional fields that the API does
-            # not accept as `null`, which default to `None` rather than UNSET.
-            if value is UNSET or (value is None and field.default is None):
+            # `None` leaves out an optional field defaulting to `None` rather than UNSET,
+            # unless it was received as `null`.
+            if value is UNSET or (value is None and field.default is None and field.name not in nulls):
                 continue
             data = to_json_value(value, hints.get(field.name, t.Any))
             if field.name in self._FLATTENED:
@@ -628,6 +644,7 @@ class BaseModel:
             )
         model = cls(**cls._fields_from_dict(data))
         model._keep_extra(data, cls._known_keys())
+        model._keep_nulls(data)
         return model
 
     @classmethod
@@ -751,6 +768,7 @@ class TaggedUnionModel(BaseModel):
         kwargs[union._DISCRIMINATOR_ATTR] = tag
         kwargs[union._CONTENT_ATTR] = content
         model = cls(**kwargs)
+        model._keep_nulls(data)
         known = union._known_keys()
         if union._CONTENT_KEY is not None:
             model._keep_extra(data, known)

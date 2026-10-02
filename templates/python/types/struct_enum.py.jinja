@@ -1,14 +1,13 @@
-{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, module_name, py_ident -%}
-{#- Discriminated unions: a model holding the discriminator and the variant
-    (`Shape(type="circle", content=Circle(...))`), or with `flat_unions`
-    in the `[python]` table, the plain union `Circle | Square`. -#}
+{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, is_flat_union, model_imports, module_name, py_ident -%}
+{#- Discriminated unions: the plain union `Circle | Square` of their variant models, or when
+    variants share fields or have no model of their own, a model holding the discriminator and
+    the variant (`Shape(type="circle", content=Circle(...))`). -#}
 {% if type.variants | has_non_ref_struct_enum_variants -%}
     {{ panic("struct enum `" ~ type.name ~ "` has inline struct variants, which the Python templates do not support yet") }}
 {%- endif -%}
 {% set class_name = type.name | to_upper_camel_case -%}
 {% set refs = type.variants | map(attribute="schema_ref") | list -%}
-{% set flat = sdk.flat_unions and type.repr == "internally_tagged" and type.fields | length == 0
-    and refs | select | list | length == refs | length and refs | unique | list | length == refs | length -%}
+{% set flat = is_flat_union(type) -%}
 
 {% if flat -%}
 from __future__ import annotations
@@ -45,7 +44,7 @@ from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
     {{ panic("struct enum `" ~ type.name ~ "`: the discriminator, content and shared fields collide") }}
 {%- endif -%}
 {% set runtime_names = ["FROM_CONTENT", "TaggedUnionModel", "UnknownVariant"] -%}
-{% if type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
+{% if request_schema and type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
     {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
 {% endif -%}
 {% set objects = namespace(any=false) -%}
@@ -99,7 +98,7 @@ class {{ class_name }}(TaggedUnionModel):
     """The variant; an `UnknownVariant` when this SDK version does not know it."""
     {%- for field in type.fields %}
 
-    {{ field_ident(field) }}: {{ field_decl(field) }}
+    {{ field_ident(field) }}: {{ field_decl(field, request_schema) }}
         {%- if field.description is defined %}
     {{ docstring(field.description) | indent(4) }}
         {%- endif %}
