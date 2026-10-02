@@ -197,7 +197,7 @@ class PathAndQueryTest(unittest.TestCase):
         with sync_client(handler) as api:
             api.wire.beta_search(limit=2)
         request = handler.requests[0]
-        self.assertEqual(request.url.raw_path, b"/api/v2/wire/beta")
+        self.assertEqual(request.url.path, "/api/v2/wire/beta")
         self.assertEqual(
             sorted(urllib.parse.parse_qsl(request.url.query.decode())), [("beta", "true"), ("limit", "2")]
         )
