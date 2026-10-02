@@ -84,10 +84,14 @@ has no Node.js imports, so it runs in browsers, Workers and edge runtimes.
 Needs Python 3.10+; generated code passes `mypy --strict`, pyright and ruff. Clients take keyword
 arguments, Stainless style: `Acme(api_key=..., base_url=..., timeout=..., max_retries=...,
 default_headers=..., http_client=...)`, and `client.with_options(max_retries=0)` changes them for
-one call. `AsyncAcme` is the asyncio client. Methods take `extra_headers=` and `timeout=`.
+one call; the former `token=` and positional `httpx_client` still work, with a
+`DeprecationWarning`. `AsyncAcme` is the asyncio client. Methods take `extra_headers=` and
+`timeout=`; these headers, like `default_headers`, win over the client's credentials. A method
+whose spec also declares a bodiless 2xx returns `Model | None`, `None` for an empty body.
 Models are keyword-only dataclasses; an optional field that accepts `null` defaults to `UNSET`, so
 `None` sends `null`, and properties the SDK does not know are kept in `extra_fields` (read as
-attributes at runtime) and sent back. Unions are models holding the discriminator and the variant
+attributes at runtime) and sent back. A property named after a model member (`extra_fields`,
+`to_dict`...) gets a trailing `_`, like a keyword. Unions are models holding the discriminator and the variant
 (`Shape(content=Circle(radius=1))`, both tags filled in); `flat_unions = true` in `[python]`
 types them as `Circle | Square` instead. Values told apart by their JSON type, such as expandable
 ids and query parameters taking a value or a list, are `str | Customer` (`expandable_id(value)`
@@ -104,7 +108,8 @@ event schema are `Stream[Chunk]`s yielding models until `[DONE]`, with `last_eve
 
 Every error derives from `AcmeError`. API errors are `APIStatusError` subclasses by status
 (`NotFoundError`, `RateLimitError`, `InternalServerError`...) with `body`, the error response
-decoded into its schema (else its JSON), and `request_id`. No response raises
+decoded into its schema (else its JSON), and `request_id`; the message quotes the start of the
+body, `Error code: 404 - {"error": ...}`. No response raises
 `APIConnectionError`, or its subclass `APITimeoutError`; an undecodable 2xx body
 `APIResponseValidationError`. The former `ApiException`, `ApiStatusError`, `NetworkException`,
 `ResponseDecodeError`, `AcmeOptions` and `AcmeAsync` names remain as deprecated aliases.
