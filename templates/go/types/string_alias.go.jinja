@@ -4,5 +4,7 @@
 {% set type_name = go_ident(type.name) -%}
 package {{ sdk.package_name }}
 
-{{ doc_comment }}
-type {{ type_name }} = string
+{% if not named %}// {{ type_name }} is the {{ type.name }} string of the {{ sdk.client_name }} API.
+{% if doc_comment %}//
+{% endif %}{% endif %}{% if doc_comment %}{{ doc_comment }}
+{% endif %}type {{ type_name }} = string

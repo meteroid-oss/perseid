@@ -29,6 +29,31 @@
     {%- if ident in GO_RESERVED -%}{{ ident }}_{%- else -%}{{ ident }}{%- endif -%}
 {%- endmacro %}
 
+{#- A method argument: a local, suffixed with `Param` when the method bodies use the name. -#}
+{% macro go_arg(name) -%}
+    {%- set ident = go_local(name) -%}
+    {{ ident ~ "Param" if ident in ["params", "resp", "page", "next", "current", "last", "item", "body"] else ident }}
+{%- endmacro %}
+
+{#- The nil checks reaching the end of `path` from `root` need, given which of its
+    properties may be absent (`flags`); with `leaf` false, the last one is a slice. With
+    `missing`, the checks that one is nil instead. -#}
+{% macro go_path_guard(root, path, flags, leaf=true, missing=false) -%}
+    {%- set ns = namespace(expr=root, checks=[]) -%}
+    {%- for segment in path -%}
+        {%- set ns.expr = ns.expr ~ "." ~ go_export(segment) -%}
+        {%- if flags[loop.index0] and (leaf or not loop.last) %}{% set ns.checks = ns.checks + [ns.expr ~ (" == nil" if missing else " != nil")] %}{% endif -%}
+    {%- endfor -%}
+    {{ ns.checks | join(" || " if missing else " && ") }}
+{%- endmacro %}
+
+{#- The value at the end of `path` from `root`, once go_path_guard holds. -#}
+{% macro go_path_value(root, path, flags, leaf=true) -%}
+    {%- set ns = namespace(expr=root) -%}
+    {%- for segment in path %}{% set ns.expr = ns.expr ~ "." ~ go_export(segment) %}{% endfor -%}
+    {{ ("*" if leaf and flags[path | length - 1] else "") ~ ns.expr }}
+{%- endmacro %}
+
 {#- The Go type of a value. Any-JSON (`{}` in the spec) is `json.RawMessage` at
     any depth: `map[string]any` would reject arrays, scalars and null. A typed
     union, when `union` names its Go type, is that type. -#}
@@ -264,11 +289,17 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
         {{ expr }}
     {%- elif gt == "bool" -%}
         formatBool({{ expr }})
-    {%- elif gt in ["int16", "int32", "int64"] -%}
+    {%- elif gt == "int64" -%}
+        formatInt({{ expr }})
+    {%- elif gt in ["int16", "int32"] -%}
         formatInt(int64({{ expr }}))
-    {%- elif gt in ["uint16", "uint64"] -%}
+    {%- elif gt == "uint64" -%}
+        formatUint({{ expr }})
+    {%- elif gt == "uint16" -%}
         formatUint(uint64({{ expr }}))
-    {%- elif gt in ["float32", "float64"] -%}
+    {%- elif gt == "float64" -%}
+        formatFloat({{ expr }})
+    {%- elif gt == "float32" -%}
         formatFloat(float64({{ expr }}))
     {%- elif ty.is_datetime() -%}
         formatTime({{ expr }})

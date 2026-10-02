@@ -1,40 +1,58 @@
 {% from "types/macros.go.jinja" import go_field_type, go_json_tag, go_deprecated, go_ident, go_export, go_type, go_union_name, go_union -%}
 {% set type_name = go_ident(type.name) -%}
 {% set patch = patch_body -%}
-{% macro field_type(field) %}{% if field.flatten %}{{ go_type(field.type) }}{% else %}{{ go_field_type(field, patch, go_union_name(type.name, field.name, field.type, type_names)) }}{% endif %}{% endmacro -%}
-{% set unions %}{% for field in type.fields if not field.flatten %}{% set union = go_union_name(type.name, field.name, field.type, type_names) %}{% if union %}
+{% macro field_type(field) %}{{ go_field_type(field, patch, go_union_name(type.name, field.name, field.type, type_names)) }}{% endmacro -%}
+{% set unions %}{% for field in type.fields %}{% set union = go_union_name(type.name, field.name, field.type, type_names) %}{% if union %}
 {{ go_union(union, field.type) }}
 {% endif %}{% endfor %}{% endset -%}
 {% set defaults = type.discriminator_defaults | default({}) -%}
-{#- A flattened type's promoted MarshalJSON would take over from plain(v). -#}
-{% set ns = namespace(defaulted=[]) -%}
-{% for field in type.fields if field.name in defaults and not (type.fields | selectattr("flatten") | list) %}{% set ns.defaulted = ns.defaulted + [field] %}{% endfor -%}
+{% set ns = namespace(defaulted=[], names=[]) -%}
+{% for field in type.fields -%}
+{% set ns.names = ns.names + [go_export(field.name)] -%}
+{% if field.name in defaults %}{% set ns.defaulted = ns.defaulted + [field] %}{% endif -%}
+{% endfor -%}
 {% set defaulted = ns.defaulted -%}
-{% set rendered_types %}{% for field in type.fields %}{{ field_type(field) }} {% endfor %}{{ unions }}{% if defaulted %} json.{% endif %}{% endset -%}
+{% set extra = "ExtraFields" if "ExtraFields" not in ns.names else "ExtraProperties" -%}
+{% set rendered_types %}{% for field in type.fields %}{{ field_type(field) }} {% endfor %}{{ unions }}{% endset -%}
 package {{ sdk.package_name }}
-{% if "time.Time" in rendered_types and "json." in rendered_types %}
+{% if "time.Time" in rendered_types %}
 import (
 	"encoding/json"
 	"time"
 )
-{% elif "time.Time" in rendered_types %}
-import "time"
-{% elif "json." in rendered_types %}
+{% else %}
 import "encoding/json"
 {% endif %}
-{{ doc_comment }}
-{% if type.deprecated %}{{ go_deprecated("type") }}
+{% if not named %}// {{ type_name }} is the {{ type.name }} object of the {{ sdk.client_name }} API.
+{% if doc_comment %}//
+{% endif %}{% endif %}{% if doc_comment %}{{ doc_comment }}
+{% endif %}{% if type.deprecated %}//
+{{ go_deprecated("type") }}
 {% endif %}type {{ type_name }} struct {
-{% for field in type.fields %}{% if not loop.first %}
-{% endif %}{% if field.description is defined %}{{ field.description | to_doc_comment(style="go") }}
+{% for field in type.fields %}{% if field.description is defined %}{{ field.description | to_doc_comment(style="go") }}
 {% endif %}{% if field in defaulted %}{% if field.description is defined %}//
 {% endif %}// Encodes as {{ defaults[field.name] | tojson }} when left empty.
 {% endif %}{% if field.type.is_datetime() %}// RFC 3339 timestamp.
-{% endif %}{% if field.deprecated %}{{ go_deprecated("field") }}
-{% endif %}{% if field.flatten %}{{ go_type(field.type) }}{% else %}{{ go_export(field.name) }} {{ field_type(field) }} {{ go_json_tag(field) }}{% endif %}
-{% endfor %}}
-{% if defaulted %}
-// MarshalJSON implements json.Marshaler, filling in the discriminator.
+{% endif %}{% if field.deprecated %}{% if field.description is defined or field in defaulted or field.type.is_datetime() %}//
+{% endif %}{{ go_deprecated("field") }}
+{% endif %}{{ go_export(field.name) }} {{ field_type(field) }} {{ go_json_tag(field) }}
+
+{% endfor %}// {{ extra }} holds the properties this SDK version does not know, as
+// decoded, and sends them along when encoding.
+{{ extra }} map[string]json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler, keeping unknown properties in {{ extra }}.
+func (v *{{ type_name }}) UnmarshalJSON(data []byte) error {
+	type plain {{ type_name }}
+	if err := json.Unmarshal(data, (*plain)(v)); err != nil {
+		return err
+	}
+	v.{{ extra }} = extraFields(data{% for field in type.fields %}, {{ field.name | tojson }}{% endfor %})
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler, sending {{ extra }} along{% if defaulted %} and filling in the discriminator{% endif %}.
 func (v {{ type_name }}) MarshalJSON() ([]byte, error) {
 	type plain {{ type_name }}
 {% for field in defaulted %}{% set value = defaults[field.name] | tojson if go_type(field.type) == "string" else go_type(field.type) ~ "(" ~ (defaults[field.name] | tojson) ~ ")" %}{% if field_type(field) is startingwith("*") %}	if v.{{ go_export(field.name) }} == nil {
@@ -43,6 +61,6 @@ func (v {{ type_name }}) MarshalJSON() ([]byte, error) {
 {% else %}	if v.{{ go_export(field.name) }} == "" {
 		v.{{ go_export(field.name) }} = {{ value }}
 	}
-{% endif %}{% endfor %}	return json.Marshal(plain(v))
+{% endif %}{% endfor %}	return marshalWithExtra(plain(v), v.{{ extra }})
 }
-{% endif %}{{ unions }}
+{{ unions }}

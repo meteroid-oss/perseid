@@ -34,17 +34,22 @@ package {{ sdk.package_name }}
 {% else %}import "encoding/json"
 {% endif %}
 
-{{ doc_comment }}
-{% if type.deprecated %}{{ go_deprecated("type") }}
-{% endif %}// {{ type_name }} is a tagged union discriminated by the {{ type.discriminator_field }} field.
+{% if named %}{{ doc_comment }}
 //
+// It is a tagged union discriminated by the {{ type.discriminator_field }} field.
+{% else %}// {{ type_name }} is a tagged union discriminated by the {{ type.discriminator_field }} field.
+{% if doc_comment %}//
+{{ doc_comment }}
+{% endif %}{% endif %}//
 // When [{{ type_name }}.IsKnown] reports true, exactly one variant pointer is
 // set, matching {{ disc_field }}. A variant added to the API after this SDK
 // version was released still decodes without error, but with every variant
 // pointer nil: always give a `switch` on {{ disc_field }} a `default:` branch (or
 // check IsKnown first) instead of dereferencing a pointer unconditionally. The
 // unknown variant's JSON is available from [{{ type_name }}.Raw].
-type {{ type_name }} struct {
+{% if type.deprecated %}//
+{{ go_deprecated("type") }}
+{% endif %}type {{ type_name }} struct {
 // {{ disc_field }} selects the active variant. Compare it against the
 // {{ type_name }}* constants.
 {{ disc_field }} string `json:"{{ type.discriminator_field }}"`
