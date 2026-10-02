@@ -2,7 +2,7 @@
 {#- A union variant's discriminator defaults to its tag: `Circle(radius=1)`. -#}
 {% set defaults = type.discriminator_defaults if type.discriminator_defaults is defined else {} -%}
 {% set runtime_names = ["BaseModel"] -%}
-{% if type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
+{% if request_schema and type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
     {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
 {% endif -%}
 {% set objects = namespace(any=false) -%}
@@ -48,7 +48,7 @@ class {{ type.name | to_upper_camel_case }}(BaseModel):
     {%- for required_pass in [true, false] %}
         {%- for field in type.fields if field.required == required_pass %}
 
-    {{ field_ident(field) }}: {{ field_decl(field) }}
+    {{ field_ident(field) }}: {{ field_decl(field, request_schema) }}
             {%- if field.required and not field.nullable and field.name in defaults and field.type.to_python() == "str" %} = {{ py_str(defaults[field.name]) }}{% endif %}
             {%- if field.description is defined or field.deprecated %}
     {{ docstring(((field.description if field.description is defined else "") ~ ("\n\n.. deprecated:: This field is deprecated." if field.deprecated else "")) | trim) | indent(4) }}

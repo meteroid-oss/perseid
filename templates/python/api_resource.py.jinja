@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import py_str, docstring, py_ident, py_type, param_type, resource_module, union_refs -%}
+{% from "types/macros.py.jinja" import arg_type, docstring, field_ident, field_type, field_decl, has_object_union, is_flat_union, py_str, py_ident, py_type, param_type, resource_module, type_refs, union_refs -%}
 # this file is @generated
 {% if resource.subresources | length > 0 -%}
     {{ panic("resource `" ~ resource.name ~ "` has subresources, which the Python templates do not support yet") }}
@@ -17,8 +17,39 @@ from __future__ import annotations
     {% if op.response_body_json_type is defined or op.response_body_schema_name is defined %}{% set may_be_empty.any = true %}{% endif -%}
 {% endfor -%}
 {#- Models a method names that `referenced_components` leaves out: event and typed union ones. -#}
-{% set extra_models = namespace(names=[]) -%}
+{#- The indices of the fields of an object body that a method takes as keyword arguments,
+    after "F"; nothing when the body is not an object or a field is named like a parameter.
+    The `stream` property a `_stream` twin sets is left out of both twins. -#}
+{% macro flat_body(op) -%}
+    {%- set twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("stream_property", "defined") | first -%}
+    {%- set skipped = op.stream_property if op.stream_property is defined else (twin.stream_property if twin else none) -%}
+    {%- set schema = types[op.request_body_schema_name] if op.request_body_schema_name is defined else none -%}
+    {%- if schema and schema.kind == "struct" and not op.request_body_is_list | default(false)
+        and op.request_body_kind in ["json", "form"] and not schema.fields | selectattr("flatten") | list -%}
+        {%- set params = (op.path_params | list) + (op.query_params | map(attribute="name") | list) + (op.header_params | map(attribute="name") | list) -%}
+        {%- set taken = (params | map("ident", "snake", "python") | list) + ["self", "t"] -%}
+        {%- set out = namespace(indices=[], clash=false) -%}
+        {%- for f in schema.fields -%}
+            {%- if (f.required or not f.read_only | default(false)) and f.name != skipped -%}
+                {%- if field_ident(f) in taken %}{% set out.clash = true %}{% endif -%}
+                {%- set out.indices = out.indices + [loop.index0 | string] -%}
+            {%- endif -%}
+        {%- endfor -%}
+        {%- if not out.clash %}F {{ out.indices | join(" ") }}{% endif -%}
+    {%- endif -%}
+{%- endmacro %}
+{#- The class names of the schemas, then of those with a `t.Literal` alias of their values. -#}
+{% set names = types | items | map("last") | map(attribute="name") | map("to_upper_camel_case") | list -%}
+{% set enums = types | items | map("last") | selectattr("kind", "in", ["string_enum", "integer_enum"]) | map(attribute="name") | map("to_upper_camel_case") | reject("in", names | select("endingwith", "Literal") | map("replace", "Literal", "") | list) | list -%}
+{% set extra_models = namespace(names=[], object_unions=false) -%}
 {% for op in resource.operations -%}
+    {% if flat_body(op) -%}
+        {% for f in types[op.request_body_schema_name].fields -%}
+            {% set extra_models.names = extra_models.names + (type_refs(f.type) | trim | split(" ") | reject("equalto", "") | list) -%}
+            {% if f.type.is_schema_ref() and f.type.to_python() in enums %}{% set extra_models.names = extra_models.names + [f.type.to_python() ~ "Literal"] %}{% endif -%}
+            {% if has_object_union(f.type) %}{% set extra_models.object_unions = true %}{% endif -%}
+        {% endfor -%}
+    {% endif -%}
     {% if op.event_schema_name is defined and op.response_is_event_stream -%}
         {% set extra_models.names = extra_models.names + [op.event_schema_name] -%}
     {% endif -%}
@@ -52,7 +83,10 @@ from ..models import (
 {%- endfor %}
 )
 {%- endif %}
-from ..serialization import UNSET, Unset, to_json_value
+from ..serialization import UNSET, {% if extra_models.object_unions %}UnknownVariant, {% endif %}Unset, to_json_value
+{%- if extra_models.object_unions %}
+from ..unions import ObjectUnion
+{%- endif %}
 from ._response import async_to_raw_response_wrapper, to_raw_response_wrapper
 from .common import (
     ApiBaseAsync,
@@ -168,31 +202,37 @@ class {{ class_name }}({{ base_class }}):
 {%- else %}
 {%- set return_type = "None" %}
 {%- endif %}
+{%- set flat = flat_body(op) | trim %}
+{%- set flat_fields = namespace(list=[]) %}
+{%- if flat %}
+{%- set schema = types[op.request_body_schema_name] %}
+{%- for index in flat | split(" ") | list | reject("equalto", "F") %}
+{%- set flat_fields.list = flat_fields.list + [schema.fields[index | int]] %}
+{%- endfor %}
+{%- set defaults = schema.discriminator_defaults if schema.discriminator_defaults is defined else {} %}
+{%- endif %}
+{%- set param_names = (op.path_params | list) + (op.query_params | map(attribute="name") | list) + (op.header_params | map(attribute="name") | list) %}
+{%- set arg_names = namespace(list=param_names | map("ident", "snake", "python") | list) %}
+{%- for f in flat_fields.list %}{% set arg_names.list = arg_names.list + [field_ident(f)] %}{% endfor %}
+{%- set body_param = ("request_body" if "body" in arg_names.list else "body") if not flat else none %}
 {%- if op.request_body_json_type is defined %}
-{%- set body_param = "body" %}
 {%- set body_type = py_type(op.request_body_json_type) %}
 {%- elif op.request_body_schema_name is defined %}
-{%- set body_param = py_ident(op.request_body_schema_name) %}
-{%- set taken = (op.path_params | list) + (op.query_params | map(attribute="name") | list) + (op.header_params | map(attribute="name") | list) %}
-{%- if body_param in ["self", "extra_headers", "timeout"] or body_param in (taken | map("ident", "snake", "python") | list) %}{% set body_param = "body" %}{% endif %}
 {%- set body_type = op.request_body_schema_name | to_upper_camel_case %}
 {%- if op.request_body_is_list %}{% set body_type = "list[" ~ body_type ~ "]" %}{% endif %}
 {%- elif op.request_body_kind == "binary" %}
-{%- set body_param = "body" %}
 {%- set body_type = "UploadContent" %}
 {%- elif op.request_body_kind == "multipart" %}
-{%- set body_param = "body" %}
 {%- set body_type = resource_class_name ~ (op.name | to_upper_camel_case) ~ "Body" %}
+{%- else %}
+{%- set body_param = none %}
 {%- endif %}
 {%- set pg = op.pagination if op.pagination is defined else none %}
 {%- if pg %}
 {%- set item_type = pg.item_schema | to_upper_camel_case %}
 {%- set page_type = ("AsyncPaginator[" if is_async else "SyncPage[") ~ item_type ~ ", " ~ response_type ~ "]" %}
 {%- endif %}
-{%- set param_names = (op.path_params | list) + (op.query_params | map(attribute="name") | list) + (op.header_params | map(attribute="name") | list) %}
-{%- set param_idents = param_names | map("ident", "snake", "python") | list %}
-{%- set timeout_kw = "request_timeout" if "timeout" in param_idents else "timeout" %}
-{%- set headers_kw = "request_extra_headers" if "extra_headers" in param_idents else "extra_headers" %}
+{%- macro option(name) %}{{ "request_" ~ name if name in arg_names.list else name }}{% endmacro %}
 
 {%- set signature %}
 {%- for p in op.path_params %}
@@ -204,6 +244,10 @@ class {{ class_name }}({{ base_class }}):
         *,
 {#- Required parameters first, for readability: they are all keyword-only. -#}
 {%- for required_pass in [true, false] %}
+{%- for f in flat_fields.list if (f.required and f.name not in defaults) == required_pass %}
+        {{ field_ident(f) }}: {{ unshadow(field_decl(f, true, arg_type(f.type, enums))) }}
+        {%- if f.required and f.name in defaults %} = {{ py_str(defaults[f.name]) }}{% endif %},
+{%- endfor %}
 {%- for p in op.query_params if p.required == required_pass %}
         {{ py_ident(p.name) }}: {{ unshadow(param_type(p)) }}{% if not p.required %} | None = None{% endif %},
 {%- endfor %}
@@ -211,16 +255,24 @@ class {{ class_name }}({{ base_class }}):
         {{ py_ident(p.name) }}: {% if p.required %}str,{% else %}str | None = None,{% endif %}
 {%- endfor %}
 {%- endfor %}
-        {{ headers_kw }}: t.Mapping[str, str] | None = None,
-        {{ timeout_kw }}: Timeout | Unset = UNSET,
+        {{ option("extra_headers") }}: t.Mapping[str, str] | None = None,
+        {{ option("extra_query") }}: t.Mapping[str, object] | None = None,
+        {{ option("extra_body") }}: t.Mapping[str, object] | None = None,
+        {{ option("timeout") }}: Timeout | Unset = UNSET,
+        {{ option("max_retries") }}: int | None = None,
 {%- endset %}
-{%- set forwarded %}
-{%- for p in op.path_params %}{{ py_ident(p) }}, {% endfor %}
-{%- if body_param is not none %}{{ body_param }}, {% endif %}
-{%- for p in op.query_params %}{{ py_ident(p.name) }}={{ py_ident(p.name) }}, {% endfor %}
-{%- for p in op.header_params %}{{ py_ident(p.name) }}={{ py_ident(p.name) }}, {% endfor %}
-{{- headers_kw }}={{ headers_kw }}, {{ timeout_kw }}={{ timeout_kw }}
-{%- endset %}
+{%- set json_value = none %}
+{%- if flat %}
+{%- set body_value %}{{ body_type }}(
+{%- for f in flat_fields.list %}
+{%- set ident = field_ident(f) %}
+{%- if arg_type(f.type, enums) != py_type(f.type) %}{{ ident }}=t.cast("{{ field_type(f) }}", {{ ident }}), {% else %}{{ ident }}={{ ident }}, {% endif %}
+{%- endfor %}){% endset %}
+{%- set json_value = "to_json_value(" ~ body_value ~ ", " ~ body_type ~ ")" %}
+{%- if op.request_body_optional and op.stream_property is not defined %}{% set json_value = json_value ~ " or None" %}{% endif %}
+{%- elif body_param is not none %}
+{%- set json_value = "to_json_value(" ~ body_param ~ ", " ~ body_type ~ ")" %}
+{%- endif %}
 {%- set request %}
             ApiRequest(
                 method="{{ op.method }}",
@@ -276,20 +328,20 @@ class {{ class_name }}({{ base_class }}):
                 security={{ op.security | tojson }},
 {%- endif %}
 {%- if op.request_body_kind == "binary" %}
-                upload_body=body,
+                upload_body={{ body_param }},
 {%- if op.request_body_content_type is defined %}
                 upload_content_type={{ py_str(op.request_body_content_type) }},
 {%- endif %}
 {%- elif op.request_body_kind == "multipart" %}
-                multipart={% if op.request_body_optional %}None if body is None else {% endif %}[
+                multipart={% if op.request_body_optional %}None if {{ body_param }} is None else {% endif %}[
 {%- for field in op.multipart_fields %}
-                    ({{ py_str(field.name) }}, body.{{ py_ident(field.name) }}, {{ "True" if field.is_file else "False" }}),
+                    ({{ py_str(field.name) }}, {{ body_param }}.{{ py_ident(field.name) }}, {{ "True" if field.is_file else "False" }}),
 {%- endfor %}
                 ],
-{%- elif body_param is not none %}
+{%- elif json_value is not none %}
 {%- if op.request_body_is_form %}
                 form_body=serialize_form_body(
-                    to_json_value({{ body_param }}, {{ body_type }}),
+                    {{ json_value }},
 {%- if op.form_deep_object %}
                     deep_object=({% for n in op.form_deep_object %}{{ py_str(n) }}, {% endfor %}),
 {%- endif %}
@@ -297,17 +349,15 @@ class {{ class_name }}({{ base_class }}):
                     unexploded=({% for n in op.form_unexploded %}{{ py_str(n) }}, {% endfor %}),
 {%- endif %}
                 ),
-{%- elif op.stream_property is defined %}
-{%- if op.request_body_optional %}
+{%- elif op.stream_property is defined and op.request_body_optional and not flat %}
                 json_body={
-                    **({} if {{ body_param }} is None else to_json_value({{ body_param }}, {{ body_type }})),
+                    **({} if {{ body_param }} is None else {{ json_value }}),
                     {{ py_str(op.stream_property) }}: True,
                 },
+{%- elif op.stream_property is defined %}
+                json_body={**{{ json_value }}, {{ py_str(op.stream_property) }}: True},
 {%- else %}
-                json_body={**to_json_value({{ body_param }}, {{ body_type }}), {{ py_str(op.stream_property) }}: True},
-{%- endif %}
-{%- else %}
-                json_body=to_json_value({{ body_param }}, {{ body_type }}),
+                json_body={{ json_value }},
 {%- endif %}
 {%- endif %}
 {%- if op.response_is_event_stream %}
@@ -325,11 +375,17 @@ class {{ class_name }}({{ base_class }}):
 {%- endif %}
                 },
 {%- endif %}
-                extra_headers={{ headers_kw }},
-                timeout={{ timeout_kw }},
+                extra_headers={{ option("extra_headers") }},
+                extra_query={{ option("extra_query") }},
+                extra_body={{ option("extra_body") }},
+                timeout={{ option("timeout") }},
+                max_retries={{ option("max_retries") }},
             )
 {%- endset %}
 {%- set params_doc %}
+{%- for f in flat_fields.list if f.description is defined %}
+:param {{ field_ident(f) }}: {{ f.description | replace("\n", " ") }}
+{%- endfor %}
 {%- for p in op.query_params if p.description is defined %}
 :param {{ py_ident(p.name) }}: {{ p.description | replace("\n", " ") }}
 {%- endfor %}
@@ -381,15 +437,6 @@ class {{ class_name }}({{ base_class }}):
 {%- else %}
         return first_page(fetch, {{ py_ident(pg.param) }}, paging)
 {%- endif %}
-
-    def {{ py_ident(op.name ~ "_iter") }}(
-        self,{{ signature }}
-    ) -> {% if is_async %}t.AsyncIterator{% else %}t.Iterator{% endif %}[{{ item_type }}]:
-        """Every item of :meth:`{{ py_ident(op.name) }}`, fetching pages on demand.
-
-        .. deprecated:: Iterate the page :meth:`{{ py_ident(op.name) }}` returns instead.
-        """
-        return {% if is_async %}aiter{% else %}iter{% endif %}(self.{{ py_ident(op.name) }}({{ forwarded }}))
 {%- else %}
 
     {% if is_async %}async {% endif %}def {{ py_ident(op.name) }}(
@@ -408,7 +455,8 @@ class {{ class_name }}({{ base_class }}):
         return response.text
 {%- elif return_type != "None" %}
 {%- set decode = "decode_optional_response" if return_type != response_type else "decode_response" %}
-{%- if sdk.flat_unions %}
+{%- set response_schema = types[op.response_body_schema_name] if op.response_body_schema_name is defined else none %}
+{%- if response_schema and response_schema.kind == "struct_enum" and is_flat_union(response_schema) %}
         {#- A union alias is not a class, so `decode_response` cannot infer its type. #}
         decoded: {{ unshadow(return_type) }} = {{ decode }}(response, {{ response_type }})
         return decoded

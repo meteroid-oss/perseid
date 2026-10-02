@@ -64,9 +64,9 @@ from .middleware import AsyncMiddleware, SyncMiddleware, chain_async, chain_sync
 
 __all__ = [
     "DEFAULT_MAX_RETRIES",
-    "DEFAULT_NUM_RETRIES",
-    "DEFAULT_SERVER_URL",
     "DEFAULT_TIMEOUT",
+    "INITIAL_RETRY_DELAY",
+    "MAX_RETRY_DELAY",
     "ApiBase",
     "ApiBaseAsync",
     "ApiBaseSync",
@@ -77,16 +77,15 @@ __all__ = [
     "Timeout",
     "decode_optional_response",
     "decode_response",
-    "default_retry_schedule",
     "serialize_form_body",
     "serialize_query_params",
 ]
 
-DEFAULT_SERVER_URL = "@@DEFAULT_BASE_URL@@"
 DEFAULT_TIMEOUT: float = @@TIMEOUT@@
 DEFAULT_MAX_RETRIES = 2
-DEFAULT_NUM_RETRIES = DEFAULT_MAX_RETRIES
-_MAX_BACKOFF = 8.0
+INITIAL_RETRY_DELAY = 0.5
+"""Seconds before the first retry, doubling for each next one up to :data:`MAX_RETRY_DELAY`."""
+MAX_RETRY_DELAY = 8.0
 _MAX_RETRY_AFTER = 60.0
 _REPLAYABLE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
 
@@ -192,21 +191,11 @@ def _flatten_param(prefix: str, value: JSONValue, out: QueryParams) -> None:
         out.append((prefix, _serialize_scalar(value)))
 
 
-def default_retry_schedule(num_retries: int) -> list[float]:
-    """Exponential backoff delays, matching the Rust client's defaults."""
-    schedule: list[float] = []
-    backoff = 0.5
-    for _ in range(num_retries):
-        schedule.append(backoff)
-        backoff = min(_MAX_BACKOFF, backoff * 2)
-    return schedule
-
-
 @dataclasses.dataclass
 class Configuration:
     """Resolved client configuration, shared by every resource."""
 
-    base_path: str = DEFAULT_SERVER_URL
+    base_path: str
     bearer_access_token: str | None = None
     token_provider: TokenProvider | None = None
     basic_auth: tuple[str, str] | None = None
@@ -217,9 +206,7 @@ class Configuration:
     security: Security = ()
     user_agent: str = f"@@USER_AGENT_PREFIX@@-python/{__version__}"
     timeout: Timeout = DEFAULT_TIMEOUT
-    retry_schedule: list[float] = dataclasses.field(
-        default_factory=lambda: default_retry_schedule(DEFAULT_MAX_RETRIES)
-    )
+    max_retries: int = DEFAULT_MAX_RETRIES
     default_headers: t.Mapping[str, str] = dataclasses.field(default_factory=dict[str, str])
     middleware: list[SyncMiddleware] = dataclasses.field(default_factory=list[SyncMiddleware])
     async_middleware: list[AsyncMiddleware] = dataclasses.field(default_factory=list[AsyncMiddleware])
@@ -251,8 +238,36 @@ class ApiRequest:
     security: Security | None = None
     error_types: ErrorTypes | None = None
     extra_headers: t.Mapping[str, str] | None = None
+    extra_query: t.Mapping[str, object] | None = None
+    extra_body: t.Mapping[str, object] | None = None
     timeout: Timeout | Unset = UNSET
+    max_retries: int | None = None
     stream: bool = False
+
+
+def _with_extra_body(
+    spec: ApiRequest,
+) -> tuple[object, QueryParams | None, t.Sequence[MultipartField] | None]:
+    """The JSON, form and multipart bodies of ``spec``, with its ``extra_body`` properties."""
+    if not spec.extra_body:
+        return spec.json_body, spec.form_body, spec.multipart
+    extra: dict[str, JSONValue] = {
+        str(key): to_json_value(value) for key, value in spec.extra_body.items()
+    }
+    if spec.form_body is not None:
+        form = [*spec.form_body]
+        for key, value in extra.items():
+            encode_param(key, value, False, True, form)
+        return None, form, None
+    if spec.multipart is not None:
+        return None, None, [*spec.multipart, *((key, value, False) for key, value in extra.items())]
+    if spec.upload_body is not None:
+        raise TypeError("extra_body needs a JSON, form or multipart request body")
+    if spec.json_body is None:
+        return extra, None, None
+    if not isinstance(spec.json_body, dict):
+        raise TypeError("extra_body needs a JSON object request body")
+    return {**t.cast("dict[str, JSONValue]", spec.json_body), **extra}, None, None
 
 
 def _raise_for_status(response: httpx.Response, error_types: ErrorTypes | None) -> None:
@@ -379,11 +394,13 @@ class ApiBase:
         path, _, own_query = path.partition("?")
         params = urllib.parse.parse_qsl(own_query, keep_blank_values=True)
         params.extend(spec.query_params or [])
+        params.extend(serialize_query_params(spec.extra_query or {}))
 
         content: str | UploadContent | None = None
-        files = multipart_files(spec.multipart) if spec.multipart is not None else []
-        if spec.form_body is not None:
-            content = urllib.parse.urlencode(spec.form_body)
+        json_body, form_body, multipart = _with_extra_body(spec)
+        files = multipart_files(multipart) if multipart is not None else []
+        if form_body is not None:
+            content = urllib.parse.urlencode(form_body)
             headers["content-type"] = "application/x-www-form-urlencoded"
         elif spec.upload_body is not None:
             content = spec.upload_body
@@ -415,7 +432,7 @@ class ApiBase:
             params=tuple(params) or None,
             headers=headers,
             content=content,
-            json=spec.json_body,
+            json=json_body,
             files=files or None,
             timeout=timeout,
         )
@@ -427,10 +444,11 @@ class ApiBase:
         return needs_token_provider(self._cfg, chosen_schemes(self._cfg, security))
 
     def _retry_delay(
-        self, attempt: int, replayable: bool, response: httpx.Response | None
+        self, spec: ApiRequest, attempt: int, replayable: bool, response: httpx.Response | None
     ) -> float | None:
         """Seconds to wait before retrying, or ``None`` to give up."""
-        if attempt >= len(self._cfg.retry_schedule) or not replayable:
+        max_retries = self._cfg.max_retries if spec.max_retries is None else spec.max_retries
+        if attempt >= max_retries or not replayable:
             return None
         if response is not None:
             if not _retryable_status(response.status_code):
@@ -438,7 +456,8 @@ class ApiBase:
             retry_after = _retry_after(response)
             if retry_after is not None and 0 <= retry_after <= _MAX_RETRY_AFTER:
                 return retry_after
-        return self._cfg.retry_schedule[attempt] * (1 - 0.25 * random.random())
+        backoff = min(INITIAL_RETRY_DELAY * 2.0**attempt, MAX_RETRY_DELAY)
+        return backoff * (1 - 0.25 * random.random())
 
     @staticmethod
     def _finish(response: httpx.Response, spec: ApiRequest) -> None:
@@ -472,11 +491,11 @@ class ApiBaseSync(ApiBase):
             try:
                 response = self._send(request, spec.stream)
             except httpx.RequestError as exc:
-                delay = self._retry_delay(attempt, replayable, None)
+                delay = self._retry_delay(spec, attempt, replayable, None)
                 if delay is None:
                     raise connection_error(exc) from exc
             else:
-                delay = self._retry_delay(attempt, replayable, response)
+                delay = self._retry_delay(spec, attempt, replayable, response)
                 if delay is None:
                     try:
                         self._finish(response, spec)
@@ -515,11 +534,11 @@ class ApiBaseAsync(ApiBase):
             try:
                 response = await self._send(request, spec.stream)
             except httpx.RequestError as exc:
-                delay = self._retry_delay(attempt, replayable, None)
+                delay = self._retry_delay(spec, attempt, replayable, None)
                 if delay is None:
                     raise connection_error(exc) from exc
             else:
-                delay = self._retry_delay(attempt, replayable, response)
+                delay = self._retry_delay(spec, attempt, replayable, response)
                 if delay is None:
                     try:
                         self._finish(response, spec)

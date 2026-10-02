@@ -144,7 +144,10 @@ impl Generator<'_> {
     }
 
     fn generate_api_resources(self, api: Api) -> anyhow::Result<Vec<Utf8PathBuf>> {
-        self.generate_api_resources_inner(api.resources.values(), &errors_context(&api))
+        // Every schema, for templates that read the fields of a request body.
+        let types = minijinja::Value::from_serialize(&api.types);
+        let shared = context! { types, ..errors_context(&api) };
+        self.generate_api_resources_inner(api.resources.values(), &shared)
     }
 
     fn generate_api_resources_inner<'a>(

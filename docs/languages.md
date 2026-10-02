@@ -93,22 +93,35 @@ runs in browsers, Workers and edge runtimes.
 ## Python
 
 Needs Python 3.10+; generated code passes `mypy --strict`, pyright and ruff. Clients take keyword
-arguments, Stainless style: `Acme(api_key=..., base_url=..., timeout=..., max_retries=...,
+arguments only, Stainless style: `Acme(api_key=..., base_url=..., timeout=..., max_retries=...,
 default_headers=..., http_client=...)`, and `client.with_options(max_retries=0)` changes them for
-one call; the former `token=` and positional `httpx_client` still work, with a
-`DeprecationWarning`. `AsyncAcme` is the asyncio client. Methods take `extra_headers=` and
-`timeout=`; these headers, like `default_headers`, win over the client's credentials. A method
-whose spec also declares a bodiless 2xx returns `Model | None`, `None` for an empty body.
-Models are keyword-only dataclasses; an optional field that accepts `null` defaults to `UNSET`, so
-`None` sends `null`, and properties the SDK does not know are kept in `extra_fields` (read as
-attributes at runtime) and sent back. A property named after a model member (`extra_fields`,
-`to_dict`...) gets a trailing `_`, like a keyword. Unions are models holding the discriminator and the variant
-(`Shape(content=Circle(radius=1))`, both tags filled in); `flat_unions = true` in `[python]`
-types them as `Circle | Square` instead. Values told apart by their JSON type, such as expandable
-ids and query parameters taking a value or a list, are `str | Customer` (`expandable_id(value)`
-gives the id either way). A union of objects is annotated `t.Annotated[Customer |
-DeletedCustomer | UnknownVariant, ObjectUnion(...)]`: unmatched objects are an `UnknownVariant`,
-and `as_variant(value, Customer)` reads a value as another variant.
+one call. Without a server in the spec nor `base_url`, the client needs `base_url=` or
+`ACME_BASE_URL` and raises `AcmeError` naming both. `AsyncAcme` is the asyncio client.
+
+The fields of an object request body are keyword arguments: `client.customers.create(
+currency="EUR", name="x")`. An enum argument also takes its values as literals (`Currency |
+CurrencyLiteral`); nested objects are models. An omitted optional argument is not sent; `None`
+sends `null` to a nullable field (its default is `UNSET`), and leaves out the others. Other bodies
+(lists, unions, multipart, binary), or one with a field named like a parameter, are a single `body`
+argument. A `_stream` twin sets its `stream` property, which neither twin takes. Every method also
+takes `extra_headers=`, `extra_query=`, `extra_body=` (merged into the JSON or form body),
+`timeout=` and `max_retries=`, prefixed with `request_` when a parameter has the name; these
+headers, like `default_headers`, win over the client's credentials. A method whose spec also
+declares a bodiless 2xx returns `Model | None`, `None` for an empty body.
+
+Models are keyword-only dataclasses, and properties the SDK does not know are kept in
+`extra_fields` (read as attributes at runtime) and sent back. In schemas requests send, an optional
+field that accepts `null` defaults to `UNSET`, so `None` sends `null`; in schemas only responses
+carry, it is `X | None = None`. A property named after a model member (`extra_fields`,
+`to_dict`...) gets a trailing `_`, like a keyword. A discriminated union is the union of its
+variant models, `t.Annotated[Circle | Square | UnknownVariant, Discriminator(...)]`, decoding into
+the variant and writing its tag back; when variants share fields, reuse a model or have none, it
+is a model holding the discriminator and the variant (`Shape(content=Circle(radius=1))`, both tags
+filled in). Values told apart by their JSON type, such as expandable ids and query parameters
+taking a value or a list, are `str | Customer` (`expandable_id(value)` gives the id either way). A
+union of objects is annotated `t.Annotated[Customer | DeletedCustomer | UnknownVariant,
+ObjectUnion(...)]`: unmatched objects are an `UnknownVariant`, and `as_variant(value, Customer)`
+reads a value as another variant.
 
 List methods return a `SyncPage` (`items`, `body`, `has_next_page()`, `get_next_page()`,
 `iter_pages()`) whose iteration walks every item of every page; the async ones an
@@ -122,8 +135,7 @@ Every error derives from `AcmeError`. API errors are `APIStatusError` subclasses
 decoded into its schema (else its JSON), and `request_id`; the message quotes the start of the
 body, `Error code: 404 - {"error": ...}`. No response raises
 `APIConnectionError`, or its subclass `APITimeoutError`; an undecodable 2xx body
-`APIResponseValidationError`. The former `ApiException`, `ApiStatusError`, `NetworkException`,
-`ResponseDecodeError`, `AcmeOptions` and `AcmeAsync` names remain as deprecated aliases.
+`APIResponseValidationError`.
 
 ## Go
 

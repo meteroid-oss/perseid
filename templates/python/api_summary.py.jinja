@@ -8,7 +8,7 @@
 {%- endfor %}
 {%- endfor %}
 {%- set client = sdk.client_name %}
-{%- set error_names = ["APIStatusError", "ApiException", "ApiStatusError", "AuthenticationError", "BadRequestError", "ConflictError", "ErrorBody", "InternalServerError", "NotFoundError", "PermissionDeniedError", "RateLimitError", "UnprocessableEntityError"] %}
+{%- set error_names = ["APIStatusError", "AuthenticationError", "BadRequestError", "ConflictError", "ErrorBody", "InternalServerError", "NotFoundError", "PermissionDeniedError", "RateLimitError", "UnprocessableEntityError"] %}
 
 from .._exceptions import (
     APIConnectionError,
@@ -25,12 +25,7 @@ from ._errors import (
 from ._pagination import AsyncPage, AsyncPaginator, SyncPage
 from ._response import APIResponse
 from ._streaming import AsyncEventStream, AsyncStream, EventStream, SseEvent, Stream, Upload
-from .client import (
-    Async{{ client }},
-    {{ client }},
-    {{ client }}Async,
-    {{ client }}Options,
-)
+from .client import Async{{ client }}, {{ client }}
 {% for resource in api.resources -%}
     {% set cls = resource.name | to_upper_camel_case -%}
     from .{{ resource_module(resource.name) }} import Async{{ cls }}, {{ cls }}
@@ -49,9 +44,7 @@ __all__ = [
     "AsyncStream",
     "EventStream",
     "{{ client }}",
-    "{{ client }}Async",
     "{{ client }}Error",
-    "{{ client }}Options",
     "SseEvent",
     "Stream",
     "SyncPage",
@@ -110,11 +103,8 @@ class {{ cls }}:
 
     def __init__(
         self,
-        api_key: str | None = None,
-        options: {{ client }}Options | None = None,
-        httpx_client: {{ http }} | None = None,
         *,
-        token: str | None = None,
+        api_key: str | None = None,
         base_url: str | httpx.URL | None = None,
         timeout: Timeout | Unset = UNSET,
         max_retries: int | None = None,
@@ -134,10 +124,11 @@ class {{ cls }}:
         """Creates a client.
 
         :param api_key: The token of the API, read from ``{{ env }}_API_KEY`` when ``None``.
-        :param options: Deprecated: pass its fields as keyword arguments.
-        :param httpx_client: Deprecated alias of ``http_client``.
-        :param token: Deprecated alias of ``api_key``.
+{%- if sdk.has_default_base_url %}
         :param base_url: Defaults to ``{{ env }}_BASE_URL``, else ``{{ sdk.default_base_url }}``.
+{%- else %}
+        :param base_url: Defaults to ``{{ env }}_BASE_URL``; one of them is required.
+{%- endif %}
         :param timeout: Of each attempt, in seconds ({{ sdk.timeout }} by default); ``None`` waits.
         :param max_retries: Retries of a failed idempotent request (2 by default).
         :param default_headers: Sent with every request.
@@ -155,11 +146,7 @@ class {{ cls }}:
 {%- endif %}
         :param middleware: Wraps every HTTP attempt: caching, logging, signing.
         """
-        api_key = _alias(api_key, "api_key", token, "token")
-        http_client = _alias(http_client, "http_client", httpx_client, "httpx_client")
-        options = options if options is not None else {{ client }}Options()
         self._cfg = _configuration(
-            options,
             api_key=api_key,
             base_url=base_url,
             timeout=timeout,
@@ -175,8 +162,7 @@ class {{ cls }}:
             api_keys=api_keys,
 {%- endif %}
         )
-        if middleware is not None:
-            self._cfg.{{ "async_" if is_async else "" }}middleware = list(middleware)
+        self._cfg.{{ "async_" if is_async else "" }}middleware = list(middleware or ())
         self._owns_httpx_client = http_client is None
         self._httpx_client = (
             http_client if http_client is not None else {{ http }}(timeout=self._cfg.timeout)
@@ -203,7 +189,7 @@ class {{ cls }}:
         if not isinstance(timeout, Unset):
             cfg.timeout = timeout
         if max_retries is not None:
-            cfg.retry_schedule = default_retry_schedule(max_retries)
+            cfg.max_retries = max_retries
         if default_headers is not None:
             cfg.default_headers = {**cfg.default_headers, **default_headers}
         clone = {{ cls }}.__new__({{ cls }})
@@ -211,10 +197,6 @@ class {{ cls }}:
         clone._httpx_client = self._httpx_client
         clone._owns_httpx_client = False
         return clone
-
-    def with_token(self, token: str) -> {{ cls }}:
-        """A copy of this client using another token. Deprecated: use :meth:`with_options`."""
-        return self.with_options(api_key=token)
 
     @property
     def with_raw_response(self) -> {{ cls }}WithRawResponse:
@@ -260,20 +242,12 @@ from __future__ import annotations
 import dataclasses
 import os
 import typing as t
-import warnings
 
 import httpx
 
-from ..serialization import UNSET, Unset
+from ..serialization import UNSET, {{ client }}Error, Unset
 from ._auth import SecurityScheme{% if "bearer" in kinds %}, TokenProvider{% endif %}
-from .common import (
-    DEFAULT_MAX_RETRIES,
-    DEFAULT_SERVER_URL,
-    DEFAULT_TIMEOUT,
-    Configuration,
-    Timeout,
-    default_retry_schedule,
-)
+from .common import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, Configuration, Timeout
 from .middleware import AsyncMiddleware, SyncMiddleware
 {% for resource in api.resources -%}
     {% set cls = resource.name | to_upper_camel_case -%}
@@ -288,52 +262,12 @@ __all__ = [
     "Async{{ client }}",
     "Async{{ client }}WithRawResponse",
     "{{ client }}",
-    "{{ client }}Async",
-    "{{ client }}Options",
     "{{ client }}WithRawResponse",
 ]
+{%- if sdk.has_default_base_url %}
 
-
-@dataclasses.dataclass
-class {{ client }}Options:
-    """Options of the {{ client }} clients. Deprecated: pass them as keyword arguments."""
-
-    server_url: str | None = None
-    """Custom server URL. Defaults to `{{ sdk.default_base_url }}`."""
-
-    timeout: Timeout = DEFAULT_TIMEOUT
-    """Timeout for HTTP requests, in seconds (default {{ sdk.timeout }}). `None` disables it."""
-
-    num_retries: int | None = None
-    """Number of retries of a failed idempotent request. Defaults to 2."""
-
-    retry_schedule: list[float] | None = None
-    """Explicit list of delays (seconds) before each retry, reduced by a random
-    jitter of up to 25%. Takes precedence over `num_retries`. A `Retry-After`
-    header of up to 60 seconds overrides it."""
-{%- if "bearer" in kinds %}
-
-    token_provider: TokenProvider | None = None
-    """Called before each request for a fresh bearer token, e.g. an OAuth2 access
-    token. Takes precedence over the client token."""
+DEFAULT_BASE_URL = {{ sdk.default_base_url | tojson }}
 {%- endif %}
-{%- if "basic" in kinds %}
-
-    basic_auth: tuple[str, str] | None = None
-    """HTTP basic `(username, password)`."""
-{%- endif %}
-{%- if "api_key" in kinds %}
-
-    api_keys: dict[str, str] = dataclasses.field(default_factory=dict[str, str])
-    """API keys by security scheme name. Schemes left out use the client token."""
-{%- endif %}
-
-    middleware: list[SyncMiddleware] = dataclasses.field(default_factory=list[SyncMiddleware])
-    """Wraps every HTTP attempt of the synchronous client: caching, logging,
-    custom headers. See `middleware.py`."""
-
-    async_middleware: list[AsyncMiddleware] = dataclasses.field(default_factory=list[AsyncMiddleware])
-    """The same, for the asyncio client."""
 
 
 SECURITY_SCHEMES: dict[str, SecurityScheme] = {
@@ -343,23 +277,7 @@ SECURITY_SCHEMES: dict[str, SecurityScheme] = {
 }
 
 
-_V = t.TypeVar("_V")
-
-
-def _alias(value: _V | None, name: str, old_value: _V | None, old_name: str) -> _V | None:
-    """``value``, else the deprecated argument ``old_name`` that it replaces."""
-    if old_value is None:
-        return value
-    warnings.warn(
-        f"`{old_name}` is deprecated, pass `{name}` instead", DeprecationWarning, stacklevel=3
-    )
-    if value is not None:
-        raise TypeError(f"pass `{name}` or `{old_name}`, not both")
-    return old_value
-
-
 def _configuration(
-    options: {{ client }}Options,
     *,
     api_key: str | None,
     base_url: str | httpx.URL | None,
@@ -376,48 +294,36 @@ def _configuration(
     api_keys: t.Mapping[str, str] | None,
 {%- endif %}
 ) -> Configuration:
-    """The configuration of a client: arguments, else options, else the environment."""
-    if max_retries is not None:
-        retry_schedule = default_retry_schedule(max_retries)
-    elif options.retry_schedule is not None:
-        retry_schedule = list(options.retry_schedule)
-    else:
-        retries = options.num_retries
-        retry_schedule = default_retry_schedule(
-            retries if retries is not None else DEFAULT_MAX_RETRIES
+    """The configuration of a client: its arguments, else the environment."""
+    base_url = base_url or os.environ.get("{{ env }}_BASE_URL")
+{%- if sdk.has_default_base_url %} or DEFAULT_BASE_URL
+{%- else %}
+    if not base_url:
+        raise {{ client }}Error(
+            "pass base_url to the client or set the {{ env }}_BASE_URL environment variable"
         )
-    base_url = (
-        base_url
-        or options.server_url
-        or os.environ.get("{{ env }}_BASE_URL")
-        or DEFAULT_SERVER_URL
-    )
+{%- endif %}
     return Configuration(
         base_path=str(base_url).rstrip("/"),
         bearer_access_token=api_key if api_key is not None else os.environ.get("{{ env }}_API_KEY"),
 {%- if "bearer" in kinds %}
-        token_provider=token_provider if token_provider is not None else options.token_provider,
+        token_provider=token_provider,
 {%- endif %}
 {%- if "basic" in kinds %}
-        basic_auth=basic_auth if basic_auth is not None else options.basic_auth,
+        basic_auth=basic_auth,
 {%- endif %}
 {%- if "api_key" in kinds %}
-        api_keys=dict(api_keys if api_keys is not None else options.api_keys),
+        api_keys=dict(api_keys or {}),
 {%- endif %}
         security_schemes=SECURITY_SCHEMES,
         security={{ api.security | tojson }},
-        timeout=options.timeout if isinstance(timeout, Unset) else timeout,
-        retry_schedule=retry_schedule,
+        timeout=DEFAULT_TIMEOUT if isinstance(timeout, Unset) else timeout,
+        max_retries=DEFAULT_MAX_RETRIES if max_retries is None else max_retries,
         default_headers=dict(default_headers or {}),
-        middleware=list(options.middleware),
-        async_middleware=list(options.async_middleware),
     )
 
 {{ client_class(false) }}
 {{ client_class(true) }}
-
-{{ client }}Async = Async{{ client }}
-"""Deprecated alias of :class:`Async{{ client }}`."""
 {% endset %}
 {% set _ = generate_extra_file(output_dir ~ "/client.py", client_py) %}
 
@@ -439,8 +345,6 @@ from ._response import request_id
 
 __all__ = [
     "APIStatusError",
-    "ApiException",
-    "ApiStatusError",
     "AuthenticationError",
     "BadRequestError",
     "ConflictError",
@@ -541,12 +445,6 @@ class RateLimitError(APIStatusError):
 class InternalServerError(APIStatusError):
     """Any 5xx status, once retries are exhausted."""
 
-
-ApiStatusError = APIStatusError
-"""Deprecated alias of :class:`APIStatusError`."""
-
-ApiException = APIStatusError
-"""Deprecated alias of :class:`APIStatusError`."""
 
 _BY_STATUS: dict[int, type[APIStatusError]] = {
     400: BadRequestError,

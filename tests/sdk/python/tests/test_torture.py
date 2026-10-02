@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import inspect
 import json
 import os
 import shutil
@@ -10,7 +11,6 @@ import sys
 import tempfile
 import time
 import unittest
-import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,7 +19,9 @@ import httpx
 WORK = Path(tempfile.mkdtemp(prefix="perseid-torture-"))
 
 
-def generate(name: str, python: str = "", spec: str | None = None) -> object:
+def generate(
+    name: str, python: str = "", spec: str | None = None, base_url: str | None = "https://torture.test/v1"
+) -> object:
     """Generates the fixture, or `spec`, as the `name` package and imports it."""
     fixtures = os.environ.get("FIXTURES")
     assert fixtures, "set FIXTURES to the perseid tests/fixtures directory"
@@ -29,9 +31,9 @@ def generate(name: str, python: str = "", spec: str | None = None) -> object:
         shutil.copy(Path(fixtures) / "torture.yaml", project / "openapi.yaml")
     else:
         (project / "openapi.yaml").write_text(spec)
+    base = f'base_url = "{base_url}"\n' if base_url else ""
     (project / "perseid.toml").write_text(
-        f'spec = "openapi.yaml"\nname = "{name.title()}"\nsdks = ["python"]\n'
-        f'base_url = "https://torture.test/v1"\n[python]\n{python}'
+        f'spec = "openapi.yaml"\nname = "{name.title()}"\nsdks = ["python"]\n{base}[python]\n{python}'
     )
     subprocess.run(["perseid", "generate"], cwd=project, check=True, capture_output=True)
     sys.path.insert(0, str(project / "python"))
@@ -158,9 +160,8 @@ components:
 torture = generate("torture")
 paged = generate("paged", spec=PAGED_SPEC)
 expandable = generate("expandable", spec=EXPANDABLE_SPEC)
-flat = generate("flat", "flat_unions = true\n")
-adjacent = generate("adjacent", spec=ADJACENT_SPEC)
-from torture import RateLimitError, Torture, TortureOptions, models  # noqa: E402
+adjacent = generate("adjacent", spec=ADJACENT_SPEC, base_url=None)
+from torture import RateLimitError, Torture, models  # noqa: E402
 from torture import (  # noqa: E402
     APIConnectionError,
     APIStatusError,
@@ -170,7 +171,7 @@ from torture import (  # noqa: E402
     TortureError,
     UnprocessableEntityError,
 )
-from torture.serialization import UNSET, UnknownVariant, from_json_value  # noqa: E402
+from torture.serialization import UNSET, UnknownVariant, from_json_value, to_json_value  # noqa: E402
 from torture.unions import as_variant, expandable_id  # noqa: E402
 
 SAMPLES = {
@@ -241,11 +242,10 @@ def round_trip(package: object, model: str, data: object) -> object:
 
 
 class ModelTest(unittest.TestCase):
-    def test_models_round_trip_in_both_union_styles(self) -> None:
-        for package in (torture, flat):
-            for model, data in SAMPLES.items():
-                with self.subTest(package=package.__name__, model=model):
-                    self.assertEqual(round_trip(package, model, data), data)
+    def test_models_round_trip(self) -> None:
+        for model, data in SAMPLES.items():
+            with self.subTest(model=model):
+                self.assertEqual(round_trip(torture, model, data), data)
 
     def test_unknown_enum_values_are_kept(self) -> None:
         kind = models.Kind("brand-new")
@@ -261,20 +261,22 @@ class ModelTest(unittest.TestCase):
 
     def test_unknown_union_variants_are_kept(self) -> None:
         data = {"type": "triangle", "a": 1}
-        shape = models.Shape.from_dict(data)
-        self.assertEqual(shape.content, UnknownVariant("triangle", data))
-        self.assertEqual(shape.to_dict(), data)
-        unknown = flat.serialization.from_json_value(flat.models.Shape, data)
-        self.assertEqual(unknown, flat.serialization.UnknownVariant("triangle", data))
-        self.assertEqual(round_trip(flat, "Shape", data), data)
+        self.assertEqual(from_json_value(models.Shape, data), UnknownVariant("triangle", data))
+        self.assertEqual(round_trip(torture, "Shape", data), data)
+        data = {"kind": "archived", "by": "b"}
+        activity = models.Activity.from_dict(data)
+        self.assertEqual(activity.content, UnknownVariant("archived", data))
+        self.assertEqual(activity.to_dict(), data)
 
-    def test_flat_unions_are_the_variant_models(self) -> None:
-        serialization = flat.serialization
-        shape = serialization.from_json_value(flat.models.Shape, SAMPLES["Shape"])
-        self.assertIsInstance(shape, flat.models.Circle)
-        square = flat.models.Square(side=2, type="ignored")
-        serialized = serialization.to_json_value(square, flat.models.Shape)
-        self.assertEqual(serialized, {"side": 2, "type": "square"})
+    def test_unions_are_the_variant_models(self) -> None:
+        shape = from_json_value(models.Shape, SAMPLES["Shape"])
+        self.assertIsInstance(shape, models.Circle)
+        square = models.Square(side=2, type="ignored")
+        self.assertEqual(to_json_value(square, models.Shape), {"side": 2, "type": "square"})
+        pet = from_json_value(models.Pet, {"pet_type": "Dog", "bark": "woof"})
+        self.assertIsInstance(pet, models.Dog)
+        self.assertEqual(pet.extra_fields, {}, "the tag is not an unknown property")
+        self.assertEqual(to_json_value(pet, models.Pet), {"pet_type": "Dog", "bark": "woof"})
 
     def test_adjacently_tagged_unions_with_shared_fields(self) -> None:
         Source = adjacent.models.Source
@@ -286,7 +288,12 @@ class ModelTest(unittest.TestCase):
             with self.subTest(data=data):
                 self.assertEqual(Source.from_dict(data).to_dict(), data)
         source = Source(id="1", type="http", config=adjacent.models.Config(url="u"))
-        self.assertEqual(source.note, adjacent.models.UNSET)
+        self.assertIsNone(source.note, "responses read an absent nullable field as None")
+
+    def test_optional_nullable_fields_of_responses_are_none_when_absent(self) -> None:
+        data = {key: value for key, value in SAMPLES["Thing"].items() if key != "nullable_optional"}
+        self.assertIsNone(models.Thing.from_dict(data).nullable_optional)
+        self.assertIsNone(models.Thing.from_dict(SAMPLES["Thing"]).nullable_optional)
 
     def test_optional_nullable_fields_tell_unset_from_null(self) -> None:
         self.assertEqual(models.ThingPatch().to_dict(), {})
@@ -343,9 +350,14 @@ class ModelTest(unittest.TestCase):
         self.assertEqual((composed.extra_fields, composed.base.extra_fields), ({"new": 1}, {}))
         composed.extra = "changed"
         self.assertEqual(composed.to_dict()["extra"], "changed")
-        shape = models.Shape.from_dict({"type": "circle", "radius": 1.0, "color": "red"})
-        self.assertEqual(shape.content.extra_fields, {"color": "red"})
-        self.assertEqual(shape.to_dict(), {"type": "circle", "radius": 1.0, "color": "red"})
+        data = {"type": "circle", "radius": 1.0, "color": "red"}
+        shape = from_json_value(models.Shape, data)
+        self.assertEqual(shape.extra_fields, {"color": "red"})
+        self.assertEqual(to_json_value(shape, models.Shape), data)
+        data = {"kind": "closed", "by": "b", "color": "red"}
+        activity = models.Activity.from_dict(data)
+        self.assertEqual((activity.extra_fields, activity.content.extra_fields), ({}, {"color": "red"}))
+        self.assertEqual(activity.to_dict(), data)
         source = adjacent.models.Source.from_dict({"id": "1", "type": "none", "v": 2})
         self.assertEqual(source.extra_fields, {"v": 2})
         self.assertEqual(source.to_dict(), {"id": "1", "type": "none", "v": 2})
@@ -356,16 +368,14 @@ class ModelTest(unittest.TestCase):
         self.assertIsInstance(tree.next, models.TreeNode)
 
 
-def client(handler, retry_schedule: list[float] | None = None, **options) -> Torture:
-    """A client of `handler`; `retry_schedule` replaces the backoff delays, to keep tests fast."""
+# Retries without backoff, to keep tests fast.
+torture.api.common.INITIAL_RETRY_DELAY = 0.0
+
+
+def client(handler, **options) -> Torture:
+    """A client of `handler`."""
     transport = httpx.MockTransport(handler)
-    return Torture(
-        "token",
-        TortureOptions(retry_schedule=retry_schedule),
-        timeout=5,
-        http_client=httpx.Client(transport=transport),
-        **options,
-    )
+    return Torture(api_key="token", timeout=5, http_client=httpx.Client(transport=transport), **options)
 
 
 THING = {**SAMPLES["Thing"], "id": "a/b"}
@@ -402,27 +412,18 @@ class ClientTest(unittest.TestCase):
         auth = [r.headers.get_list("authorization") for r in self.requests]
         self.assertEqual(auth, [["Bearer call"], ["Bearer client"], ["Bearer token"]])
 
-    def test_the_old_constructor_arguments_still_work(self) -> None:
-        def http() -> httpx.Client:
-            return httpx.Client(transport=httpx.MockTransport(self.respond(httpx.Response(200, json=THING))))
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            clients = [
-                Torture(token="old", http_client=http()),
-                Torture("old", TortureOptions(), http()),
-                Torture("old", None, httpx_client=http()),
-            ]
-        self.assertEqual([w.category for w in caught], [DeprecationWarning] * 3)
-        self.assertEqual(caught[0].filename, __file__)
-        for api in clients:
-            with api:
-                api.things.retrieve("t")
-        self.assertEqual([r.headers["authorization"] for r in self.requests], ["Bearer old"] * 3)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            with self.assertRaises(TypeError):
-                Torture("new", token="old")
+    def test_a_client_without_base_url_names_both_ways_to_give_one(self) -> None:
+        with self.assertRaises(adjacent.AdjacentError) as raised:
+            adjacent.Adjacent(api_key="k")
+        self.assertIn("base_url", str(raised.exception))
+        self.assertIn("ADJACENT_BASE_URL", str(raised.exception))
+        os.environ["ADJACENT_BASE_URL"] = "https://adjacent.test"
+        try:
+            self.assertEqual(adjacent.Adjacent(api_key="k")._cfg.base_path, "https://adjacent.test")
+        finally:
+            del os.environ["ADJACENT_BASE_URL"]
+        with self.assertRaises(TypeError):
+            Torture("token")  # type: ignore[misc]
 
     def test_query_and_header_params(self) -> None:
         with client(self.respond(httpx.Response(200, json={"data": [], "total": 0}))) as api:
@@ -453,20 +454,45 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(json.loads(self.requests[0].content), [{"name": "n"}])
         self.assertEqual(self.requests[1].url.params["DateCreated<"], "2024-01-01")
 
-    def test_a_user_idempotency_key_replaces_the_automatic_one(self) -> None:
-        create = models.ThingCreate(name="n", kind=models.Kind.ALPHA)
+    def test_object_bodies_are_keyword_arguments(self) -> None:
         with client(self.respond(httpx.Response(200, json=THING))) as api:
-            api.things.create(create)
-            api.things.create(create, idempotency_key="mine")
-            api.things.create(create, extra_headers={"IDEMPOTENCY-KEY": "extra"})
+            api.things.create(name="n", kind="beta-2", priority=10)
+            api.things.create(name="n", kind=models.Kind.ALPHA, metadata={"k": "v"})
+        bodies = [json.loads(r.content) for r in self.requests]
+        self.assertEqual(bodies[0], {"name": "n", "kind": "beta-2", "priority": 10})
+        self.assertEqual(bodies[1], {"name": "n", "kind": "alpha", "metadata": {"k": "v"}})
+
+    def test_extra_query_body_and_headers_of_a_call(self) -> None:
+        with client(self.respond(httpx.Response(200, json=THING))) as api:
+            api.things.create(
+                name="n",
+                kind="alpha",
+                extra_query={"debug": True, "tags": ["a", "b"]},
+                extra_body={"beta": {"x": 1}, "name": "over"},
+                extra_headers={"x-extra": "1"},
+            )
+            api.things.retrieve("t", extra_body={"only": 1})
+        first, second = self.requests
+        self.assertEqual(first.url.params.multi_items(), [("debug", "true"), ("tags", "a"), ("tags", "b")])
+        self.assertEqual(json.loads(first.content), {"name": "over", "kind": "alpha", "beta": {"x": 1}})
+        self.assertEqual(first.headers["x-extra"], "1")
+        self.assertEqual(json.loads(second.content), {"only": 1})
+
+    def test_a_user_idempotency_key_replaces_the_automatic_one(self) -> None:
+        with client(self.respond(httpx.Response(200, json=THING))) as api:
+            api.things.create(name="n", kind="alpha")
+            api.things.create(name="n", kind="alpha", idempotency_key="mine")
+            api.things.create(name="n", kind="alpha", extra_headers={"IDEMPOTENCY-KEY": "extra"})
         keys = [r.headers.get_list("idempotency-key") for r in self.requests]
         self.assertTrue(keys[0][0].startswith("auto_"))
         self.assertEqual(keys[1:], [["mine"], ["extra"]])
 
     def test_patch_sends_explicit_nulls(self) -> None:
         with client(self.respond(httpx.Response(200, json=THING))) as api:
-            api.things.update("t", models.ThingPatch(name="n", description=None))
+            api.things.update("t", name="n", description=None)
+            api.things.update("t", name="n")
         self.assertEqual(json.loads(self.requests[0].content), {"name": "n", "description": None})
+        self.assertEqual(json.loads(self.requests[1].content), {"name": "n"})
 
     def test_retries_wait_the_delay_the_server_asks_for(self) -> None:
         for status in (429, 500, 408):
@@ -483,18 +509,20 @@ class ClientTest(unittest.TestCase):
                 self.assertEqual(self.requests[1].headers["torture-retry-count"], "1")
 
     def test_max_retries_can_change_for_one_call(self) -> None:
-        responses = (httpx.Response(503), httpx.Response(200, json=THING))
-        with client(self.respond(*responses), retry_schedule=[0.0]) as api:
+        responses = (httpx.Response(503), httpx.Response(503), httpx.Response(200, json=THING))
+        with client(self.respond(*responses), max_retries=1) as api:
             with self.assertRaises(InternalServerError):
                 api.with_options(max_retries=0).things.retrieve("t")
-            self.assertEqual(len(self.requests), 1)
-            self.assertEqual(api.things.retrieve("t").id, "a/b")
+            with self.assertRaises(InternalServerError):
+                api.things.retrieve("t", max_retries=0)
+            self.assertEqual(len(self.requests), 2)
+            self.assertEqual(api.things.retrieve("t", max_retries=1).id, "a/b")
 
     def test_non_idempotent_requests_are_not_replayed_on_429(self) -> None:
         responses = (httpx.Response(429, headers={"retry-after": "0"}), httpx.Response(200))
-        with client(self.respond(*responses), retry_schedule=[0.0]) as api:
+        with client(self.respond(*responses), max_retries=1) as api:
             with self.assertRaises(RateLimitError):
-                api.things.update("t", models.ThingPatch())
+                api.things.update("t")
         self.assertEqual(len(self.requests), 1)
 
     def test_non_idempotent_requests_are_not_replayed_on_5xx(self) -> None:
@@ -503,12 +531,12 @@ class ClientTest(unittest.TestCase):
             httpx.Response(500),
             httpx.Response(200, json=THING),
         )
-        with client(self.respond(*responses), retry_schedule=[0.0]) as api:
+        with client(self.respond(*responses), max_retries=1) as api:
             with self.assertRaises(APIStatusError) as raised:
-                api.things.update("t", models.ThingPatch())
+                api.things.update("t")
             self.assertEqual(raised.exception.headers["x-request-id"], "req_1")
             self.assertEqual(len(self.requests), 1)
-            api.things.create(models.ThingCreate(name="n", kind=models.Kind.ALPHA))
+            api.things.create(name="n", kind="alpha")
         self.assertEqual(len(self.requests), 3)
         self.assertEqual(self.requests[1].headers["idempotency-key"],
                          self.requests[2].headers["idempotency-key"])
@@ -518,7 +546,7 @@ class ClientTest(unittest.TestCase):
             self.requests.append(request)
             raise httpx.ReadTimeout("slow", request=request)
 
-        with client(handler, retry_schedule=[0.0, 0.0]) as api:
+        with client(handler, max_retries=2) as api:
             with self.assertRaises(APITimeoutError) as raised:
                 api.things.retrieve("t")
         self.assertEqual(len(self.requests), 3)
@@ -561,23 +589,19 @@ class ClientTest(unittest.TestCase):
         async def run():
             transport = httpx.MockTransport(handler)
             async with torture.AsyncTorture(
-                "token", http_client=httpx.AsyncClient(transport=transport)
+                api_key="token", http_client=httpx.AsyncClient(transport=transport)
             ) as api:
-                return await api.shapes.create(
-                    models.Shape(type="circle", content=models.Circle(radius=1.5, type="circle"))
-                )
+                return await api.shapes.create(models.Circle(radius=1.5), max_retries=0)
 
-        shape = asyncio.run(run())
-        self.assertIsInstance(shape.content, models.Circle)
+        self.assertIsInstance(asyncio.run(run()), models.Circle)
 
     def test_a_bodiless_2xx_next_to_a_json_one_is_none(self) -> None:
-        update = models.WidgetUpdate(name="n")
         responses = (httpx.Response(204), httpx.Response(200, json={"id": "w", "name": "n"}))
         with client(self.respond(*responses)) as api:
-            self.assertIsNone(api.widgets.update("w", update))
-            self.assertEqual(api.widgets.update("w", update), models.Widget(id="w", name="n"))
+            self.assertIsNone(api.widgets.update("w", name="n"))
+            self.assertEqual(api.widgets.update("w", name="n"), models.Widget(id="w", name="n"))
         with client(self.respond(httpx.Response(204))) as api:
-            raw = api.with_raw_response.widgets.update("w", update)
+            raw = api.with_raw_response.widgets.update("w", name="n")
         self.assertEqual((raw.status_code, raw.parse()), (204, None))
 
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -586,9 +610,9 @@ class ClientTest(unittest.TestCase):
         async def run() -> object:
             transport = httpx.MockTransport(handler)
             async with torture.AsyncTorture(
-                "token", http_client=httpx.AsyncClient(transport=transport)
+                api_key="token", http_client=httpx.AsyncClient(transport=transport)
             ) as api:
-                return await api.widgets.update("w", update)
+                return await api.widgets.update("w", name="n")
 
         self.assertIsNone(asyncio.run(run()))
 
@@ -620,7 +644,7 @@ class PaginationTest(unittest.TestCase):
 
     def test_pages_and_their_items(self) -> None:
         transport = httpx.MockTransport(self.handler)
-        api = paged.Paged("k", base_url="https://paged.test", http_client=httpx.Client(transport=transport))
+        api = paged.Paged(api_key="k", base_url="https://paged.test", http_client=httpx.Client(transport=transport))
         page = api.items.list()
         self.assertEqual([item.id for item in page.items], ["a", "b"])
         self.assertTrue(page.has_next_page())
@@ -641,7 +665,7 @@ class PaginationTest(unittest.TestCase):
         async def run() -> tuple[list[str], list[str]]:
             transport = httpx.MockTransport(handler)
             async with paged.AsyncPaged(
-                "k", base_url="https://paged.test", http_client=httpx.AsyncClient(transport=transport)
+                api_key="k", base_url="https://paged.test", http_client=httpx.AsyncClient(transport=transport)
             ) as api:
                 first = await api.items.list()
                 pages = [[item.id for item in p.items] async for p in first.iter_pages()]
@@ -661,19 +685,19 @@ class Chunks(httpx.SyncByteStream):
 
 
 class StreamTest(unittest.TestCase):
-    def chat(self, stream: Chunks, *body: object):
+    def chat(self, stream: Chunks):
         requests: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
 
-        api = paged.Paged("k", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
-        return api.chat.create_stream(*body), requests
+        api = paged.Paged(api_key="k", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+        return api.chat.create_stream(), requests
 
     def test_events_decode_into_models_until_done(self) -> None:
         events = b'event: chunk\nid: 7\ndata: {"id": "a"}\n\ndata: [DONE]\n\ndata: {"id": "b"}\n\n'
-        stream, requests = self.chat(Chunks(events), paged.models.ChatRequest(stream=False))
+        stream, requests = self.chat(Chunks(events))
         with stream:
             self.assertEqual(list(stream), [paged.models.Item(id="a")])
         self.assertEqual((stream.last_event.event, stream.last_event.id), ("chunk", "7"))
@@ -684,6 +708,19 @@ class StreamTest(unittest.TestCase):
         with stream:
             self.assertEqual(list(stream), [])
         self.assertEqual(json.loads(requests[0].content), {"stream": True})
+        for method in (paged.api.Chat.create, paged.api.Chat.create_stream):
+            self.assertNotIn("stream", inspect.signature(method).parameters)
+
+    def test_an_optional_body_left_empty_is_not_sent(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json={"id": "a"})
+
+        api = paged.Paged(api_key="k", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+        self.assertEqual(api.chat.create().id, "a")
+        self.assertEqual(requests[0].content, b"")
 
     def test_a_connection_lost_mid_stream_is_an_sdk_error(self) -> None:
         stream, _ = self.chat(Chunks(b'data: {"id": "a"}\n\n', fail=True))
@@ -705,13 +742,12 @@ class ScoresTest(unittest.TestCase):
         return handler
 
     def test_errors_are_typed_by_status_and_decode_the_declared_body(self) -> None:
-        create = models.ThingCreate(name="n", kind=models.Kind.ALPHA)
         invalid = httpx.Response(
             422, json={"message": "bad", "fields": {"name": ["short"]}}, headers={"request-id": "r1"}
         )
         with client(self.respond(invalid)) as api:
             with self.assertRaises(UnprocessableEntityError) as raised:
-                api.things.create(create)
+                api.things.create(name="n", kind="alpha")
         self.assertIsInstance(raised.exception, APIStatusError)
         self.assertEqual(raised.exception.body, models.ValidationError(message="bad", fields={"name": ["short"]}))
         self.assertEqual(raised.exception.request_id, "r1")
@@ -733,7 +769,7 @@ class ScoresTest(unittest.TestCase):
                 response = httpx.Response(status, json={"title": "t"})
                 with client(self.respond(response), max_retries=0) as api:
                     with self.assertRaises(error) as raised:
-                        api.widgets.create(models.WidgetUpdate(name="n"))
+                        api.widgets.create(name="n")
                 self.assertIs(type(raised.exception), error)
                 expected = models.Problem(title="t") if status < 500 else {"title": "t"}
                 self.assertEqual(raised.exception.body, expected)
@@ -745,9 +781,9 @@ class ScoresTest(unittest.TestCase):
     def test_503_is_not_replayed_for_non_idempotent_requests(self) -> None:
         unavailable = httpx.Response(503, headers={"retry-after": "0"})
         responses = (unavailable, unavailable, httpx.Response(200, json=THING))
-        with client(self.respond(*responses), retry_schedule=[0.0]) as api:
+        with client(self.respond(*responses), max_retries=1) as api:
             with self.assertRaises(InternalServerError):
-                api.things.update("t", models.ThingPatch())
+                api.things.update("t")
             self.assertEqual(len(self.requests), 1)
             api.things.retrieve("t")
         self.assertEqual(len(self.requests), 3)
@@ -755,10 +791,12 @@ class ScoresTest(unittest.TestCase):
     def test_union_variants_default_their_discriminator(self) -> None:
         circle = models.Circle(radius=1.5)
         self.assertEqual(circle.to_dict(), SAMPLES["Shape"])
-        shape = models.Shape(content=circle)
-        self.assertEqual((shape.type, shape.to_dict()), ("circle", SAMPLES["Shape"]))
-        unknown = models.Shape(content=UnknownVariant("hexagon", {"type": "hexagon"}))
-        self.assertEqual(unknown.type, "hexagon")
+        activity = models.Activity(content=models.ActivityClosedVariant(by="b"))
+        self.assertEqual((activity.kind, activity.to_dict()), ("closed", {"kind": "closed", "by": "b"}))
+        reopened = models.Activity(kind="reopened", content=models.Opened(kind="reopened"))
+        self.assertEqual(reopened.to_dict(), {"kind": "reopened"})
+        unknown = models.Activity(content=UnknownVariant("archived", {"kind": "archived"}))
+        self.assertEqual(unknown.kind, "archived")
 
     def test_primitive_or_object_unions_are_typed(self) -> None:
         Charge = expandable.models.Charge
@@ -778,9 +816,9 @@ class ScoresTest(unittest.TestCase):
 
     def test_resource_method_names(self) -> None:
         transport = httpx.MockTransport(self.respond(httpx.Response(200, json=THING)))
-        with Torture("token", http_client=httpx.Client(transport=transport)) as api:
+        with Torture(api_key="token", http_client=httpx.Client(transport=transport)) as api:
             thing = api.things.retrieve("a/b")
-            api.things.update("a/b", models.ThingPatch())
+            api.things.update("a/b")
         self.assertEqual(thing.id, "a/b")
         self.assertEqual([r.method for r in self.requests], ["GET", "PATCH"])
 

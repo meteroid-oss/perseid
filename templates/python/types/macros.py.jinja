@@ -117,27 +117,57 @@
     {%- endif -%}
 {%- endmacro %}
 
-{#- Whether a field is optional and also accepts `null`, so needs UNSET. -#}
-{% macro is_tristate(field) -%}
-    {%- if field.nullable and not field.required %}1{% endif -%}
+{#- Whether a field is optional and also accepts `null`, so needs UNSET to tell them apart:
+    only in the schemas requests send, as responses never need to. -#}
+{% macro is_tristate(field, in_request=true) -%}
+    {%- if field.nullable and not field.required and in_request %}1{% endif -%}
 {%- endmacro %}
 
-{#- The annotation and default of a struct field:
-    required `X`, required nullable `X | None`, optional `X | None = None`,
-    optional nullable `X | None | Unset = UNSET`. -#}
-{% macro field_decl(field) -%}
-    {%- set ty = py_type(field.type) -%}
-    {%- if field.required and not field.nullable -%}
-        {{ ty }}
-    {%- elif field.required -%}
-        {%- if ty == "t.Any" %}t.Any{% else %}{{ ty }} | None{% endif -%}
-    {%- elif ty == "t.Any" -%}
-        t.Any = {% if is_tristate(field) %}UNSET{% else %}None{% endif %}
-    {%- elif is_tristate(field) -%}
-        {{ ty }} | None | Unset = UNSET
-    {%- else -%}
-        {{ ty }} | None = None
-    {%- endif -%}
+{#- The annotation of a struct field: required `X`, required nullable `X | None`, optional
+    `X | None`, optional nullable `X | None | Unset` in request schemas. `ty` replaces the
+    annotation of the value, such as an enum taking its literals too. -#}
+{% macro field_type(field, in_request=true, ty=none) -%}
+    {%- set ty = ty or py_type(field.type) -%}
+    {%- if ty == "t.Any" or (field.required and not field.nullable) %}{{ ty }}
+    {%- elif field.required or not is_tristate(field, in_request) %}{{ ty }} | None
+    {%- else %}{{ ty }} | None | Unset{% endif -%}
+{%- endmacro %}
+
+{#- The annotation and default of a struct field: optional ones default to `None`, or to
+    `UNSET` when `None` sends `null`. -#}
+{% macro field_decl(field, in_request=true, ty=none) -%}
+    {{ field_type(field, in_request, ty) }}
+    {%- if not field.required %} = {% if is_tristate(field, in_request) %}UNSET{% else %}None{% endif %}{% endif -%}
+{%- endmacro %}
+
+{#- The models `ty` names, each followed by a space. -#}
+{% macro type_refs(ty) -%}
+    {%- if ty.is_schema_ref() %}{{ ty.to_python() }} {% endif -%}
+    {%- if ty.is_list() or ty.is_set() %}{{ type_refs(ty.inner_type()) }}{% endif -%}
+    {%- if ty.is_map() %}{{ type_refs(ty.value_type()) }}{% endif -%}
+    {%- if ty.is_union() %}{% for v in ty.union_variants() %}{{ type_refs(v.type) }}{% endfor %}{% endif -%}
+{%- endmacro %}
+
+{#- "1" when the struct enum `type` is the plain union of its variant models, told apart by
+    its discriminator, rather than a model holding the discriminator and the variant. -#}
+{% macro is_flat_union(type) -%}
+    {%- set refs = type.variants | map(attribute="schema_ref") | list -%}
+    {%- if type.repr == "internally_tagged" and type.fields | length == 0
+        and refs | select | list | length == refs | length
+        and refs | unique | list | length == refs | length %}1{% endif -%}
+{%- endmacro %}
+
+{#- The `t.Literal` alias of the values of an enum, which arguments take next to the enum;
+    nothing when a schema has its name. `names` holds the class name of every schema. -#}
+{% macro literal_alias(type, names) -%}
+    {%- set alias = (type.name | to_upper_camel_case) ~ "Literal" -%}
+    {%- if alias not in names %}{{ alias }}{% endif -%}
+{%- endmacro %}
+
+{#- The annotation of an argument holding `ty`: an enum also takes its values as literals.
+    `enums` lists the class names of the enums with a `literal_alias`. -#}
+{% macro arg_type(ty, enums) -%}
+    {{ py_type(ty) }}{% if ty.is_schema_ref() and ty.to_python() in enums %} | {{ ty.to_python() }}Literal{% endif %}
 {%- endmacro %}
 
 {#- `from __future__` and imports shared by the model modules. Other models are

@@ -542,11 +542,6 @@
             "type": "string"
           }
         },
-        "flat_unions": {
-          "description": "Types a union as `Circle | Square` instead of a wrapper model.",
-          "default": false,
-          "type": "boolean"
-        },
         "header_prefix": {
           "description": "Prefix of this SDK's own headers, over the top-level one.",
           "type": "string"
