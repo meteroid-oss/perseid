@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"testing"
 )
 
@@ -176,5 +177,16 @@ func TestBodilessSuccessReturnsNil(t *testing.T) {
 	widget, err = client.Widgets().Update(context.Background(), "w1", WidgetUpdate{})
 	if err != nil || widget == nil || widget.ID != "w1" {
 		t.Fatalf("200: %+v %v", widget, err)
+	}
+}
+
+func TestUnionDiscriminatorsAreTyped(t *testing.T) {
+	var tag ShapeType = NewShapeCircle(Circle{Radius: 1}).Type
+	if tag != ShapeCircle || reflect.TypeOf(PetCat).Name() != "PetPetType" {
+		t.Errorf("tag %q, Pet constants are %T", tag, PetCat)
+	}
+	var pet Pet
+	if err := json.Unmarshal([]byte(`{"pet_type":"Cat","meow":true}`), &pet); err != nil || pet.PetType != PetCat {
+		t.Fatalf("%+v %v", pet, err)
 	}
 }

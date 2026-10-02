@@ -139,7 +139,8 @@ A primitive-or-object union is a struct with one field per variant (`String *str
 `Customer *Customer`, `Empty bool` for `""`) plus `New...From...` constructors, also for query
 parameters; values of another JSON type, or objects no variant matches, are kept in `Raw()`;
 `ID()` returns the id of an expandable field and `As(&target)` decodes a union of objects as
-another variant. Variants of a tagged union fill in their discriminator when it is left empty.
+another variant. A tagged union's discriminator has its own string type (`ShapeType`, with
+`ShapeCircle`... constants), and its variants fill in their discriminator when it is left empty.
 Generated files start with the `// Code generated ... DO NOT EDIT.` line linters and editors look
 for; `doc.go`, `errors.go` and `version.go` are yours.
 
