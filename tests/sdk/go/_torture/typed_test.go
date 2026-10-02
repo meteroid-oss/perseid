@@ -83,6 +83,9 @@ func TestErrorsMatchStatusSentinelsAndDecodeBodies(t *testing.T) {
 	if !errors.As(err, &apiErr) || apiErr.RequestID() != "req_1" {
 		t.Fatalf("request id: %v", err)
 	}
+	if body, ok := apiErr.Body.(*Problem); !ok || body.Title != "no widgets" {
+		t.Fatalf("declared body: %#v", apiErr.Body)
+	}
 
 	_, err = client.Widgets().Create(context.Background(), CreateWidgetRequest{})
 	if !errors.Is(err, ErrUnprocessableEntity) {

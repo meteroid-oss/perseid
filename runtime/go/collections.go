@@ -9,18 +9,15 @@ import "encoding/json"
 //
 // It exists because the zero value of a Go slice is nil and `encoding/json`
 // writes nil slices as `null`, which those fields do not accept. A nil
-// RequiredSlice marshals as `[]` instead, so the common case of leaving a
-// required list unset still produces a schema-valid request:
-//
-//	req := @@PACKAGE_NAME@@.CustomerCreateRequest{Name: "Acme", Currency: @@PACKAGE_NAME@@.CurrencyEur}
-//	// {"currency":"EUR","custom_taxes":[],"invoicing_emails":[],"name":"Acme"}
+// RequiredSlice marshals as `[]` instead, so leaving a required list unset
+// still produces a schema-valid request.
 //
 // RequiredSlice[T] is a defined type over []T, so it behaves like the slice it
 // wraps: plain slice literals assign to it, and len, index, range, append and
-// comparison against nil all work unchanged.
+// comparison against nil all work unchanged:
 //
-//	req.InvoicingEmails = []string{"billing@acme.test"}
-//	for _, email := range req.InvoicingEmails { ... }
+//	var tags @@PACKAGE_NAME@@.RequiredSlice[string] // encodes as []
+//	tags = []string{"a", "b"}
 //
 // Optional array fields keep the plain []T type: for those, nil means "absent"
 // and `omitempty` drops them from the payload entirely.

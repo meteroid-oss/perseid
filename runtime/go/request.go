@@ -8,11 +8,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,13 +30,14 @@ type request struct {
 	headers     http.Header
 	body        []byte
 	contentType string
-	// err records a failure that happened while building the request (for
-	// instance a body that cannot be serialized) so it can be surfaced when the
-	// request is executed.
+	// err records a failure that happened while building the request, surfaced
+	// when the request is executed.
 	err     error
 	options []RequestOption
 	// security overrides the API-wide requirement when not nil.
 	security [][]string
+	// errors decodes the error bodies the operation declares.
+	errors errorSchemas
 	// newBody returns a streamed body for each attempt; oneShot bodies are not retried.
 	newBody func() (io.Reader, error)
 	oneShot bool
@@ -44,6 +46,18 @@ type request struct {
 	response *http.Response
 	cancel   context.CancelFunc
 }
+
+// queryStyle is how a structured query parameter is serialized.
+type queryStyle int
+
+const (
+	// queryForm repeats the name of a list for each item: name=a&name=b.
+	queryForm queryStyle = iota
+	// queryFormCSV joins the items of a list with commas: name=a,b.
+	queryFormCSV
+	// queryDeepObject brackets the keys and lists of objects: name[key]=v, name[]=a.
+	queryDeepObject
+)
 
 func newRequest(method, path string, options []RequestOption) *request {
 	return &request{
@@ -92,7 +106,7 @@ func (r *request) SetHeader(name, value string) {
 func (r *request) SetJSONBody(v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
-		r.err = fmt.Errorf("@@PACKAGE_NAME@@: encoding request body: %w", err)
+		r.err = requestError("encoding request body: %w", err)
 		return
 	}
 	r.body = body
@@ -100,14 +114,14 @@ func (r *request) SetJSONBody(v any) {
 }
 
 // AddStructuredQueryParam sends the JSON value of v: objects as name[key]=value,
-// lists as repeated name=item (name[]=item with deepObject, name=a,b without explode).
-func (r *request) AddStructuredQueryParam(name string, v any, deepObject, explode bool) {
+// lists as style says.
+func (r *request) AddStructuredQueryParam(name string, v any, style queryStyle) {
 	value, err := jsonValue(v)
 	if err != nil {
-		r.err = fmt.Errorf("@@PACKAGE_NAME@@: encoding query parameter %q: %w", name, err)
+		r.err = requestError("encoding query parameter %q: %w", name, err)
 		return
 	}
-	encodeParam(name, value, deepObject, explode, r.query)
+	encodeParam(name, value, style == queryDeepObject, style != queryFormCSV, r.query)
 }
 
 // SetFormBody serializes v as an application/x-www-form-urlencoded body, given the
@@ -115,12 +129,12 @@ func (r *request) AddStructuredQueryParam(name string, v any, deepObject, explod
 func (r *request) SetFormBody(v any, deepObject, unexploded []string) {
 	value, err := jsonValue(v)
 	if err != nil {
-		r.err = fmt.Errorf("@@PACKAGE_NAME@@: encoding form body: %w", err)
+		r.err = requestError("encoding form body: %w", err)
 		return
 	}
 	fields, ok := value.(map[string]any)
 	if !ok {
-		r.err = fmt.Errorf("@@PACKAGE_NAME@@: form bodies must be JSON objects, not %T", value)
+		r.err = requestError("form bodies must be JSON objects, not %T", value)
 		return
 	}
 	values := url.Values{}
@@ -138,7 +152,7 @@ func (r *request) url(serverURL string) (string, error) {
 		path = strings.ReplaceAll(path, "{"+name+"}", url.PathEscape(value))
 	}
 	if strings.Contains(path, "{") {
-		return "", fmt.Errorf("@@PACKAGE_NAME@@: unresolved path parameter in %q", path)
+		return "", requestError("unresolved path parameter in %q", path)
 	}
 
 	full := serverURL + path
@@ -150,7 +164,7 @@ func (r *request) url(serverURL string) (string, error) {
 		full += separator + encoded
 	}
 	if _, err := url.Parse(full); err != nil {
-		return "", fmt.Errorf("@@PACKAGE_NAME@@: invalid request URL %q: %w", full, err)
+		return "", requestError("invalid request URL %q: %w", full, err)
 	}
 	return full, nil
 }
@@ -228,16 +242,18 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 		req.SetHeader("@@HEADER_PREFIX@@-req-id", id)
 	}
 
-	// Replaying a non-idempotent request could apply it twice, while a 429 was not processed.
+	// Replaying a request that is not idempotent could apply it twice.
 	idempotent := req.headers.Get("idempotency-key") != "" ||
 		slices.Contains([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodOptions}, req.method)
 	for attempt := 0; ; attempt++ {
 		res := c.attempt(ctx, req, endpoint, attempt, call.timeout)
+		if call.response != nil && res.response != nil {
+			*call.response = res.response
+		}
 		if res.err == nil {
 			return res.body, res.status, nil
 		}
-		retryable := res.retryable && (idempotent || res.status == http.StatusTooManyRequests)
-		if !retryable || req.oneShot || attempt >= len(call.retrySchedule) || ctx.Err() != nil {
+		if !res.retryable || !idempotent || req.oneShot || attempt >= len(call.retrySchedule) || ctx.Err() != nil {
 			return nil, 0, res.err
 		}
 
@@ -245,7 +261,7 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, 0, &TransportError{Method: req.method, Path: req.path, Err: ctx.Err()}
+			return nil, 0, failure(ctx, req, ctx.Err())
 		case <-timer.C:
 		}
 	}
@@ -254,6 +270,7 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 type attemptResult struct {
 	body       []byte
 	status     int
+	response   *http.Response
 	err        error
 	retryable  bool
 	retryAfter time.Duration
@@ -268,9 +285,11 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	switch {
 	case req.stream:
 		// The timeout only covers opening a stream, which then lives until closed.
-		ctx, cancel = context.WithCancel(ctx)
+		var cancelCause context.CancelCauseFunc
+		ctx, cancelCause = context.WithCancelCause(ctx)
+		cancel = func() { cancelCause(context.Canceled) }
 		if timeout > 0 {
-			defer time.AfterFunc(timeout, cancel).Stop()
+			defer time.AfterFunc(timeout, func() { cancelCause(context.DeadlineExceeded) }).Stop()
 		}
 	case timeout > 0:
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -287,13 +306,13 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	} else if req.newBody != nil {
 		var err error
 		if body, err = req.newBody(); err != nil {
-			return attemptResult{err: err}
+			return attemptResult{err: requestError("reading request body: %w", err)}
 		}
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, req.method, endpoint, body)
 	if err != nil {
-		return attemptResult{err: fmt.Errorf("@@PACKAGE_NAME@@: building request: %w", err)}
+		return attemptResult{err: requestError("building request: %w", err)}
 	}
 
 	for name, values := range req.headers {
@@ -310,48 +329,71 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 		httpReq.Header.Set("@@HEADER_PREFIX@@-retry-count", strconv.Itoa(attempt))
 	}
 
-	if cfg.debug {
-		fmt.Fprintf(os.Stderr, "@@PACKAGE_NAME@@: %s %s (attempt %d)\n", req.method, endpoint, attempt+1)
+	if cfg.logger != nil {
+		cfg.logger.DebugContext(ctx, "@@PACKAGE_NAME@@: request", "method", req.method, "url", endpoint, "attempt", attempt+1)
 	}
 
 	resp, err := cfg.httpClient.Do(httpReq)
 	if err != nil {
-		return attemptResult{retryable: true, err: &TransportError{Method: req.method, Path: req.path, Err: err}}
+		return attemptResult{retryable: true, err: failure(ctx, req, err)}
 	}
 	if req.stream && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		keep = true
 		req.response, req.cancel = resp, cancel
-		return attemptResult{status: resp.StatusCode}
+		return attemptResult{status: resp.StatusCode, response: resp}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return attemptResult{retryable: true, err: &TransportError{Method: req.method, Path: req.path, Err: fmt.Errorf("reading response body: %w", err)}}
+		return attemptResult{retryable: true, err: failure(ctx, req, fmt.Errorf("reading response body: %w", err))}
 	}
+	read := *resp
+	read.Body = io.NopCloser(bytes.NewReader(respBody))
 
-	if cfg.debug {
-		fmt.Fprintf(os.Stderr, "@@PACKAGE_NAME@@: %s %s -> %d (%d bytes)\n", req.method, endpoint, resp.StatusCode, len(respBody))
+	if cfg.logger != nil {
+		cfg.logger.DebugContext(ctx, "@@PACKAGE_NAME@@: response", "method", req.method, "url", endpoint, "status", resp.StatusCode, "bytes", len(respBody))
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		apiErr := newAPIError(resp.StatusCode, respBody)
 		apiErr.setHeader(resp.Header)
+		apiErr.Body = req.errors.decode(resp.StatusCode, respBody)
 		return attemptResult{
 			status:     resp.StatusCode,
+			response:   &read,
 			err:        apiErr,
 			retryable:  retryableStatus(resp.StatusCode),
-			retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now()),
+			retryAfter: retryAfter(resp.Header, time.Now()),
 		}
 	}
 
-	return attemptResult{body: respBody, status: resp.StatusCode}
+	return attemptResult{body: respBody, status: resp.StatusCode, response: &read}
+}
+
+// failure is the error of an attempt that got no response: a [*TimeoutError]
+// when it ran out of time, else a [*TransportError].
+func failure(ctx context.Context, req *request, err error) error {
+	var netErr net.Error
+	if (errors.As(err, &netErr) && netErr.Timeout()) || errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+		return &TimeoutError{Method: req.method, Path: req.path, Err: err}
+	}
+	return &TransportError{Method: req.method, Path: req.path, Err: err}
 }
 
 // retryableStatus reports whether a failed status may succeed later: timeouts,
 // rate limits and server errors. Other 4xx fail again the same way.
 func retryableStatus(status int) bool {
 	return status == http.StatusRequestTimeout || status == http.StatusTooManyRequests || status >= 500
+}
+
+// retryAfter reads how long the server asks to wait, from retry-after-ms or
+// Retry-After.
+func retryAfter(header http.Header, now time.Time) time.Duration {
+	if ms, err := strconv.ParseFloat(header.Get("Retry-After-Ms"), 64); err == nil && ms > 0 {
+		return time.Duration(ms * float64(time.Millisecond))
+	}
+	return parseRetryAfter(header.Get("Retry-After"), now)
 }
 
 // parseRetryAfter reads a Retry-After header, in seconds or as an HTTP date.
@@ -457,7 +499,7 @@ func flattenParam(prefix string, value any, out url.Values) {
 func randomHex(n int) (string, error) {
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("@@PACKAGE_NAME@@: reading random bytes: %w", err)
+		return "", requestError("reading random bytes: %w", err)
 	}
 	return hex.EncodeToString(buf), nil
 }

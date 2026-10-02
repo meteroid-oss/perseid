@@ -97,17 +97,35 @@ decoded into its schema (else its JSON), and `request_id`. No response raises
 
 ## Go
 
-Every method takes trailing options for one call: `WithHeader`, `WithTimeout`,
-`WithIdempotencyKey` and `WithMaxRetries`. Names spell initialisms the Go way (`CustomerID`,
-`APIKey`). Nullable optional PATCH fields are `*Nullable[T]`, and `Null[T]()` clears one. `DefaultTimeout` is `timeout` from perseid.toml. A non-2xx response is an
-`*APIError`: `errors.Is(err, ErrNotFound)` (and `ErrUnauthorized`, `ErrRateLimited`, `ErrServer`...)
-tests its status, `ErrorBody[T](err)` decodes its body as an error schema of the spec, and
-`APIError.Detail()` as the schema most operations share. A primitive-or-object union is a struct with one field per variant (`String *string`,
-`Customer *Customer`, `Empty bool` for `""`) plus `New...From...` constructors; values of another
-JSON type, or objects no variant matches, are kept in `Raw()`; `ID()` returns the id of an
-expandable field and `As(&target)` decodes a union of objects as another variant. Variants of a tagged union fill in their discriminator when it is
-left empty. Generated files start with the `// Code generated ... DO NOT EDIT.` line linters
-and editors look for.
+Needs Go 1.23+. Required query and header parameters are arguments, optional ones go in a
+`*...Options` struct (pointers, `nil` to omit); every method also takes trailing options for one
+call: `WithHeader`, `WithTimeout`, `WithIdempotencyKey`, `WithMaxRetries` and
+`WithResponseInto(&resp)`, which hands over the `*http.Response` (status, headers). Names spell
+initialisms the Go way (`CustomerID`, `APIKey`), and the package of a multi-word name is one word
+(`realworld`). `allOf` parts are inlined into flat structs, and every struct keeps the properties
+it does not know in `ExtraFields`, sent back when encoding. Nullable optional PATCH fields are
+`*Nullable[T]`: `NewNullable(v)` sets one and `ExplicitNull[T]()` clears it. `DefaultTimeout` is
+`timeout` from perseid.toml, and `Options.Logger` (a `*slog.Logger`) logs every attempt.
+
+Every error is an `SDKError`: `*APIError` for a non-2xx response, `*TimeoutError`,
+`*TransportError` when no response came, `*DecodeError` and `*RequestError`. `errors.Is(err,
+ErrNotFound)` (and `ErrUnauthorized`, `ErrRateLimited`, `ErrServer`...) tests the status,
+`APIError.Body` holds the body decoded as the error schema the operation declares (else plain
+JSON), `ErrorBody[T](err)` decodes it as any schema and `APIError.Detail()` as the one most
+operations share.
+
+List operations have `ListPage`, a `*Page[T]` with `Items`, `HasNextPage()` and `NextPage(ctx)`,
+and `ListIter`, a `*Pager[T]` over every item (`Next`/`Current`/`Err`, or `range pager.All()`).
+Event streams with a schema are a `*Stream[T]` of decoded events ending at `[DONE]` (`Event()`
+gives the raw `SSEEvent`), others an `*EventStream`; lines are capped at 1 MiB.
+
+A primitive-or-object union is a struct with one field per variant (`String *string`,
+`Customer *Customer`, `Empty bool` for `""`) plus `New...From...` constructors, also for query
+parameters; values of another JSON type, or objects no variant matches, are kept in `Raw()`;
+`ID()` returns the id of an expandable field and `As(&target)` decodes a union of objects as
+another variant. Variants of a tagged union fill in their discriminator when it is left empty.
+Generated files start with the `// Code generated ... DO NOT EDIT.` line linters and editors look
+for; `doc.go`, `errors.go` and `version.go` are yours.
 
 ## Java
 

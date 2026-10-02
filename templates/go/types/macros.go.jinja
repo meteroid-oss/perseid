@@ -1,10 +1,5 @@
-{#
-    Shared helpers for the Go templates.
-
-    Every macro here is intentionally strict: anything the templates do not know
-    how to render calls `panic()` so the codegen fails loudly instead of quietly
-    dropping a field, a parameter or a whole operation.
--#}
+{#- Shared helpers for the Go templates. What they cannot render calls `panic()`, so the
+    codegen fails loudly instead of dropping a field, a parameter or an operation. -#}
 
 {#- Go keywords + the identifiers the generated method bodies use for their own
     locals. A parameter that would shadow one of them gets a trailing `_`. -#}
@@ -27,6 +22,31 @@
 {% macro go_local(name) -%}
     {%- set ident = name | ident("camel", "go") | go_name -%}
     {%- if ident in GO_RESERVED -%}{{ ident }}_{%- else -%}{{ ident }}{%- endif -%}
+{%- endmacro %}
+
+{#- A method argument: a local, suffixed with `Param` when the method bodies use the name. -#}
+{% macro go_arg(name) -%}
+    {%- set ident = go_local(name) -%}
+    {{ ident ~ "Param" if ident in ["params", "resp", "page", "next", "current", "last", "item", "body"] else ident }}
+{%- endmacro %}
+
+{#- The nil checks reaching the end of `path` from `root` need, given which of its
+    properties may be absent (`flags`); with `leaf` false, the last one is a slice. With
+    `missing`, the checks that one is nil instead. -#}
+{% macro go_path_guard(root, path, flags, leaf=true, missing=false) -%}
+    {%- set ns = namespace(expr=root, checks=[]) -%}
+    {%- for segment in path -%}
+        {%- set ns.expr = ns.expr ~ "." ~ go_export(segment) -%}
+        {%- if flags[loop.index0] and (leaf or not loop.last) %}{% set ns.checks = ns.checks + [ns.expr ~ (" == nil" if missing else " != nil")] %}{% endif -%}
+    {%- endfor -%}
+    {{ ns.checks | join(" || " if missing else " && ") }}
+{%- endmacro %}
+
+{#- The value at the end of `path` from `root`, once go_path_guard holds. -#}
+{% macro go_path_value(root, path, flags, leaf=true) -%}
+    {%- set ns = namespace(expr=root) -%}
+    {%- for segment in path %}{% set ns.expr = ns.expr ~ "." ~ go_export(segment) %}{% endfor -%}
+    {{ ("*" if leaf and flags[path | length - 1] else "") ~ ns.expr }}
 {%- endmacro %}
 
 {#- The Go type of a value. Any-JSON (`{}` in the spec) is `json.RawMessage` at
@@ -207,10 +227,8 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
     {{ (name ~ ("Value" if name in type_names else "")) | go_name }}
 {%- endmacro %}
 
-{#- The Go type of a struct field: optional fields are pointers (collections stay
-    nil), required non-nullable collections marshal nil as `[]`/`{}` through
-    RequiredSlice/RequiredMap, and optional nullable fields of a PATCH body are
-    *Nullable[T] so they can be cleared. -#}
+{#- The Go type of a struct field: optional fields are pointers (collections stay nil),
+    required collections RequiredSlice/RequiredMap, optional nullable PATCH fields *Nullable[T]. -#}
 {% macro go_field_type(field, patch=false, union=none) -%}
     {%- if union -%}
         {%- if patch and field.nullable and not field.required -%}
@@ -254,51 +272,43 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
 // Deprecated: this {{ what }} is deprecated in the {{ sdk.client_name }} API.
 {%- endmacro %}
 
-{#- Convert a single (already dereferenced) query parameter value expression to
-    a Go `string` expression.
-
-    Everything that is not a scalar we know how to serialize is a hard error. -#}
+{#- A Go `string` expression of one (dereferenced) query parameter scalar. -#}
 {% macro go_query_scalar(ty, expr) -%}
     {%- set gt = ty.to_go() -%}
     {%- if gt == "string" -%}
         {{ expr }}
     {%- elif gt == "bool" -%}
         formatBool({{ expr }})
-    {%- elif gt in ["int16", "int32", "int64"] -%}
+    {%- elif gt == "int64" -%}
+        formatInt({{ expr }})
+    {%- elif gt in ["int16", "int32"] -%}
         formatInt(int64({{ expr }}))
-    {%- elif gt in ["uint16", "uint64"] -%}
+    {%- elif gt == "uint64" -%}
+        formatUint({{ expr }})
+    {%- elif gt == "uint16" -%}
         formatUint(uint64({{ expr }}))
-    {%- elif gt in ["float32", "float64"] -%}
+    {%- elif gt == "float64" -%}
+        formatFloat({{ expr }})
+    {%- elif gt == "float32" -%}
         formatFloat(float64({{ expr }}))
     {%- elif ty.is_datetime() -%}
         formatTime({{ expr }})
     {%- elif ty.is_schema_ref() -%}
         formatValue({{ expr }})
     {%- else -%}
-        {{ panic("go codegen: unsupported query parameter type `" ~ gt ~ "` - add explicit support in codegen/templates/go/types/macros.go.jinja") }}
+        {{ panic("go codegen: unsupported query parameter type `" ~ gt ~ "` - add explicit support in templates/go/types/macros.go.jinja") }}
     {%- endif -%}
 {%- endmacro %}
 
-{#- The Go type of a header parameter. HTTP header values are strings, and the
-    generated code hands them to `req.SetHeader` unconverted, so anything that is
-    not already a Go `string` must fail rather than be silently retyped.
-
-    `HeaderParam` (codegen/src/api/resources.rs) carries only `name` and
-    `required`: unlike a query parameter it has no `type` at all, because
-    `enforce_string_parameter` rejects every non-string header upstream. So when
-    `p.type` is undefined, `string` is guaranteed correct rather than assumed.
-    Should the codegen ever start passing a type through, this branch turns
-    strict immediately instead of quietly rendering `string` for it.
-
-    The spec currently declares no header parameters at all, so neither branch is
-    reached today. -#}
+{#- The Go type of a header parameter: headers are strings, and anything else must fail
+    rather than be silently retyped. -#}
 {% macro go_header_type(p) -%}
     {%- if p.type is not defined -%}
         string
     {%- elif p.type.to_go() == "string" -%}
         string
     {%- else -%}
-        {{ panic("go codegen: unsupported header parameter type `" ~ p.type.to_go() ~ "` for header `" ~ p.name ~ "` - add explicit support in codegen/templates/go/types/macros.go.jinja") }}
+        {{ panic("go codegen: unsupported header parameter type `" ~ p.type.to_go() ~ "` for header `" ~ p.name ~ "` - add explicit support in templates/go/types/macros.go.jinja") }}
     {%- endif -%}
 {%- endmacro %}
 

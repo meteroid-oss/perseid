@@ -52,7 +52,7 @@ pub(crate) fn generate_with_output_context(
     if tpl_file_ext == "java" {
         api.inline_string_alias_bodies()?;
     }
-    if tpl_file_ext == "cs" {
+    if matches!(tpl_file_ext, "cs" | "go") {
         api.inline_flattened_fields()?;
     }
 

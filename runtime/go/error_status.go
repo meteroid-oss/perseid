@@ -5,7 +5,59 @@ package @@PACKAGE_NAME@@
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 )
+
+// SDKError is implemented by every error the SDK returns: [*APIError] for a
+// non-2xx response, [*TimeoutError] when an attempt ran out of time,
+// [*TransportError] when no response came, [*DecodeError] for a response body
+// that does not decode, and [*RequestError] for a request that could not be
+// built.
+//
+//	var sdkErr @@PACKAGE_NAME@@.SDKError
+//	if errors.As(err, &sdkErr) {
+//		// ...
+//	}
+type SDKError interface {
+	error
+	sdkError()
+}
+
+func (*APIError) sdkError()       {}
+func (*TransportError) sdkError() {}
+func (*DecodeError) sdkError()    {}
+func (*TimeoutError) sdkError()   {}
+func (*RequestError) sdkError()   {}
+func (*UnionError) sdkError()     {}
+
+// TimeoutError is returned when an attempt, or the context of the call, ran out
+// of time. It wraps the cause, so errors.Is(err, context.DeadlineExceeded)
+// holds when the deadline was a context's.
+type TimeoutError struct {
+	Method string
+	Path   string
+	Err    error
+}
+
+func (e *TimeoutError) Error() string {
+	return fmt.Sprintf("@@PACKAGE_NAME@@: %s %s timed out: %v", e.Method, e.Path, e.Err)
+}
+
+func (e *TimeoutError) Unwrap() error { return e.Err }
+
+// RequestError is returned when a request could not be built: a body or
+// parameter that does not encode, an invalid URL or a failing token provider.
+type RequestError struct {
+	Err error
+}
+
+func (e *RequestError) Error() string { return "@@PACKAGE_NAME@@: " + e.Err.Error() }
+
+func (e *RequestError) Unwrap() error { return e.Err }
+
+func requestError(format string, args ...any) *RequestError {
+	return &RequestError{Err: fmt.Errorf(format, args...)}
+}
 
 // Sentinels that errors.Is matches against the status of an [*APIError]:
 //
@@ -37,13 +89,10 @@ func (e *APIError) Is(target error) bool {
 	return ok && e.StatusCode >= status.min && e.StatusCode <= status.max
 }
 
-// ErrorBody decodes the body of the [*APIError] in err's chain as a T, the
-// error schema an operation documents for that status. It reports false when
-// err holds no APIError or its body is not JSON.
-//
-//	if body, ok := @@PACKAGE_NAME@@.ErrorBody[@@PACKAGE_NAME@@.ErrorResponse](err); ok {
-//		log.Print(body.Message)
-//	}
+// ErrorBody decodes the body of the [*APIError] in err's chain as a T, such as
+// an error schema of the API. It reports false when err holds no APIError or its
+// body is not JSON. [APIError.Body] already holds the body decoded as the error
+// schema the operation declares for the status.
 func ErrorBody[T any](err error) (*T, bool) {
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
@@ -59,4 +108,32 @@ func decodeErrorBody[T any](raw []byte) *T {
 		return nil
 	}
 	return &body
+}
+
+// errorSchemas decodes the error bodies an operation declares, by status: "404",
+// "4XX" or "default".
+type errorSchemas map[string]func(raw []byte) any
+
+func errorSchema[T any](raw []byte) any {
+	if body := decodeErrorBody[T](raw); body != nil {
+		return body
+	}
+	return nil
+}
+
+// decode returns the body as the schema declared for status, else as plain JSON.
+func (s errorSchemas) decode(status int, raw []byte) any {
+	for _, key := range []string{fmt.Sprint(status), fmt.Sprintf("%dXX", status/100), "default"} {
+		if decode, ok := s[key]; ok {
+			if body := decode(raw); body != nil {
+				return body
+			}
+			break
+		}
+	}
+	var body any
+	if json.Unmarshal(raw, &body) != nil {
+		return nil
+	}
+	return body
 }

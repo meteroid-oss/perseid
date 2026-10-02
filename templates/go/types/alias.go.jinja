@@ -15,7 +15,9 @@ import "time"
 import "encoding/json"
 {% endif %}
 {% if union and type.target.is_union() %}{{ go_union(union_name, type.target) | replace("// " ~ union_name ~ " is one of", doc_comment ~ "\n//\n// " ~ union_name ~ " is one of" if doc_comment else "// " ~ union_name ~ " is one of") }}
-{% else %}{{ doc_comment }}
-type {{ go_ident(type.name) }} = {{ target }}
+{% else %}{% if not named %}// {{ go_ident(type.name) }} is the {{ type.name }} schema of the {{ sdk.client_name }} API.
+{% if doc_comment %}//
+{% endif %}{% endif %}{% if doc_comment %}{{ doc_comment }}
+{% endif %}type {{ go_ident(type.name) }} = {{ target }}
 {% if union %}{{ go_union(union_name, type.target) }}
 {% endif %}{% endif %}

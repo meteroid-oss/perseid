@@ -4,8 +4,16 @@ package {{ sdk.package_name }}
 
 import "strconv"
 
+{% if named %}{{ doc_comment }}
+//
+// It is one of [All{{ type_name }}Values], or a value this SDK version does
+// not know.
+{% else %}// {{ type_name }} is one of [All{{ type_name }}Values], or a value this SDK version
+// does not know.
+{% if doc_comment %}//
 {{ doc_comment }}
-{% if type.deprecated %}{{ go_deprecated("type") }}
+{% endif %}{% endif %}{% if type.deprecated %}//
+{{ go_deprecated("type") }}
 {% endif %}type {{ type_name }} int64
 
 // Known values of {{ type_name }}.
