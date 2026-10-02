@@ -107,8 +107,8 @@ func TestNullableStates(t *testing.T) {
 	if absent.IsNull() || !ExplicitNull[string]().IsNull() || NewNullable("").IsNull() {
 		t.Error("IsNull is true only for an explicit null")
 	}
-	if v, ok := Set("d").Get(); !ok || v != "d" || !Null[int]().IsNull() {
-		t.Error("deprecated Set/Null")
+	if v, ok := NewNullable("d").Get(); !ok || v != "d" {
+		t.Error("NewNullable(\"d\").Get()")
 	}
 }
 
@@ -181,7 +181,7 @@ func TestRequestOptions(t *testing.T) {
 	}
 
 	var transport *TransportError
-	_, err = New("token", &Options{ServerURL: "http://127.0.0.1:1", NumRetries: -1}).Things().Retrieve(context.Background(), "t1")
+	_, err = New("token", &Options{ServerURL: "http://127.0.0.1:1", MaxRetries: -1}).Things().Retrieve(context.Background(), "t1")
 	if !errors.As(err, &transport) || errors.As(err, &timeout) {
 		t.Errorf("err = %v, want a connection error", err)
 	}
@@ -345,8 +345,11 @@ func TestRetryAfterParsing(t *testing.T) {
 
 func TestDefaultBackoffIsJittered(t *testing.T) {
 	call := newConfig("", nil).callConfig(nil)
-	if len(call.retrySchedule) != DefaultNumRetries || call.retrySchedule[0] != 500*time.Millisecond {
+	if len(call.retrySchedule) != DefaultMaxRetries || call.retrySchedule[0] != 500*time.Millisecond {
 		t.Fatalf("schedule = %v", call.retrySchedule)
+	}
+	if n := len(newConfig("", &Options{MaxRetries: 4}).callConfig(nil).retrySchedule); n != 4 {
+		t.Fatalf("MaxRetries: 4 gives %d retries", n)
 	}
 	for range 100 {
 		if d := call.delay(0, 0); d < 375*time.Millisecond || d > 500*time.Millisecond {
@@ -388,5 +391,27 @@ func TestEventStreams(t *testing.T) {
 	broken := &Stream[map[string]int]{events: events("data: nope\n\n")}
 	if broken.Next() || !errors.As(broken.Err(), &decodeErr) {
 		t.Errorf("err %v", broken.Err())
+	}
+}
+
+func TestBaseURL(t *testing.T) {
+	client, rec := server(t, func(_ int32, w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, thingJSON)
+	})
+	t.Setenv(BaseURLEnv, client.cfg.serverURL)
+	if _, err := New("token", nil).Things().Retrieve(context.Background(), "t1"); err != nil || rec.requests.Load() != 1 {
+		t.Fatalf("%s ignored: %v", BaseURLEnv, err)
+	}
+
+	t.Setenv(BaseURLEnv, "")
+	unset := New("token", nil)
+	unset.cfg.serverURL = ""
+	_, err := unset.Things().Retrieve(context.Background(), "t1")
+	var reqErr *RequestError
+	if !errors.As(err, &reqErr) || !strings.Contains(err.Error(), "Options.ServerURL") || !strings.Contains(err.Error(), BaseURLEnv) {
+		t.Fatalf("err = %v, want a RequestError naming both settings", err)
+	}
+	if rec.requests.Load() != 1 {
+		t.Error("a request went out without a base URL")
 	}
 }

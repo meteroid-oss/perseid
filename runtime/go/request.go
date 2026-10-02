@@ -147,6 +147,9 @@ func (r *request) SetFormBody(v any, deepObject, unexploded []string) {
 
 // url renders the absolute request URL against the configured server.
 func (r *request) url(serverURL string) (string, error) {
+	if serverURL == "" {
+		return "", requestError("no base URL: set Options.ServerURL or the %s environment variable", BaseURLEnv)
+	}
 	path := r.path
 	for name, value := range r.pathParams {
 		path = strings.ReplaceAll(path, "{"+name+"}", url.PathEscape(value))
