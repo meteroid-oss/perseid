@@ -240,7 +240,7 @@ impl<'de> serde::Deserialize<'de> for {{ name }} {
 {% macro try_decode(ty, unknown) -%}
 {% set best = ty.union_mode() == "best-match" -%}
 #[allow(unused_imports)]
-use crate::models::union_rules::{self as rules, Shape as ItemShape};
+use crate::models::union_rules::{self as rules, ItemShape};
 {% for v in ty.try_variants() if v.empty -%}
 if value.as_str() == Some("") {
     return Ok(Self::{{ v.name | to_upper_camel_case }});

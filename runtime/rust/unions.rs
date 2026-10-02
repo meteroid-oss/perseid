@@ -29,17 +29,17 @@ pub(crate) fn best_match(value: &Value, candidates: &[(&[&str], &[&str])]) -> Op
 }
 
 /// The JSON shape of the items of an array variant, which tells arrays of different items apart.
-pub(crate) enum Shape {
+pub(crate) enum ItemShape {
     Any,
     String,
     Integer,
     Number,
     Boolean,
     Object,
-    Array(&'static Shape),
+    Array(&'static ItemShape),
 }
 
-impl Shape {
+impl ItemShape {
     /// Whether `value` has this shape; for arrays, whether it is empty or its first item has the
     /// shape of the items.
     pub(crate) fn matches(&self, value: &Value) -> bool {
@@ -56,7 +56,7 @@ impl Shape {
 }
 
 /// Whether `value` is an array that is empty or whose first item has the shape `items`.
-pub(crate) fn array_of(value: &Value, items: &Shape) -> bool {
+pub(crate) fn array_of(value: &Value, items: &ItemShape) -> bool {
     value
         .as_array()
         .is_some_and(|array| array.first().is_none_or(|first| items.matches(first)))
