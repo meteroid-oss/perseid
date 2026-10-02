@@ -119,11 +119,13 @@ body, `Error code: 404 - {"error": ...}`. No response raises
 Needs Go 1.23+. Required query and header parameters are arguments, optional ones go in a
 `*...Options` struct (pointers, `nil` to omit); every method also takes trailing options for one
 call: `WithHeader`, `WithTimeout`, `WithIdempotencyKey`, `WithMaxRetries` and
-`WithResponseInto(&resp)`, which hands over the `*http.Response` (status, headers). Names spell
+`WithResponseInto(&resp)`, which hands over the `*http.Response` (status, headers). A method whose
+operation may also answer a bodiless 2xx returns nil for it, scalars as a pointer. Names spell
 initialisms the Go way (`CustomerID`, `APIKey`), and the package of a multi-word name is one word
 (`realworld`). `allOf` parts are inlined into flat structs, and every struct keeps the properties
 it does not know in `ExtraFields`, sent back when encoding. Nullable optional PATCH fields are
-`*Nullable[T]`: `NewNullable(v)` sets one and `ExplicitNull[T]()` clears it. `DefaultTimeout` is
+`*Nullable[T]`: `NewNullable(v)` sets one and `ExplicitNull[T]()` clears it (`Set` and `Null`
+remain as deprecated aliases); `IsNull()` is true only for an explicit null, not for `nil`. `DefaultTimeout` is
 `timeout` from perseid.toml, and `Options.Logger` (a `*slog.Logger`) logs every attempt.
 
 Every error is an `SDKError`: `*APIError` for a non-2xx response, `*TimeoutError`,
@@ -142,7 +144,8 @@ A primitive-or-object union is a struct with one field per variant (`String *str
 `Customer *Customer`, `Empty bool` for `""`) plus `New...From...` constructors, also for query
 parameters; values of another JSON type, or objects no variant matches, are kept in `Raw()`;
 `ID()` returns the id of an expandable field and `As(&target)` decodes a union of objects as
-another variant. Variants of a tagged union fill in their discriminator when it is left empty.
+another variant. A tagged union's discriminator has its own string type (`ShapeType`, with
+`ShapeCircle`... constants), and its variants fill in their discriminator when it is left empty.
 Generated files start with the `// Code generated ... DO NOT EDIT.` line linters and editors look
 for; `doc.go`, `errors.go` and `version.go` are yours.
 

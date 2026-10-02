@@ -102,6 +102,16 @@ func TestPatchBodiesTellAbsentFromNull(t *testing.T) {
 	}
 }
 
+func TestNullableStates(t *testing.T) {
+	var absent *Nullable[string]
+	if absent.IsNull() || !ExplicitNull[string]().IsNull() || NewNullable("").IsNull() {
+		t.Error("IsNull is true only for an explicit null")
+	}
+	if v, ok := Set("d").Get(); !ok || v != "d" || !Null[int]().IsNull() {
+		t.Error("deprecated Set/Null")
+	}
+}
+
 type recorded struct {
 	requests atomic.Int32
 	last     atomic.Pointer[http.Request]
@@ -297,6 +307,14 @@ func TestUnknownPropertiesRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	sameJSON(t, string(out), strings.Replace(thingJSON, `{`, `{"future":{"a":[1]},`, 1))
+
+	var cased Thing
+	if err := json.Unmarshal([]byte(strings.Replace(thingJSON, `"id"`, `"ID"`, 1)), &cased); err != nil {
+		t.Fatal(err)
+	}
+	if cased.ID != "t1" || cased.ExtraFields != nil {
+		t.Errorf("a differently cased known property: ID %q, extra %v", cased.ID, cased.ExtraFields)
+	}
 
 	create := ThingCreate{Name: "n", Kind: KindAlpha, ExtraFields: map[string]json.RawMessage{"beta": []byte(`true`), "name": []byte(`"ignored"`)}}
 	out, err = json.Marshal(create)

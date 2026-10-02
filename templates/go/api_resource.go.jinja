@@ -90,7 +90,7 @@ type {{ resource_type_name }} struct {
 {% elif op.response_is_event_stream %}{% set ret_type = "*EventStream" %}
 {% elif op.response_is_binary %}{% set ret_type = "[]byte" %}
 {% elif op.response_is_text %}{% set ret_type = "string" %}
-{% elif op.response_body_json_type is defined %}{% set ret_type = go_type(op.response_body_json_type) %}
+{% elif op.response_body_json_type is defined %}{% set ret_type = go_type(op.response_body_json_type) %}{% if op.response_may_be_empty | default(false) and not (ret_type is startingwith("[]") or ret_type is startingwith("map[") or ret_type is startingwith("*") or ret_type in ["any", "json.RawMessage"]) %}{% set ret_type = "*" ~ ret_type %}{% endif %}
 {% elif op.response_body_is_list %}{% set ret_type = "[]" ~ go_ident(op.response_body_schema_name) %}
 {% elif op.response_body_schema_name is defined %}{% set ret_type = "*" ~ go_ident(op.response_body_schema_name) %}
 {% else %}{% set ret_type = "" %}{% endif %}
@@ -98,6 +98,8 @@ type {{ resource_type_name }} struct {
 {% if not (lead is startingwith(name ~ " ")) %}// {{ name }} sends {{ op.method | upper }} {{ op.path }}{% if op.response_is_event_stream %} and streams its events{% endif %}.
 {% if op.description is defined %}//
 {% endif %}{% endif %}{% if op.description is defined %}{{ op.description | to_doc_comment(style="go") }}
+{% endif %}{% if op.response_may_be_empty | default(false) %}//
+// It returns nil when the response has no body.
 {% endif %}{% if op.stream_property is defined %}//
 // It sets {{ op.stream_property }} to true in the body it sends, leaving {{ body_var }} unchanged.
 {% endif %}{% set errors = op.errors | default({}) %}{% if errors | dictsort | map(attribute=1) | reject("equalto", default_error) | list %}//
@@ -175,11 +177,11 @@ type {{ resource_type_name }} struct {
 		return out, err
 	}
 	return out, nil
-{% elif op.response_body_schema_name is defined %}	var out {% if op.response_body_is_list %}[]{% endif %}{{ go_ident(op.response_body_schema_name) }}
+{% elif op.response_body_schema_name is defined %}{% set maybe_nil = op.response_may_be_empty | default(false) and not op.response_body_is_list %}	var out {% if op.response_body_is_list %}[]{% elif maybe_nil %}*{% endif %}{{ go_ident(op.response_body_schema_name) }}
 	if err := a.client.execute(ctx, req, &out); err != nil {
 		return nil, err
 	}
-	return {% if not op.response_body_is_list %}&{% endif %}out, nil
+	return {% if not (op.response_body_is_list or maybe_nil) %}&{% endif %}out, nil
 {% else %}	return a.client.execute(ctx, req, nil)
 {% endif %}}
 {% if op.pagination is defined %}
@@ -200,7 +202,10 @@ func (a *{{ resource_type_name }}) {{ name }}Page(ctx context.Context{{ sig }}{%
 	if err != nil {
 		return nil, err
 	}
-{% set items_guard = go_path_guard("resp", pg.items, opt["items"], false) -%}
+{% if op.response_may_be_empty | default(false) and ret_type is startingwith("*") %}	if resp == nil {
+		return &Page[{{ item_type }}]{}, nil
+	}
+{% endif %}{% set items_guard = go_path_guard("resp", pg.items, opt["items"], false) -%}
 {% if items_guard %}	page := &Page[{{ item_type }}]{}
 	if {{ items_guard }} {
 		page.Items = {{ go_path_value("resp", pg.items, opt["items"], false) }}

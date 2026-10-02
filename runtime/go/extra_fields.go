@@ -7,17 +7,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // extraFields returns the properties of the JSON object data that are not
-// known, or nil when there are none.
+// known, or nil when there are none. Like encoding/json, it matches names
+// case-insensitively, so "Id" counts as the known "id".
 func extraFields(data []byte, known ...string) map[string]json.RawMessage {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(data, &fields) != nil {
 		return nil
 	}
-	for _, name := range known {
-		delete(fields, name)
+	for name := range fields {
+		if slices.ContainsFunc(known, func(k string) bool { return strings.EqualFold(k, name) }) {
+			delete(fields, name)
+		}
 	}
 	if len(fields) == 0 {
 		return nil
