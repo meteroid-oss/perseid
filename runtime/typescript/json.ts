@@ -45,3 +45,32 @@ export function isJsonObject<T>(
     typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date)
   );
 }
+
+/**
+ * @internal The properties of `object` other than `known` (property names): those the API
+ * sends or accepts that this SDK version does not know, kept as they are.
+ */
+export function extraProperties(object: unknown, known: readonly string[]): object {
+  const extra = {};
+  if (isJsonObject(object)) {
+    for (const [key, value] of Object.entries(object as Record<string, unknown>)) {
+      if (!known.includes(key)) {
+        Object.defineProperty(extra, key, { value, enumerable: true, writable: true, configurable: true });
+      }
+    }
+  }
+  return extra;
+}
+
+/**
+ * @internal The properties of `object` named in `keys`: a base model's own, without the ones
+ * it took for unknown.
+ */
+export function pickProperties<T extends object>(object: T, keys: readonly string[]): T {
+  return Object.fromEntries(Object.entries(object).filter(([key]) => keys.includes(key))) as T;
+}
+
+/** @internal The properties of `object` other than those named in `keys`, set again after. */
+export function omitProperties<T extends object>(object: T, keys: readonly string[]): T {
+  return Object.fromEntries(Object.entries(object).filter(([key]) => !keys.includes(key))) as T;
+}

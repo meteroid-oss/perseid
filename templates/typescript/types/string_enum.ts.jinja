@@ -1,4 +1,3 @@
-{% import "types/macros.ts.jinja" as m -%}
 {% set type_name = type.name | to_upper_camel_case -%}
 {% set members = type.values | idents("pascal", none, "schema `" ~ type.name ~ "`") -%}
 {{ doc_comment }}
@@ -10,6 +9,7 @@ export const {{ type_name }} = {
 
 export type {{ type_name }} = (typeof {{ type_name }})[keyof typeof {{ type_name }}];
 
+/** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
     parse(json: any): {{ type_name }} {
         return json;
@@ -18,5 +18,4 @@ export const {{ type_name }}Serializer = {
     serialize(value: {{ type_name }}): any {
         return value;
     },
-{{ m.legacy_aliases(type_name) }}
 };
