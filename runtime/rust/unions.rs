@@ -27,3 +27,64 @@ pub(crate) fn best_match(value: &Value, candidates: &[(&[&str], &[&str])]) -> Op
     }
     best.map(|(index, _)| index)
 }
+
+/// The JSON shape of the items of an array variant, which tells arrays of different items apart.
+pub(crate) enum Shape {
+    Any,
+    String,
+    Integer,
+    Number,
+    Boolean,
+    Object,
+    Array(&'static Shape),
+}
+
+impl Shape {
+    /// Whether `value` has this shape; for arrays, whether it is empty or its first item has the
+    /// shape of the items.
+    pub(crate) fn matches(&self, value: &Value) -> bool {
+        match self {
+            Self::Any => true,
+            Self::String => value.is_string(),
+            Self::Integer => value.is_i64() || value.is_u64(),
+            Self::Number => value.is_number(),
+            Self::Boolean => value.is_boolean(),
+            Self::Object => value.is_object(),
+            Self::Array(items) => array_of(value, items),
+        }
+    }
+}
+
+/// Whether `value` is an array that is empty or whose first item has the shape `items`.
+pub(crate) fn array_of(value: &Value, items: &Shape) -> bool {
+    value
+        .as_array()
+        .is_some_and(|array| array.first().is_none_or(|first| items.matches(first)))
+}
+
+/// `value` read as `T`, when `matches` and it decodes.
+pub(crate) fn decode<T: serde::de::DeserializeOwned>(matches: bool, value: &Value) -> Option<T> {
+    if matches {
+        serde_json::from_value(value.clone()).ok()
+    } else {
+        None
+    }
+}
+
+/// The candidates, as their required and known properties, that the object `value` can be
+/// read as, best first: the most known properties it has, the first one on ties.
+pub(crate) fn ranked(value: &Value, candidates: &[(&[&str], &[&str])]) -> Vec<usize> {
+    let Some(object) = value.as_object() else {
+        return Vec::new();
+    };
+    let mut scored: Vec<(usize, usize)> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, (required, _))| required.iter().all(|p| object.contains_key(*p)))
+        .map(|(index, (_, known))| {
+            (index, known.iter().filter(|p| object.contains_key(**p)).count())
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.into_iter().map(|(index, _)| index).collect()
+}

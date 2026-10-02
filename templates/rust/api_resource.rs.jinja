@@ -82,6 +82,13 @@ use crate::{error::Result, models::*, Configuration};
     {{ union_enum(options_name[:-7] ~ (p.ident | to_upper_camel_case), p.typed_union) }}
     {% endfor %}
     {% endif %}
+    {# The unions of JSON bodies no schema names; the stream twin shares the union of its request. -#}
+    {% if op.request_body_union is defined and op.request_body_json_type is defined and op.stream_property is undefined %}
+    {{ union_enum(op.request_body_union, op.request_body_json_type) }}
+    {% endif %}
+    {% if op.response_body_union is defined and op.response_body_json_type is defined %}
+    {{ union_enum(op.response_body_union, op.response_body_json_type) }}
+    {% endif %}
 {% endfor -%}
 
 /// The {{ resource.name | to_snake_case | replace("_", " ") }} API, from the client's
@@ -134,7 +141,7 @@ impl {{ resource_type_name }} {
     {% elif op.response_is_text -%}
     {% set returned = "String" -%}
     {% elif op.response_body_json_type is defined -%}
-    {% set returned = rust_type(op.response_body_json_type) -%}
+    {% set returned = rust_type(op.response_body_json_type, op.response_body_union | default(none)) -%}
     {% elif op.response_body_is_list -%}
     {% set returned %}Vec<crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}>{% endset -%}
     {% elif op.response_body_schema_name is defined -%}
@@ -181,7 +188,7 @@ impl {{ resource_type_name }} {
         {% if op.request_body_schema_name is defined -%}
             {{ body_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},
         {% elif op.request_body_json_type is defined -%}
-            body: {% if op.request_body_optional %}Option<{% endif %}{{ rust_type(op.request_body_json_type) }}{% if op.request_body_optional %}>{% endif %},
+            body: {% if op.request_body_optional %}Option<{% endif %}{{ rust_type(op.request_body_json_type, op.request_body_union | default(none)) }}{% if op.request_body_optional %}>{% endif %},
         {% endif -%}
 
         {# query / header parameter struct -#}
@@ -339,7 +346,7 @@ impl {{ resource_type_name }} {
         {% if op.request_body_schema_name is defined -%}
             {{ body_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},
         {% elif op.request_body_json_type is defined -%}
-            body: {% if op.request_body_optional %}Option<{% endif %}{{ rust_type(op.request_body_json_type) }}{% if op.request_body_optional %}>{% endif %},
+            body: {% if op.request_body_optional %}Option<{% endif %}{{ rust_type(op.request_body_json_type, op.request_body_union | default(none)) }}{% if op.request_body_optional %}>{% endif %},
         {% endif -%}
         {% if has_required_params -%}
             options: {{ param_struct_name }},

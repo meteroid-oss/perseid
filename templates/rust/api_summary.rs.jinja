@@ -55,6 +55,12 @@ pub use self::{
                 {% for p in op.query_params if p.typed_union is defined -%}
                     {{ resource_type_name }}{{ op.name | to_upper_camel_case }}{{ p.ident | to_upper_camel_case }},
                 {% endfor -%}
+                {% if op.request_body_union is defined and op.request_body_json_type is defined and op.stream_property is undefined -%}
+                    {{ op.request_body_union }},
+                {% endif -%}
+                {% if op.response_body_union is defined and op.response_body_json_type is defined -%}
+                    {{ op.response_body_union }},
+                {% endif -%}
             {% endfor -%}
         },
     {% endfor -%}

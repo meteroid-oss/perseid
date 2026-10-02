@@ -47,7 +47,14 @@ case "$lang" in
       && perseid init --sdks rust --spec "$here/../fixtures/oauth.yaml" > /dev/null \
       && perseid generate rust > /dev/null \
       && mkdir -p rust/tests && cp "$here/rust/oauth/"*.rs rust/tests/ \
-      && cd rust && cargo test --test oauth) ;;
+      && cd rust && cargo test --test oauth)
+    # The decoding of unions sharing a JSON type, best-match unions and open enums run on the SDK
+    # of tests/fixtures/edge-unions.yaml.
+    (mkdir "$work/unions" && cd "$work/unions" \
+      && perseid init --sdks rust --spec "$here/../fixtures/edge-unions.yaml" > /dev/null \
+      && perseid generate rust > /dev/null \
+      && mkdir -p rust/tests && cp "$here/rust/unions/"*.rs rust/tests/ \
+      && cd rust && cargo test --test models --test client) ;;
   typescript)
     # The tests generate more SDKs themselves (features, torture, realworld and, with their
     # `perseid samples`, the sample round trips of torture and every edge fixture).
