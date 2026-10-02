@@ -494,3 +494,4 @@ public sealed class {{ class_name }}
 }
 {%- endfor %}
 {%- with fields = bu.fields, union_owner = resource_type_name, type_names = {} %}{% include "types/unions.cs.jinja" %}{% endwith %}
+
