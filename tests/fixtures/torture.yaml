@@ -304,6 +304,46 @@ paths:
       responses:
         '204':
           description: pong
+  /jobs/{job_id}:
+    get:
+      operationId: get_job
+      tags:
+      - jobs
+      parameters:
+      - name: job_id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: the finished job
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '202':
+          description: still running, no body
+  /chats:
+    post:
+      operationId: create_chat
+      tags:
+      - chats
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: the reply, or its chunks as server-sent events with `stream`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatReply'
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/ChatReply'
   /composed:
     get:
       operationId: get_composed
@@ -1162,6 +1202,27 @@ components:
         at:
           type: string
           format: date-time
+    Job:
+      type: object
+      required:
+      - id
+      properties:
+        id:
+          type: string
+    ChatRequest:
+      type: object
+      properties:
+        model:
+          type: string
+        stream:
+          type: boolean
+    ChatReply:
+      type: object
+      required:
+      - text
+      properties:
+        text:
+          type: string
     Nested:
       allOf:
       - allOf:
