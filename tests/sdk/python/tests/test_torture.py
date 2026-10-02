@@ -121,8 +121,21 @@ paths:
         "200":
           description: ok
           content: {application/json: {schema: {$ref: '#/components/schemas/LogPage'}}}
+  /chat:
+    post:
+      operationId: create_chat
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ChatRequest'}}}
+      responses:
+        "200":
+          description: the answer, or its chunks with `stream`
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/Item'}}
+            text/event-stream: {schema: {$ref: '#/components/schemas/Item'}}
 components:
   schemas:
+    ChatRequest: {type: object, properties: {stream: {type: boolean}}}
     Item: {type: object, required: [id], properties: {id: {type: string}}}
     ItemPage:
       type: object
@@ -570,6 +583,41 @@ class PaginationTest(unittest.TestCase):
                 return [item.id async for item in api.logs.list()], pages[1]
 
         self.assertEqual(asyncio.run(run()), (["l1", "l2"], ["c"]))
+
+
+class Chunks(httpx.SyncByteStream):
+    def __init__(self, *chunks: bytes, fail: bool = False) -> None:
+        self.chunks, self.fail = chunks, fail
+
+    def __iter__(self):
+        yield from self.chunks
+        if self.fail:
+            raise httpx.ReadError("reset")
+
+
+class StreamTest(unittest.TestCase):
+    def chat(self, stream: Chunks):
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
+
+        api = paged.Paged("k", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+        return api.chat.create_stream(paged.models.ChatRequest()), requests
+
+    def test_events_decode_into_models_until_done(self) -> None:
+        events = b'event: chunk\nid: 7\ndata: {"id": "a"}\n\ndata: [DONE]\n\ndata: {"id": "b"}\n\n'
+        stream, requests = self.chat(Chunks(events))
+        with stream:
+            self.assertEqual(list(stream), [paged.models.Item(id="a")])
+        self.assertEqual((stream.last_event.event, stream.last_event.id), ("chunk", "7"))
+        self.assertEqual(json.loads(requests[0].content), {"stream": True})
+
+    def test_a_connection_lost_mid_stream_is_an_sdk_error(self) -> None:
+        stream, _ = self.chat(Chunks(b'data: {"id": "a"}\n\n', fail=True))
+        with self.assertRaises(paged.APIConnectionError):
+            list(stream)
 
 
 class ScoresTest(unittest.TestCase):
