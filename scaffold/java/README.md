@@ -1,3 +1,10 @@
+{% import "docs.jinja" as docs -%}
+{% set call = examples.call -%}
+{% set list = examples.list -%}
+{% set stream = examples.stream -%}
+{% set create = examples.create -%}
+{% set result = docs.var(call.result, "result") if call else "result" -%}
+{% macro call_of(raw=false, request_options="") %}{% if call %}{{ docs.call(call, raw=raw, request_options=request_options) }}{% else %}client.{{ "withRawResponse()." if raw }}someResource().someMethod({{ request_options }}){% endif %}{% endmacro -%}
 # @@CLIENT_NAME@@ Java SDK
 
 @@DESCRIPTION@@
@@ -14,17 +21,23 @@ implementation("@@JAVA_PACKAGE@@:@@NPM_PACKAGE@@:@@VERSION@@")
 </dependency>
 ```
 
-Requires Java 11 or later.
+Requires Java 11 or later. Every method of the API is listed in [api.md](api.md).
 
-## Client
+## Usage
 
 ```java
 import @@JAVA_PACKAGE@@.@@CLIENT_NAME@@;
-import @@JAVA_PACKAGE@@.@@CLIENT_NAME@@Options;
-
+{% if call %}{{ docs.uses(call) }}{% endif %}
 try (@@CLIENT_NAME@@ client = @@CLIENT_NAME@@.fromEnv()) {
-    // client.<resource>().<method>(...)
+    {% if call and call.result %}var {{ result }} = {{ call_of() }};
+    System.out.println({{ result }});{% else %}{{ call_of() }};{% endif %}
 }
+```
+
+The client can also be configured in code:
+
+```java
+import @@JAVA_PACKAGE@@.@@CLIENT_NAME@@Options;
 
 @@CLIENT_NAME@@ client = new @@CLIENT_NAME@@(
         @@CLIENT_NAME@@Options.builder()
@@ -47,17 +60,26 @@ Requests are logged through `System.Logger` (`@@JAVA_PACKAGE@@`) at `DEBUG`, or 
 Required path, query and header parameters are method arguments; optional ones go in an
 immutable `...Options` built with `builder()`. Every method has overloads taking a
 `RequestOptions` last, for the headers, timeout, retries or idempotency key of one call:
-`RequestOptions.builder().timeout(Duration.ofSeconds(5)).maxRetries(0).build()`.
 
-The examples below use an API with a `widgets` resource.
+```java
+{% if call and call.result %}var {{ result }} = {% endif %}{{ call_of(request_options="RequestOptions.builder().timeout(Duration.ofSeconds(5)).maxRetries(0).build()") }};
+```
 
 ## Models
 
-Models are immutable: `Widget.builder().id("w1").name("n").build()` checks required properties,
-and `widget.toBuilder().name("m").build()` changes a copy. Required properties are read directly
-(`widget.id()`), others as an `Optional`. For an optional property that accepts `null`, passing
-`null` to the builder sends `null`, while leaving it unset leaves it out. Properties this SDK
-version does not know are kept in `additionalProperties()` and sent back.
+Models are immutable: `Model.builder()...build()` checks required properties, and
+`model.toBuilder()...build()` changes a copy{% if create %}:
+
+```java
+{{ docs.uses(create) }}
+{% if create.result %}var {{ docs.var(create.result, "result") }} = {% endif %}{{ docs.call(create) }};
+```
+{% else %}.
+{% endif %}
+Required properties are read directly (`model.id()`), others as an `Optional`. For an optional
+property that accepts `null`, passing `null` to the builder sends `null`, while leaving it unset
+leaves it out. Properties this SDK version does not know are kept in `additionalProperties()` and
+sent back.
 
 Enums keep values added to the API later: `isKnown()` tells them apart, `value()` is an enum to
 `switch` on with `_UNKNOWN` for them, `known()` throws on them, and `asString()` is the raw value.
@@ -85,29 +107,32 @@ connections and retries. `withRawResponse()`, on either client, returns `ApiResp
 status code and headers along with the body:
 
 ```java
-ApiResponse<Widget> response = client.withRawResponse().widgets().retrieve("w1");
+var response = {{ call_of(raw=true) }};
 response.statusCode();
 response.requestId();
 response.body();
 ```
-
+{% if list %}
 ## Pagination
 
 List operations have an `...Iter` twin iterating over every item, fetching pages on demand, and
 giving the pages themselves:
 
 ```java
-for (Widget widget : client.widgets().listIter()) { ... }
+for (var {{ docs.var(list.item, "item") }} : {{ docs.call(list, iter=true) }}) {
+    System.out.println({{ docs.var(list.item, "item") }});
+}
 
-Page<Widget> page = client.widgets().listIter().firstPage();
+var page = {{ docs.call(list, iter=true) }}.firstPage();
 page.items();
 if (page.hasNextPage()) {
     page = page.nextPage();
 }
 
-client.async().widgets().listIter().forEach(widget -> ...);
+client.async(){{ docs.call(list, iter=true)[6:] }}.forEach(System.out::println);
 ```
-
+{% endif %}
+{%- if stream %}
 ## Streaming
 
 Server-sent events come as an `EventStream`, to close after use. When the API describes the
@@ -115,11 +140,14 @@ events, the stream yields them decoded and ends at `[DONE]`, and `lastEvent()` g
 (name, id, data) of the last one:
 
 ```java
-try (EventStream<CompletionChunk> chunks = client.completions().createStream(request)) {
-    for (CompletionChunk chunk : chunks) { ... }
+{{ docs.uses(stream) }}
+try (var events = {{ docs.call(stream) }}) {
+    for (var event : events) {
+        System.out.println(event);
+    }
 }
 ```
-
+{% endif %}
 ## Errors
 
 Every exception the SDK throws is a `@@CLIENT_NAME@@Exception`:
@@ -132,6 +160,16 @@ Every exception the SDK throws is a `@@CLIENT_NAME@@Exception`:
 - `ApiConnectionException` when no response came, and its subclass `ApiTimeoutException`.
 - `InvalidDataException` when a response is not what the API describes, such as a required
   property it left out.
+
+```java
+import @@JAVA_PACKAGE@@.exceptions.NotFoundException;
+
+try {
+    {{ call_of() }};
+} catch (NotFoundException e) {
+    System.out.println(e.statusCode() + " " + e.requestId());
+}
+```
 
 Connection errors, timeouts, 408, 429 and 5xx responses are retried with jittered backoff,
 honoring `Retry-After` and `retry-after-ms` up to a minute (the backoff otherwise), when the method

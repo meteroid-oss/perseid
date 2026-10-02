@@ -1,3 +1,9 @@
+{% import "docs.jinja" as docs -%}
+{% set call = examples.call -%}
+{% set list = examples.list -%}
+{% set stream = examples.stream -%}
+{% set result = docs.var(call.result, "result") if call else "result" -%}
+{% macro call_of(request_options="") %}{% if call %}{{ docs.call(call, request_options) }}{% else %}client.someResource.someMethod({{ request_options }}){% endif %}{% endmacro -%}
 # @@CLIENT_NAME@@ TypeScript SDK
 
 @@DESCRIPTION@@
@@ -7,14 +13,17 @@ npm install @@NPM_PACKAGE@@
 ```
 
 The package ships ESM and CommonJS builds and runs on Node.js 20+, Deno, Bun, browsers and edge
-runtimes: it only needs `fetch`.
+runtimes: it only needs `fetch`. Every method of the API is listed in [api.md](api.md).
 
-## Client
+## Usage
 
 ```ts
 import { @@CLIENT_NAME@@ } from "@@NPM_PACKAGE@@";
 
-const client = new @@CLIENT_NAME@@({ apiKey: "your-api-key" });
+const client = new @@CLIENT_NAME@@({ apiKey: "your-api-key"{% if not sdk.has_default_base_url %}, baseURL: "https://api.example.com"{% endif %} });
+
+{% if call and call.result %}const {{ result }} = await {{ call_of() }};
+console.log({{ result }});{% else %}await {{ call_of() }};{% endif %}
 ```
 
 Without `apiKey`, the client reads the `@@ENV_PREFIX@@_API_KEY` environment variable, and
@@ -30,7 +39,7 @@ argument: `{ signal, headers, query, timeout, maxRetries, idempotencyKey }`.
 Models are plain objects with camelCase properties, converted from and to their JSON form by
 `XSerializer.parse(json)` and `XSerializer.serialize(value)`. Properties the API sends that this
 version of the SDK does not know are kept under their JSON names, and sent back when the object
-is serialized: `(widget as Widget & { new_field?: string }).new_field`.
+is serialized: `(value as typeof value & { new_field?: string }).new_field`.
 
 ## Errors
 
@@ -49,7 +58,7 @@ Everything the SDK throws is a `@@CLIENT_NAME@@Error`:
 import { NotFoundError } from "@@NPM_PACKAGE@@";
 
 try {
-  await client.someResource.retrieve("id");
+  await {{ call_of() }};
 } catch (error) {
   if (error instanceof NotFoundError) {
     console.log(error.status, error.requestId, error.error);
@@ -63,10 +72,10 @@ Every method returns an `APIPromise`: await it for the parsed body, or ask for t
 too.
 
 ```ts
-const { data, response, requestId } = await client.someResource.retrieve("id").withResponse();
-const raw: Response = await client.someResource.retrieve("id").asResponse(); // body unread
+const { data, response, requestId } = await {{ call_of() }}.withResponse();
+const raw: Response = await {{ call_of() }}.asResponse(); // body unread
 ```
-
+{% if list %}
 ## Pagination
 
 List methods return a `PagePromise`. Iterate it to get every item, pages being fetched on demand,
@@ -74,16 +83,17 @@ or await it for the first `Page`, with `items`, `body` (the response), `hasNextP
 `getNextPage()` and `iterPages()`.
 
 ```ts
-for await (const item of client.someResource.list({ limit: 100 })) {
-  console.log(item);
+for await (const {{ docs.var(list.item, "item") }} of {{ docs.call(list) }}) {
+  console.log({{ docs.var(list.item, "item") }});
 }
 
-let page = await client.someResource.list();
+let page = await {{ docs.call(list) }};
 while (page.hasNextPage()) {
   page = await page.getNextPage();
 }
 ```
-
+{% endif %}
+{%- if stream %}
 ## Streaming
 
 Server-sent events come as a `Stream` to iterate with `for await`. When the API declares the
@@ -92,12 +102,12 @@ schema of the events, each one is decoded into its model, up to a `[DONE]` event
 calling `stream.close()` closes the connection.
 
 ```ts
-const stream = await client.someResource.createStream({ prompt: "Hi" });
-for await (const chunk of stream) {
-  process.stdout.write(chunk.delta);
+const stream = await {{ docs.call(stream) }};
+for await (const event of stream) {
+  console.log(event);
 }
 ```
-
+{% endif %}
 ## Retries and timeouts
 
 Connection errors, timeouts, 408, 429 and 5xx responses are retried twice with exponential
@@ -106,8 +116,8 @@ an `Idempotency-Key` (POST requests get one automatically). Each attempt times o
 `timeout` milliseconds (`Infinity` waits forever).
 
 ```ts
-const client = new @@CLIENT_NAME@@({ maxRetries: 5, timeout: 20_000 });
-await client.someResource.retrieve("id", { maxRetries: 0, timeout: 5_000 });
+const client = new @@CLIENT_NAME@@({ {% if not sdk.has_default_base_url %}baseURL: "https://api.example.com", {% endif %}maxRetries: 5, timeout: 20_000 });
+await {{ call_of("{ maxRetries: 0, timeout: 5_000 }") }};
 ```
 
 `middleware` wraps every attempt, for logging, caching or custom headers, and `fetch` replaces

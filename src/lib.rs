@@ -2,6 +2,7 @@ mod api;
 pub mod assets;
 mod codesamples;
 pub mod config;
+mod docs;
 mod format;
 mod fsx;
 pub mod generate;
