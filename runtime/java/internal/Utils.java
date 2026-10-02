@@ -18,10 +18,10 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import @@JAVA_PACKAGE@@.exceptions.@@CLIENT_NAME@@Exception;
 import @@JAVA_PACKAGE@@.exceptions.InvalidDataException;
 import java.util.AbstractMap;
 import java.util.ArrayList;
@@ -327,7 +327,7 @@ public final class Utils {
         try {
             return MAPPER.writeValueAsString(value);
         } catch (JsonProcessingException e) {
-            throw new UncheckedIOException(e);
+            throw new @@CLIENT_NAME@@Exception("cannot serialize " + value.getClass().getSimpleName(), e);
         }
     }
 

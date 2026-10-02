@@ -42,6 +42,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import okhttp3.Callback;
+import okhttp3.Dispatcher;
 import okhttp3.FormBody;
 import okhttp3.Headers;
 import okhttp3.HttpUrl;
@@ -137,6 +138,12 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                 options.httpClient()
                         .map(OkHttpClient::newBuilder)
                         .orElseGet(() -> withTimeout(new OkHttpClient.Builder(), options.timeout()));
+        if (options.httpClient().isEmpty()) {
+            Dispatcher dispatcher = new Dispatcher();
+            dispatcher.setMaxRequests(64);
+            dispatcher.setMaxRequestsPerHost(64);
+            builder.dispatcher(dispatcher);
+        }
         options.interceptors().forEach(builder::addInterceptor);
         builder.addInterceptor(logger(options.debug() ? System.Logger.Level.INFO : System.Logger.Level.DEBUG));
         return builder.build();

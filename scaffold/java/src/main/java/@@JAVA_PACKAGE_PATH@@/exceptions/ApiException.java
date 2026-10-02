@@ -1,7 +1,8 @@
 package @@JAVA_PACKAGE@@.exceptions;
 
-import java.util.Optional;
 import okhttp3.Headers;
+
+import java.util.Optional;
 
 /**
  * An error response of the API. Common statuses have their own subclass, such as {@link
@@ -16,6 +17,7 @@ public class ApiException extends @@CLIENT_NAME@@Exception {
 
     /** The response body. */
     private final String body;
+
     private final transient Headers headers;
     private final transient Object error;
 
@@ -29,7 +31,8 @@ public class ApiException extends @@CLIENT_NAME@@Exception {
      * @param error the body parsed as the schema the operation declares for this status, else as
      *     JSON, or null
      */
-    public ApiException(String message, int statusCode, Headers headers, String body, Object error) {
+    public ApiException(
+            String message, int statusCode, Headers headers, String body, Object error) {
         super(message);
         this.statusCode = statusCode;
         this.headers = headers == null ? Headers.of() : headers;

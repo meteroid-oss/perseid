@@ -11,7 +11,11 @@ import java.util.Objects;
  * idempotency key.
  *
  * <pre>{@code
- * RequestOptions.builder().header("X-Trace", "1").timeout(Duration.ofSeconds(5)).maxRetries(0).build()
+ * RequestOptions.builder()
+ *         .header("X-Trace", "1")
+ *         .timeout(Duration.ofSeconds(5))
+ *         .maxRetries(0)
+ *         .build()
  * }</pre>
  */
 public final class RequestOptions {
