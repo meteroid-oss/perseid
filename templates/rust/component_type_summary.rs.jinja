@@ -1,5 +1,11 @@
 // this file is @generated
-#![allow(clippy::too_many_arguments)]
+//! The schemas of the API. Structs keep the properties they do not declare in `extra`.
+#![allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::default_trait_access,
+    clippy::doc_markdown
+)]
 
 #[path = "../codec.rs"]
 pub(crate) mod codec;
@@ -70,6 +76,7 @@ pub use self::{{ module }}::{{ nested }};
 
 impl {{ module }}::{{ union }} {
     /// The id of the object, expanded or not.
+    #[must_use]
     pub fn id(&self) -> Option<&str> {
         match self {
             Self::String(id) => Some(id.as_str()),

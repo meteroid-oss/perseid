@@ -90,10 +90,14 @@ impl {{ name }} {
     {% if not loop.first %}
     {% endif -%}
     {% if variant.empty -%}
+    /// Whether the value is `""`.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         matches!(self, Self::{{ v }})
     }
     {% elif variant.json_type in ["integer", "number", "boolean"] and not variant.type.is_schema_ref() -%}
+    /// The value, if it is a {{ variant.json_type }}.
+    #[must_use]
     pub fn as_{{ variant.name | to_snake_case }}(&self) -> Option<{{ variant_type(name, variant) }}> {
         match self {
             Self::{{ v }}(value) => Some(*value),
@@ -101,6 +105,8 @@ impl {{ name }} {
         }
     }
     {% elif variant_type(name, variant) == "String" -%}
+    /// The value, if it is a string.
+    #[must_use]
     pub fn as_{{ variant.name | to_snake_case }}(&self) -> Option<&str> {
         match self {
             Self::{{ v }}(value) => Some(value.as_str()),
@@ -108,6 +114,8 @@ impl {{ name }} {
         }
     }
     {% else -%}
+    /// The value, if it is {% if variant.type.is_schema_ref() %}a [`{{ variant.type.to_rust() }}`]{% else %}a {{ variant.json_type }}{% endif %}.
+    #[must_use]
     pub fn as_{{ variant.name | to_snake_case }}(&self) -> Option<&{{ variant_type(name, variant) }}> {
         match self {
             Self::{{ v }}(value) => Some({% if variant.type.is_schema_ref() %}&**value{% else %}value{% endif %}),
@@ -119,6 +127,10 @@ impl {{ name }} {
     {% if objects %}
 
     /// The value read as `T`, such as another variant than the one decoding picked.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the value is not a `T`.
     pub fn decode_as<T: serde::de::DeserializeOwned>(&self) -> Result<T, serde_json::Error> {
         serde_json::to_value(self).and_then(serde_json::from_value)
     }
@@ -284,13 +296,31 @@ use super::{{ c | to_rust_ident }}::{{ c | to_upper_camel_case }};
 {% endfor %}
 {%- endmacro %}
 
+{# The field keeping the properties a struct does not declare, unless it flattens others in. -#}
+{% macro extra_name(fields) -%}
+{% if not (fields | selectattr("flatten") | list) -%}
+{% if "extra" in (fields | map(attribute="name") | map("to_rust_ident") | list) %}extra_properties{% else %}extra{% endif -%}
+{% endif -%}
+{%- endmacro %}
+
+{% macro extra_field(name) -%}
+{% if name %}
+    /// Properties this version of the SDK does not know, sent back as received.
+    #[serde(flatten)]
+    pub {{ name }}: serde_json::Map<String, serde_json::Value>,
+{% endif -%}
+{%- endmacro %}
+
 {# `new` takes the required, non-nullable fields but those with a `defaults` value; strings
    and unions as `impl Into<_>`. -#}
-{% macro struct_new(fields, recursive, skip=none, owner=none, defaults={}) -%}
+{% macro struct_new(fields, recursive, skip=none, owner=none, defaults={}, extra="") -%}
 {% set params = fields | rejectattr("flatten") | selectattr("required") | rejectattr("nullable") | rejectattr("name", "equalto", skip) | rejectattr("name", "in", defaults) | list -%}
 {% if params -%}
 /// Creates a value from its required fields.
+{% else -%}
+/// Creates a value with every field unset.
 {% endif -%}
+#[must_use]
 pub fn new(
     {% for field in params -%}
         {% set union = union_name(owner, field.name, field.type) -%}
@@ -326,6 +356,7 @@ pub fn new(
                 {{ field_name(field.name) }}: None,
             {% endif -%}
         {% endfor -%}
+        {% if extra %}{{ extra }}: serde_json::Map::new(),{% endif %}
     }
 }
 {%- endmacro %}

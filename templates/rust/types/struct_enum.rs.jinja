@@ -1,4 +1,4 @@
-{% from "types/macros.rs.jinja" import struct_fields, struct_new, unknown_variant, value_type, union_enums, union_imports -%}
+{% from "types/macros.rs.jinja" import extra_field, extra_name, struct_fields, struct_new, unknown_variant, value_type, union_enums, union_imports -%}
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::models::codec;
@@ -36,12 +36,14 @@ pub struct {{ type_name }} {
 {% set struct_name = type_name ~ (variant.name | to_rust_variant) ~ "Variant" -%}
 /// The `{{ variant.name }}` variant of [`{{ enum_name }}`].
 #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+{% set extra = extra_name(variant.fields) -%}
 pub struct {{ struct_name }} {
     {{ struct_fields(variant.fields, recursive, false, tag, owner=struct_name) }}
+    {{- extra_field(extra) }}
 }
 
 impl {{ struct_name }} {
-    {{ struct_new(variant.fields, recursive, tag, owner=struct_name) }}
+    {{ struct_new(variant.fields, recursive, tag, owner=struct_name, extra=extra) }}
 }
 {{ union_enums(struct_name, variant.fields) }}
 {% endfor %}
@@ -77,6 +79,7 @@ pub enum {{ enum_name }} {
 
 impl {{ enum_name }} {
     /// The `{{ tag }}` value of this variant.
+    #[must_use]
     pub fn tag(&self) -> Option<&str> {
         match self {
             {% for variant in type.variants -%}
@@ -124,7 +127,7 @@ impl<'de> Deserialize<'de> for {{ enum_name }} {
         Ok(match tag.as_str() {
             {% for variant in type.variants -%}
             {% if payload(variant) -%}
-            {{ variant.name | rust_str }} => Self::{{ variant.name | to_rust_variant }}(codec::from_value({% if adjacent %}codec::take(&mut value, {{ type.content_field | rust_str }}){% else %}value{% endif %})?),
+            {{ variant.name | rust_str }} => Self::{{ variant.name | to_rust_variant }}(codec::from_value({% if adjacent %}codec::take(&mut value, {{ type.content_field | rust_str }}){% elif variant.type == "struct" and variant.fields %}codec::without(value, {{ tag | rust_str }}){% else %}value{% endif %})?),
             {% else -%}
             {{ variant.name | rust_str }} => Self::{{ variant.name | to_rust_variant }},
             {% endif -%}
