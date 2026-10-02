@@ -331,7 +331,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
          * @return the exchange
          */
         public <T> Exchange<T> returning(JavaType type) {
-            return new Exchange<>(this, false, response -> readJson(response, type));
+            return new Exchange<>(this, false, response -> readJson(response, type, true));
         }
 
         /**
@@ -357,7 +357,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         }
 
         private <T> Exchange<Optional<T>> returningOptional(JavaType type) {
-            return new Exchange<>(this, false, response -> Optional.ofNullable(readJson(response, type)));
+            return new Exchange<>(this, false, response -> Optional.ofNullable(readJson(response, type, false)));
         }
 
         /**
@@ -599,12 +599,19 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         }
     }
 
-    private <T> T readJson(Response response, JavaType type) throws IOException {
-        if (response.code() == 204 || response.code() == 205 || response.body() == null) {
+    private <T> T readJson(Response response, JavaType type, boolean required) throws IOException {
+        if (response.code() == 204 || response.code() == 205) {
             return null;
         }
-        String text = response.body().string();
-        return text.isBlank() ? null : objectMapper.readValue(text, type);
+        String text = response.body() == null ? "" : response.body().string();
+        if (text.isBlank()) {
+            if (required) {
+                throw new InvalidDataException(
+                        "the " + response.code() + " response has an empty body, but a JSON body was expected");
+            }
+            return null;
+        }
+        return objectMapper.readValue(text, type);
     }
 
     private <T> T decodeEvent(SseEvent event, JavaType type) {

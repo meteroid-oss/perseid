@@ -150,13 +150,15 @@ public final class EventStream<T> implements Iterable<T>, AutoCloseable {
         }
         if (text.isEmpty()) {
             String name = event.isEmpty() ? "message" : event;
+            Duration delay = retry;
             event = "";
+            retry = null;
             if (data.length() == 0) {
                 return null;
             }
             String payload = data.substring(0, data.length() - 1);
             data.setLength(0);
-            return new SseEvent(name, payload, id, retry);
+            return new SseEvent(name, payload, id, delay);
         }
         if (text.startsWith(":")) {
             return null;
