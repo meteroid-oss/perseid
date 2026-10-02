@@ -65,7 +65,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          # SDKs target .NET 8; the newest SDK builds them, with its stricter analyzers.
+          dotnet-version: |
+            8.0.x
+            10.0.x
       - run: cargo install --locked --path . --root "$RUNNER_TEMP/perseid"
       - run: |
           echo "$RUNNER_TEMP/perseid/bin" >> "$GITHUB_PATH"
@@ -126,7 +129,10 @@ jobs:
       - if: matrix.language == 'csharp'
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          # SDKs target .NET 8; the newest SDK builds them, with its stricter analyzers.
+          dotnet-version: |
+            8.0.x
+            10.0.x
       - run: cargo install --locked --path . --root "$RUNNER_TEMP/perseid"
       - run: |
           echo "$RUNNER_TEMP/perseid/bin" >> "$GITHUB_PATH"

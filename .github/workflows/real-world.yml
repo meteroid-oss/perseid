@@ -48,7 +48,10 @@ jobs:
       - if: matrix.language == 'csharp'
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          # SDKs target .NET 8; the newest SDK builds them, with its stricter analyzers.
+          dotnet-version: |
+            8.0.x
+            10.0.x
       - run: cargo install --locked --path . --root "$RUNNER_TEMP/perseid"
       - name: Generate
         working-directory: ${{ runner.temp }}
