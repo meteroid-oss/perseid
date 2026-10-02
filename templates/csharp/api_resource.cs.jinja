@@ -79,12 +79,17 @@ requestOptions{% if cancellation %}, cancellationToken{% endif %}
 {%- set ty = path_param_type(op, p) %}
 {%- if ty == "string" %}
         ArgumentException.ThrowIfNullOrEmpty({{ m.param(p) }});
-{%- elif not m.is_value_type(ty) %}
+{%- elif m.needs_null_check(ty, m.schema_kind(op.path_styles[p].type, types) if p in op.path_styles | default({}) and op.path_styles[p].type is defined else "") %}
         ArgumentNullException.ThrowIfNull({{ m.param(p) }});
 {%- endif %}
 {%- endfor -%}
 {% if f.takes_body and not op.request_body_optional %}
+{%- if op.request_body_schema_name is defined and not op.request_body_is_list %}{% set kind = (types[op.request_body_schema_name] or {}).kind | default("") %}
+{%- elif op.request_body_json_type is defined %}{% set kind = m.schema_kind(op.request_body_json_type, types) %}
+{%- else %}{% set kind = "" %}{% endif %}
+{%- if m.needs_null_check(f.body_type, kind) %}
         ArgumentNullException.ThrowIfNull({{ f.body }});
+{%- endif %}
 {%- endif -%}
 {% if f.required_options %}
         ArgumentNullException.ThrowIfNull(options);

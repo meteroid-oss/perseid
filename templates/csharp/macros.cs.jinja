@@ -164,6 +164,23 @@
 {% if ty in ["bool", "int", "long", "short", "ushort", "ulong", "float", "double", "decimal", "DateTimeOffset"] %}yes{% endif %}
 {%- endmacro %}
 
+{# The kind of the schema the JSON type `ty` names (`struct`, `string_enum`...), empty for other types. -#}
+{% macro schema_kind(ty, types={}) -%}
+{% if ty.is_schema_ref() -%}
+{% set inner = ty.inner_schema_ref_ty() -%}
+{% set target = inner or types[ty.to_csharp()] -%}
+{{ target.kind if target else "" }}
+{%- endif %}
+{%- endmacro %}
+
+{# `yes` when a required argument of the C# type `ty`, naming a schema of the kind `kind` (if any),
+   takes an `ArgumentNullException.ThrowIfNull` check: a non-nullable reference type. A value type
+   (number, boolean, date, enum record struct) is never null, so checking it is a no-op (CA2264),
+   and a nullable type accepts `null`. -#}
+{% macro needs_null_check(ty, kind="") -%}
+{% if ty[-1:] != "?" and not is_value_type(ty) and kind not in ["string_enum", "integer_enum"] %}yes{% endif %}
+{%- endmacro %}
+
 {# The `JsonContext` property of a body type: its name, or a flattened name for generics. -#}
 {% macro type_info(type) -%}
 {% set type = type | replace("Models.", "") | replace("?", "OrNull") -%}
