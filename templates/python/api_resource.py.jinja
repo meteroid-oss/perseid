@@ -296,7 +296,7 @@ class {{ class_name }}({{ base_class }}):
 {%- if op.response_is_event_stream %}
                 stream=True,
 {%- endif %}
-{%- if error_schemas | length > 0 %}
+{%- if error_schemas | length > 0 and (op.errors | length > 0 or default_error) %}
 {#- Statuses sharing the default schema are left to the `default` entry. #}
 {%- set fallback = op.errors["default"] if "default" in op.errors else default_error %}
                 error_types={
