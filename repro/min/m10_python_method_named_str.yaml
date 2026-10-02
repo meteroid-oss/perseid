@@ -1,0 +1,16 @@
+openapi: 3.1.0
+info: {title: Str Method Min, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /things/str:
+    post:
+      operationId: things_str
+      tags: [things]
+      parameters: [{name: q, in: query, schema: {type: string}}]
+      responses: {'204': {description: ok}}
+  /things/other:
+    post:
+      operationId: things_other
+      tags: [things]
+      parameters: [{name: q, in: query, schema: {type: string}}]
+      responses: {'204': {description: ok}}

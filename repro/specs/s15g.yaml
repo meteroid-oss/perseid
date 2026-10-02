@@ -1,0 +1,178 @@
+openapi: 3.1.0
+info: {title: Runtime Clash, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Holder'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Holder'}
+components:
+  schemas:
+    Serialize: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Deserialize: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Serializer: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Deserializer: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Upload: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Multipart: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Configuration: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Paginator: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Middleware: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    RequestOptions: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    EventStream: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    SseEvent: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    BaseModel: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Unset: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    UnknownVariant: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    StrEnum: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Discriminator: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ObjectUnion: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    TaggedUnionModel: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ModelParseError: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ApiBase: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Pagination: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    SecurityScheme: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ApiTimeoutError: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    NotFoundError: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    HttpMethod: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Credentials: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ApiException: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Utils: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    TypeReference: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    JsonNode: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ObjectMapper: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Field: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Literal: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Annotated: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Codec: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Next: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    TokenProvider: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    HttpClient: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Response: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Headers: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Url: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Uri: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Instant: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    LocalDate: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    UUID: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    BigInteger: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Byte: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Character: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Short: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Math: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    System: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Thread: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Runnable: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Iterable: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Collection: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Collections: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Arrays: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Map: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Entry: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Function: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Supplier: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Consumer: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    CompletableFuture: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Duration: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ZonedDateTime: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Base64: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Builder: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    JsonProperty: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    JsonCreator: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    JsonValue: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    JsonInclude: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Nullable: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Override: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Deprecated: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    FunctionalInterface: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    SuppressWarnings: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Holder:
+      type: object
+      properties:
+        p_serialize: {$ref: '#/components/schemas/Serialize'}
+        p_deserialize: {$ref: '#/components/schemas/Deserialize'}
+        p_serializer: {$ref: '#/components/schemas/Serializer'}
+        p_deserializer: {$ref: '#/components/schemas/Deserializer'}
+        p_upload: {$ref: '#/components/schemas/Upload'}
+        p_multipart: {$ref: '#/components/schemas/Multipart'}
+        p_configuration: {$ref: '#/components/schemas/Configuration'}
+        p_paginator: {$ref: '#/components/schemas/Paginator'}
+        p_middleware: {$ref: '#/components/schemas/Middleware'}
+        p_requestoptions: {$ref: '#/components/schemas/RequestOptions'}
+        p_eventstream: {$ref: '#/components/schemas/EventStream'}
+        p_sseevent: {$ref: '#/components/schemas/SseEvent'}
+        p_basemodel: {$ref: '#/components/schemas/BaseModel'}
+        p_unset: {$ref: '#/components/schemas/Unset'}
+        p_unknownvariant: {$ref: '#/components/schemas/UnknownVariant'}
+        p_strenum: {$ref: '#/components/schemas/StrEnum'}
+        p_discriminator: {$ref: '#/components/schemas/Discriminator'}
+        p_objectunion: {$ref: '#/components/schemas/ObjectUnion'}
+        p_taggedunionmodel: {$ref: '#/components/schemas/TaggedUnionModel'}
+        p_modelparseerror: {$ref: '#/components/schemas/ModelParseError'}
+        p_apibase: {$ref: '#/components/schemas/ApiBase'}
+        p_pagination: {$ref: '#/components/schemas/Pagination'}
+        p_securityscheme: {$ref: '#/components/schemas/SecurityScheme'}
+        p_apitimeouterror: {$ref: '#/components/schemas/ApiTimeoutError'}
+        p_notfounderror: {$ref: '#/components/schemas/NotFoundError'}
+        p_httpmethod: {$ref: '#/components/schemas/HttpMethod'}
+        p_credentials: {$ref: '#/components/schemas/Credentials'}
+        p_apiexception: {$ref: '#/components/schemas/ApiException'}
+        p_utils: {$ref: '#/components/schemas/Utils'}
+        p_typereference: {$ref: '#/components/schemas/TypeReference'}
+        p_jsonnode: {$ref: '#/components/schemas/JsonNode'}
+        p_objectmapper: {$ref: '#/components/schemas/ObjectMapper'}
+        p_field: {$ref: '#/components/schemas/Field'}
+        p_literal: {$ref: '#/components/schemas/Literal'}
+        p_annotated: {$ref: '#/components/schemas/Annotated'}
+        p_codec: {$ref: '#/components/schemas/Codec'}
+        p_next: {$ref: '#/components/schemas/Next'}
+        p_tokenprovider: {$ref: '#/components/schemas/TokenProvider'}
+        p_httpclient: {$ref: '#/components/schemas/HttpClient'}
+        p_response: {$ref: '#/components/schemas/Response'}
+        p_headers: {$ref: '#/components/schemas/Headers'}
+        p_url: {$ref: '#/components/schemas/Url'}
+        p_uri: {$ref: '#/components/schemas/Uri'}
+        p_instant: {$ref: '#/components/schemas/Instant'}
+        p_localdate: {$ref: '#/components/schemas/LocalDate'}
+        p_uuid: {$ref: '#/components/schemas/UUID'}
+        p_biginteger: {$ref: '#/components/schemas/BigInteger'}
+        p_byte: {$ref: '#/components/schemas/Byte'}
+        p_character: {$ref: '#/components/schemas/Character'}
+        p_short: {$ref: '#/components/schemas/Short'}
+        p_math: {$ref: '#/components/schemas/Math'}
+        p_system: {$ref: '#/components/schemas/System'}
+        p_thread: {$ref: '#/components/schemas/Thread'}
+        p_runnable: {$ref: '#/components/schemas/Runnable'}
+        p_iterable: {$ref: '#/components/schemas/Iterable'}
+        p_collection: {$ref: '#/components/schemas/Collection'}
+        p_collections: {$ref: '#/components/schemas/Collections'}
+        p_arrays: {$ref: '#/components/schemas/Arrays'}
+        p_map: {$ref: '#/components/schemas/Map'}
+        p_entry: {$ref: '#/components/schemas/Entry'}
+        p_function: {$ref: '#/components/schemas/Function'}
+        p_supplier: {$ref: '#/components/schemas/Supplier'}
+        p_consumer: {$ref: '#/components/schemas/Consumer'}
+        p_completablefuture: {$ref: '#/components/schemas/CompletableFuture'}
+        p_duration: {$ref: '#/components/schemas/Duration'}
+        p_zoneddatetime: {$ref: '#/components/schemas/ZonedDateTime'}
+        p_base64: {$ref: '#/components/schemas/Base64'}
+        p_builder: {$ref: '#/components/schemas/Builder'}
+        p_jsonproperty: {$ref: '#/components/schemas/JsonProperty'}
+        p_jsoncreator: {$ref: '#/components/schemas/JsonCreator'}
+        p_jsonvalue: {$ref: '#/components/schemas/JsonValue'}
+        p_jsoninclude: {$ref: '#/components/schemas/JsonInclude'}
+        p_nullable: {$ref: '#/components/schemas/Nullable'}
+        p_override: {$ref: '#/components/schemas/Override'}
+        p_deprecated: {$ref: '#/components/schemas/Deprecated'}
+        p_functionalinterface: {$ref: '#/components/schemas/FunctionalInterface'}
+        p_suppresswarnings: {$ref: '#/components/schemas/SuppressWarnings'}

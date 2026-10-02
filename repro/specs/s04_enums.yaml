@@ -1,0 +1,100 @@
+openapi: 3.1.0
+info: {title: Enums, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      parameters:
+        - {name: e, in: query, schema: {$ref: '#/components/schemas/Collide'}}
+        - {name: n, in: query, schema: {$ref: '#/components/schemas/IntEnum'}}
+        - {name: b, in: query, schema: {$ref: '#/components/schemas/BoolEnum'}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Holder'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Holder'}
+components:
+  schemas:
+    Collide:
+      type: string
+      enum: [a-b, a_b, A_B, aB, a b, A-B]
+    Symbols:
+      type: string
+      enum: ['-', '+', '*', '/', '1', '2.5', '!', '?', '#', '@', '$']
+    IntEnum:
+      type: integer
+      enum: [-1, 0, 1, 2, 100]
+    Int64Enum:
+      type: integer
+      format: int64
+      enum: [9007199254740993, 1]
+    NumEnum:
+      type: number
+      enum: [1.5, 2.5, -0.5]
+    BoolEnum:
+      type: boolean
+      enum: [true, false]
+    OnlyFalse:
+      type: boolean
+      enum: [false]
+    NullableEnum:
+      type: [string, 'null']
+      enum: [a, b, null]
+    NullableEnum30:
+      type: string
+      nullable: true
+      enum: [x, y]
+    MixedEnum:
+      enum: [a, 1, true]
+    UntypedEnum:
+      enum: [red, green]
+    EnumWithDefault:
+      type: string
+      enum: [one, two]
+      default: two
+    SingleEnum:
+      type: string
+      enum: [only]
+    DupEnum:
+      type: string
+      enum: [same, same]
+    CaseEnum:
+      type: string
+      enum: [Active, active, ACTIVE]
+    KeywordEnum:
+      type: string
+      enum: [None, True, False, self, class, def, return, null, nil, undefined, true, false, string, int, Default, type, enum, values, valueOf, name, ordinal, toString, value]
+    Holder:
+      type: object
+      properties:
+        collide: {$ref: '#/components/schemas/Collide'}
+        symbols: {$ref: '#/components/schemas/Symbols'}
+        ints: {$ref: '#/components/schemas/IntEnum'}
+        i64: {$ref: '#/components/schemas/Int64Enum'}
+        nums: {$ref: '#/components/schemas/NumEnum'}
+        bools: {$ref: '#/components/schemas/BoolEnum'}
+        only_false: {$ref: '#/components/schemas/OnlyFalse'}
+        nullable_enum: {$ref: '#/components/schemas/NullableEnum'}
+        nullable_enum30: {$ref: '#/components/schemas/NullableEnum30'}
+        mixed: {$ref: '#/components/schemas/MixedEnum'}
+        untyped: {$ref: '#/components/schemas/UntypedEnum'}
+        with_default: {$ref: '#/components/schemas/EnumWithDefault'}
+        single: {$ref: '#/components/schemas/SingleEnum'}
+        dup: {$ref: '#/components/schemas/DupEnum'}
+        case: {$ref: '#/components/schemas/CaseEnum'}
+        keyword: {$ref: '#/components/schemas/KeywordEnum'}
+        inline_ints: {type: integer, enum: [3, 4]}
+        inline_arr: {type: array, items: {type: string, enum: [p, q]}}
+        inline_map: {type: object, additionalProperties: {type: string, enum: [m, n]}}
+        req_default:
+          type: string
+          enum: [x, y]
+          default: x

@@ -1,0 +1,9 @@
+openapi: 3.2.0
+info: {title: Oas Min, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /x:
+    get:
+      operationId: get_x
+      tags: [x]
+      responses: {'204': {description: ok}}

@@ -1,0 +1,44 @@
+openapi: 3.1.0
+info: {title: Collide, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Holder'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Holder'}
+components:
+  schemas:
+    foo_bar: {type: object, properties: {a: {type: string}}}
+    FooBar: {type: object, properties: {b: {type: integer}}}
+    foo-bar: {type: object, properties: {c: {type: boolean}}}
+    1Thing: {type: object, properties: {v: {type: string}}}
+    com.example.Thing: {type: object, properties: {v: {type: string}}}
+    Thing.V2: {type: object, properties: {v: {type: string}}}
+    _private: {type: object, properties: {v: {type: string}}}
+    lower: {type: object, properties: {v: {type: string}}}
+    HTTPServer: {type: object, properties: {v: {type: string}}}
+    HttpServer: {type: object, properties: {v: {type: string}}}
+    Holder:
+      type: object
+      properties:
+        a: {$ref: '#/components/schemas/foo_bar'}
+        b: {$ref: '#/components/schemas/FooBar'}
+        c: {$ref: '#/components/schemas/foo-bar'}
+        d: {$ref: '#/components/schemas/1Thing'}
+        e: {$ref: '#/components/schemas/com.example.Thing'}
+        f: {$ref: '#/components/schemas/Thing.V2'}
+        g: {$ref: '#/components/schemas/_private'}
+        h: {$ref: '#/components/schemas/lower'}
+        i: {$ref: '#/components/schemas/HTTPServer'}
+        j: {$ref: '#/components/schemas/HttpServer'}

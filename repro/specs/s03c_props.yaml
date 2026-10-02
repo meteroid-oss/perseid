@@ -1,0 +1,114 @@
+openapi: 3.1.0
+info: {title: Props, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Holder'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Holder'}
+components:
+  schemas:
+    Holder:
+      type: object
+      required: [foo_bar, fooBar]
+      properties:
+        foo_bar: {type: string}
+        fooBar: {type: integer}
+        foo-bar: {type: boolean}
+        id: {type: string}
+        Holder: {type: string}
+        holder: {type: string}
+        __init__: {type: string}
+        '@type': {type: string}
+        x-custom: {type: string}
+        '': {type: string}
+        '123': {type: string}
+        '名前': {type: string}
+        a.b: {type: string}
+        a/b: {type: string}
+        'quote"d': {type: string}
+        "apos'd": {type: string}
+        back\slash: {type: string}
+        to_json: {type: string}
+        to_dict: {type: string}
+        model_config: {type: string}
+        model_dump: {type: string}
+        validate: {type: string}
+        schema: {type: string}
+        fields: {type: string}
+        copy: {type: string}
+        json: {type: string}
+        dict: {type: string}
+        hashCode: {type: string}
+        equals: {type: string}
+        toString: {type: string}
+        getClass: {type: string}
+        builder: {type: string}
+        build: {type: string}
+        constructor: {type: string}
+        prototype: {type: string}
+        __proto__: {type: string}
+        String: {type: string}
+        Object: {type: string}
+        int: {type: string}
+        str: {type: string}
+        list: {type: string}
+        bool: {type: string}
+        float: {type: string}
+        bytes: {type: string}
+        Optional: {type: string}
+        Any: {type: string}
+        datetime: {type: string}
+        enum: {type: string}
+        struct: {type: string}
+        impl: {type: string}
+        match: {type: string}
+        mod: {type: string}
+        ref: {type: string}
+        mut: {type: string}
+        crate: {type: string}
+        super: {type: string}
+        Self: {type: string}
+        loop: {type: string}
+        go: {type: string}
+        chan: {type: string}
+        range: {type: string}
+        map: {type: string}
+        var: {type: string}
+        let: {type: string}
+        const: {type: string}
+        new: {type: string}
+        delete: {type: string}
+        void: {type: string}
+        yield: {type: string}
+        await: {type: string}
+        lambda: {type: string}
+        global: {type: string}
+        nonlocal: {type: string}
+        True: {type: string}
+        False: {type: string}
+        abstract: {type: string}
+        final: {type: string}
+        static: {type: string}
+        synchronized: {type: string}
+        throws: {type: string}
+        transient: {type: string}
+        volatile: {type: string}
+        native: {type: string}
+        record: {type: string}
+        sealed: {type: string}
+        _underscore: {type: string}
+        trailing_: {type: string}
+        UPPER: {type: string}
+        mixed_Case-thing.x: {type: string}

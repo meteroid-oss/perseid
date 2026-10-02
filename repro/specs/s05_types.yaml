@@ -1,0 +1,180 @@
+openapi: 3.1.0
+info: {title: Types, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Holder'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Holder'}
+components:
+  schemas:
+    MultiType:
+      type: [string, integer, 'null']
+    StrOrNum:
+      type: [string, number]
+    ConstStr:
+      const: fixed
+    ConstInt:
+      type: integer
+      const: 7
+    EmptySchema: {}
+    NotString:
+      not: {type: string}
+    Closed:
+      type: object
+      additionalProperties: false
+      required: [a]
+      properties:
+        a: {type: string}
+    PropsAndMap:
+      type: object
+      properties:
+        a: {type: string}
+      additionalProperties: {type: integer}
+    PropsAndAny:
+      type: object
+      properties:
+        a: {type: string}
+      additionalProperties: true
+    MapOfArraysOfUnions:
+      type: object
+      additionalProperties:
+        type: array
+        items:
+          oneOf:
+            - {type: string}
+            - {type: integer}
+            - {$ref: '#/components/schemas/Closed'}
+    NestedNullableArrays:
+      type: array
+      items:
+        type: [array, 'null']
+        items:
+          type: [string, 'null']
+    A1:
+      type: object
+      required: [x]
+      properties:
+        x: {type: string}
+    A2:
+      type: object
+      required: [x]
+      properties:
+        x: {type: integer}
+    ConflictingAllOf:
+      allOf:
+        - {$ref: '#/components/schemas/A1'}
+        - {$ref: '#/components/schemas/A2'}
+    OneOfAB:
+      oneOf:
+        - {$ref: '#/components/schemas/A1'}
+        - {type: object, required: [y], properties: {y: {type: boolean}}}
+    AllOfOneOf:
+      allOf:
+        - {$ref: '#/components/schemas/OneOfAB'}
+        - {type: object, properties: {extra: {type: string}}}
+    Prims:
+      oneOf:
+        - {type: string}
+        - {type: integer}
+        - {type: boolean}
+        - {type: number}
+    IntOrFloat:
+      oneOf:
+        - {type: integer}
+        - {type: number}
+    BadMapping:
+      oneOf:
+        - {$ref: '#/components/schemas/A1'}
+        - {$ref: '#/components/schemas/A2'}
+      discriminator:
+        propertyName: kind
+        mapping:
+          one: '#/components/schemas/A1'
+          two: '#/components/schemas/A2'
+    OnlyNull:
+      anyOf:
+        - {type: 'null'}
+    NullType:
+      type: 'null'
+    ReadOnlyRequired:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string, readOnly: true}
+        name: {type: string}
+        pw: {type: string, writeOnly: true}
+    Formats:
+      type: object
+      required: [i64, dec, byt, bin]
+      properties:
+        i64: {type: integer, format: int64}
+        u32: {type: integer, format: uint32}
+        i8: {type: integer, format: int8}
+        u8: {type: integer, format: uint8}
+        i16: {type: integer, format: int16}
+        dec: {type: string, format: decimal}
+        dec_num: {type: number, format: decimal}
+        byt: {type: string, format: byte}
+        bin: {type: string, format: binary}
+        b64: {type: string, contentEncoding: base64}
+        dur: {type: string, format: duration}
+        tm: {type: string, format: time}
+        ip: {type: string, format: ipv4}
+        unknown_fmt: {type: string, format: foo-bar}
+        int_no_fmt: {type: integer}
+        num_float: {type: number, format: float}
+    ArrayNoItems:
+      type: array
+    ObjNoType:
+      properties:
+        a: {type: string}
+    TupleLike:
+      type: array
+      prefixItems:
+        - {type: string}
+        - {type: integer}
+    Holder:
+      type: object
+      properties:
+        multi: {$ref: '#/components/schemas/MultiType'}
+        str_or_num: {$ref: '#/components/schemas/StrOrNum'}
+        const_str: {$ref: '#/components/schemas/ConstStr'}
+        const_int: {$ref: '#/components/schemas/ConstInt'}
+        empty: {$ref: '#/components/schemas/EmptySchema'}
+        not_string: {$ref: '#/components/schemas/NotString'}
+        closed: {$ref: '#/components/schemas/Closed'}
+        props_and_map: {$ref: '#/components/schemas/PropsAndMap'}
+        props_and_any: {$ref: '#/components/schemas/PropsAndAny'}
+        moaou: {$ref: '#/components/schemas/MapOfArraysOfUnions'}
+        nna: {$ref: '#/components/schemas/NestedNullableArrays'}
+        conflict: {$ref: '#/components/schemas/ConflictingAllOf'}
+        aoo: {$ref: '#/components/schemas/AllOfOneOf'}
+        prims: {$ref: '#/components/schemas/Prims'}
+        int_or_float: {$ref: '#/components/schemas/IntOrFloat'}
+        bad_mapping: {$ref: '#/components/schemas/BadMapping'}
+        only_null: {$ref: '#/components/schemas/OnlyNull'}
+        null_type: {$ref: '#/components/schemas/NullType'}
+        ror: {$ref: '#/components/schemas/ReadOnlyRequired'}
+        formats: {$ref: '#/components/schemas/Formats'}
+        arr_no_items: {$ref: '#/components/schemas/ArrayNoItems'}
+        obj_no_type: {$ref: '#/components/schemas/ObjNoType'}
+        tuple: {$ref: '#/components/schemas/TupleLike'}
+        inline_multi: {type: [boolean, string]}
+        inline_const: {const: 3}
+        inline_nullable_arr: {type: [array, 'null'], items: {type: integer}}
+        inline_nullable_map: {type: [object, 'null'], additionalProperties: {type: string}}
+        inline_obj_nullable: {type: [object, 'null'], properties: {z: {type: string}}}
+        arr_of_maps: {type: array, items: {type: object, additionalProperties: {type: [string, 'null']}}}
+        deep: {type: array, items: {type: array, items: {type: array, items: {$ref: '#/components/schemas/A1'}}}}

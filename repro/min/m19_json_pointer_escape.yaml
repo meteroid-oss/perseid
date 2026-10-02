@@ -1,0 +1,21 @@
+openapi: 3.1.0
+info: {title: Pointer Min, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Holder'}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Holder'}}}}
+components:
+  schemas:
+    a/b: {type: object, properties: {v: {type: string}}}
+    Holder:
+      type: object
+      properties:
+        x: {$ref: '#/components/schemas/a~1b'}
+        y: {$ref: '#/components/schemas/a~1b/properties/v'}

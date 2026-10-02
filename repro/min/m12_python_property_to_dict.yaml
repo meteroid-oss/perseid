@@ -1,0 +1,19 @@
+openapi: 3.1.0
+info: {title: To Dict Min, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Holder'}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Holder'}}}}
+components:
+  schemas:
+    Holder:
+      type: object
+      properties:
+        to_dict: {type: string}

@@ -1,0 +1,9 @@
+openapi: 3.1.0
+info: {title: Trace Min, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /x:
+    trace:
+      operationId: trace_x
+      tags: [x]
+      responses: {'204': {description: ok}}

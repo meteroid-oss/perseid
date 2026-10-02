@@ -1,0 +1,149 @@
+openapi: 3.1.0
+info: {title: Inherit Fuzz, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /pets:
+    post:
+      operationId: create_pet
+      tags: [pets]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Pet'}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Pet'}}}}
+  /pets/list:
+    get:
+      operationId: list_pets
+      tags: [pets]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Pet'}}}}}
+  /bodies/int:
+    post:
+      operationId: int_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: integer}}}
+      responses: {'204': {description: ok}}
+  /bodies/str:
+    post:
+      operationId: str_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: string}}}
+      responses: {'204': {description: ok}}
+  /bodies/map:
+    post:
+      operationId: map_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: {type: integer}}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: object, additionalProperties: {$ref: '#/components/schemas/Pet'}}}}}
+  /bodies/union:
+    post:
+      operationId: union_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {oneOf: [{$ref: '#/components/schemas/Cat'}, {$ref: '#/components/schemas/Dog'}]}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {anyOf: [{type: string}, {type: integer}]}}}}
+  /bodies/optional:
+    post:
+      operationId: optional_body
+      tags: [bodies]
+      requestBody:
+        required: false
+        content: {application/json: {schema: {$ref: '#/components/schemas/Cat'}}}
+      responses: {'204': {description: ok}}
+  /bodies/nullable:
+    post:
+      operationId: nullable_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: [object, 'null'], properties: {a: {type: string}}}}}
+      responses: {'204': {description: ok}}
+  /bodies/arr-arr:
+    post:
+      operationId: arr_arr_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: array, items: {type: array, items: {type: integer}}}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: array, items: {$ref: '#/components/schemas/Cat'}}}}}}
+  /bodies/empty-obj:
+    post:
+      operationId: empty_obj_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {}}}}
+  /bodies/form-nested:
+    post:
+      operationId: form_nested
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                files: {type: array, items: {type: string, format: binary}}
+                meta: {type: object, additionalProperties: {type: string}}
+                maybe_file: {type: [string, 'null'], format: binary}
+                kind: {$ref: '#/components/schemas/Kind'}
+      responses: {'204': {description: ok}}
+  /params/{kind}:
+    get:
+      operationId: param_defaults
+      tags: [params]
+      parameters:
+        - {name: kind, in: path, required: true, schema: {$ref: '#/components/schemas/Kind'}}
+        - {name: limit, in: query, required: true, schema: {type: integer, default: 10}}
+        - {name: kinds, in: header, schema: {type: array, items: {$ref: '#/components/schemas/Kind'}}}
+        - {name: when, in: query, schema: {type: string, format: date-time}}
+        - {name: uid, in: query, schema: {type: string, format: uuid}}
+        - {name: amount, in: query, schema: {type: string, format: decimal}}
+        - {name: nullable_q, in: query, schema: {type: [string, 'null']}}
+        - {name: bool_h, in: header, required: true, schema: {type: boolean}}
+        - {name: obj, in: query, schema: {$ref: '#/components/schemas/Cat'}}
+        - {name: map_q, in: query, style: form, explode: true, schema: {type: object, additionalProperties: {type: integer}}}
+        - {name: union_q, in: query, schema: {oneOf: [{type: integer}, {$ref: '#/components/schemas/Kind'}]}}
+        - {name: byte_q, in: query, schema: {type: string, format: byte}}
+        - {name: date_h, in: header, schema: {type: string, format: date}}
+      responses: {'204': {description: ok}}
+components:
+  schemas:
+    Kind: {type: string, enum: [cat, dog]}
+    Pet:
+      type: object
+      required: [petType, name]
+      properties:
+        petType: {type: string}
+        name: {type: string}
+      discriminator:
+        propertyName: petType
+        mapping:
+          cat: '#/components/schemas/Cat'
+          dog: '#/components/schemas/Dog'
+    Cat:
+      allOf:
+        - $ref: '#/components/schemas/Pet'
+        - type: object
+          properties:
+            huntingSkill: {type: string}
+    Dog:
+      allOf:
+        - $ref: '#/components/schemas/Pet'
+        - type: object
+          required: [packSize]
+          properties:
+            packSize: {type: integer}

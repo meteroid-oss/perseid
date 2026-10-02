@@ -1,0 +1,12 @@
+openapi: 3.1.0
+info: {title: "Asyncio", version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /x:
+    get:
+      operationId: get_x
+      tags: [x]
+      responses: {'200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/X'}}}}}
+components:
+  schemas:
+    X: {type: object, properties: {a: {type: string, format: date-time}, b: {type: object, additionalProperties: {type: string}}}}

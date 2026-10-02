@@ -1,0 +1,70 @@
+openapi: 3.1.0
+info: {title: Misc Fuzz, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+security: [{oidc: []}, {cookie_key: []}, {weird-scheme.name: []}]
+paths:
+  /files/{name}.{ext}:
+    get:
+      operationId: get_file
+      tags: [files]
+      servers: [{url: https://files.example.com}]
+      parameters:
+        - {name: name, in: path, required: true, schema: {type: string}}
+        - {name: ext, in: path, required: true, schema: {type: string}}
+        - {name: Content-Type, in: header, schema: {type: string}}
+        - {name: Authorization, in: header, schema: {type: string}}
+        - {name: Accept, in: header, schema: {type: string}}
+      responses: {'204': {description: ok}}
+  /multi-tag:
+    get:
+      operationId: multi_tag
+      tags: [alpha, beta]
+      responses: {'204': {description: ok}}
+  /tagcase1:
+    get:
+      operationId: tagcase1
+      tags: [User]
+      responses: {'204': {description: ok}}
+  /tagcase2:
+    post:
+      operationId: tagcase2
+      tags: [user]
+      responses: {'204': {description: ok}}
+  /tagcase3:
+    put:
+      operationId: tagcase3
+      tags: [user-api]
+      responses: {'204': {description: ok}}
+  /tagcase4:
+    delete:
+      operationId: tagcase4
+      tags: [user_api]
+      responses: {'204': {description: ok}}
+  /admin/users:
+    get:
+      operationId: admin_users
+      tags: [admin/users]
+      responses: {'204': {description: ok}}
+  /admin.things:
+    get:
+      operationId: admin_things
+      tags: [admin.things]
+      responses: {'204': {description: ok}}
+  /undeclared/{thing}:
+    get:
+      operationId: undeclared_param
+      tags: [files]
+      responses: {'204': {description: ok}}
+  /pq/{id}:
+    get:
+      operationId: path_and_query_same
+      tags: [files]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {name: id, in: query, schema: {type: string}}
+      responses: {'204': {description: ok}}
+components:
+  securitySchemes:
+    oidc: {type: openIdConnect, openIdConnectUrl: https://x.example.com/.well-known/openid-configuration}
+    cookie_key: {type: apiKey, in: cookie, name: sess}
+    weird-scheme.name: {type: http, scheme: digest}

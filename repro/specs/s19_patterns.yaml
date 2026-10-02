@@ -1,0 +1,61 @@
+openapi: 3.0.3
+info: {title: Patterns Fuzz, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Holder'}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Holder'}}}}
+components:
+  schemas:
+    Addr:
+      type: object
+      properties: {line: {type: string}}
+    EitherRequired:
+      type: object
+      properties:
+        email: {type: string}
+        phone: {type: string}
+      oneOf:
+        - required: [email]
+        - required: [phone]
+    AnyRequired:
+      type: object
+      properties:
+        a: {type: string}
+        b: {type: string}
+      anyOf:
+        - required: [a]
+        - required: [b]
+    VarnamesMismatch:
+      type: integer
+      enum: [1, 2, 3]
+      x-enum-varnames: [One, Two]
+    ClosedAllOf:
+      allOf:
+        - $ref: '#/components/schemas/Addr'
+        - type: object
+          additionalProperties: false
+          properties: {zip: {type: string}}
+    Holder:
+      type: object
+      properties:
+        ref_nullable:
+          $ref: '#/components/schemas/Addr'
+          nullable: true
+        ref_desc:
+          $ref: '#/components/schemas/Addr'
+          description: sibling description
+        either: {$ref: '#/components/schemas/EitherRequired'}
+        anyreq: {$ref: '#/components/schemas/AnyRequired'}
+        varnames: {$ref: '#/components/schemas/VarnamesMismatch'}
+        closed_all_of: {$ref: '#/components/schemas/ClosedAllOf'}
+        anyof_nullable_30:
+          anyOf:
+            - $ref: '#/components/schemas/Addr'
+          nullable: true

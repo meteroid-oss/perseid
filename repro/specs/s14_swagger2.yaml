@@ -1,0 +1,8 @@
+swagger: '2.0'
+info: {title: Swag, version: 1.0.0}
+host: x.example.com
+paths:
+  /x:
+    get:
+      operationId: x
+      responses: {'200': {description: ok}}

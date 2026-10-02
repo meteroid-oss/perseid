@@ -1,0 +1,292 @@
+openapi: 3.1.0
+info: {title: Ops Fuzz B, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /no-op-id:
+    get:
+      tags: [misc]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /no-tags:
+    get:
+      operationId: untagged_op
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /items/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+      - {name: shared_q, in: query, schema: {type: string}}
+    put:
+      operationId: put_item
+      tags: [items]
+      parameters:
+        - {name: shared_q, in: query, schema: {type: integer}, description: overrides path-level}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Item'}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /reserved-params/{self}:
+    post:
+      operationId: reserved_params
+      tags: [items]
+      parameters:
+        - {name: self, in: path, required: true, schema: {type: string}}
+        - {name: options, in: query, schema: {type: string}}
+        - {name: body, in: query, schema: {type: string}}
+        - {name: params, in: query, schema: {type: string}}
+        - {name: request, in: query, schema: {type: string}}
+        - {name: headers, in: query, schema: {type: string}}
+        - {name: signal, in: query, schema: {type: string}}
+        - {name: timeout, in: query, schema: {type: string}}
+        - {name: client, in: query, schema: {type: string}}
+        - {name: ctx, in: query, schema: {type: string}}
+        - {name: opts, in: query, schema: {type: string}}
+        - {name: query, in: query, schema: {type: string}}
+        - {name: path, in: query, schema: {type: string}}
+        - {name: url, in: query, schema: {type: string}}
+        - {name: method, in: query, schema: {type: string}}
+        - {name: response, in: query, schema: {type: string}}
+        - {name: err, in: query, schema: {type: string}}
+        - {name: error, in: query, schema: {type: string}}
+        - {name: result, in: query, schema: {type: string}}
+        - {name: req, in: query, schema: {type: string}}
+        - {name: resp, in: query, schema: {type: string}}
+        - {name: res, in: query, schema: {type: string}}
+        - {name: type, in: query, schema: {type: string}}
+        - {name: class, in: query, schema: {type: string}}
+        - {name: default, in: query, schema: {type: string}}
+        - {name: async, in: query, schema: {type: string}}
+        - {name: page.size, in: query, schema: {type: integer}}
+        - {name: 'filter[status]', in: query, schema: {type: string}}
+        - {name: X-Rate-Limit, in: header, schema: {type: integer}}
+        - {name: dup, in: query, schema: {type: string}}
+        - {name: dup, in: header, schema: {type: string}}
+        - {name: kind, in: query, schema: {$ref: '#/components/schemas/Kind'}}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                self: {type: string}
+                options: {type: string}
+                kind: {type: string}
+      responses:
+        '204': {description: ok}
+  /int-path/{n}/{k}:
+    get:
+      operationId: int_path
+      tags: [items]
+      parameters:
+        - {name: n, in: path, required: true, schema: {type: integer, format: int64}}
+        - {name: k, in: path, required: true, schema: {$ref: '#/components/schemas/Kind'}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: string}}}}
+  /optional-only-body:
+    post:
+      operationId: optional_only_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, properties: {a: {type: string}}}
+      responses:
+        '204': {description: ok}
+  /multi-media:
+    post:
+      operationId: multi_media
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Item'}
+          application/x-www-form-urlencoded:
+            schema: {$ref: '#/components/schemas/Item'}
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/Item'}
+      responses:
+        '204': {description: ok}
+  /text-body:
+    post:
+      operationId: text_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema: {type: string}
+      responses:
+        '200': {description: ok, content: {text/plain: {schema: {type: string}}}}
+  /xml:
+    get:
+      operationId: get_xml
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/xml: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /png:
+    get:
+      operationId: get_png
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {image/png: {schema: {type: string, format: binary}}}}
+  /star:
+    get:
+      operationId: get_star
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {'*/*': {schema: {type: string}}}}
+  /only-default:
+    get:
+      operationId: only_default
+      tags: [responses]
+      responses:
+        default: {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /only-4xx:
+    get:
+      operationId: only_4xx
+      tags: [responses]
+      responses:
+        '404': {description: nf, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /range-2xx:
+    get:
+      operationId: range_2xx
+      tags: [responses]
+      responses:
+        2XX: {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /two-success:
+    post:
+      operationId: two_success
+      tags: [responses]
+      responses:
+        '201': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+        '202': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Other'}}}}
+  /two-success-b:
+    post:
+      operationId: two_success_b
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+        '204': {description: none}
+  /json-and-text:
+    get:
+      operationId: json_and_text
+      tags: [responses]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/Item'}}
+            text/plain: {schema: {type: string}}
+  /resp-headers:
+    get:
+      operationId: resp_headers
+      tags: [responses]
+      responses:
+        '200':
+          description: ok
+          headers:
+            X-Total: {schema: {type: integer}}
+            X-Next: {$ref: '#/components/headers/Next'}
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Item'}}}}
+  /prim-resp:
+    get:
+      operationId: prim_resp
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: integer}}}}
+  /bool-resp:
+    get:
+      operationId: bool_resp
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: boolean}}}}
+  /nullable-resp:
+    get:
+      operationId: nullable_resp
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {oneOf: [{$ref: '#/components/schemas/Item'}, {type: 'null'}]}}}}
+  /get-body:
+    get:
+      operationId: get_with_body
+      tags: [methods]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}
+      responses:
+        '204': {description: ok}
+  /head:
+    head:
+      operationId: head_op
+      tags: [methods]
+      responses:
+        '200': {description: ok}
+    options:
+      operationId: options_op
+      tags: [methods]
+      responses:
+        '204': {description: ok}
+    trace:
+      operationId: trace_op
+      tags: [methods]
+      responses:
+        '200': {description: ok}
+  /trailing/:
+    get:
+      operationId: trailing_slash
+      tags: [methods]
+      responses:
+        '204': {description: ok}
+  /a/{id}:
+    get:
+      operationId: getUser
+      tags: [collide]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: ok}}
+  /b/{id}:
+    get:
+      operationId: get_user_v2
+      tags: [collide]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: ok}}
+  /odd-op-ids:
+    get:
+      operationId: 'items/list.all now'
+      tags: [Odd Tag Name]
+      responses: {'204': {description: ok}}
+    post:
+      operationId: delete
+      tags: [class]
+      responses: {'204': {description: ok}}
+    put:
+      operationId: new
+      tags: [class]
+      responses: {'204': {description: ok}}
+    patch:
+      operationId: import
+      tags: [class]
+      responses: {'204': {description: ok}}
+    delete:
+      operationId: 2fa_disable
+      tags: [Item]
+      responses: {'204': {description: ok}}
+components:
+  headers:
+    Next: {schema: {type: string}}
+  schemas:
+    Kind: {type: string, enum: [a, b]}
+    Item:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+        n: {type: integer}
+    Other:
+      type: object
+      properties:
+        z: {type: string}

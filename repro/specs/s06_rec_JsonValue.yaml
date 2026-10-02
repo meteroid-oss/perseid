@@ -1,0 +1,27 @@
+openapi: 3.1.0
+info: {title: Rec JsonValue, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /echo:
+    get:
+      operationId: echo
+      tags: [echo]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Holder'}
+components:
+  schemas:
+    JsonValue:
+      oneOf:
+        - {type: string}
+        - {type: number}
+        - {type: boolean}
+        - {type: object, additionalProperties: {$ref: '#/components/schemas/JsonValue'}}
+        - {type: array, items: {$ref: '#/components/schemas/JsonValue'}}
+    Holder:
+      type: object
+      properties:
+        r: {$ref: '#/components/schemas/JsonValue'}

@@ -1,0 +1,12 @@
+openapi: 3.1.0
+info: {title: Path Query Min, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /x/{id}:
+    get:
+      operationId: get_x
+      tags: [x]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {name: id, in: query, schema: {type: string}}
+      responses: {'204': {description: ok}}

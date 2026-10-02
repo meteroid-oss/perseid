@@ -1,0 +1,19 @@
+openapi: 3.1.0
+info: {title: Rec Union Min, version: 1.0.0}
+servers: [{url: https://x.example.com}]
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Json'}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Json'}}}}
+components:
+  schemas:
+    Json:
+      oneOf:
+        - {type: string}
+        - {type: array, items: {$ref: '#/components/schemas/Json'}}
