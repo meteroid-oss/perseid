@@ -43,6 +43,8 @@ case "$lang" in
       rust_samples "$spec"
     done ;;
   typescript)
+    # The tests generate more SDKs themselves (features, torture, realworld and, with their
+    # `perseid samples`, the sample round trips of torture and every edge fixture).
     npm install --no-audit --no-fund && npm run build
     FIXTURES="$here/../fixtures" node --test test/*.test.mjs ;;
   python)
