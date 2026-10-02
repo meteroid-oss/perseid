@@ -1,0 +1,762 @@
+openapi: 3.1.0
+info:
+  title: Unions
+  version: 1.0.0
+  description: "Union shapes found in the OpenAI spec: open enums, unions sharing a JSON type, undiscriminated object unions, union bodies, required-only constraints, untypable fields and refined variants."
+servers:
+  - url: https://api.example.com/v1
+security:
+  - oauth: [read, write]
+paths:
+  /completions:
+    post:
+      operationId: createCompletion
+      tags: [completions]
+      summary: Prompt-like unions in a request body and a response.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateCompletionRequest'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Completion'}
+  /completions/{completion_id}:
+    get:
+      operationId: retrieveCompletion
+      tags: [completions]
+      parameters:
+        - {name: completion_id, in: path, required: true, schema: {type: string}}
+        - {name: model, in: query, schema: {$ref: '#/components/schemas/ModelIds'}}
+        - {name: effort, in: query, schema: {anyOf: [{type: string}, {type: string, enum: [low, medium, high]}]}}
+        - name: include
+          in: query
+          explode: true
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/Include'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Completion'}
+  /completions/list:
+    get:
+      operationId: listCompletions
+      tags: [completions]
+      parameters:
+        - {name: order, in: query, schema: {type: string, enum: [asc, desc]}}
+        - {name: after, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CompletionList'}
+  /responses:
+    post:
+      operationId: createResponse
+      tags: [responses]
+      summary: Object unions without a distinguishing property.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateResponseRequest'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Response'}
+  /responses/{response_id}:
+    get:
+      operationId: retrieveResponse
+      tags: [responses]
+      parameters:
+        - {name: response_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Response'}
+  /transcriptions:
+    post:
+      operationId: createTranscription
+      tags: [transcriptions]
+      summary: Union response body without a discriminator.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateTranscriptionRequest'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - {$ref: '#/components/schemas/Transcription'}
+                  - {$ref: '#/components/schemas/TranscriptionVerbose'}
+    get:
+      operationId: listTranscriptions
+      tags: [transcriptions]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/TranscriptionResult'}
+  /transcriptions/{transcription_id}:
+    get:
+      operationId: retrieveTranscription
+      tags: [transcriptions]
+      parameters:
+        - {name: transcription_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TranscriptionResult'}
+  /grades:
+    post:
+      operationId: createGrade
+      tags: [grades]
+      summary: Union request body without a discriminator.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - {$ref: '#/components/schemas/GradeByText'}
+                - {$ref: '#/components/schemas/GradeByScore'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Grade'}
+    get:
+      operationId: listGrades
+      tags: [grades]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Grade'}
+  /grades/{grade_id}:
+    get:
+      operationId: retrieveGrade
+      tags: [grades]
+      parameters:
+        - {name: grade_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Grade'}
+  /evals:
+    post:
+      operationId: createEval
+      tags: [evals]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateEvalRequest'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Eval'}
+    get:
+      operationId: listEvals
+      tags: [evals]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items: {$ref: '#/components/schemas/Eval'}
+  /evals/{eval_id}:
+    get:
+      operationId: retrieveEval
+      tags: [evals]
+      parameters:
+        - {name: eval_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Eval'}
+  /messages:
+    post:
+      operationId: createMessage
+      tags: [messages]
+      summary: Adjacently tagged and inline discriminated unions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateMessageRequest'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Message'}
+  /messages/{message_id}:
+    get:
+      operationId: retrieveMessage
+      tags: [messages]
+      parameters:
+        - {name: message_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Message'}
+  /vector_stores/{vector_store_id}/file_batches:
+    post:
+      operationId: createFileBatch
+      tags: [vector_stores]
+      parameters:
+        - {name: vector_store_id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreateFileBatchRequest'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FileBatch'}
+    get:
+      operationId: listFileBatches
+      tags: [vector_stores]
+      parameters:
+        - {name: vector_store_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/FileBatch'}
+  /vector_stores/{vector_store_id}/file_batches/{batch_id}:
+    get:
+      operationId: retrieveFileBatch
+      tags: [vector_stores]
+      parameters:
+        - {name: vector_store_id, in: path, required: true, schema: {type: string}}
+        - {name: batch_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FileBatch'}
+  /images:
+    post:
+      operationId: createImage
+      tags: [images]
+      summary: A required-only anyOf next to properties.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ImageRef'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Image'}
+  /images/{image_id}:
+    get:
+      operationId: retrieveImage
+      tags: [images]
+      parameters:
+        - {name: image_id, in: path, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Image'}
+components:
+  securitySchemes:
+    oauth:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: /oauth/token
+          scopes:
+            read: Read access
+            write: Write access
+  schemas:
+    # Open enums, in every form the OpenAI spec uses.
+    ModelIds:
+      description: A model name, with the known ones listed.
+      anyOf:
+        - {type: string}
+        - {type: string, enum: [alpha-1, alpha-2, beta-1]}
+    ChatModel:
+      type: string
+      enum: [chat-small, chat-large]
+    ModelIdsWithRef:
+      anyOf:
+        - {type: string}
+        - {$ref: '#/components/schemas/ChatModel'}
+    Include:
+      description: A value to include, one description per value.
+      oneOf:
+        - {const: logprobs, description: Token log probabilities}
+        - {const: usage, description: Token usage}
+        - {const: sources, description: Source documents}
+    Voice:
+      anyOf:
+        - {type: string, enum: [alloy, ash]}
+        - {type: string, enum: [coral, sage]}
+    VoiceWithOpen:
+      anyOf:
+        - {type: string}
+        - {type: string, enum: [alloy, ash]}
+        - {type: string, enum: [coral, sage]}
+    # A model with one field per construct.
+    Completion:
+      type: object
+      required: [id, model, created_at, choices]
+      properties:
+        id: {type: string}
+        model: {$ref: '#/components/schemas/ModelIds'}
+        fallback_model: {$ref: '#/components/schemas/ModelIdsWithRef'}
+        voice: {$ref: '#/components/schemas/Voice'}
+        voice_open: {$ref: '#/components/schemas/VoiceWithOpen'}
+        include: {type: array, items: {$ref: '#/components/schemas/Include'}}
+        inline_model:
+          anyOf:
+            - {type: string}
+            - {type: string, enum: [fast, slow]}
+        created_at:
+          description: Either a timestamp or a free-form string.
+          anyOf:
+            - {type: string, format: date-time}
+            - {type: string}
+        expires_at:
+          anyOf:
+            - {type: string, format: date-time}
+            - {type: string}
+            - {type: 'null'}
+        score:
+          description: A whole number or a fraction.
+          oneOf:
+            - {type: integer}
+            - {type: number}
+        ratio: {type: [integer, number]}
+        stop: {type: [string, integer, 'null']}
+        limit: {type: [integer, number, 'null']}
+        choices:
+          type: array
+          items: {$ref: '#/components/schemas/Choice'}
+        prompt:
+          description: The prompt that was echoed back.
+          anyOf:
+            - {type: string}
+            - {type: array, items: {type: string}}
+            - {type: array, items: {type: integer}}
+            - {type: array, items: {type: array, items: {type: integer}}}
+        metadata: {$ref: '#/components/schemas/Untypable'}
+    Choice:
+      type: object
+      required: [index]
+      properties:
+        index: {type: integer}
+        text: {type: string}
+        finish_reason: {$ref: '#/components/schemas/FinishReason'}
+    FinishReason:
+      anyOf:
+        - {type: string}
+        - {type: string, enum: [stop, length]}
+        - {type: 'null'}
+    # A single untypable field must not make the model untyped.
+    Untypable:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        mixed:
+          description: A mixed-type enum no SDK can model as a string.
+          type: string
+          enum: [auto, 1, 2]
+        count: {type: integer}
+    CompletionList:
+      type: object
+      required: [data, has_more]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/Completion'}
+        has_more: {type: boolean}
+        last_id: {type: [string, 'null']}
+    CreateCompletionRequest:
+      type: object
+      required: [model, prompt]
+      properties:
+        model: {$ref: '#/components/schemas/ModelIds'}
+        prompt:
+          description: String, array of strings, array of tokens or array of token arrays.
+          default: '<|endoftext|>'
+          oneOf:
+            - {type: string, default: '', example: This is a test.}
+            - type: array
+              items: {type: string, default: '', example: This is a test.}
+            - type: array
+              minItems: 1
+              items: {type: integer}
+            - type: array
+              minItems: 1
+              items:
+                type: array
+                minItems: 1
+                items: {type: integer}
+        stop:
+          oneOf:
+            - {type: string}
+            - {type: array, items: {type: string}, maxItems: 4}
+        logit_bias:
+          type: object
+          additionalProperties: {type: integer}
+        reasoning_effort: {anyOf: [{type: string}, {type: string, enum: [low, medium, high]}]}
+        created_after:
+          anyOf:
+            - {type: string, format: date-time}
+            - {type: string}
+        weight: {type: [integer, number]}
+        timeout: {type: [string, integer, 'null']}
+        voice: {$ref: '#/components/schemas/VoiceWithOpen'}
+        include: {type: array, items: {$ref: '#/components/schemas/Include'}}
+    # Object unions with no distinguishing property.
+    AllowedTools:
+      type: object
+      required: [mode, tools]
+      properties:
+        mode: {type: string, enum: [auto, required]}
+        tools:
+          type: array
+          items: {type: object, additionalProperties: true}
+    HostedTool:
+      type: object
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [file_search, web_search, code_interpreter]
+    FunctionTool:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+        arguments: {type: string}
+    ToolChoice:
+      description: How the model picks a tool.
+      anyOf:
+        - {type: string, enum: [none, auto, required]}
+        - {$ref: '#/components/schemas/AllowedTools'}
+        - {$ref: '#/components/schemas/HostedTool'}
+        - {$ref: '#/components/schemas/FunctionTool'}
+    CreateResponseRequest:
+      type: object
+      required: [model]
+      properties:
+        model: {$ref: '#/components/schemas/ModelIds'}
+        tool_choice: {$ref: '#/components/schemas/ToolChoice'}
+        input:
+          oneOf:
+            - {type: string}
+            - type: array
+              items: {$ref: '#/components/schemas/InputItem'}
+    InputItem:
+      oneOf:
+        - {$ref: '#/components/schemas/HostedTool'}
+        - {$ref: '#/components/schemas/FunctionTool'}
+    Response:
+      type: object
+      required: [id, model]
+      properties:
+        id: {type: string}
+        model: {$ref: '#/components/schemas/ModelIds'}
+        tool_choice: {$ref: '#/components/schemas/ToolChoice'}
+        output:
+          type: array
+          items: {$ref: '#/components/schemas/InputItem'}
+    # Transcription-like union bodies.
+    CreateTranscriptionRequest:
+      type: object
+      required: [model, file_id]
+      properties:
+        model: {$ref: '#/components/schemas/ModelIds'}
+        file_id: {type: string}
+        response_format: {type: string, enum: [json, verbose_json]}
+    Transcription:
+      type: object
+      required: [text]
+      properties:
+        text: {type: string}
+        logprobs:
+          type: array
+          items:
+            type: object
+            properties:
+              token: {type: string}
+              logprob: {type: number}
+    TranscriptionVerbose:
+      type: object
+      required: [text, duration, language]
+      properties:
+        text: {type: string}
+        duration: {type: number}
+        language: {type: string}
+        segments:
+          type: array
+          items:
+            type: object
+            required: [id, start, end]
+            properties:
+              id: {type: integer}
+              start: {type: number}
+              end: {type: number}
+    TranscriptionResult:
+      oneOf:
+        - {$ref: '#/components/schemas/Transcription'}
+        - {$ref: '#/components/schemas/TranscriptionVerbose'}
+    GradeByText:
+      type: object
+      required: [text]
+      properties:
+        text: {type: string}
+        reference: {type: string}
+    GradeByScore:
+      type: object
+      required: [score]
+      properties:
+        score: {type: number}
+        threshold: {type: number}
+    Grade:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+        result:
+          oneOf:
+            - {$ref: '#/components/schemas/GradeByText'}
+            - {$ref: '#/components/schemas/GradeByScore'}
+    # An allOf refinement alias used as a discriminated variant.
+    GraderStringCheck:
+      type: object
+      required: [type, name, input, reference, operation]
+      properties:
+        type: {type: string, enum: [string_check]}
+        name: {type: string}
+        input: {type: string}
+        reference: {type: string}
+        operation: {type: string, enum: [eq, ne, like, ilike]}
+    GraderTextSimilarity:
+      type: object
+      required: [type, name, input, reference, evaluation_metric]
+      properties:
+        type: {type: string, enum: [text_similarity]}
+        name: {type: string}
+        input: {type: string}
+        reference: {type: string}
+        evaluation_metric: {type: string, enum: [bleu, rouge_l]}
+    EvalGraderStringCheck:
+      title: StringCheckGrader
+      allOf:
+        - {$ref: '#/components/schemas/GraderStringCheck'}
+        - type: object
+          description: A string check grader used by evals.
+    EvalGraderTextSimilarity:
+      title: TextSimilarityGrader
+      allOf:
+        - {$ref: '#/components/schemas/GraderTextSimilarity'}
+        - type: object
+          required: [pass_threshold]
+          properties:
+            pass_threshold: {type: number}
+    EvalGrader:
+      oneOf:
+        - {$ref: '#/components/schemas/EvalGraderStringCheck'}
+        - {$ref: '#/components/schemas/EvalGraderTextSimilarity'}
+      discriminator:
+        propertyName: type
+    CreateEvalRequest:
+      type: object
+      required: [name, graders]
+      properties:
+        name: {type: string}
+        graders:
+          type: array
+          items: {$ref: '#/components/schemas/EvalGrader'}
+    Eval:
+      type: object
+      required: [id, name, graders]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        graders:
+          type: array
+          items: {$ref: '#/components/schemas/EvalGrader'}
+    # Go: adjacently tagged and inline discriminated unions.
+    MessageEvent:
+      type: object
+      required: [type]
+      properties:
+        type: {type: string}
+        at: {type: string, format: date-time}
+      oneOf:
+        - type: object
+          required: [type, created]
+          properties:
+            type: {type: string, enum: [created]}
+            created: {$ref: '#/components/schemas/HostedTool'}
+        - type: object
+          required: [type, renamed]
+          properties:
+            type: {type: string, enum: [renamed]}
+            renamed:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string}
+        - type: object
+          required: [type]
+          properties:
+            type: {type: string, enum: [ping]}
+    ContentPart:
+      oneOf:
+        - type: object
+          required: [type, text]
+          properties:
+            type: {type: string, enum: [text]}
+            text: {type: string}
+        - type: object
+          required: [type, file]
+          properties:
+            type: {type: string, enum: [file]}
+            file:
+              type: object
+              properties:
+                file_id: {type: string}
+                filename: {type: string}
+        - type: object
+          required: [type, image_url]
+          properties:
+            type: {type: string, enum: [image_url]}
+            image_url:
+              type: object
+              required: [url]
+              properties:
+                url: {type: string}
+                detail: {type: string, enum: [auto, low, high]}
+      discriminator:
+        propertyName: type
+    CreateMessageRequest:
+      type: object
+      required: [role, content]
+      properties:
+        role: {type: string, enum: [user, assistant]}
+        content:
+          oneOf:
+            - {type: string}
+            - type: array
+              items: {$ref: '#/components/schemas/ContentPart'}
+        event: {$ref: '#/components/schemas/MessageEvent'}
+    Message:
+      type: object
+      required: [id, role, content]
+      properties:
+        id: {type: string}
+        role: {type: string, enum: [user, assistant]}
+        content:
+          type: array
+          items: {$ref: '#/components/schemas/ContentPart'}
+        events:
+          type: array
+          items: {$ref: '#/components/schemas/MessageEvent'}
+    # Required-only anyOf constraints next to properties.
+    CreateFileBatchRequest:
+      type: object
+      properties:
+        file_ids:
+          type: array
+          items: {type: string}
+        files:
+          type: array
+          items:
+            type: object
+            required: [file_id]
+            properties:
+              file_id: {type: string}
+              attributes:
+                type: object
+                additionalProperties:
+                  oneOf:
+                    - {type: string}
+                    - {type: number}
+                    - {type: boolean}
+      anyOf:
+        - {required: [file_ids]}
+        - {required: [files]}
+    FileBatch:
+      type: object
+      required: [id, status]
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [in_progress, completed, failed]}
+    ImageRef:
+      type: object
+      description: Reference an image by file id or URL.
+      properties:
+        image_url: {type: string}
+        file_id: {type: string}
+      anyOf:
+        - {required: [image_url]}
+        - {required: [file_id]}
+    Image:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+        ref: {$ref: '#/components/schemas/ImageRef'}

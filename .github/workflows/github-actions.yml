@@ -44,6 +44,7 @@ jobs:
           - tests/fixtures/realworld.yaml
           - tests/fixtures/edge-names.yaml
           - tests/fixtures/edge-types.yaml
+          - tests/fixtures/edge-unions.yaml
           - tests/fixtures/edge-operations.yaml
           - tests/fixtures/edge-security.yaml
           - tests/fixtures/edge-legacy.yaml
