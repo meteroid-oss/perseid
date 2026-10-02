@@ -459,6 +459,9 @@ pub(crate) struct Operation {
     ///
     /// Only required string-typed parameters are currently supported.
     path_params: Vec<String>,
+    /// Path parameters with their types, in `path_params` order.
+    #[serde(default)]
+    typed_path_params: Vec<TypedParam>,
     /// Header parameters.
     ///
     /// Only string-typed parameters are currently supported.
@@ -522,6 +525,9 @@ pub(crate) struct Operation {
     response_is_text: bool,
     #[serde(default)]
     response_is_event_stream: bool,
+    /// Whether another success status of the operation has no body, such as a `204`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    response_may_be_empty: bool,
     /// Schema of the JSON `data` of each event, when the `text/event-stream` response names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) event_schema_name: Option<String>,
@@ -603,6 +609,7 @@ impl Operation {
         let op_name = op_id.rsplit('/').next().unwrap_or(&op_id).to_owned();
 
         let mut path_params = Vec::new();
+        let mut typed_path_params = Vec::new();
         let mut query_params = Vec::new();
         let mut header_params = Vec::new();
 
@@ -618,6 +625,11 @@ impl Operation {
                 } => {
                     enforce_string_parameter(&parameter_data, false)
                         .with_context(|| format!("path parameter `{name}`"))?;
+                    typed_path_params.push(TypedParam {
+                        name: parameter_data.name.clone(),
+                        r#type: FieldType::from_openapi(parameter_data.format)
+                            .unwrap_or(FieldType::String),
+                    });
                     path_params.push(parameter_data.name);
                 }
                 openapi::Parameter::Header {
@@ -629,6 +641,7 @@ impl Operation {
                     header_params.push(HeaderParam {
                         name: parameter_data.name,
                         required: parameter_data.required,
+                        schema_type: FieldType::from_openapi(parameter_data.format).ok(),
                     });
                 }
                 openapi::Parameter::Query {
@@ -714,6 +727,7 @@ impl Operation {
             method: method.to_owned(),
             path: path.to_owned(),
             path_params,
+            typed_path_params,
             header_params,
             query_params,
             request_body_schema_name: request.schema_name,
@@ -733,6 +747,7 @@ impl Operation {
             response_is_binary: response.kind == ResponseKind::Binary,
             response_is_text: response.kind == ResponseKind::Text,
             response_is_event_stream: response.kind == ResponseKind::EventStream,
+            response_may_be_empty: response.may_be_empty,
             event_schema_name: response.event_schema_name,
             stream_property: None,
             json_or_event_stream: response.also_event_stream,
@@ -756,6 +771,7 @@ impl Operation {
             response_body_is_list: false,
             response_body_json_type: None,
             response_is_event_stream: true,
+            response_may_be_empty: false,
             stream_property: self.body_stream_property.clone(),
             json_or_event_stream: false,
             x_pagination: Some(serde_json::Value::Bool(false)),
@@ -1184,6 +1200,8 @@ struct ResponseBody {
     also_event_stream: bool,
     /// Named schema of the JSON `data` of each event of a `text/event-stream` body.
     event_schema_name: Option<String>,
+    /// Another success status declares no body.
+    may_be_empty: bool,
 }
 
 /// The boolean `stream` property of the body schema `name`, which switches the response from
@@ -1241,6 +1259,7 @@ fn responses_from_openapi(
     success.sort_by_key(|(code, ..)| *code);
 
     let mut chosen: Option<(String, ResponseBody)> = None;
+    let mut bodiless = false;
     for (_, status, response) in success {
         let status = match status {
             openapi::StatusCode::Code(0) => "default".to_owned(),
@@ -1249,7 +1268,7 @@ fn responses_from_openapi(
         let body = ResponseBody::from_openapi(response, schemas)
             .with_context(|| format!("response `{status}`"))?;
         match &chosen {
-            _ if body.kind == ResponseKind::None => {}
+            _ if body.kind == ResponseKind::None => bodiless = true,
             None => chosen = Some((status, body)),
             Some((first, kept)) if *kept != body => tracing::warn!(
                 "responses `{first}` and `{status}` have different bodies, the SDK decodes `{first}`"
@@ -1267,10 +1286,9 @@ fn responses_from_openapi(
             Some((status, get_schema_name(obj.reference.as_deref())?))
         })
         .collect();
-    Ok((
-        chosen.map(|(_, body)| body).unwrap_or_default(),
-        error_schemas,
-    ))
+    let mut response = chosen.map(|(_, body)| body).unwrap_or_default();
+    response.may_be_empty = bodiless && response.kind != ResponseKind::None;
+    Ok((response, error_schemas))
 }
 
 impl ResponseBody {
@@ -1313,9 +1331,9 @@ impl ResponseBody {
                     kind: ResponseKind::Json,
                     schema_name: Some(schema_name),
                     is_list,
-                    json_type: None,
                     also_event_stream,
                     event_schema_name,
+                    ..Self::default()
                 });
             }
             let json_type = FieldType::from_schema_object(obj.clone())?;
@@ -1374,6 +1392,21 @@ fn named_or_list_of_named(
 struct HeaderParam {
     name: String,
     required: bool,
+    /// The schema's type, none for a `content` header. Not `type`, which templates read as
+    /// "not a plain string".
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_field_type"
+    )]
+    schema_type: Option<FieldType>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct TypedParam {
+    name: String,
+    #[serde(serialize_with = "serialize_field_type")]
+    r#type: FieldType,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1630,6 +1663,18 @@ mod tests {
     }
 
     #[test]
+    fn a_bodiless_success_next_to_a_body_may_leave_it_empty() {
+        let json = json!({ "description": "", "content": {
+            "application/json": { "schema": widget() } } });
+        let (body, _) = responses(json!({ "200": json, "204": { "description": "" } })).unwrap();
+        assert!(body.may_be_empty && body.kind == ResponseKind::Json);
+        let (body, _) = responses(json!({ "200": json })).unwrap();
+        assert!(!body.may_be_empty);
+        let (body, _) = responses(json!({ "204": { "description": "" } })).unwrap();
+        assert!(!body.may_be_empty);
+    }
+
+    #[test]
     fn non_json_responses_are_text_or_binary() {
         let content =
             |media: &str| json!({ "200": { "description": "", "content": { media: {} } } });
@@ -1789,13 +1834,25 @@ mod tests {
     fn unions_of_scalars_lists_and_content_are_text_parameters() {
         let id = json!({ "name": "id", "in": "path", "required": true,
             "schema": { "anyOf": [{ "type": "integer" }, { "type": "string" }] } });
-        assert_eq!(parameter(id).unwrap().path_params, ["id"]);
+        let op = parameter(id).unwrap();
+        assert_eq!(op.path_params, ["id"]);
+        assert!(matches!(
+            op.typed_path_params[0].r#type,
+            FieldType::Union { .. }
+        ));
         let list = json!({ "name": "beta", "in": "header",
             "schema": { "type": "array", "items": { "type": "string" } } });
-        assert_eq!(parameter(list).unwrap().header_params[0].name, "beta");
+        let op = parameter(list).unwrap();
+        assert_eq!(op.header_params[0].name, "beta");
+        assert!(matches!(
+            op.header_params[0].schema_type,
+            Some(FieldType::List { .. })
+        ));
         let filter = json!({ "name": "X-Filter", "in": "header",
             "content": { "application/json": { "schema": { "type": "object" } } } });
-        assert_eq!(parameter(filter).unwrap().header_params[0].name, "X-Filter");
+        let op = parameter(filter).unwrap();
+        assert_eq!(op.header_params[0].name, "X-Filter");
+        assert!(op.header_params[0].schema_type.is_none());
         let nested = json!({ "name": "rows", "in": "header", "schema": { "type": "array",
             "items": { "type": "array", "items": { "type": "string" } } } });
         assert!(parameter(nested).is_err());

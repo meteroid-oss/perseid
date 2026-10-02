@@ -66,6 +66,7 @@ export type {{ type_name }} =
     | {{ member }}
     {%- endfor %};
 
+/** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
     parse(json: any): {{ type_name }} {
         switch (json[{{ disc_json | tojson }}]) {
@@ -73,15 +74,20 @@ export const {{ type_name }}Serializer = {
             case {{ variant.name | tojson }}:
                 return {
                     {% if adjacent -%}
+                    ...extraProperties(json, {{ m.names(type.fields, false, [disc_json, content_json]) }}),
                     {% if variant.type == "ref" and variant.schema_ref is defined -%}
                     {{ content }}: {{ variant.schema_ref | to_upper_camel_case }}Serializer.parse(json[{{ content_json | tojson }}]),
                     {% elif variant.type == "struct" and variant.fields is defined and variant.fields -%}
                     {{ content }}: { {{- m.parse_fields(variant.fields, "json[" ~ (content_json | tojson) ~ "]") }} },
                     {% endif -%}
                     {% elif variant.type == "ref" and variant.schema_ref is defined -%}
-                    ...{{ variant.schema_ref | to_upper_camel_case }}Serializer.parse(json),
+                    {% set parsed %}{{ variant.schema_ref | to_upper_camel_case }}Serializer.parse(json){% endset -%}
+                    ...{% if type.fields %}omitProperties({{ parsed }}, {{ m.names(type.fields) }}){% else %}{{ parsed }}{% endif %},
                     {% elif variant.type == "struct" and variant.fields is defined -%}
+                    ...extraProperties(json, {{ m.names(variant.fields + type.fields, false, [disc_json]) }}),
                     {{- m.parse_fields(variant.fields, "json") }}
+                    {% else -%}
+                    ...extraProperties(json, {{ m.names(type.fields, false, [disc_json]) }}),
                     {% endif -%}
                     {% if type.fields %}{{ m.parse_fields(type.fields, "json") }}
                     {% endif -%}
@@ -100,15 +106,20 @@ export const {{ type_name }}Serializer = {
             case {{ variant.name | tojson }}:
                 return {
                     {% if adjacent -%}
+                    ...extraProperties(value, {{ m.names(type.fields, true, [disc_json, content_json]) }}),
                     {% if variant.type == "ref" and variant.schema_ref is defined -%}
                     {{ content_json | tojson }}: {{ variant.schema_ref | to_upper_camel_case }}Serializer.serialize(value.{{ content }}),
                     {% elif variant.type == "struct" and variant.fields is defined and variant.fields -%}
                     {{ content_json | tojson }}: { {{- m.serialize_fields(variant.fields, "value." ~ content) }} },
                     {% endif -%}
                     {% elif variant.type == "ref" and variant.schema_ref is defined -%}
-                    ...{{ variant.schema_ref | to_upper_camel_case }}Serializer.serialize(value),
+                    {% set serialized %}{{ variant.schema_ref | to_upper_camel_case }}Serializer.serialize(value){% endset -%}
+                    ...{% if type.fields %}omitProperties({{ serialized }}, {{ m.names(type.fields, true) }}){% else %}{{ serialized }}{% endif %},
                     {% elif variant.type == "struct" and variant.fields is defined -%}
+                    ...extraProperties(value, {{ m.names(variant.fields + type.fields, true, [disc_json]) }}),
                     {{- m.serialize_fields(variant.fields, "value") }}
+                    {% else -%}
+                    ...extraProperties(value, {{ m.names(type.fields, true, [disc_json]) }}),
                     {% endif -%}
                     {% if type.fields %}{{ m.serialize_fields(type.fields, "value") }}
                     {% endif -%}
@@ -119,5 +130,4 @@ export const {{ type_name }}Serializer = {
                 return value;
         }
     },
-{{ m.legacy_aliases(type_name) }}
 };

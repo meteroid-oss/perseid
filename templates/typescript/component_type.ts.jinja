@@ -31,8 +31,9 @@
 {% if "parseDateTime(" in body -%}
 import { parseDateTime } from "../datetime.js";
 {% endif -%}
-{% if "isJsonObject(" in body -%}
-import { isJsonObject } from "../json.js";
+{% set json_helpers = ["extraProperties", "isJsonObject", "omitProperties", "pickProperties"] | select("in", body) | list -%}
+{% if json_helpers -%}
+import { {{ json_helpers | join(", ") }} } from "../json.js";
 {% endif -%}
 {% set union_helpers = ["unionBestMatch", "unionHas"] | select("in", body) | list -%}
 {% if union_helpers -%}

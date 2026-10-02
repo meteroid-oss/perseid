@@ -30,11 +30,19 @@ export interface {{ type_name }}{% if base_names %} extends {{ ns.parents | join
     {% endfor -%}
 }{% if intersect %};{% endif %}
 
+{# Properties this SDK version does not know are kept as received, under their JSON names, and
+    sent back. A base that is not an object (a union) has no fixed properties to tell apart. -#}
+{% set extras = not intersect -%}
+{% set inherited = inherited_fields | list -%}
+/** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
     parse(json: any): {{ type_name }} {
         return {
+            {%- if extras %}
+            ...extraProperties(json, {{ m.names(type.fields, false, inherited) }}),
+            {%- endif %}
             {%- for base in base_names %}
-            ...{{ base }}Serializer.parse(json),
+            ...{% if extras %}pickProperties({{ base }}Serializer.parse(json), {{ m.names([], true, inherited) }}){% else %}{{ base }}Serializer.parse(json){% endif %},
             {%- endfor %}
             {{- m.parse_fields(type.fields, "json", type.discriminator_defaults | default({})) }}
         };
@@ -42,11 +50,14 @@ export const {{ type_name }}Serializer = {
 
     serialize(value: {{ type_name }}): any {
         return {
+            {%- if extras %}
+            ...extraProperties(value, {{ m.names(type.fields, true, inherited) }}),
+            {%- endif %}
             {%- for base in base_names %}
-            ...{{ base }}Serializer.serialize({% if overridden %}value as unknown as {{ base }}{% else %}value{% endif %}),
+            {%- set serialized %}{{ base }}Serializer.serialize({% if overridden %}value as unknown as {{ base }}{% else %}value{% endif %}){% endset %}
+            ...{% if extras %}pickProperties({{ serialized }}, {{ m.names([], false, inherited) }}){% else %}{{ serialized }}{% endif %},
             {%- endfor %}
             {{- m.serialize_fields(type.fields, "value", type.discriminator_defaults | default({})) }}
         };
     },
-{{ m.legacy_aliases(type_name) }}
 };

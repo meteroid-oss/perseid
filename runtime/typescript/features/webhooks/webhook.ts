@@ -133,8 +133,8 @@ function hmacSha256(key: Uint8Array, message: Uint8Array): Uint8Array {
   const inner = new Uint8Array(64 + message.length);
   const outer = new Uint8Array(64 + 32);
   for (let i = 0; i < 64; i++) {
-    inner[i] = block[i] ^ 0x36;
-    outer[i] = block[i] ^ 0x5c;
+    inner[i] = (block[i] ?? 0) ^ 0x36;
+    outer[i] = (block[i] ?? 0) ^ 0x5c;
   }
   inner.set(message, 64);
   outer.set(sha256(inner), 64);
@@ -164,19 +164,30 @@ function sha256(data: Uint8Array): Uint8Array {
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
   ]);
   const w = new Uint32Array(64);
+  const word = (i: number) => w[i] ?? 0;
   const rotr = (x: number, n: number) => (x >>> n) | (x << (32 - n));
   for (let offset = 0; offset < length; offset += 64) {
     for (let i = 0; i < 16; i++) {
       w[i] = view.getUint32(offset + i * 4);
     }
     for (let i = 16; i < 64; i++) {
-      const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
-      const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
-      w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+      const s0 = rotr(word(i - 15), 7) ^ rotr(word(i - 15), 18) ^ (word(i - 15) >>> 3);
+      const s1 = rotr(word(i - 2), 17) ^ rotr(word(i - 2), 19) ^ (word(i - 2) >>> 10);
+      w[i] = word(i - 16) + s0 + word(i - 7) + s1;
     }
-    let [a, b, c, d, e, f, g, hh] = h;
+    let [a, b, c, d, e, f, g, hh] = Array.from(h) as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
     for (let i = 0; i < 64; i++) {
-      const t1 = hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + w[i];
+      const t1 =
+        hh + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + (K[i] ?? 0) + word(i);
       const t2 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
       hh = g;
       g = f;
@@ -187,14 +198,9 @@ function sha256(data: Uint8Array): Uint8Array {
       b = a;
       a = (t1 + t2) >>> 0;
     }
-    h[0] += a;
-    h[1] += b;
-    h[2] += c;
-    h[3] += d;
-    h[4] += e;
-    h[5] += f;
-    h[6] += g;
-    h[7] += hh;
+    [a, b, c, d, e, f, g, hh].forEach((value, i) => {
+      h[i] = (h[i] ?? 0) + value;
+    });
   }
   const out = new Uint8Array(32);
   const outView = new DataView(out.buffer);

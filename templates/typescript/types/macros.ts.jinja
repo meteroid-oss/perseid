@@ -38,8 +38,9 @@
     {% endif -%}
 {%- endmacro %}
 
+{# Optional fields also take `undefined`, which parsing leaves in absent fields. -#}
 {% macro field_decl(field) -%}
-    {{ doc(field.description, field.deprecated) }}{{ field.name | ident("camel") }}{% if not field.required %}?{% endif %}: {{ field_type(field) }};
+    {{ doc(field.description, field.deprecated) }}{{ field.name | ident("camel") }}{% if not field.required %}?{% endif %}: {{ field_type(field) }}{% if not field.required %} | undefined{% endif %};
 {%- endmacro %}
 
 {#- An int64 union variant stays a number when int64 values are strings, which would be
@@ -171,14 +172,7 @@
     {%- endfor %}
 {%- endmacro %}
 
-{#- `@deprecated` aliases of `parse` / `serialize` under their former names. -#}
-{% macro legacy_aliases(type_name) %}
-    /** @deprecated Use `parse`. */
-    _fromJsonObject(json: any): {{ type_name }} {
-        return {{ type_name }}Serializer.parse(json);
-    },
-    /** @deprecated Use `serialize`. */
-    _toJsonObject(value: {{ type_name }}): any {
-        return {{ type_name }}Serializer.serialize(value);
-    },
+{#- The names of `fields` as a list literal: the JSON names, or the TypeScript ones with `ts`. -#}
+{% macro names(fields, ts=false, extra=[]) -%}
+    [{% for name in (fields | rejectattr("flatten") | map(attribute="name") | list) + extra %}{{ (name | ident("camel") if ts else name) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]
 {%- endmacro %}

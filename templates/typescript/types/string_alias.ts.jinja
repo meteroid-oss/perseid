@@ -1,8 +1,8 @@
-{% import "types/macros.ts.jinja" as m -%}
 {% set type_name = type.name | to_upper_camel_case -%}
 {{ doc_comment }}
 export type {{ type_name }} = string;
 
+/** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
     parse(json: any): {{ type_name }} {
         return json;
@@ -11,5 +11,4 @@ export const {{ type_name }}Serializer = {
     serialize(value: {{ type_name }}): any {
         return value;
     },
-{{ m.legacy_aliases(type_name) }}
 };

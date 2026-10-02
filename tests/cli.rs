@@ -2134,9 +2134,9 @@ fn typescript_types_unions_errors_and_the_default_timeout() {
     let charge = read("models/charge.ts");
     for decl in [
         "customer: string | Customer | null;",
-        "amount?: number | \"\";",
-        "shipping?: ChargeShipping | \"\";",
-        "source?: string | Customer | UploadModel;",
+        "amount?: number | \"\" | undefined;",
+        "shipping?: ChargeShipping | \"\" | undefined;",
+        "source?: string | Customer | UploadModel | undefined;",
     ] {
         assert!(charge.contains(decl), "no `{decl}` in {charge}");
     }
