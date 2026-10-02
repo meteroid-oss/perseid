@@ -5,14 +5,22 @@ use crate::{
     request::{decode_error, transport_error},
 };
 use bytes::{Buf, Bytes};
-use http_body_util::BodyExt;
-use hyper::body::Incoming;
-use std::{io, time::Duration};
+use hyper::body::{Body as _, Incoming};
+use serde::de::DeserializeOwned;
+use std::{
+    fmt, io,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
 
 /// One SSE event. Data lines are joined with a newline; metadata is not JSON-decoded.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SseEvent {
+    /// The event type, `message` unless the server named one.
     pub event: String,
+    /// The data lines, joined with a newline.
     pub data: String,
     /// Last event ID, including updates from events with no data.
     pub id: Option<String>,
@@ -20,71 +28,215 @@ pub struct SseEvent {
     pub retry: Option<Duration>,
 }
 
-/// Live response stream. Dropping it closes the response; cancelling `next()` is safe.
+impl SseEvent {
+    /// An event of type `message` carrying `data`.
+    #[must_use]
+    pub fn new(data: impl Into<String>) -> Self {
+        Self {
+            event: "message".into(),
+            data: data.into(),
+            id: None,
+            retry: None,
+        }
+    }
+
+    /// The event with its type set.
+    #[must_use]
+    pub fn with_event(mut self, event: impl Into<String>) -> Self {
+        self.event = event.into();
+        self
+    }
+
+    /// The event with its id set.
+    #[must_use]
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// The event with its reconnection delay set.
+    #[must_use]
+    pub fn with_retry(mut self, retry: Duration) -> Self {
+        self.retry = Some(retry);
+        self
+    }
+}
+
+/// What one raw event decodes to.
+enum Step<T> {
+    Item(T),
+    Done,
+}
+
+type Decode<T> = fn(&SseEvent) -> Result<Step<T>, Error>;
+
+#[allow(clippy::unnecessary_wraps)]
+fn raw(event: &SseEvent) -> Result<Step<SseEvent>, Error> {
+    Ok(Step::Item(event.clone()))
+}
+
+fn json<T: DeserializeOwned>(event: &SseEvent) -> Result<Step<T>, Error> {
+    match event.data.as_str() {
+        "[DONE]" => Ok(Step::Done),
+        data => serde_json::from_str(data).map(Step::Item).map_err(decode_error),
+    }
+}
+
+/// Live response stream, of [`SseEvent`]s or of the JSON model each event carries. It is a
+/// `futures_core::Stream`. Dropping it closes the response; cancelling `next()` is safe.
+///
+/// A typed stream ends at a `[DONE]` event, and [`last_event`](Self::last_event) gives the raw
+/// event of the last item, with its type and id.
 ///
 /// The client timeout covers opening this stream. Use `tokio::time::timeout`
 /// around `next()` when an idle timeout is desired. On a body or parsing error,
 /// one error is returned and the stream terminates. EOF discards incomplete events.
-pub struct EventStream {
+pub struct EventStream<T = SseEvent> {
     body: Option<Incoming>,
     pending: Bytes,
     parser: Parser,
+    last: Option<SseEvent>,
+    decode: Decode<T>,
 }
 
-impl EventStream {
+impl EventStream<SseEvent> {
     pub(crate) fn new(body: Incoming) -> Self {
         Self {
             body: Some(body),
             pending: Bytes::new(),
             parser: Parser::default(),
+            last: None,
+            decode: raw,
+        }
+    }
+
+    pub(crate) fn typed<T: DeserializeOwned>(self) -> EventStream<T> {
+        self.decoding(json::<T>)
+    }
+}
+
+impl<T> EventStream<T> {
+    fn decoding<U>(self, decode: Decode<U>) -> EventStream<U> {
+        EventStream {
+            body: self.body,
+            pending: self.pending,
+            parser: self.parser,
+            last: self.last,
+            decode,
         }
     }
 
     /// Maximum buffered event/line size in bytes (default 1 MiB).
+    #[must_use]
     pub fn with_max_event_bytes(mut self, limit: usize) -> Self {
         self.parser.limit = limit;
         self
     }
 
+    /// The id of the last event, the `Last-Event-ID` to resume from.
+    #[must_use]
     pub fn last_event_id(&self) -> Option<&str> {
         self.parser.id.as_deref()
     }
+
+    /// The reconnection delay the server last asked for.
+    #[must_use]
     pub fn retry_delay(&self) -> Option<Duration> {
         self.parser.retry
     }
 
-    pub async fn next(&mut self) -> Option<Result<SseEvent, Error>> {
+    /// The raw event the last item was read from.
+    #[must_use]
+    pub fn last_event(&self) -> Option<&SseEvent> {
+        self.last.as_ref()
+    }
+
+    /// The rest of the stream as raw events, without decoding their data.
+    #[must_use]
+    pub fn into_raw(self) -> EventStream<SseEvent> {
+        self.decoding(raw)
+    }
+
+    /// The next item, `None` once the stream ended.
+    pub async fn next(&mut self) -> Option<Result<T, Error>> {
+        std::future::poll_fn(|cx| self.poll_item(cx)).await
+    }
+
+    fn poll_item(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<T, Error>>> {
+        let event = match std::task::ready!(self.poll_event(cx)) {
+            Some(Ok(event)) => event,
+            Some(Err(error)) => return Poll::Ready(Some(Err(error))),
+            None => return Poll::Ready(None),
+        };
+        let step = (self.decode)(&event);
+        self.last = Some(event);
+        Poll::Ready(match step {
+            Ok(Step::Item(item)) => Some(Ok(item)),
+            Ok(Step::Done) => {
+                self.close();
+                None
+            }
+            Err(error) => {
+                self.close();
+                Some(Err(error))
+            }
+        })
+    }
+
+    fn close(&mut self) {
+        self.body = None;
+        self.pending = Bytes::new();
+    }
+
+    fn poll_event(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<SseEvent, Error>>> {
         loop {
             while !self.pending.is_empty() {
                 let byte = self.pending[0];
                 self.pending.advance(1);
                 match self.parser.push(byte) {
-                    Ok(Some(event)) => return Some(Ok(event)),
+                    Ok(Some(event)) => return Poll::Ready(Some(Ok(event))),
                     Ok(None) => {}
                     Err(error) => {
-                        self.body = None;
-                        self.pending = Bytes::new();
-                        return Some(Err(decode_error(error)));
+                        self.close();
+                        return Poll::Ready(Some(Err(decode_error(error))));
                     }
                 }
             }
-            let body = self.body.as_mut()?;
-            match body.frame().await {
+            let Some(body) = self.body.as_mut() else {
+                return Poll::Ready(None);
+            };
+            match std::task::ready!(Pin::new(body).poll_frame(cx)) {
                 Some(Ok(frame)) => {
                     if let Ok(bytes) = frame.into_data() {
                         self.pending = bytes;
                     }
                 }
                 Some(Err(error)) => {
-                    self.body = None;
-                    return Some(Err(transport_error(error)));
+                    self.close();
+                    return Poll::Ready(Some(Err(transport_error(error))));
                 }
                 None => {
-                    self.body = None;
-                    return None;
+                    self.close();
+                    return Poll::Ready(None);
                 }
             }
         }
+    }
+}
+
+impl<T> futures_core::Stream for EventStream<T> {
+    type Item = Result<T, Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.get_mut().poll_item(cx)
+    }
+}
+
+impl<T> fmt::Debug for EventStream<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EventStream")
+            .field("last_event_id", &self.last_event_id())
+            .finish_non_exhaustive()
     }
 }
 

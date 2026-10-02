@@ -1,4 +1,4 @@
-{% from "types/macros.rs.jinja" import default_trait, struct_fields, struct_new, union_enums, union_imports -%}
+{% from "types/macros.rs.jinja" import default_trait, extra_field, extra_name, struct_fields, struct_new, union_enums, union_imports -%}
 use serde::{Deserialize, Serialize};
 
 {% if referenced_components -%}
@@ -16,12 +16,14 @@ use super::{
 {% set defaulted = type.fields | selectattr("required") | rejectattr("nullable") | rejectattr("flatten") | selectattr("name", "in", defaults) | map(attribute="name") | list -%}
 {{ doc_comment }}
 #[derive(Clone, Debug, {% if not defaulted %}Default, {% endif %}PartialEq, Deserialize, Serialize)]
+{% set extra = extra_name(type.fields) -%}
 pub struct {{ type_name }} {
     {{ struct_fields(type.fields, recursive, patch_body, owner=type_name) }}
+    {{- extra_field(extra) }}
 }
 
 impl {{ type_name }} {
-    {{ struct_new(type.fields, recursive, owner=type_name, defaults=defaults) }}
+    {{ struct_new(type.fields, recursive, owner=type_name, defaults=defaults, extra=extra) }}
 }
 {% if defaulted %}
 
@@ -39,6 +41,7 @@ impl {{ default_trait() }} for {{ type_name }} {
             {{ field.name | to_rust_ident }}: {{ default_trait() }}::default(),
             {% endif -%}
             {% endfor -%}
+            {% if extra %}{{ extra }}: serde_json::Map::new(),{% endif %}
         }
     }
 }

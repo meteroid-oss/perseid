@@ -6,12 +6,15 @@ use http_body_util::BodyExt as _;
 use hyper::body::Incoming;
 use std::{fmt, future::Future, pin::Pin, sync::Arc};
 
+/// Any error, as middleware and HTTP clients return them.
 pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+/// A boxed future, as middleware and HTTP clients return them.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + Sync + 'a>>;
 
 /// Wraps each HTTP attempt, inside the retry loop. The first middleware registered is the
 /// outermost. Call `next.run(request)` to continue, or return a response of your own.
 pub trait Middleware: Send + Sync {
+    /// Handles one attempt: `next.run(request)` sends it on.
     fn handle<'a>(
         &'a self,
         request: Request,
@@ -21,10 +24,10 @@ pub trait Middleware: Send + Sync {
 
 /// The middleware registered on a client, in order.
 #[derive(Clone, Default)]
-pub struct Middlewares(pub(crate) Vec<Arc<dyn Middleware>>);
+pub(crate) struct Middlewares(pub(crate) Vec<Arc<dyn Middleware>>);
 
 impl Middlewares {
-    pub fn push(&mut self, middleware: impl Middleware + 'static) {
+    pub(crate) fn push(&mut self, middleware: impl Middleware + 'static) {
         self.0.push(Arc::new(middleware));
     }
 }
@@ -36,19 +39,27 @@ impl fmt::Debug for Middlewares {
 }
 
 /// An outgoing request. The body is not exposed.
-pub struct Request(pub(crate) http1::Request<crate::api::upload::RequestBody>);
+pub struct Request(pub(crate) http::Request<crate::api::upload::RequestBody>);
 
 impl Request {
-    pub fn method(&self) -> &http1::Method {
+    /// The HTTP method.
+    #[must_use]
+    pub fn method(&self) -> &http::Method {
         self.0.method()
     }
-    pub fn uri(&self) -> &http1::Uri {
+    /// The full URL, query included.
+    #[must_use]
+    pub fn uri(&self) -> &http::Uri {
         self.0.uri()
     }
-    pub fn headers(&self) -> &http1::HeaderMap {
+    /// The headers, credentials included.
+    #[must_use]
+    pub fn headers(&self) -> &http::HeaderMap {
         self.0.headers()
     }
-    pub fn headers_mut(&mut self) -> &mut http1::HeaderMap {
+
+    /// The headers, to change before sending the request on.
+    pub fn headers_mut(&mut self) -> &mut http::HeaderMap {
         self.0.headers_mut()
     }
 }
@@ -60,15 +71,16 @@ enum Body {
 
 /// A response from the server, or a buffered one built by a middleware.
 pub struct Response {
-    status: http1::StatusCode,
-    headers: http1::HeaderMap,
+    status: http::StatusCode,
+    headers: http::HeaderMap,
     body: Body,
 }
 
 impl Response {
     /// A response served without contacting the server, e.g. from a cache. Only 2xx statuses
     /// keep their typed API error handling; pass other upstream responses through untouched.
-    pub fn buffered(status: http1::StatusCode, headers: http1::HeaderMap, body: Bytes) -> Self {
+    #[must_use]
+    pub fn buffered(status: http::StatusCode, headers: http::HeaderMap, body: Bytes) -> Self {
         Self {
             status,
             headers,
@@ -76,19 +88,27 @@ impl Response {
         }
     }
 
-    pub fn status(&self) -> http1::StatusCode {
+    /// The HTTP status.
+    #[must_use]
+    pub fn status(&self) -> http::StatusCode {
         self.status
     }
 
-    pub fn headers(&self) -> &http1::HeaderMap {
+    /// The response headers.
+    #[must_use]
+    pub fn headers(&self) -> &http::HeaderMap {
         &self.headers
     }
 
     /// Reads the whole body, e.g. to store it. Rebuild the response with [`Response::buffered`]
     /// to hand it back to the client.
+    ///
+    /// # Errors
+    ///
+    /// Fails when reading the body from the server does.
     pub async fn into_parts(
         self,
-    ) -> Result<(http1::StatusCode, http1::HeaderMap, Bytes), BoxError> {
+    ) -> Result<(http::StatusCode, http::HeaderMap, Bytes), BoxError> {
         let bytes = match self.body {
             Body::Buffered(bytes) => bytes,
             Body::Upstream(body) => body.collect().await?.to_bytes(),
@@ -119,6 +139,7 @@ impl<'a> Next<'a> {
         Self { middleware, client }
     }
 
+    /// Sends `request` to the next middleware, or to the server after the last one.
     pub fn run(self, request: Request) -> BoxFuture<'a, Result<Response, BoxError>> {
         match self.middleware.split_first() {
             Some((first, rest)) => first.handle(

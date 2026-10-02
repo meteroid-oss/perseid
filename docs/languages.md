@@ -18,17 +18,25 @@ received, and each SDK reads a value as another variant than the one picked.
 
 ## Rust
 
-Enums and unions are `#[non_exhaustive]` and decode values this version does not know into an
-`Unknown` variant that serializes back unchanged. Recursive fields are boxed. Dates are `chrono`
-types. In PATCH
-bodies, nullable optional fields are `Option<Option<T>>`: `Some(None)` sends `null`.
-
-`Options::with_connector` takes any hyper connector, for custom TLS roots, client certificates or
-a proxy, and `http_client` any `HttpClient` implementation. `with_options(RequestOptions)` on a
-resource sets headers, the timeout, retries or the idempotency key of its calls:
-`client.items().with_options(RequestOptions::new().max_retries(0)).list(None)`. Paginators are
-`futures_core::Stream`s. The `http`
+Clients come from `Acme::builder()` (token, base URL, timeout, `max_retries`, headers,
+middleware, `http_client`, or `connector` for any hyper connector: custom TLS roots, client
+certificates, a proxy), `Acme::new(token)` or `Acme::from_env()`. Methods return a `Call`, a
+future of the decoded body; `.with_response().await` also gives the status, headers and
+`request_id()`. `with_options(RequestOptions)` on a resource sets headers, the timeout, retries or
+the idempotency key of its calls:
+`client.items().with_options(RequestOptions::new().max_retries(0)).list(None)`. Query and header
+parameters are `#[non_exhaustive]` options structs, built with `new(required...)` then a setter per
+optional parameter. A query parameter that is a union of scalars or lists is an enum. Clients, resources, calls and paginators own what they need, so they move into
+`tokio::spawn`. `*_iter` methods return a `Paginator<Page, Item>`, a `futures_core::Stream` of
+items whose `pages()` and `first_page()` give `Page`s (`items()`, `has_next_page()`,
+`next_page()`, the response through `Deref`). Event streams are `Stream`s of `SseEvent`s, or of
+the model each event carries until `[DONE]`, with `last_event()` for the raw event. The `http`
 crate is re-exported as `api::http`.
+
+Structs keep the properties they do not declare in `extra` and send them back. Enums and unions
+are `#[non_exhaustive]` and decode values this version does not know into an `Unknown` variant
+that serializes back unchanged. Recursive fields are boxed. Dates are `chrono` types. In PATCH
+bodies, nullable optional fields are `Option<Option<T>>`: `Some(None)` sends `null`.
 
 Unions told apart by JSON type are enums (`ChargeCustomer::String(id)`,
 `ChargeCustomer::Customer(Box<Customer>)`, with `From` impls, `as_*` accessors and `id()` for
@@ -38,9 +46,10 @@ reads the value as another variant.
 
 `src/error.rs` is yours: the runtime builds errors with `Error::generic(Failure)` and
 `Error::from_response(status, headers, body)` only. The scaffolded one is an enum of `Api`,
-`Timeout`, `Transport`, `Decode` and `Request` errors with `source()`; `Error::api()` gives the
-response, with `payload()` decoding it as `api::ErrorBody` (the spec's common error schema) and
-`request_id()`. Methods list their documented error bodies under `# Errors`.
+`Timeout`, `Connection`, `Decode` and `Request` errors with `source()`; `Error::api()` gives the
+response, with `kind()` (`NotFound`, `RateLimited`, `InternalServer`...), `payload()` decoding it
+as `api::ErrorBody` (the spec's common error schema) and `request_id()`. Methods list their
+documented error bodies under `# Errors`.
 
 ## TypeScript
 

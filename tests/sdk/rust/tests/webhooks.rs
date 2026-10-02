@@ -1,4 +1,4 @@
-use http1::{HeaderMap, HeaderName, HeaderValue};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use petstore::webhooks::{Webhook, WebhookError};
 use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};

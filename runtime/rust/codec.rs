@@ -61,11 +61,20 @@ pub(crate) fn from_value<T: DeserializeOwned, E: serde::de::Error>(value: Value)
     serde_json::from_value(value).map_err(E::custom)
 }
 
+/// `value` without its `field`, such as the tag a variant struct does not declare.
+pub(crate) fn without(mut value: Value, field: &str) -> Value {
+    if let Value::Object(object) = &mut value {
+        object.remove(field);
+    }
+    value
+}
+
 pub(crate) fn take(value: &mut Value, field: &str) -> Value {
     value.get_mut(field).map(Value::take).unwrap_or_default()
 }
 
 /// Reads a field that may be absent (`None`), `null` (`Some(None)`) or set.
+#[allow(clippy::option_option)]
 pub(crate) fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,

@@ -2094,8 +2094,12 @@ fn rust_timeout_stream_and_error_docs_follow_the_config() {
         fs::read_to_string(dir.path().join("rust/src").join(path)).unwrap()
     };
     assert!(read("api/client.rs").contains("Some(Duration::from_secs(60))"));
+    let pagination = read("pagination.rs");
+    assert!(
+        pagination.contains("futures_core::Stream for Paginator"),
+        "{pagination}"
+    );
     let api = read("api/mod.rs");
-    assert!(api.contains("futures_core::Stream for Paginator"), "{api}");
     assert!(
         api.contains("pub type ErrorBody = serde_json::Value;"),
         "{api}"

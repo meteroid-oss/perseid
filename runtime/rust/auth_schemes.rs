@@ -14,11 +14,12 @@ use crate::error::Error;
 
 type TokenFuture = Pin<Box<dyn Future<Output = Result<String, Error>> + Send>>;
 
-/// Returns a fresh bearer token before each request, e.g. an OAuth2 access token.
+/// Returns a fresh bearer token before each request, e.g. a short-lived access token.
 #[derive(Clone)]
 pub struct TokenProvider(Arc<dyn Fn() -> TokenFuture + Send + Sync>);
 
 impl TokenProvider {
+    /// Calls `provider` for the token of each request.
     pub fn new<F, Fut>(provider: F) -> Self
     where
         F: Fn() -> Fut + Send + Sync + 'static,
@@ -49,7 +50,9 @@ impl fmt::Debug for TokenProvider {
 /// HTTP basic credentials.
 #[derive(Clone)]
 pub struct BasicAuth {
+    /// The user name.
     pub username: String,
+    /// The password.
     pub password: String,
 }
 

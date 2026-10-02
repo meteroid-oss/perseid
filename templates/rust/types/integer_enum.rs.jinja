@@ -22,6 +22,7 @@ pub enum {{ name }} {
 
 impl {{ name }} {
     /// The value as sent on the wire.
+    #[must_use]
     pub fn value(self) -> i64 {
         match self {
             {% for name, value in type.variants -%}
