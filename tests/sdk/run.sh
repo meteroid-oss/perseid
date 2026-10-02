@@ -92,6 +92,13 @@ case "$lang" in
       && perseid init --sdks go --spec "$here/../fixtures/oauth.yaml" > /dev/null \
       && perseid generate go > /dev/null \
       && cp "$here/go/_oauth/"*_test.go go/ \
+      && cd go && go vet ./... && go test ./...)
+    # The decoding of unions sharing a JSON type, best-match unions, union bodies, hoisted
+    # variants and open enums run on the SDK of tests/fixtures/edge-unions.yaml.
+    (mkdir "$work/unions" && cd "$work/unions" \
+      && perseid init --sdks go --spec "$here/../fixtures/edge-unions.yaml" > /dev/null \
+      && perseid generate go > /dev/null \
+      && cp "$here/go/_unions/"*_test.go go/ \
       && cd go && go vet ./... && go test ./...) ;;
   java)
     gradle_test() {

@@ -30,8 +30,8 @@ Generated names are valid in every language whatever the spec spells: keywords a
 schemas named like runtime types get a `Model` suffix, and clashing enum values or parameters get
 a suffix ([names](configuration.md#names)). Models keep what the spec leaves open
 (`additionalProperties`, unknown properties) and every nullable value, item and response body.
-Unions Go cannot express yet (adjacently tagged ones, inline object variants) are untyped JSON
-in Go and typed in the others.
+Go types adjacently tagged unions too, and declares the inline object variants of tagged unions
+as structs of their own (`ContentPartTextVariant`), as openai-go does.
 
 ## Rust
 
@@ -183,11 +183,15 @@ and their `ListAutoPaging` twin an `*AutoPager[Customer]` over every item
 Event streams with a schema are a `*Stream[T]` of decoded events ending at `[DONE]` (`Event()`
 gives the raw `SSEEvent`), others an `*EventStream`; lines are capped at 1 MiB.
 
-A primitive-or-object union is a struct with one field per variant (`String *string`,
-`Customer *Customer`, `Empty bool` for `""`) plus `New...From...` constructors, also for query
-parameters; values of another JSON type, or objects no variant matches, are kept in `Raw()`;
-`ID()` returns the id of an expandable field and `As(&target)` decodes a union of objects as
-another variant. A tagged union's discriminator has its own string type (`ShapeType`, with
+A union is a struct with one `Of...` field per variant (`OfString *string`,
+`OfArrayOfIntegers []int64`, `OfCustomer *Customer`, `OfEmpty bool` for `""`) plus `New...From...`
+constructors, also for query parameters and request and response bodies; at most one field is set.
+Variants sharing a JSON type are tried in turn (an array is told apart by its first item, a
+`date-time` falls back to a plain string), and objects no property tells apart go to their best
+match. Values of another JSON type, or objects no variant matches, are kept in `Raw()`; `Kind()`
+names the variant that is set, `As...()` returns a variant or decodes it from `Raw()`, `ID()`
+returns the id of an expandable field and `As(&target)` decodes a union of objects as another
+variant. A tagged union's discriminator has its own string type (`ShapeType`, with
 `ShapeCircle`... constants), and its variants fill in their discriminator when it is left empty.
 Generated files start with the `// Code generated ... DO NOT EDIT.` line linters and editors look
 for; `doc.go`, `errors.go` and `version.go` are yours.

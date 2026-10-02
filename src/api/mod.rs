@@ -168,9 +168,9 @@ impl Api {
         counts
     }
 
-    /// Types as untyped JSON the unions the Go templates cannot express yet.
-    pub(crate) fn untype_unions_go_lacks(&mut self) {
-        types::untype_unions_go_lacks(&mut self.types);
+    /// Declares the inline object variants of tagged unions as structs, for Go.
+    pub(crate) fn hoist_inline_variants(&mut self) {
+        types::hoist_inline_variants(&mut self.types);
     }
 
     pub(crate) fn inline_flattened_fields(&mut self) -> anyhow::Result<()> {

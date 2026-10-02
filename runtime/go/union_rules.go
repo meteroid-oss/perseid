@@ -3,7 +3,9 @@
 package @@PACKAGE_NAME@@
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
 )
 
@@ -33,15 +35,15 @@ func unionMatches(data []byte, conditions ...unionCondition) bool {
 	return true
 }
 
-// unionBestMatch returns the index of the candidate, given as its required and known
-// properties, whose required properties the JSON object data all has and which knows the most
-// of its properties, the first one on ties; -1 when none fits.
-func unionBestMatch(data []byte, candidates ...[2][]string) int {
+// unionBestOrder returns the indexes of the candidates, given as their required and known
+// properties, whose required properties the JSON object data all has, the one knowing the most of
+// its properties first and the earlier one first on ties.
+func unionBestOrder(data []byte, candidates ...[2][]string) []int {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(data, &fields) != nil {
-		return -1
+		return nil
 	}
-	best, top := -1, -1
+	var order, scores []int
 	for i, candidate := range candidates {
 		fits := true
 		for _, p := range candidate[0] {
@@ -59,9 +61,100 @@ func unionBestMatch(data []byte, candidates ...[2][]string) int {
 				score++
 			}
 		}
-		if score > top {
-			best, top = i, score
+		at := len(order)
+		for at > 0 && scores[at-1] < score {
+			at--
+		}
+		order = append(order[:at], append([]int{i}, order[at:]...)...)
+		scores = append(scores[:at], append([]int{score}, scores[at:]...)...)
+	}
+	return order
+}
+
+// unionShape is what the items of an array variant look like: their JSON type, and for arrays
+// the shape of their own items when it is known.
+type unionShape struct {
+	kind  string
+	items *unionShape
+}
+
+// unionIsInteger reports whether the JSON number data has no fraction or exponent.
+func unionIsInteger(data []byte) bool {
+	return jsonKind(data) == "number" && !bytes.ContainsAny(data, ".eE")
+}
+
+// unionIs reports whether the JSON value data has the shape.
+func unionIs(data []byte, shape *unionShape) bool {
+	switch shape.kind {
+	case "integer":
+		return unionIsInteger(data)
+	case "number":
+		return jsonKind(data) == "number"
+	case "array":
+		if shape.items == nil {
+			return jsonKind(data) == "array"
+		}
+		return unionArrayOf(data, shape.items)
+	}
+	return jsonKind(data) == shape.kind
+}
+
+// unionArrayOf reports whether the JSON value data is an array that is empty, or whose first
+// item has the shape.
+func unionArrayOf(data []byte, items *unionShape) bool {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if token, err := decoder.Token(); err != nil || token != json.Delim('[') {
+		return false
+	}
+	if !decoder.More() {
+		return true
+	}
+	var first json.RawMessage
+	if decoder.Decode(&first) != nil {
+		return false
+	}
+	return unionIs(first, items)
+}
+
+// marshalAdjacentVariant encodes an adjacently tagged union: the fields the variants share and
+// the discriminator, with the payload of the variant under contentField (nothing when payload
+// is nil).
+func marshalAdjacentVariant(tagField, tagValue, contentField string, payload any, shared ...any) ([]byte, error) {
+	fields := map[string]json.RawMessage{}
+	for _, part := range shared {
+		encoded, err := json.Marshal(part)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(encoded, &fields); err != nil {
+			return nil, fmt.Errorf("@@PACKAGE_NAME@@: union variant %q: the shared fields must encode to a JSON object: %w", tagValue, err)
 		}
 	}
-	return best
+	tag, err := json.Marshal(tagValue)
+	if err != nil {
+		return nil, err
+	}
+	fields[tagField] = tag
+	if payload != nil {
+		content, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
+		}
+		fields[contentField] = content
+	}
+	return json.Marshal(fields)
+}
+
+// unmarshalAdjacentContent decodes the payload of an adjacently tagged union, found under
+// contentField, into into. A payload that is missing or null leaves into as it is.
+func unmarshalAdjacentContent(data []byte, contentField string, into any) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	content, ok := fields[contentField]
+	if !ok || string(content) == "null" {
+		return nil
+	}
+	return json.Unmarshal(content, into)
 }

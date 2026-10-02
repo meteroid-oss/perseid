@@ -6,13 +6,16 @@
 {% set tag_type = (type_name ~ disc_field) | go_name -%}
 {% if tag_type in type_names or tag_type in ns_tag.consts %}{% set tag_type = (type_name ~ "Discriminator") | go_name %}{% endif -%}
 {#- Go has no sum types: a tagged union is a struct holding the discriminator,
-    the fields every variant shares and one pointer per variant. -#}
-{% if type.repr != "internally_tagged" -%}
+    the fields every variant shares and one pointer per variant. An adjacently tagged one
+    keeps the payload of a variant under its content field, and a variant may have none.
+    Inline object variants are declared as structs of their own beforehand. -#}
+{% if type.repr not in ["internally_tagged", "adjacently_tagged"] -%}
 {{ panic("go codegen: struct enum `" ~ type.name ~ "` uses the `" ~ type.repr ~ "` representation, which the Go templates do not implement yet") }}
 {%- endif -%}
+{% set adjacent = type.repr == "adjacently_tagged" -%}
 {% for variant in type.variants -%}
 {% if variant.type != "ref" -%}
-{{ panic("go codegen: struct enum `" ~ type.name ~ "` has an inline-struct variant `" ~ variant.name ~ "`, which the Go templates do not implement yet") }}
+{{ panic("go codegen: struct enum `" ~ type.name ~ "` has an inline-struct variant `" ~ variant.name ~ "`, which should have been declared as a struct of its own") }}
 {%- endif -%}
 {% endfor -%}
 {% set shared = type.fields | rejectattr("name", "equalto", type.discriminator_field) | list -%}
@@ -20,6 +23,7 @@
 {{ panic("go codegen: struct enum `" ~ type.name ~ "` flattens `" ~ field.name ~ "` into its shared fields, which the Go templates do not implement yet") }}
 {%- endfor -%}
 {% set known = type.variants | selectattr("schema_ref", "defined") | list -%}
+{% set bare = (type.variants | rejectattr("schema_ref", "defined") | list) if adjacent else [] -%}
 {#- A variant field must not clash with the discriminator, a shared field or a method. -#}
 {% set ns = namespace(reserved=[disc_field, "Raw", "IsKnown", "MarshalJSON", "UnmarshalJSON"]) -%}
 {% for field in shared %}{% set ns.reserved = ns.reserved + [go_export(field.name)] %}{% endfor -%}
@@ -40,8 +44,8 @@ package {{ sdk.package_name }}
 
 {% if named %}{{ doc_comment }}
 //
-// It is a tagged union discriminated by the {{ type.discriminator_field }} field.
-{% else %}// {{ type_name }} is a tagged union discriminated by the {{ type.discriminator_field }} field.
+// It is a tagged union discriminated by the {{ type.discriminator_field }} field{% if adjacent %}, whose variant is the {{ type.content_field }} field{% endif %}.
+{% else %}// {{ type_name }} is a tagged union discriminated by the {{ type.discriminator_field }} field{% if adjacent %}, whose variant is the {{ type.content_field }} field{% endif %}.
 {% if doc_comment %}//
 {{ doc_comment }}
 {% endif %}{% endif %}//
@@ -85,14 +89,19 @@ func New{{ type_name }}{{ go_export(variant.name) }}(value {{ go_ident(variant.s
 	return {{ type_name }}{ {{ disc_field }}: {{ go_const(type.name, variant.name, type_names) }}, {{ variant_field(variant) }}: &value}
 }
 
+{% endfor %}{% for variant in bare %}// New{{ type_name }}{{ go_export(variant.name) }} builds a {{ type_name }} of the {{ variant.name }} variant, which has no payload.
+func New{{ type_name }}{{ go_export(variant.name) }}() {{ type_name }} {
+	return {{ type_name }}{ {{ disc_field }}: {{ go_const(type.name, variant.name, type_names) }}}
+}
+
 {% endfor %}
 // IsKnown reports whether {{ disc_field }} is one of the variants this SDK version
 // knows about, i.e. one of the {{ type_name }}* constants. It is false for a
 // variant added to the API later, whose payload is then only available from
 // [{{ type_name }}.Raw].
 func (u {{ type_name }}) IsKnown() bool {
-{% if known %}	switch u.{{ disc_field }} {
-	case {% for variant in known %}{% if not loop.first %}, {% endif %}{{ go_const(type.name, variant.name, type_names) }}{% endfor %}:
+{% if type.variants %}	switch u.{{ disc_field }} {
+	case {% for variant in type.variants %}{% if not loop.first %}, {% endif %}{{ go_const(type.name, variant.name, type_names) }}{% endfor %}:
 		return true
 	}
 {% endif %}	return false
@@ -118,7 +127,9 @@ func (u {{ type_name }}) MarshalJSON() ([]byte, error) {
 		if u.{{ variant_field(variant) }} == nil {
 			return nil, &UnionError{Union: "{{ type_name }}", Discriminator: string(u.{{ disc_field }}), Reason: "variant payload is nil"}
 		}
-		return marshalUnionVariant({{ type.discriminator_field | tojson }}, string(u.{{ disc_field }}), u.{{ variant_field(variant) }}{% if shared %}, shared{% endif %})
+		return {% if adjacent %}marshalAdjacentVariant({{ type.discriminator_field | tojson }}, string(u.{{ disc_field }}), {{ type.content_field | tojson }}, u.{{ variant_field(variant) }}{% else %}marshalUnionVariant({{ type.discriminator_field | tojson }}, string(u.{{ disc_field }}), u.{{ variant_field(variant) }}{% endif %}{% if shared %}, shared{% endif %})
+{% endfor %}{% for variant in bare %}	case {{ go_const(type.name, variant.name, type_names) }}:
+		return marshalAdjacentVariant({{ type.discriminator_field | tojson }}, string(u.{{ disc_field }}), {{ type.content_field | tojson }}, nil{% if shared %}, shared{% endif %})
 {% endfor %}	}
 
 	if len(u.raw) > 0 {
@@ -149,7 +160,9 @@ func (u *{{ type_name }}) UnmarshalJSON(data []byte) error {
 	switch tag.{{ disc_field }} {
 {% for variant in known %}	case {{ go_const(type.name, variant.name, type_names) }}:
 		u.{{ variant_field(variant) }} = new({{ go_ident(variant.schema_ref) }})
-		return json.Unmarshal(data, u.{{ variant_field(variant) }})
+		return {% if adjacent %}unmarshalAdjacentContent(data, {{ type.content_field | tojson }}, u.{{ variant_field(variant) }}){% else %}json.Unmarshal(data, u.{{ variant_field(variant) }}){% endif %}
+{% endfor %}{% for variant in bare %}	case {{ go_const(type.name, variant.name, type_names) }}:
+		return nil
 {% endfor %}	default:
 		u.raw = append(json.RawMessage(nil), data...)
 		return nil

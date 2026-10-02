@@ -166,39 +166,79 @@ pub(crate) fn untag_unions_with_non_object_variants(types: &mut Types) {
     }
 }
 
-/// Types as untyped JSON the tagged unions the Go templates cannot express yet: adjacently
-/// tagged ones, and those with an inline object variant.
-pub(crate) fn untype_unions_go_lacks(types: &mut Types) {
+/// Declares the inline object variants of the tagged unions as structs of their own, named
+/// `{Union}{Variant}Variant`, which the variants then reference like any other schema. Go has no
+/// anonymous variant types, and hoists them as openai-go does. The struct of an internally
+/// tagged variant carries the discriminator, which it fills in when left empty.
+pub(crate) fn hoist_inline_variants(types: &mut Types) {
+    let mut taken: BTreeSet<String> = types.keys().map(|n| n.to_upper_camel_case()).collect();
+    let mut hoisted = Vec::new();
     for (name, ty) in types.iter_mut() {
-        let TypeData::StructEnum { repr, .. } = &ty.data else {
+        let TypeData::StructEnum {
+            discriminator_field,
+            repr,
+            ..
+        } = &mut ty.data
+        else {
             continue;
         };
-        let reason = match repr {
-            StructEnumRepr::AdjacentlyTagged { .. } => {
-                "is adjacently tagged (`oneOf` next to properties)"
-            }
-            StructEnumRepr::InternallyTagged { variants } => {
-                if variants
-                    .iter()
-                    .all(|v| matches!(v.content, EnumVariantType::Ref { .. }))
-                {
-                    continue;
-                }
-                "has an inline object variant"
-            }
+        let (variants, tagged) = match repr {
+            StructEnumRepr::AdjacentlyTagged { variants, .. } => (variants, false),
+            StructEnumRepr::InternallyTagged { variants } => (variants, true),
         };
-        tracing::warn!(
-            "schema `{name}`: the union {reason}, which the Go SDK does not support yet, so Go \
-             types it as an untyped JSON value"
-        );
-        ty.data = TypeData::Alias {
-            target: Box::new(FieldType::JsonObject),
-        };
+        for variant in variants.iter_mut() {
+            let EnumVariantType::Struct { fields } = &mut variant.content else {
+                continue;
+            };
+            let mut hoisted_name = format!("{name}{}Variant", variant.name.to_upper_camel_case());
+            while taken.contains(&hoisted_name.to_upper_camel_case()) {
+                hoisted_name.push_str("Content");
+            }
+            taken.insert(hoisted_name.to_upper_camel_case());
+            let mut own = Vec::new();
+            let mut discriminator_defaults = BTreeMap::new();
+            if tagged {
+                own.push(Field {
+                    name: discriminator_field.clone(),
+                    r#type: FieldType::String,
+                    default: None,
+                    description: None,
+                    required: true,
+                    nullable: false,
+                    deprecated: false,
+                    example: None,
+                    read_only: false,
+                    write_only: false,
+                    flatten: false,
+                    constant: Some(serde_json::Value::String(variant.name.clone())),
+                });
+                discriminator_defaults.insert(discriminator_field.clone(), variant.name.clone());
+            }
+            own.append(fields);
+            hoisted.push(Type {
+                name: hoisted_name.clone(),
+                description: None,
+                deprecated: false,
+                discriminator_defaults,
+                data: TypeData::Struct {
+                    fields: own,
+                    additional_properties: None,
+                },
+            });
+            variant.content = EnumVariantType::Ref {
+                schema_ref: Some(hoisted_name),
+                inner: None,
+            };
+        }
+    }
+    for ty in hoisted {
+        types.insert(ty.name.clone(), ty);
     }
 }
 
-/// Settles the JSON type of the variants of every union referencing a schema, typing the unions
-/// whose variants cannot be told apart as untyped JSON. Operations only take untyped JSON.
+/// Settles the JSON type of the variants of every union referencing a schema, and how they are
+/// told apart, typing as untyped JSON the unions with a variant of unknown type. Operations
+/// keep the unions of their query parameters (in `typed_union`) and bodies.
 pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
     fn json_type(types: &Types, name: &str, depth: usize) -> Option<&'static str> {
         match &types.get(name)?.data {
@@ -3280,6 +3320,46 @@ mod tests {
         }));
         assert_eq!(field_type(&types, "Holder", "ok"), &FieldType::String);
         assert_eq!(field_type(&types, "Holder", "bad"), &FieldType::JsonObject);
+    }
+
+    #[test]
+    fn inline_variants_are_hoisted_into_structs() {
+        let mut types = types_from(json!({
+            "Part": {
+                "oneOf": [
+                    {"type": "object", "required": ["type", "text"], "properties": {
+                        "type": {"type": "string", "enum": ["text"]},
+                        "text": {"type": "string"}}},
+                    {"$ref": "#/components/schemas/Image"},
+                ],
+                "discriminator": {"propertyName": "type"},
+            },
+            "Image": {"type": "object", "properties": {"type": {"type": "string"}}},
+        }));
+        super::hoist_inline_variants(&mut types);
+        let TypeData::StructEnum {
+            repr: StructEnumRepr::InternallyTagged { variants },
+            ..
+        } = &types["Part"].data
+        else {
+            panic!("Part is not a tagged union");
+        };
+        assert!(variants.iter().all(|v| matches!(
+            &v.content,
+            EnumVariantType::Ref {
+                schema_ref: Some(_),
+                ..
+            }
+        )));
+        let hoisted = &types["PartTextVariant"];
+        assert_eq!(hoisted.discriminator_defaults["type"], "text");
+        let TypeData::Struct { fields, .. } = &hoisted.data else {
+            panic!("the variant is not a struct");
+        };
+        assert_eq!(
+            fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(),
+            ["type", "text"]
+        );
     }
 
     #[test]

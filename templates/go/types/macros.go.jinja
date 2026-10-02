@@ -91,13 +91,60 @@
     {%- endif -%}
 {%- endmacro %}
 
+{#- The Go field of a union variant, `Of{Variant}` as in openai-go. -#}
 {% macro go_union_field(variant) -%}
-    {%- set field = variant.name | ident("pascal", "go") | go_name -%}
-    {{ field ~ ("Variant" if field in ["Raw", "MarshalJSON", "UnmarshalJSON", "As", "ID", "Id"] else "") }}
+    {{ "Of" ~ (variant.name | ident("pascal", "go") | go_name) }}
 {%- endmacro %}
 
-{#- The declaration of the union `name` found in `ty`: one pointer per variant,
-    decoded by the JSON type of the value. -#}
+{#- The `{Variant}` of the `New...From{Variant}` constructors and `As{Variant}` accessors. -#}
+{% macro go_union_variant(variant) -%}
+    {{ variant.name | ident("pascal", "go") | go_name }}
+{%- endmacro %}
+
+{#- `*` when the field of a union variant is a pointer, nothing for slices, maps and raw JSON,
+    which are nil when unset. -#}
+{% macro go_union_pointer(v) -%}
+    {%- if not (v.type.is_list() or v.type.is_set() or v.type.is_map() or v.type.is_json_object()) -%}*{%- endif -%}
+{%- endmacro %}
+
+{#- The shape of the items of an array variant, as the runtime checks the first one. -#}
+{% macro go_shape(shape) -%}
+    {%- if shape.items is defined and shape.items -%}
+        &unionShape{ {{ shape.json_type | tojson }}, {{ go_shape(shape.items) }} }
+    {%- else -%}
+        &unionShape{ {{ shape.json_type | tojson }}, nil }
+    {%- endif -%}
+{%- endmacro %}
+
+{#- The Go condition a JSON value of the variant's JSON type must also meet, `true` when its JSON
+    type is enough. -#}
+{% macro go_predicate(v) -%}
+    {%- if v.empty -%}
+        string(data) == `""`
+    {%- elif v.json_type == "integer" -%}
+        unionIsInteger(data)
+    {%- elif v.json_type == "array" and v.items is defined and v.items -%}
+        unionArrayOf(data, {{ go_shape(v.items) }})
+    {%- else -%}
+        true
+    {%- endif -%}
+{%- endmacro %}
+
+{#- Tries to decode `data` as the variant, moving on to the next one when it does not fit. -#}
+{% macro go_attempt(v) -%}
+    {%- if v.empty -%}
+        u.{{ go_union_field(v) }} = true
+        return nil
+    {%- else -%}
+        if json.Unmarshal(data, &u.{{ go_union_field(v) }}) == nil {
+            return nil
+        }
+        u.{{ go_union_field(v) }} = nil
+    {%- endif -%}
+{%- endmacro %}
+
+{#- The declaration of the union `name` found in `ty`: one field per variant, of which at
+    most one is set. -#}
 {% macro go_union(name, ty) -%}
 {%- if ty.is_list() or ty.is_set() or ty.is_nullable() -%}
 {{ go_union(name, ty.inner_type()) }}
@@ -105,11 +152,18 @@
 {{ go_union(name, ty.value_type()) }}
 {%- else -%}
 {%- set variants = ty.union_variants() %}
+{%- set tried = ty.try_variants() %}
 {%- set objects = ty.union_mode() != "json" %}
+{%- set ns = namespace(kinds=[]) %}
+{%- for v in tried %}{% set kind = "number" if v.json_type == "integer" else v.json_type %}{% if kind not in ns.kinds %}{% set ns.kinds = ns.kinds + [kind] %}{% endif %}{% endfor %}
 // {{ name }} is one of {% for v in variants %}{% if not loop.first %}{{ " or " if loop.last else ", " }}{% endif %}{% if v.empty %}the empty string{% elif v.type.is_schema_ref() %}{{ go_article(go_type(v.type)) }} [{{ go_type(v.type) }}]{% else %}{{ "an" if v.name[0] in "aeiou" else "a" }} {{ v.name | replace("_", " ") }}{% endif %}{% endfor %}.
 //
 // At most one field is set, and the zero value encodes as null. A value of
 // another JSON type, from a newer API version, is kept as [{{ name }}.Raw].
+{%- if ty.union_decode() == "try" %}
+// Variants sharing a JSON type are tried in turn: the first one the value fits
+// and decodes into is set.
+{%- endif %}
 {%- if objects %}
 {%- if ty.union_mode() == "rules" %}
 // An object is the first variant whose conditions it meets:
@@ -125,20 +179,43 @@
 type {{ name }} struct {
 {% for v in variants %}{% if v.empty %}	// {{ go_union_field(v) }} reports the empty string.
 	{{ go_union_field(v) }} bool
-{% else %}	{{ go_union_field(v) }} {% if not (v.type.is_list() or v.type.is_set() or v.type.is_map() or v.type.is_json_object()) %}*{% endif %}{{ go_type(v.type) }}
+{% else %}	{{ go_union_field(v) }} {{ go_union_pointer(v) }}{{ go_type(v.type) }}
 {% endif %}{% endfor %}
 	raw json.RawMessage
 }
 {% for v in variants %}
-// New{{ name }}{% if v.empty %}Empty returns the empty string {{ name }}.
+{% if v.empty %}// New{{ name }}Empty returns the empty string {{ name }}.
 func New{{ name }}Empty() {{ name }} {
 	return {{ name }}{ {{ go_union_field(v) }}: true}
 }
-{% else %}From{{ go_union_field(v) }} returns a {{ name }} holding value.
-func New{{ name }}From{{ go_union_field(v) }}(value {{ go_type(v.type) }}) {{ name }} {
-	return {{ name }}{ {{ go_union_field(v) }}: {% if not (v.type.is_list() or v.type.is_set() or v.type.is_map() or v.type.is_json_object()) %}&{% endif %}value}
+{% else %}// New{{ name }}From{{ go_union_variant(v) }} returns a {{ name }} holding value.
+func New{{ name }}From{{ go_union_variant(v) }}(value {{ go_type(v.type) }}) {{ name }} {
+	return {{ name }}{ {{ go_union_field(v) }}: {{ "&" if go_union_pointer(v) == "*" else "" }}value}
+}
+
+// As{{ go_union_variant(v) }} returns the value when it is {{ go_article(go_union_variant(v)) }} {{ go_union_variant(v) }}, as set or as
+// decoded from the JSON of a value kept in [{{ name }}.Raw].
+func (u {{ name }}) As{{ go_union_variant(v) }}() ({{ go_type(v.type) }}, bool) {
+	if u.{{ go_union_field(v) }} != nil {
+		return {{ "*" if go_union_pointer(v) == "*" else "" }}u.{{ go_union_field(v) }}, true
+	}
+	var value {{ go_type(v.type) }}
+	if len(u.raw) > 0 && json.Unmarshal(u.raw, &value) == nil {
+		return value, true
+	}
+	return value, false
 }
 {% endif %}{% endfor %}
+// Kind names the variant that is set, as the spec's schema would ("string",
+// "array_of_strings"...), or is empty when none is.
+func (u {{ name }}) Kind() string {
+	switch {
+{% for v in variants %}	case u.{{ go_union_field(v) }}{% if not v.empty %} != nil{% endif %}:
+		return {{ v.name | tojson }}
+{% endfor %}	}
+	return ""
+}
+
 // Raw returns the JSON of a value of a type this SDK version does not expect,
 // as decoded, or nil.
 func (u {{ name }}) Raw() json.RawMessage {
@@ -187,30 +264,24 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
 	switch jsonKind(data) {
 	case "null":
 		return nil
-{% if objects %}	case "object":
-{% set candidates = ty.object_variants() %}{% if ty.union_mode() == "rules" %}		switch {
-{% for v in candidates %}		case {% if v.when %}unionMatches(data{% for c in v.when %}, unionCondition{ {{ c.property | tojson }}, {{ (c.value | tojson | tojson) if c.value is defined else '""' }} }{% endfor %}){% else %}true{% endif %}:
-			if json.Unmarshal(data, &u.{{ go_union_field(v) }}) == nil {
-				return nil
-			}
-			u.{{ go_union_field(v) }} = nil
-{% endfor %}		}
-{% else %}		switch unionBestMatch(data{% for v in candidates %},
+{% for kind in ns.kinds %}	case "{{ kind }}":
+{% if kind == "object" and objects %}{% set candidates = ty.object_variants() %}{% if ty.union_mode() == "rules" %}{% for v in candidates %}{% if v.when %}		if unionMatches(data{% for c in v.when %}, unionCondition{ {{ c.property | tojson }}, {{ (c.value | tojson | tojson) if c.value is defined else '""' }} }{% endfor %}) {
+			{{ go_attempt(v) }}
+		}
+{% else %}		{{ go_attempt(v) }}
+{% endif %}{% endfor %}{% else %}		for _, i := range unionBestOrder(data{% for v in candidates %},
 			[2][]string{ { {% for p in v.required %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %} }, { {% for p in v.properties %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %} } }{% endfor %},
 		) {
-{% for v in candidates %}		case {{ loop.index0 }}:
-			if json.Unmarshal(data, &u.{{ go_union_field(v) }}) == nil {
-				return nil
-			}
-			u.{{ go_union_field(v) }} = nil
-{% endfor %}		}
-{% endif %}{% endif %}{% for v in variants if not (objects and v.json_type == "object") %}	case "{{ "number" if v.json_type == "integer" else v.json_type }}":
-{% if v.empty %}		if string(data) == `""` {
-			u.{{ go_union_field(v) }} = true
-			return nil
+			switch i {
+{% for v in candidates %}			case {{ loop.index0 }}:
+				{{ go_attempt(v) }}
+{% endfor %}			}
 		}
-{% else %}		return json.Unmarshal(data, &u.{{ go_union_field(v) }})
-{% endif %}{% endfor %}	}
+{% endif %}{% else %}{% for v in tried if ("number" if v.json_type == "integer" else v.json_type) == kind %}{% set predicate = go_predicate(v) | trim %}{% if predicate == "true" %}		{{ go_attempt(v) }}
+{% else %}		if {{ predicate }} {
+			{{ go_attempt(v) }}
+		}
+{% endif %}{% endfor %}{% endif %}{% endfor %}	}
 	u.raw = append(json.RawMessage(nil), data...)
 	return nil
 }

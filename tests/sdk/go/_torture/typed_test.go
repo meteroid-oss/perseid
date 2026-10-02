@@ -15,10 +15,10 @@ func TestPrimitiveOrObjectUnions(t *testing.T) {
 		in    string
 		check func(StringOrInt) bool
 	}{
-		{`"a"`, func(u StringOrInt) bool { return u.String != nil && *u.String == "a" && u.Integer == nil }},
-		{`7`, func(u StringOrInt) bool { return u.Integer != nil && *u.Integer == 7 && u.String == nil }},
+		{`"a"`, func(u StringOrInt) bool { return u.OfString != nil && *u.OfString == "a" && u.OfInteger == nil }},
+		{`7`, func(u StringOrInt) bool { return u.OfInteger != nil && *u.OfInteger == 7 && u.OfString == nil }},
 		{`true`, func(u StringOrInt) bool { return string(u.Raw()) == "true" }},
-		{`null`, func(u StringOrInt) bool { return u.String == nil && u.Integer == nil && u.Raw() == nil }},
+		{`null`, func(u StringOrInt) bool { return u.OfString == nil && u.OfInteger == nil && u.Raw() == nil }},
 	} {
 		var u StringOrInt
 		if err := json.Unmarshal([]byte(tc.in), &u); err != nil || !tc.check(u) {
@@ -29,7 +29,7 @@ func TestPrimitiveOrObjectUnions(t *testing.T) {
 		}
 	}
 
-	holder := UnionHolder{Shape: NewShapeCircle(Circle{Radius: 1}), StrOrInt: Ptr(NewUnionHolderStrOrIntFromInteger(3)), InlineUnion: Ptr(NewUnionHolderInlineUnionFromList([]string{"x"}))}
+	holder := UnionHolder{Shape: NewShapeCircle(Circle{Radius: 1}), StrOrInt: Ptr(NewUnionHolderStrOrIntFromInteger(3)), InlineUnion: Ptr(NewUnionHolderInlineUnionFromArrayOfStrings([]string{"x"}))}
 	out, err := json.Marshal(holder)
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +39,7 @@ func TestPrimitiveOrObjectUnions(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"str_or_int":"s","inline_union":"one"}`), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if *decoded.StrOrInt.String != "s" || *decoded.InlineUnion.String != "one" {
+	if *decoded.StrOrInt.OfString != "s" || *decoded.InlineUnion.OfString != "one" {
 		t.Fatalf("%+v", decoded)
 	}
 }
@@ -107,13 +107,13 @@ func TestUnionsOfObjects(t *testing.T) {
 	}{
 		{`"a0"`, func(u ObjectUnionsAccount) bool { return u.ID() == "a0" }},
 		{`{"id":"a1","object":"account","email":"e"}`, func(u ObjectUnionsAccount) bool {
-			return u.Account != nil && u.DeletedAccount == nil && u.ID() == "a1"
+			return u.OfAccount != nil && u.OfDeletedAccount == nil && u.ID() == "a1"
 		}},
 		{`{"deleted":true,"id":"a2","object":"account"}`, func(u ObjectUnionsAccount) bool {
-			return u.DeletedAccount != nil && u.Account == nil && u.ID() == "a2"
+			return u.OfDeletedAccount != nil && u.OfAccount == nil && u.ID() == "a2"
 		}},
 		{`{"object":"account_v2","id":"a3"}`, func(u ObjectUnionsAccount) bool {
-			return u.Account == nil && u.DeletedAccount == nil && string(u.Raw()) == `{"object":"account_v2","id":"a3"}`
+			return u.OfAccount == nil && u.OfDeletedAccount == nil && string(u.Raw()) == `{"object":"account_v2","id":"a3"}`
 		}},
 	} {
 		var u ObjectUnionsAccount
@@ -141,10 +141,10 @@ func TestUnionsOfObjects(t *testing.T) {
 	if err := json.Unmarshal([]byte(in), &unions); err != nil {
 		t.Fatal(err)
 	}
-	if unions.Source.FileSource == nil || unions.Sources[0].URLSource == nil || string(unions.Sources[1].Raw()) != `{"path":"p"}` {
+	if unions.Source.OfFileSource == nil || unions.Sources[0].OfURLSource == nil || string(unions.Sources[1].Raw()) != `{"path":"p"}` {
 		t.Fatalf("%+v", unions)
 	}
-	if unions.Document.Article == nil || string(unions.Loose) != `{"title":"t"}` {
+	if unions.Document.OfArticle == nil || unions.Loose.OfDraft == nil {
 		t.Fatalf("%+v", unions)
 	}
 	out, err := json.Marshal(unions)
@@ -154,10 +154,10 @@ func TestUnionsOfObjects(t *testing.T) {
 	sameJSON(t, string(out), in)
 
 	var draft, untitled ObjectUnionsDocument
-	if json.Unmarshal([]byte(`{"title":"t"}`), &draft) != nil || draft.Draft == nil {
+	if json.Unmarshal([]byte(`{"title":"t"}`), &draft) != nil || draft.OfDraft == nil {
 		t.Fatalf("ties go to the first variant: %+v", draft)
 	}
-	if json.Unmarshal([]byte(`{"body":"b"}`), &untitled) != nil || untitled.Draft != nil || untitled.Article != nil {
+	if json.Unmarshal([]byte(`{"body":"b"}`), &untitled) != nil || untitled.OfDraft != nil || untitled.OfArticle != nil {
 		t.Fatalf("%+v", untitled)
 	}
 }

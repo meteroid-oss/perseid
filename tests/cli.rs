@@ -1477,7 +1477,7 @@ fn real_world_constructs_generate_every_language() {
     assert!(out.contains(warning), "missing `{warning}` in:\n{out}");
     let charge = fs::read_to_string(dir.path().join("go/charge.go")).unwrap();
     assert!(
-        charge.contains("u.Customer != nil && u.Customer.ID != nil"),
+        charge.contains("u.OfCustomer != nil && u.OfCustomer.ID != nil"),
         "a read-only id is optional in requests, so a pointer: {charge}"
     );
 
@@ -3188,7 +3188,7 @@ fn samples_command_is_hidden_from_help() {
 }
 
 #[test]
-fn adjacent_unions_repeating_the_discriminator_generate_and_go_types_them_as_json() {
+fn adjacent_unions_repeating_the_discriminator_generate_and_stay_typed_in_go() {
     let dir = project_from("petstore.yaml", &["python", "go"]);
     let spec = r##"
 openapi: 3.1.0
@@ -3227,11 +3227,9 @@ components:
     fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
-    assert!(
-        out.contains("schema `Event`: the union is adjacently tagged"),
-        "{out}"
-    );
+    assert!(!out.contains("untyped JSON"), "{out}");
     assert!(generated_text(dir.path(), "python").contains("class Event"));
+    assert!(generated_text(dir.path(), "go").contains("func NewEventPing() Event"));
 }
 
 #[test]
@@ -3418,4 +3416,107 @@ fn specs_without_a_client_credentials_flow_get_no_credentials_options() {
             );
         }
     }
+}
+
+#[test]
+fn go_types_adjacently_tagged_unions_and_hoists_inline_variants() {
+    let dir = project_from("petstore.yaml", &["go"]);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Tagged, version: "1.0.0" }
+servers: [{ url: "https://x.example.com" }]
+paths:
+  /events/{id}:
+    get:
+      operationId: getEvent
+      tags: [events]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+  /parts:
+    post:
+      operationId: createPart
+      tags: [events]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Part" }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Part" }
+components:
+  schemas:
+    Event:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string }
+        at: { type: string }
+      oneOf:
+        - type: object
+          required: [type, data]
+          properties:
+            type: { type: string, enum: [created] }
+            data: { $ref: "#/components/schemas/Thing" }
+        - type: object
+          required: [type, data]
+          properties:
+            type: { type: string, enum: [renamed] }
+            data:
+              type: object
+              required: [name]
+              properties: { name: { type: string } }
+        - type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [ping] }
+    Thing:
+      type: object
+      required: [id]
+      properties: { id: { type: string } }
+    Part:
+      oneOf:
+        - type: object
+          required: [type, text]
+          properties:
+            type: { type: string, enum: [text] }
+            text: { type: string }
+        - type: object
+          required: [type, url]
+          properties:
+            type: { type: string, enum: [link] }
+            url: { type: string }
+      discriminator: { propertyName: type }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(!out.contains("untyped JSON value"), "{out}");
+    let sources = files(&dir.path().join("go"));
+    let source = |name: &str| {
+        sources
+            .iter()
+            .find(|(path, _)| path.ends_with(name))
+            .unwrap_or_else(|| panic!("no {name} in {sources:?}"))
+            .1
+            .clone()
+    };
+    let event = source("event.go");
+    assert!(
+        event.contains("unmarshalAdjacentContent(data, \"data\""),
+        "{event}"
+    );
+    assert!(event.contains("func NewEventPing() Event"), "{event}");
+    assert!(source("event_data.go").contains("type EventData struct"));
+    assert!(source("part_text_variant.go").contains("type PartTextVariant struct"));
+    assert!(source("part.go").contains("marshalUnionVariant("));
 }
