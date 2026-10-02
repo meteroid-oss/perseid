@@ -1,0 +1,95 @@
+{% from "types/macros.go.jinja" import go_arg, go_export, go_header_type, go_ident, go_local, go_type -%}
+{% import "docs.jinja" as docs -%}
+{% set _ = set_summary_filename("api.md") -%}
+{% macro model(name) -%}
+    {%- if name in api.types %}[`{{ go_ident(name) }}`]({{ docs.model_path(name) }}){% else %}`{{ go_ident(name) }}`{% endif -%}
+{%- endmacro -%}
+{#- The type of a query parameter, as the resource files declare it. -#}
+{% macro param_type(resource, op, p) -%}
+    {%- set ns = namespace(ok=p.typed_union is defined and p.structured) -%}
+    {%- if ns.ok -%}
+        {%- for v in p.typed_union.union_variants() if not v.empty -%}
+            {%- set t = v.type.inner_type() if (v.type.is_list() or v.type.is_set()) else v.type -%}
+            {%- if not (t.to_go() in ["string", "bool", "int16", "int32", "int64", "uint16", "uint64", "float32", "float64"] or (t.is_schema_ref() and v.json_type not in ["", "object"])) %}{% set ns.ok = false %}{% endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+    {%- if ns.ok %}{{ (go_ident(resource.name) ~ (op.name | ident("pascal", "go")) ~ (p.name | ident("pascal", "go"))) | go_name }}{% else %}{{ go_type(p.type) }}{% endif -%}
+{%- endmacro -%}
+{#- `(ctx, ...)` of a method, without the request options every method takes last. -#}
+{% macro params(resource, op) -%}
+    {%- set prefix = go_ident(resource.name) ~ (op.name | ident("pascal", "go")) -%}
+    {%- set args = namespace(list=["ctx"], taken=[]) -%}
+    {%- for p in op.path_params %}{% set args.list = args.list + [go_arg(p) ~ " string"] %}{% set args.taken = args.taken + [go_arg(p)] %}{% endfor -%}
+    {%- for p in op.query_params if p.required %}{% set args.list = args.list + [go_arg(p.name) ~ " " ~ param_type(resource, op, p)] %}{% set args.taken = args.taken + [go_arg(p.name)] %}{% endfor -%}
+    {%- for p in op.header_params if p.required %}{% set args.list = args.list + [go_arg(p.name) ~ " " ~ go_header_type(p)] %}{% set args.taken = args.taken + [go_arg(p.name)] %}{% endfor -%}
+    {%- if op.request_body_schema_name is defined -%}
+        {%- set body_var = go_local(op.request_body_schema_name) -%}
+        {%- if body_var in ["ctx", "options", "opts", "req", "a", "out", "params", "resp", "page", "next", "current", "last", "item"] or body_var in args.taken %}{% set body_var = "body" %}{% endif -%}
+        {%- set args.list = args.list + [body_var ~ " " ~ ("[]" if op.request_body_is_list else "") ~ go_ident(op.request_body_schema_name)] -%}
+    {%- elif op.request_body_json_type is defined -%}
+        {%- set args.list = args.list + ["body " ~ go_type(op.request_body_json_type)] -%}
+    {%- elif op.request_body_kind == "binary" -%}
+        {%- set args.list = args.list + ["body io.Reader"] -%}
+    {%- elif op.request_body_kind == "multipart" -%}
+        {%- set args.list = args.list + ["body " ~ ("*" if op.request_body_optional else "") ~ (prefix ~ "Body") | go_name] -%}
+    {%- endif -%}
+    {%- if docs.has_options(op) %}{% set args.list = args.list + ["options *" ~ (prefix ~ "Options") | go_name] %}{% endif -%}
+    ({{ args.list | join(", ") }})
+{%- endmacro -%}
+{% macro returned(resource, op) -%}
+    {%- if op.pagination is defined %}*{{ (go_ident(resource.name) ~ (op.name | ident("pascal", "go")) ~ "Page") | go_name }}
+    {%- elif op.response_is_event_stream and op.event_schema_name is defined %}*Stream[{{ go_ident(op.event_schema_name) }}]
+    {%- elif op.response_is_event_stream %}*EventStream
+    {%- elif op.response_is_binary %}[]byte
+    {%- elif op.response_is_text %}string
+    {%- elif op.response_body_json_type is defined -%}
+        {%- set t = go_type(op.response_body_json_type) -%}
+        {{ "*" if op.response_may_be_empty | default(false) and not (t is startingwith("[]") or t is startingwith("map[") or t is startingwith("*") or t in ["any", "json.RawMessage"]) }}{{ t }}
+    {%- elif op.response_body_is_list %}[]{{ go_ident(op.response_body_schema_name) }}
+    {%- elif op.response_body_schema_name is defined %}*{{ go_ident(op.response_body_schema_name) }}{% endif -%}
+{%- endmacro -%}
+{% macro returns(op) -%}
+    {%- if op.pagination is defined %}pages of {{ model(op.pagination.item_schema) }}
+    {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
+    {%- elif op.response_is_binary %}bytes
+    {%- elif op.response_is_text %}text
+    {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
+    {%- elif op.response_body_json_type is defined %}`{{ go_type(op.response_body_json_type) }}`
+    {%- else %}nothing{% endif -%}
+{%- endmacro -%}
+{% macro row(resource, op, suffix, result, returns) -%}
+| `{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{{ suffix }}{{ params(resource, op) }} {{ result }}`{% if op.deprecated %} (deprecated){% endif %} | `{{ op.method | upper }} {{ op.path }}` | {{ returns }} |
+{%- endmacro -%}
+{% macro table(resource) -%}
+| Method | Request | Returns |
+| --- | --- | --- |
+{% for op in resource.operations -%}
+{% set result = returned(resource, op) -%}
+{{ row(resource, op, "", "(" ~ result ~ ", error)" if result else "error", returns(op)) }}
+{% if op.pagination is defined -%}
+{{ row(resource, op, "AutoPaging", "*AutoPager[" ~ go_ident(op.pagination.item_schema) ~ "]", "every " ~ model(op.pagination.item_schema)) }}
+{% endif -%}
+{% endfor -%}
+{%- endmacro -%}
+<!-- This file is @generated by perseid. Do not edit. -->
+# {{ sdk.client_name }} API
+
+Every operation of the API, as a method of a `*{{ sdk.package_name }}.Client` (`client` below), by
+resource. Each method also takes trailing `...RequestOption`s, such as `WithMaxRetries`,
+`WithTimeout`, `WithHeader` or `WithResponseInto`, for that call. Models and option structs are
+in the `{{ sdk.package_name }}` package.
+{% if api.resources | length > 1 %}
+{{ docs.contents(api.resources) }}
+{% endif %}
+{%- for resource in api.resources %}
+## {{ docs.title(resource.name) }}
+
+[`{{ docs.resource(resource.name) }}`]({{ docs.resource_path(resource.name) }})
+
+{{ table(resource) -}}
+{%- for name, sub in resource.subresources | items %}
+### {{ docs.title(name) }}
+
+{{ table(sub) -}}
+{%- endfor %}
+{%- endfor %}

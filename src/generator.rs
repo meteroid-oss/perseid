@@ -26,6 +26,8 @@ enum TemplateKind {
     Summary,
 }
 
+/// Renders `tpl_name` with the API model as the SDK of `language` (`rs`, `ts`, `py`...) sees it,
+/// which is also the extension of the code it renders, unless it renders documentation.
 pub(crate) fn generate_with_output_context(
     mut api: Api,
     tpl_name: String,
@@ -33,6 +35,7 @@ pub(crate) fn generate_with_output_context(
     no_postprocess: bool,
     sdk: serde_json::Value,
     output_context: Option<&str>,
+    language: &str,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
     let (name_without_jinja_suffix, tpl_path) = match tpl_name.strip_suffix(".jinja") {
         Some(basename) => (basename, &tpl_name),
@@ -45,25 +48,27 @@ pub(crate) fn generate_with_output_context(
         .rsplit_once(".")
         .context("template name must contain '.'")?;
 
-    if tpl_file_ext != "rs" {
+    if language != "rs" {
         api.inline_aliases()?;
     }
     api.settle_object_unions(&sdk);
-    if tpl_file_ext == "java" {
+    if language == "java" {
         api.inline_string_alias_bodies()?;
     }
-    if matches!(tpl_file_ext, "cs" | "go" | "rs") {
+    if matches!(language, "cs" | "go" | "rs") {
         api.inline_flattened_fields()?;
     }
 
     let tpl_kind = match tpl_base_name {
         "api_resource" => TemplateKind::ApiResource,
         "operation_options" => TemplateKind::OperationOptions,
-        "api_summary" | "component_type_summary" | "summary" => TemplateKind::Summary,
+        "api_summary" | "component_type_summary" | "api_reference" | "summary" => {
+            TemplateKind::Summary
+        }
         "component_type" => TemplateKind::Type,
         _ => bail!(
             "template file basename must be one of 'api_resource', 'api_summary', \
-             'component_type', 'component_type_summary', 'summary'",
+             'api_reference', 'component_type', 'component_type_summary', 'summary'",
         ),
     };
 
@@ -255,6 +260,7 @@ impl Generator<'_> {
             (None, "go") => "models".to_owned(),
             (None, "rb") => "client".to_owned(),
             (None, "php") => "Client".to_owned(),
+            (None, "md") => "api".to_owned(),
             (None, _) => "summary".to_owned(),
         };
 
@@ -351,7 +357,7 @@ fn recursive_refs<'a>(types: &'a Types, ty: &'a Type) -> BTreeSet<&'a str> {
 }
 
 /// Go only builds `x_windows.go`, `x_arm64.go` or `x_test.go` for that OS, arch or test run.
-fn go_file_stem(stem: String) -> String {
+pub(crate) fn go_file_stem(stem: String) -> String {
     const CONSTRAINTS: &[&str] = &[
         "aix",
         "android",

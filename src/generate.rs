@@ -42,6 +42,9 @@ impl std::fmt::Display for Change {
     }
 }
 
+/// The template of `api.md`, the API reference at the root of every SDK.
+const API_REFERENCE: &str = "api_reference";
+
 /// Where each template renders to, and where the runtime goes, relative to the SDK root.
 fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathBuf)>) {
     let runtime = PathBuf::from(match language {
@@ -80,6 +83,7 @@ fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathB
         "go" => {}
         _ => tasks.push(("component_type_summary", models)),
     }
+    tasks.push((API_REFERENCE, PathBuf::from(".")));
     (runtime, tasks)
 }
 
@@ -172,9 +176,13 @@ fn render(
         );
     }
     for (template, output) in tasks {
-        let template = assets_dir
-            .path()
-            .join(format!("templates/{language}/{template}.{extension}.jinja"));
+        let output_extension = match template {
+            API_REFERENCE => "md",
+            _ => extension,
+        };
+        let template = assets_dir.path().join(format!(
+            "templates/{language}/{template}.{output_extension}.jinja"
+        ));
         let template = template.to_str().context("non UTF-8 path")?.to_owned();
         let out = Utf8PathBuf::from_path_buf(stage.join(&output))
             .map_err(|p| anyhow::anyhow!("non UTF-8 path {}", p.display()))?;
@@ -185,6 +193,7 @@ fn render(
             true,
             context.clone(),
             Some(output.to_str().unwrap()),
+            extension,
         )?;
         for path in paths {
             produced.push(clean(path.as_std_path().strip_prefix(stage)?));

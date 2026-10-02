@@ -1,0 +1,47 @@
+{#- The API as C# names it, for api.md and the README's examples. An example is a
+    `{resource, operation, path_args, body, result, item}` the README receives. -#}
+{% import "macros.cs.jinja" as m %}
+
+{#- The heading of a resource in api.md, and links to every resource's. -#}
+{% macro title(name) %}{{ name | to_snake_case | replace("_", " ") | capitalize }}{% endmacro %}
+
+{% macro contents(resources) -%}
+    {%- for r in resources %}[{{ title(r.name) }}](#{{ r.name | to_kebab_case }}){% if not loop.last %} · {% endif %}{% endfor -%}
+{%- endmacro %}
+
+{% macro resource(name) %}client.{{ name | to_upper_camel_case }}{% endmacro %}
+
+{% macro method(op) %}{{ op.name | to_upper_camel_case }}Async{% endmacro %}
+
+{% macro auto_paging_method(op) %}{{ op.name | to_upper_camel_case }}AutoPagingAsync{% endmacro %}
+
+{% macro model_name(name) %}{{ m.model(name) | replace("Models.", "") }}{% endmacro %}
+
+{% macro model_path(name) %}{{ sdk.package_name }}/Models/{{ name | to_upper_camel_case }}.cs{% endmacro %}
+
+{% macro resource_path(name) %}{{ sdk.package_name }}/Api/{{ m.resource_class(name) }}.cs{% endmacro %}
+
+{#- A variable holding a value of schema `name`, `fallback` without one. -#}
+{% macro var(name, fallback) -%}
+    {%- set id = m.param(name) if name else fallback -%}
+    {{ fallback if id in ["client", "page", "stream", "response", "e"] or id is startingwith("@") or id is endingwith("Param") else id }}
+{%- endmacro %}
+
+{% macro literal(arg) -%}
+    {%- if arg.kind == "boolean" %}{{ "true" if arg.value else "false" }}{% else %}{{ arg.value | tojson }}{% endif -%}
+{%- endmacro %}
+
+{#- The call of an example: of its `...AutoPagingAsync` twin with `auto_paging`, through
+    `WithRawResponse` with `raw`, with `request_options` as a named argument when given. -#}
+{% macro call(ex, auto_paging=false, raw=false, request_options="") -%}
+    {%- set out = namespace(args=[]) -%}
+    {%- for a in ex.path_args %}{% set out.args = out.args + [literal(a)] %}{% endfor -%}
+    {%- if ex.body -%}
+        {%- set owner = ex.body.schema | to_upper_camel_case -%}
+        {%- set fields = namespace(list=[]) -%}
+        {%- for f in ex.body.fields %}{% set fields.list = fields.list + [m.member(f.name, owner) ~ " = " ~ literal(f)] %}{% endfor -%}
+        {%- set out.args = out.args + ["new " ~ model_name(ex.body.schema) ~ (" { " ~ (fields.list | join(", ")) ~ " }" if fields.list else "()")] -%}
+    {%- endif -%}
+    {%- if request_options %}{% set out.args = out.args + ["requestOptions: " ~ request_options] %}{% endif -%}
+    {{ resource(ex.resource) }}{{ ".WithRawResponse" if raw }}.{{ auto_paging_method(ex.operation) if auto_paging else method(ex.operation) }}({{ out.args | join(", ") }})
+{%- endmacro %}

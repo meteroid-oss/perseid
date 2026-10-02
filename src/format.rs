@@ -166,3 +166,22 @@ pub fn on_path(program: &str) -> bool {
         })
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markdown_is_never_formatted() {
+        let dir = tempfile::tempdir().unwrap();
+        let text = "| `a  b` |   x |\n";
+        std::fs::write(dir.path().join("api.md"), text).unwrap();
+        for language in ["rust", "typescript", "python", "go", "java", "csharp"] {
+            format(language, dir.path(), &[PathBuf::from("api.md")]).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("api.md")).unwrap(),
+            text
+        );
+    }
+}
