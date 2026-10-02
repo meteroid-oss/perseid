@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -339,6 +340,10 @@ func (r *request) url(serverURL string) (string, error) {
 	}
 	path := r.path
 	for name, value := range r.pathParams {
+		// A URL resolves these away: the request would reach another path.
+		if value == "." || value == ".." {
+			return "", requestError("path parameter %q cannot be %q", name, value)
+		}
 		path = strings.ReplaceAll(path, "{"+name+"}", url.PathEscape(value))
 	}
 	if strings.Contains(path, "{") {
@@ -366,7 +371,11 @@ func (c *Client) execute(ctx context.Context, req *request, out any) error {
 	if err != nil {
 		return err
 	}
-	if out == nil || len(bytes.TrimSpace(body)) == 0 {
+	if out == nil || status == http.StatusNoContent {
+		return nil
+	}
+	// Only an optional body, decoded into a pointer, may be empty.
+	if len(bytes.TrimSpace(body)) == 0 && reflect.TypeOf(out).Elem().Kind() == reflect.Pointer {
 		return nil
 	}
 	if err := json.Unmarshal(body, out); err != nil {

@@ -200,7 +200,10 @@ func (p *sseParser) push(char rune) (SSEEvent, bool, error) {
 		if data == "" {
 			return SSEEvent{}, false, nil
 		}
-		return SSEEvent{Event: name, Data: strings.TrimSuffix(data, "\n"), ID: p.id, Retry: p.retry}, true, nil
+		// The reconnection delay belongs to the event it arrived with.
+		retry := p.retry
+		p.retry = 0
+		return SSEEvent{Event: name, Data: strings.TrimSuffix(data, "\n"), ID: p.id, Retry: retry}, true, nil
 	}
 	if strings.HasPrefix(line, ":") {
 		return SSEEvent{}, false, nil
