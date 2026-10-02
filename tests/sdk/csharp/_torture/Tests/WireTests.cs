@@ -256,13 +256,13 @@ public class WireTests
     public async Task TheBaseUrlPathPrefixIsKept(string prefix)
     {
         using var server = new RawServer(request =>
-            request.Line.Contains("/things?", StringComparison.Ordinal) ? Ok("""{"data":[]}""") : Ok()
+            request.Line.Contains("/things/", StringComparison.Ordinal) ? Ok() : Ok("""{"data":[]}""")
         );
         using var client = Client(server, prefix);
         await client.Things.RetrieveAsync("t1");
         await client.Things.ListAsync(new() { XRequired = "r" });
         Assert.Equal("GET /api/v2/things/t1 HTTP/1.1", server.Seen[0].Line);
-        Assert.StartsWith("GET /api/v2/things?", server.Seen[1].Line);
+        Assert.Equal("GET /api/v2/things HTTP/1.1", server.Seen[1].Line);
     }
 
     [Fact]
