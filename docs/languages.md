@@ -9,7 +9,8 @@ are kept rather than rejected. Requests time out after `timeout` seconds (60 by 
 
 API errors carry the status, the response headers (for request ids) and the raw body. They are
 also typed by status (not found, rate limited, 5xx...), and the body decodes into the error schema
-the operation declares for that status (exact status, then `4XX`, then `default`).
+the operation declares for that status (exact status, then `4XX`, then `default`), else the
+API-wide error schema when [one is inferred](configuration.md#spec-support).
 
 Values told apart by their JSON type, such as Stripe's expandable `string | Customer` or
 `ChargeShipping | ""`, are typed rather than untyped JSON. So are unions of several object types
@@ -24,6 +25,13 @@ parameters, return type, HTTP method and path, linking the models. The README, w
 then yours, links it, and its examples (client, a call, pagination, streaming, errors, raw
 responses, per-call options) call the API's own operations: a retrieve, the first paginated list
 and the first stream, sections left out when the API has none.
+
+Generated names are valid in every language whatever the spec spells: keywords are escaped,
+schemas named like runtime types get a `Model` suffix, and clashing enum values or parameters get
+a suffix ([names](configuration.md#names)). Models keep what the spec leaves open
+(`additionalProperties`, unknown properties) and every nullable value, item and response body.
+Unions Go cannot express yet (adjacently tagged ones, inline object variants) are untyped JSON
+in Go and typed in the others.
 
 ## Rust
 

@@ -132,8 +132,25 @@ own, such as `/responses?beta=true`, keep it.
 `content: application/json` (query, path or header) is typed by its schema and sent as compact JSON,
 percent-encoded where it needs to be.
 
+Cookie parameters are typed like header ones and sent in one `Cookie` header, percent-encoded. A
+parameter whose name another one of the operation already takes (`id` in the query and in a
+header) gets a `_query`, `_header` or `_cookie` suffix in the SDK, its wire name untouched; path
+variables the path uses without declaring them are strings.
+
 Plain path parameters are strings: unions of scalars are accepted. Other path parameters follow
 their `style` and `explode` as the OpenAPI table has it: `label` (`.a.b`), `matrix` (`;id=a,b`),
 and lists and objects (`a,b,c`, `k,v,k2,v2`, or `k=v,k2=v2` exploded) are typed values. Header
 lists are sent as the caller writes them. Operations using a construct perseid does not support are
 skipped with a warning naming them.
+
+## Bodies and responses
+
+A request body of any JSON schema is accepted, including a bare list or scalar, a boolean schema
+and a recursive alias (`Tree: array of Tree`, typed as plain JSON where an SDK cannot spell it).
+Nullable items, map values and response bodies stay nullable: a `null` body decodes to the
+language's empty value without an error. An operation declaring both a body and a bodiless `204`
+(or any bodiless 2xx) returns an optional value, empty for the bodiless response.
+
+Every operation is sent to the one base URL of the client. Operations or path items declaring their
+own `servers` warn, naming the operation: put them in a spec of their own, or set the base URL when
+creating the client.

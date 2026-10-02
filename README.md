@@ -73,6 +73,9 @@ var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.
 - An opt-in [Standard Webhooks](https://www.standardwebhooks.com) verifier in every language.
 - An `api.md` in every SDK listing each method, its HTTP request and models, regenerated with
   the code, and a README whose examples call your API's own operations.
+- Specs as found in the wild: OpenAPI 3.0, 3.1 and 3.2, `$ref`s to other files, cookie parameters
+  and parameter styles, nullable and recursive schemas, `additionalProperties`, webhook-only specs.
+  Names no language accepts are renamed, clashes are reported together.
 - Middleware, resource snippets and ejectable templates when the defaults don't fit.
 - `perseid generate --check` fails CI when the SDKs drift from the spec.
 
@@ -152,17 +155,19 @@ signs in with `GH_TOKEN`, `GITHUB_TOKEN`, the token `gh` stores, or a browser lo
 - [Languages](docs/languages.md): what each SDK looks like
 - [Auth, pagination, streaming, raw responses and encoding](docs/features.md)
 - [Customizing](docs/customizing.md): handwritten code, middleware, snippets, templates, webhooks
+- [Testing](docs/testing.md): how perseid and its SDKs are tested
 
 ## Status
 
-perseid reads OpenAPI 3.0 and 3.1, in JSON or YAML. Convert Swagger 2.0 first, for example with
+perseid reads OpenAPI 3.0, 3.1 and 3.2, in JSON or YAML. Convert Swagger 2.0 first, for example with
 `npx swagger2openapi`.
 
 It generates the [Meteroid SDKs](https://github.com/meteroid-oss/meteroid-clients). SDKs from the
 Stripe, GitHub, OpenAI, Twilio, DigitalOcean and Linode specs compile in every language, with one
 operation excluded on Stripe and on OpenAI.
 
-An unsupported construct fails generation and names the operation or schema. Skip it with
+A construct no SDK can express is skipped or typed as untyped JSON, with a warning naming the
+operation or schema; names that clash fail generation, listed together. Leave an operation out with
 `exclude = ["<operation id>"]`, and open an issue with the spec attached.
 
 perseid started as a fork of [Svix's openapi-codegen](https://github.com/svix/openapi-codegen).

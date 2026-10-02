@@ -64,7 +64,7 @@ IntelliJ and other [Taplo](https://taplo.tamasfe.dev)-based editors complete and
 
 | Key | |
 |---|---|
-| `spec` | The OpenAPI document (3.0 or 3.1, JSON or YAML) the SDKs are generated from: a path relative to `perseid.toml`, `openapi.json` by default, or an `http(s)` URL. When another repository holds the spec, `perseid connect` run there pushes it to this path, with `.perseid/source.json` naming its commit. `perseid generate --spec` reads another one |
+| `spec` | The OpenAPI document (3.0, 3.1 or 3.2, JSON or YAML; `$ref`s to other files or URLs are bundled in) the SDKs are generated from: a path relative to `perseid.toml`, `openapi.json` by default, or an `http(s)` URL. When another repository holds the spec, `perseid connect` run there pushes it to this path, with `.perseid/source.json` naming its commit. `perseid generate --spec` reads another one |
 | `name` | The client name, in any form: `acme-api`, `acme_api` and `Acme API` all give the `AcmeApi` client, the `acme_api` crate and Python package and the `acme-api` npm package. A name already in UpperCamelCase is kept as written (`AcmeAPI`) |
 | `sdks` | The SDKs generated: `rust`, `typescript`, `python`, `go`, `java`, `csharp`. A [language table](#language-tables) only overrides the settings of a listed SDK |
 
@@ -212,14 +212,15 @@ share: the scaffolded `README.md` is rendered once, with `examples` (`call`, `li
 `perseid inspect` prints the model templates receive. In templates,
 `name | ident("snake", "rust")` turns a spec name into an identifier (cases `snake`, `camel`,
 `pascal` and `shouty`, keywords escaped for `rust`, `python`, `go`, `java` or `typescript`), and
-`names | idents(case, language, owner)` fails when two names collide. Descriptions are Markdown
+`names | idents(case, language, owner)` fails when two names collide (`ident` turns punctuation
+into words and prefixes a leading digit, see [names](#names)). Descriptions are Markdown
 (spec HTML is converted); the `doc` filter converts other text.
 
 The model also carries, for templates to use:
 
 - `op.errors`, the schema of each error response by status (`404`, `4XX`, `default`);
-  `error_schemas` and `default_error` (the schema of nearly every operation's errors) on the API
-  and in every template, and `is_error_schema` in type templates.
+  `error_schemas` and `default_error` (the schema of nearly every operation's errors, inferred as
+  [described above](#spec-support)) on the API and in every template, and `is_error_schema` in type templates.
 - `types`, every schema by name, in resource templates, to read the fields of a request body.
 - Union field types (`is_union()`, `union_variants()`) for values of several types told apart by
   their JSON type, such as Stripe's expandable `string | Customer` or emptyable `object | ""`:
@@ -235,17 +236,58 @@ The model also carries, for templates to use:
 ## Spec support
 
 - OpenAPI 3.0 documents are upgraded to 3.1 on load (`nullable`, boolean
-  `exclusiveMinimum`/`exclusiveMaximum`). Swagger 2.0 is rejected: convert it first, for example
-  with `npx swagger2openapi`.
-- `$ref` parameters, bodies and responses, inline objects, `allOf` compositions, list bodies and
+  `exclusiveMinimum`/`exclusiveMaximum`), and 3.2 ones are read as 3.1: its `QUERY` method and
+  `additionalOperations` are skipped with a warning. Swagger 2.0 is rejected: convert it first, for
+  example with `npx swagger2openapi`.
+- `$ref`s to other files or URLs are bundled: each referenced schema is hoisted into
+  `components.schemas` under a name that collides with none. Escaped pointers (`~1`, `%7B`) resolve.
+- A spec of only `webhooks` (or `x-webhooks`) and components still gives models, with a client
+  without resources.
+- `$ref` parameters, bodies and responses, cookie parameters, parameter `style`s, `content`
+  parameters, inline objects, `allOf` compositions, list bodies, any JSON body and
   `application/*+json` are read as is; inline objects become named types.
+- Boolean schemas are read as untyped JSON (`false`, which no type expresses, with a warning), as
+  are `not` and tuple arrays (`prefixItems`), with a warning.
+- `additionalProperties` are kept: the typed map, or the unknown properties of the model, sent back.
+- Nullable array items, map values and response bodies stay nullable. A schema may be recursive
+  through an alias, a list or a map.
 - A required `readOnly` property is optional in the models sent in requests, and a required
   `writeOnly` one in the models received in responses.
-- Unsupported operations, and fields whose names would clash, make generation fail instead of
-  being skipped, each listed with its operation id and path or its schema. Other schemas degrade
-  with a warning: unions without a discriminator whose variants share a JSON type (bar
-  [unions of objects](#unions-of-objects)) and schemas no SDK can model are typed as untyped JSON, enums whose values would share a name as strings, and schemas named like a type
-  the SDK already uses (`Upload`, `Options`...) get a `Model` suffix.
-- A variant missing from the discriminator `mapping` is tagged with the `const` or `enum` of its
-  discriminator property, falling back to its schema name.
+- A discriminator on a base schema, whose subtypes reference it in `allOf`, makes the base a union
+  of its subtypes (those of the `mapping`, plus those referencing the base), the base's own fields
+  moving to `{Base}Base`. A variant missing from the discriminator `mapping` is tagged with the
+  `const` or `enum` of its discriminator property, falling back to its schema name. An `allOf` of
+  parts declaring the same property keeps the narrower schema.
+- Each SDK sends every operation to one base URL: `servers` of a path item or operation that the
+  root `servers` do not list warn instead.
+- Whatever perseid cannot express skips the operation or types the schema as untyped JSON, with a
+  warning naming it and saying what to do: operations using an unsupported construct are
+  skipped, unions without a discriminator whose variants share a JSON type (bar
+  [unions of objects](#unions-of-objects)) and schemas no SDK can model are untyped JSON, and
+  unions Go cannot yet express are untyped JSON in Go only.
+- Error schemas: the schema shared by at least three operations and by nine in ten of those
+  declaring errors, and that is not mostly a success body, types every API error (`default_error`);
+  one operation declaring `404: Item` never types the errors of the others. Each operation's own
+  error schemas still decode by status.
+
+### Names
+
+Names a language cannot spell are changed rather than rejected, in every SDK:
+
+- Schema names become UpperCamelCase types. A name starting with a digit gets an `N` prefix
+  (`3DModel` is `N3dModel`), and one clashing with a type the SDK or its runtime uses (`Upload`,
+  `Options`, the client's own name, standard library or dependency types) a `Model` suffix.
+- Identifiers drop punctuation (`created<` is `created_lt`, `-` is `minus`), get a `value` prefix
+  when starting with a digit, and escape keywords (`type` is `r#type` in Rust, `type_` elsewhere).
+  Names Go cannot export get an `X` prefix. Serialized names with quotes or backslashes are escaped.
+- Enum values that share an identifier get a numeric suffix (`bps` and `Bps` are `Bps` and
+  `Bps2`) and repeated values are dropped; the wire values are untouched.
+- Parameters sharing a name get a `_query`, `_header` or `_cookie` suffix, and method names that
+  clash fall back to the operation id.
 - Tags become ASCII identifiers: `Petite Requête` is the `petite_requete` resource.
+
+What perseid cannot choose for you fails generation, listing every clash at once with the names
+and where they are: two schemas becoming the same type (`a.b` and `AB`), two properties of a
+model becoming the same field (`type` and `@type`), and two operations given the same method name
+by `x-perseid-name` or `[methods]`. Rename one in the spec, or set `x-perseid-name` on an
+operation. Go properties a `json` tag cannot carry (a comma, a quote) are encoded by hand.

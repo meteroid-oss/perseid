@@ -92,6 +92,6 @@ new Webhook("whsec_...").verify(rawBody, request.headers); // throws WebhookVeri
 
 It is `Webhook` in every language: `Webhook::new(secret)?.verify(&body, &headers)` in Rust,
 `NewWebhook(secret)` then `Verify(body, r.Header)` in Go, `new Webhook(secret).Verify(body, name =>
-Request.Headers[name])` in C#. Payload models come from `webhooks` and `x-webhooks` in the spec.
+Request.Headers[name])` in C#. Payload models come from `webhooks` and `x-webhooks` in the spec, which may be all it holds.
 In Rust the verifier is always generated, behind the `webhooks` cargo feature declared in the
 scaffolded `Cargo.toml` and `lib.rs`, so `--all-features` builds (docs.rs) work whatever the setting.
