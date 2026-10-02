@@ -26,7 +26,7 @@ future of the decoded body; `.with_response().await` also gives the status, head
 the idempotency key of its calls:
 `client.items().with_options(RequestOptions::new().max_retries(0)).list(None)`. Query and header
 parameters are `#[non_exhaustive]` options structs, built with `new(required...)` then a setter per
-optional parameter. Clients, resources, calls and paginators own what they need, so they move into
+optional parameter. A query parameter that is a union of scalars or lists is an enum. Clients, resources, calls and paginators own what they need, so they move into
 `tokio::spawn`. `*_iter` methods return a `Paginator<Page, Item>`, a `futures_core::Stream` of
 items whose `pages()` and `first_page()` give `Page`s (`items()`, `has_next_page()`,
 `next_page()`, the response through `Deref`). Event streams are `Stream`s of `SseEvent`s, or of
