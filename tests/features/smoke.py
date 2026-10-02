@@ -16,6 +16,7 @@ from features.models import (
     ChargeShipping,
     ChargeShippingAddress,
     CompletionChunk,
+    Error,
     Filter,
     FilterAmount,
     Health,
@@ -69,14 +70,16 @@ try:
 except AuthenticationError as error:
     assert (error.status_code, error.body, error.request_id) == (
         401,
-        {"error": "unauthorized"},
+        Error(error="unauthorized"),
         "req_mock",
     ), error
 try:
     client.with_options(base_url=URL + "/v0").account.check_health()
     raise AssertionError("expected a 404")
 except NotFoundError as error:
-    assert error.body == {"error": "/v0/health"}, error.body
+    # The strict mock answers an unserved path with what it received.
+    assert isinstance(error.body, Error) and error.body.error == "unknown path", error.body
+    assert error.body.extra_fields["received"]["path"] == "/v0/health", error.body.extra_fields
 try:
     Features(api_key="tok", base_url="http://127.0.0.1:9").account.check_health(max_retries=0)
     raise AssertionError("expected a connection error")
