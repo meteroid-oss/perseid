@@ -172,7 +172,7 @@
     {%- elif type.is_map() -%}
         Object.fromEntries(Object.entries({{ expr }}).map(([key, entry]) => [key, {{ to_json("entry", type.value_type()) }}]))
     {%- else -%}
-        {{ expr }}.map((item) => {{ to_json("item", type.inner_type()) }})
+        {{ expr }}.map((item: any) => {{ to_json("item", type.inner_type()) }})
     {%- endif -%}
 {%- endmacro %}
 
