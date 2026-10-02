@@ -325,7 +325,13 @@ export class {{ resource_type_name }} {
 
 {# A blank line keeps the marker apart from the imports, which may be removed if unused. -#}
 {% for c in referenced_components -%}
-import { type {{ c | to_upper_camel_case }}, {{ c | to_upper_camel_case }}Serializer } from "../models/{{ c | to_lower_camel_case }}.js";
+{% set name = c | to_upper_camel_case -%}
+{% set used = [] -%}
+{% if body | mentions_ident(name) %}{% set used = used + ["type " ~ name] %}{% endif -%}
+{% if body | mentions_ident(name ~ "Serializer") %}{% set used = used + [name ~ "Serializer"] %}{% endif -%}
+{% if used -%}
+import { {{ used | join(", ") }} } from "../models/{{ c | to_lower_camel_case }}.js";
+{% endif -%}
 {% endfor -%}
 {% if "isJsonObject(" in body -%}
 import { isJsonObject } from "../json.js";
