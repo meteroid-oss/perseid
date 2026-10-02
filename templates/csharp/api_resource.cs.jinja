@@ -145,7 +145,7 @@ public interface {{ interface_name }}
     /// <exception cref="{{ class }}">{% for status in statuses.list %}{{ (("Any" if loop.first else "any") ~ " other status") if status == "default" else status }}{% if not loop.last %}, {% endif %}{% endfor %}: <c>Error</c> is the <see cref="Models.{{ statuses.schemas | map("to_upper_camel_case") | join("\"/>, <see cref=\"Models.") }}"/> body.</exception>
 {%- endfor %}
 {%- if op.deprecated %}
-    [Obsolete]
+    [Obsolete("Deprecated by the API.")]
 {%- endif %}
     {{ signature("Task" ~ ("<" ~ f.value ~ ">" if f.value else "") ~ " " ~ method_name, op, f, ";") }}
 {%- if op.pagination is defined %}
@@ -154,7 +154,7 @@ public interface {{ interface_name }}
     /// <c>await foreach</c> over it, or over its <c>AsPagesAsync()</c>.</summary>
 {{- param_docs(op, f, cancellation=false) }}
 {%- if op.deprecated %}
-    [Obsolete]
+    [Obsolete("Deprecated by the API.")]
 {%- endif %}
     {{ signature(pager_type(op) ~ " " ~ (op.name | to_upper_camel_case) ~ "AutoPagingAsync", op, f, ";", cancellation=false) }}
 {%- endif %}
@@ -171,7 +171,7 @@ public interface {{ raw_interface_name }}
     /// <summary><see cref="{{ interface_name }}.{{ method_name }}"/>, with the status and headers of the response.</summary>
 {{- param_docs(op, f) }}
 {%- if op.deprecated %}
-    [Obsolete]
+    [Obsolete("Deprecated by the API.")]
 {%- endif %}
     {{ signature("Task<ApiResponse" ~ ("<" ~ f.value ~ ">" if f.value else "") ~ "> " ~ method_name, op, f, ";") }}
 {%- endfor %}
@@ -201,7 +201,7 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
 
     /// <inheritdoc/>
 {%- if op.deprecated %}
-    [Obsolete]
+    [Obsolete("Deprecated by the API.")]
 {%- endif %}
 {%- if f.value %}
     {{ signature("public async Task<" ~ f.value ~ "> " ~ method_name, op, f) }}
@@ -231,7 +231,7 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
 
     /// <inheritdoc/>
 {%- if op.deprecated %}
-    [Obsolete]
+    [Obsolete("Deprecated by the API.")]
 {%- endif %}
     {{ signature("public " ~ pager_type(op) ~ " " ~ (op.name | to_upper_camel_case) ~ "AutoPagingAsync", op, f, cancellation=false) }}
     {
@@ -286,7 +286,7 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
 
     /// <inheritdoc/>
 {%- if op.deprecated %}
-    [Obsolete]
+    [Obsolete("Deprecated by the API.")]
 {%- endif %}
     {{ signature("public Task<ApiResponse" ~ ("<" ~ f.value ~ ">" if f.value else "") ~ "> " ~ method_name, op, f) }}
     {
