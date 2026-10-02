@@ -70,7 +70,8 @@
 {%- set ns = namespace(names=[]) -%}
 {%- for name in field_idents(fields, "camel", owner) | split(" ") | reject("equalto", "") -%}
 {%- set clash = name in ["builder", "toBuilder", "hashCode", "toString", "getClass", "notify",
-    "notifyAll", "wait", "clone", "finalize", "toJson", "additionalProperties", "copy", "build"] -%}
+    "notifyAll", "wait", "clone", "finalize", "toJson", "additionalProperties", "copy", "build",
+    "anyProperties", "putAnyProperty"] -%}
 {%- set ns.names = ns.names + [name ~ "_" if clash else name] -%}
 {%- endfor -%}
 {{ ns.names | join(" ") }}
@@ -277,12 +278,12 @@ public Map<String, JsonNode> additionalProperties() {
 }
 
 @JsonAnyGetter
-private Map<String, JsonNode> properties() {
+private Map<String, JsonNode> anyProperties() {
     return additionalProperties;
 }
 
 @JsonAnySetter
-private void putProperty(String name, JsonNode value) {
+private void putAnyProperty(String name, JsonNode value) {
     additionalProperties.put(name, value);
 }
 

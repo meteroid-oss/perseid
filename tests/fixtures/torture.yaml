@@ -1046,6 +1046,18 @@ components:
           type: string
         1leading:
           type: string
+        properties:
+          type: object
+          additionalProperties:
+            type: string
+        extra:
+          type: string
+        extra_fields:
+          type: string
+        additional_properties:
+          type: string
+        any_properties:
+          type: string
     ValidationError:
       type: object
       required:

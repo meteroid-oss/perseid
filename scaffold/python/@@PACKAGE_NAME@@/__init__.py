@@ -1,3 +1,4 @@
+# ruff: noqa: I001  (the import order depends on the client name)
 from ._version import __version__
 from .api import (
     APIResponse,

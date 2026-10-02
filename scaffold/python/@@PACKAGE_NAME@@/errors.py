@@ -6,6 +6,7 @@
   request timed out.
 * `APIResponseValidationError`: a successful response that does not decode.
 """
+# ruff: noqa: I001  (the import order depends on the client name)
 
 from ._exceptions import (
     APIConnectionError,
