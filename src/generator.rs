@@ -183,6 +183,7 @@ impl Generator<'_> {
                 .map(|name| (name.to_upper_camel_case(), true))
                 .collect::<std::collections::BTreeMap<_, _>>(),
         );
+        let request_schemas = request_schemas(&api);
         let errors = errors_context(&api);
         for (name, ty) in &api.types {
             let mut referenced_components = ty.referenced_components();
@@ -218,6 +219,7 @@ impl Generator<'_> {
                     output_dir,
                     type_names => type_names.clone(),
                     is_error_schema => api.error_schemas.contains(name),
+                    request_schema => request_schemas.contains(name.as_str()),
                     ..errors.clone()
                 },
             )?);
@@ -302,6 +304,25 @@ impl Generator<'_> {
 /// `error_schemas` and `default_error` of the API, for templates rendering a part of it.
 fn errors_context(api: &Api) -> minijinja::Value {
     context! { error_schemas => api.error_schemas, default_error => api.default_error }
+}
+
+/// Schemas a request can carry: the ones operations send and every schema they reach.
+fn request_schemas(api: &Api) -> BTreeSet<&str> {
+    let mut stack: Vec<&str> = (api.resources.values())
+        .flat_map(Resource::request_schemas)
+        .collect();
+    let mut seen = BTreeSet::new();
+    while let Some(name) = stack.pop() {
+        if seen.insert(name) {
+            let ty = api.types.get(name);
+            stack.extend(ty.into_iter().flat_map(|ty| {
+                let mut refs = ty.referenced_components();
+                refs.extend(ty.union_refs());
+                refs
+            }));
+        }
+    }
+    seen
 }
 
 /// Schemas `ty` holds by value that lead back to it, so a language without indirection by

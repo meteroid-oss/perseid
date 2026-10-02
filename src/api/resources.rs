@@ -311,6 +311,32 @@ impl Resource {
             .collect()
     }
 
+    /// Schemas an operation sends: request bodies, multipart fields, query and header
+    /// parameters, without what they reference.
+    pub(crate) fn request_schemas(&self) -> BTreeSet<&str> {
+        let mut res: BTreeSet<&str> = self
+            .subresources
+            .values()
+            .flat_map(Self::request_schemas)
+            .collect();
+        for operation in &self.operations {
+            let params = (operation.multipart_fields.iter().map(|f| &f.field.r#type))
+                .chain(operation.query_params.iter().map(|p| &p.r#type))
+                .chain(
+                    operation
+                        .header_params
+                        .iter()
+                        .filter_map(|p| p.schema_type.as_ref()),
+                );
+            for ty in params {
+                res.extend(ty.referenced_schema());
+                res.extend(ty.union_refs());
+            }
+            res.extend(operation.request_body_schema_name.as_deref());
+        }
+        res
+    }
+
     pub(crate) fn referenced_components(&self) -> BTreeSet<&str> {
         let mut res = BTreeSet::new();
 
