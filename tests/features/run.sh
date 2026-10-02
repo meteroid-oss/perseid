@@ -27,7 +27,7 @@ case $lang in
     echo '{"type":"commonjs"}' > smoke-build/package.json
     node smoke-build/smoke/smoke.js ;;
   python) cp "$here/smoke.py" . && uv run --no-project python smoke.py ;;
-  go) cp "$here/smoke_test.go" . && go test -run TestSmoke -count=1 . ;;
+  go) cp "$here/smoke_test.go" . && go test -run 'TestSmoke|TestScenario' -count=1 . ;;
   java)
     mkdir -p smoke && cp "$here/Smoke.java" smoke/
     grep -q "register('smoke'" build.gradle || cat >> build.gradle <<'GRADLE'
