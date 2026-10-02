@@ -49,6 +49,9 @@ pub fn populate_env(
          language: Option<Cow<'_, str>>,
          owner: Cow<'_, str>| { ident::idents(&names, &case, language.as_deref(), &owner) },
     );
+    env.add_filter("enum_names", |values: Vec<String>| {
+        ident::enum_names(&values)
+    });
     env.add_filter("go_tag", |s: Cow<'_, str>| ident::go_tag(&s));
     env.add_test("go_taggable", |s: Cow<'_, str>| ident::go_tag(&s).is_ok());
     env.add_filter("go_name", |s: Cow<'_, str>| go::initialisms(&s));

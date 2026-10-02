@@ -6,7 +6,7 @@ class {{ type.name | to_upper_camel_case }}(StrEnum):
     {% if type.description is defined -%}
         {{ docstring(type.description) | indent(4) }}
     {% endif %}
-    {%- set members = type.values | idents("shouty", "python", "schema `" ~ type.name ~ "`") %}
+    {%- set members = type.values | enum_names | idents("shouty", "python", "schema `" ~ type.name ~ "`") %}
     {%- for value in type.values %}
     {{ members[loop.index0] }} = {{ py_str(value) }}
     {%- endfor %}

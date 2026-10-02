@@ -1,4 +1,6 @@
 use anyhow::{Result, bail};
+use std::collections::BTreeSet;
+
 use serde_json::{Map, Value, json};
 
 const SCHEMA_MAPS: [&str; 4] = ["properties", "patternProperties", "$defs", "definitions"];
@@ -95,6 +97,48 @@ fn walk_slots(value: &mut Value) {
     }
 }
 
+/// Warnings already printed: every SDK of a run loads the spec, on threads of its own.
+static WARNED: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
+
+/// Prints a warning once per run.
+fn warn_once(message: String) {
+    let mut warned = WARNED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if warned.insert(message.clone()) {
+        eprintln!("warning: {message}");
+    }
+}
+
+/// Reads what no SDK type expresses as untyped JSON: `not` (alone, the schema accepts anything
+/// but a value; next to other keywords it is ignored) and tuple `prefixItems`, a list of
+/// untyped values.
+fn drop_unsupported_keywords(map: &mut Map<String, Value>, at: &str) {
+    if map.remove("not").is_some() {
+        let only_not = map
+            .keys()
+            .all(|k| ANNOTATIONS.contains(&k.as_str()) || k.starts_with("x-"));
+        warn_once(if only_not {
+            format!(
+                "schema `{at}` is only a `not`, which no SDK type expresses: read as untyped JSON"
+            )
+        } else {
+            format!(
+                "`not` in schema `{at}` is ignored, as no SDK type expresses it: values it excludes are not rejected"
+            )
+        });
+    }
+    let tuple_items = map.get("items").is_some_and(Value::is_array);
+    if map.remove("prefixItems").is_some() || tuple_items {
+        warn_once(format!(
+            "tuple array in schema `{at}` (`prefixItems`) is typed as a list of untyped JSON values: \
+             SDKs have no fixed-length heterogeneous list"
+        ));
+        map.insert("items".to_owned(), json!({}));
+        map.entry("type").or_insert_with(|| json!("array"));
+    }
+}
+
 fn boolean_schema(value: &mut Value, at: &str) {
     match value {
         Value::Bool(allowed) => {
@@ -106,6 +150,7 @@ fn boolean_schema(value: &mut Value, at: &str) {
             *value = json!({});
         }
         Value::Object(map) => {
+            drop_unsupported_keywords(map, at);
             for key in SCHEMA_MAPS {
                 for s in map
                     .get_mut(key)
@@ -456,5 +501,19 @@ mod tests {
         assert_eq!(schemas["Holder"]["properties"]["b"]["items"], json!({}));
         let media = &doc["paths"]["/x"]["get"]["responses"]["200"]["content"]["application/json"];
         assert_eq!(media["schema"], json!({}));
+    }
+
+    #[test]
+    fn not_and_tuples_become_untyped() {
+        let mut doc = json!({ "components": { "schemas": {
+            "Only": { "not": { "type": "string" }, "description": "d" },
+            "Next": { "type": "string", "not": { "enum": ["x"] } },
+            "Pair": { "type": "array", "prefixItems": [{ "type": "string" }, { "type": "integer" }] }
+        } } });
+        boolean_schemas(&mut doc);
+        let schemas = &doc["components"]["schemas"];
+        assert_eq!(schemas["Only"], json!({ "description": "d" }));
+        assert_eq!(schemas["Next"], json!({ "type": "string" }));
+        assert_eq!(schemas["Pair"], json!({ "type": "array", "items": {} }));
     }
 }

@@ -45,10 +45,17 @@ pub(crate) struct Security {
 impl Security {
     pub(crate) fn from_spec(spec: &Value) -> Self {
         let declared = spec["components"]["securitySchemes"].as_object();
+        let mut skipped: Vec<(String, String)> = Vec::new();
         let schemes: Vec<_> = match declared {
             Some(declared) if !declared.is_empty() => declared
                 .iter()
-                .filter_map(|(name, scheme)| parse_scheme(name, scheme))
+                .filter_map(|(name, scheme)| match parse_scheme(name, scheme) {
+                    Ok(scheme) => Some(scheme),
+                    Err(reason) => {
+                        skipped.push((name.clone(), reason));
+                        None
+                    }
+                })
                 .collect(),
             _ => vec![SecurityScheme {
                 name: IMPLICIT_BEARER.to_owned(),
@@ -86,6 +93,22 @@ impl Security {
                 None => counts.push((req.clone(), 1)),
             }
             effective.insert(id.to_owned(), req);
+        }
+        for (name, reason) in &skipped {
+            let affected: Vec<&str> = effective
+                .iter()
+                .filter(|(_, req)| req.iter().flatten().any(|n| n == name))
+                .map(|(id, _)| id.as_str())
+                .collect();
+            let used = match affected.as_slice() {
+                [] => "no operation uses it".to_owned(),
+                ops => format!("it is ignored for {}", operation_list(ops)),
+            };
+            tracing::warn!(
+                "security scheme `{name}` {reason}, so perseid sends no credentials for it ({used}); \
+                 use `bearer`, `basic`, an `apiKey` or `oauth2` scheme, or pass the header \
+                 yourself with the client's extra headers"
+            );
         }
         let default = if spec.get("security").is_some() {
             global
@@ -130,20 +153,32 @@ fn requirement(value: &Value) -> Requirement {
     alternatives
 }
 
-fn parse_scheme(name: &str, scheme: &Value) -> Option<SecurityScheme> {
+/// Up to five operation ids, then how many more.
+fn operation_list(ops: &[&str]) -> String {
+    let shown: Vec<String> = ops.iter().take(5).map(|id| format!("`{id}`")).collect();
+    match ops.len().saturating_sub(5) {
+        0 => format!(
+            "operation{} {}",
+            if ops.len() == 1 { "" } else { "s" },
+            shown.join(", ")
+        ),
+        more => format!("operations {} and {more} more", shown.join(", ")),
+    }
+}
+
+/// The scheme, or why perseid does not support it.
+fn parse_scheme(name: &str, scheme: &Value) -> Result<SecurityScheme, String> {
     let text = |key: &str| scheme[key].as_str().map(str::to_owned);
     let (kind, location, param, token_url) = match scheme["type"].as_str() {
-        Some("http") => match text("scheme")?.to_ascii_lowercase().as_str() {
+        Some("http") => match text("scheme")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "bearer" => (SchemeKind::Bearer, None, None, None),
             "basic" => (SchemeKind::Basic, None, None, None),
-            other => {
-                tracing::warn!(
-                    name,
-                    scheme = other,
-                    "unsupported http auth scheme, ignored"
-                );
-                return None;
-            }
+            "" => return Err("is `type: http` without a `scheme`".to_owned()),
+            other => return Err(format!("uses the unsupported http auth scheme `{other}`")),
         },
         Some("apiKey") => (SchemeKind::ApiKey, text("in"), text("name"), None),
         Some("oauth2") => {
@@ -153,12 +188,10 @@ fn parse_scheme(name: &str, scheme: &Value) -> Option<SecurityScheme> {
             (SchemeKind::Bearer, None, None, token_url)
         }
         Some("openIdConnect") => (SchemeKind::Bearer, None, None, None),
-        other => {
-            tracing::warn!(name, kind = ?other, "unsupported security scheme, ignored");
-            return None;
-        }
+        Some(other) => return Err(format!("has the unsupported type `{other}`")),
+        None => return Err("has no `type`".to_owned()),
     };
-    Some(SecurityScheme {
+    Ok(SecurityScheme {
         name: name.to_owned(),
         kind,
         location,
@@ -227,5 +260,16 @@ mod tests {
         let security = Security::from_spec(&spec);
         assert_eq!(security.default, vec![vec!["b".to_owned()]]);
         assert_eq!(security.override_for("a"), Some(vec![]));
+    }
+
+    #[test]
+    fn unsupported_schemes_say_what_they_are() {
+        let err = parse_scheme("d", &json!({"type": "http", "scheme": "Digest"})).unwrap_err();
+        assert_eq!(err, "uses the unsupported http auth scheme `digest`");
+        assert_eq!(operation_list(&["a"]), "operation `a`");
+        assert_eq!(
+            operation_list(&["a", "b", "c", "d", "e", "f", "g"]),
+            "operations `a`, `b`, `c`, `d`, `e` and 2 more"
+        );
     }
 }

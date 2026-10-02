@@ -1,6 +1,6 @@
 {% import "types/macros.ts.jinja" as m -%}
 {% set type_name = type.name | to_upper_camel_case -%}
-{% set members = type.values | idents("pascal", none, "schema `" ~ type.name ~ "`") -%}
+{% set members = type.values | enum_names | idents("pascal", none, "schema `" ~ type.name ~ "`") -%}
 {{ doc_comment }}
 export const {{ type_name }} = {
     {% for value in type.values -%}

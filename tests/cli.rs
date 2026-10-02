@@ -1437,14 +1437,9 @@ fn real_world_constructs_generate_every_language() {
     let dir = project_from("realworld.yaml", &langs);
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
-    for warning in [
-        "schema `Timezone`: `Etc/GMT-0` and `Etc/GMT0` both become the identifier `EtcGmt0`, so \
-         the enum is typed as a string",
-        "schema `PaymentMethodData`: inline schema in oneOf must have discriminator enum value, \
-         so the schema is typed as an untyped JSON value",
-    ] {
-        assert!(out.contains(warning), "missing `{warning}` in:\n{out}");
-    }
+    let warning = "schema `PaymentMethodData`: inline schema in oneOf must have discriminator enum value, \
+                   so the schema is typed as an untyped JSON value";
+    assert!(out.contains(warning), "missing `{warning}` in:\n{out}");
     let charge = fs::read_to_string(dir.path().join("go/charge.go")).unwrap();
     assert!(
         charge.contains("u.Customer != nil && u.Customer.ID != nil"),
@@ -2462,6 +2457,66 @@ fn nullable_items_values_and_optional_responses_are_typed_in_every_language() {
         for needle in needles {
             assert!(text.contains(needle), "{language}: missing `{needle}`");
         }
+    }
+}
+
+#[test]
+fn unsupported_constructs_warn_with_names_and_stay_typed_where_possible() {
+    let dir = project_from(
+        "petstore.yaml",
+        &["rust", "typescript", "python", "go", "java", "csharp"],
+    );
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Polish, version: "1.0.0" }
+servers: [{ url: "https://x.example.com" }]
+components:
+  securitySchemes:
+    digest: { type: http, scheme: digest }
+    key: { type: apiKey, in: header, name: X-Key }
+  schemas:
+    Symbols:
+      type: string
+      enum: ["-", "*", "a-b", "a_b", "Active", "active"]
+    Negated: { not: { type: string } }
+    Pair:
+      type: array
+      prefixItems: [{ type: string }, { type: integer }]
+paths:
+  /things:
+    get:
+      operationId: get_thing
+      tags: [x]
+      security: [{ digest: [] }]
+      servers: [{ url: "https://other.example.com" }]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  symbols: { $ref: "#/components/schemas/Symbols" }
+                  negated: { $ref: "#/components/schemas/Negated" }
+                  pair: { $ref: "#/components/schemas/Pair" }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    for warning in [
+        "unsupported http auth scheme `digest`",
+        "operation `get_thing`",
+        "declares its own `servers`",
+        "is only a `not`",
+        "tuple array in schema `Pair`",
+    ] {
+        assert!(out.contains(warning), "missing `{warning}` in:\n{out}");
+    }
+    assert!(!out.contains("typed as a string"), "{out}");
+    let rust = generated_text(dir.path(), "rust");
+    for needle in ["Minus", "Star", "\"a_b\" => Self::AB2"] {
+        assert!(rust.contains(needle), "missing `{needle}`");
     }
 }
 

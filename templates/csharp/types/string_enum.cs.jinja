@@ -1,5 +1,6 @@
 {% import "macros.cs.jinja" as m -%}
 {% set type_name = type.name | to_upper_camel_case -%}
+{% set names = type.values | enum_names -%}
 // this file is @generated
 using System.Text.Json.Serialization;
 
@@ -16,7 +17,7 @@ namespace {{ sdk.package_name }}.Models;
 public readonly partial record struct {{ type_name }}(string Value) : IStringEnum<{{ type_name }}>
 {
 {% for value in type.values -%}
-{% set name = m.member(value, type_name) -%}
+{% set name = m.member(names[loop.index0], type_name) -%}
 {% if name in ["Value", "FromValue", "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
     /// <summary><c>{{ value }}</c></summary>
     public static {{ type_name }} {{ name }} { get; } = new("{{ value }}");

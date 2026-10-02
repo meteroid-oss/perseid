@@ -366,35 +366,6 @@ pub(crate) fn set_discriminator_defaults(types: &mut Types) {
     }
 }
 
-/// Types string enums whose values would share an identifier, such as `bps` and `Bps`, as
-/// strings: no SDK could name both members.
-pub(crate) fn untype_clashing_enums(types: &mut Types) {
-    let mut untyped = false;
-    for (name, ty) in types.iter_mut() {
-        let TypeData::StringEnum { values } = &ty.data else {
-            continue;
-        };
-        let owner = format!("schema `{name}`");
-        let clash = ["pascal", "shouty", "snake"]
-            .into_iter()
-            .find_map(|case| crate::template::ident::idents(values, case, None, &owner).err());
-        if let Some(error) = clash {
-            let _span = tracing::warn_span!("schema", name = %name).entered();
-            let detail = error.detail().unwrap_or_default();
-            let detail = detail.split(": ").nth(1).unwrap_or(detail);
-            tracing::warn!(
-                "{}, so the enum is typed as a string",
-                detail.split(',').next().unwrap_or(detail)
-            );
-            ty.data = TypeData::StringAlias;
-            untyped = true;
-        }
-    }
-    if untyped {
-        resolve_schema_refs(types);
-    }
-}
-
 /// Makes `readOnly` fields optional in the schemas sent in requests, and `writeOnly` ones in
 /// the schemas received in responses, so that callers need not invent the server's values.
 pub(crate) fn relax_access_modes<'a>(

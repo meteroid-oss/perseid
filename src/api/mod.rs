@@ -80,7 +80,6 @@ impl Api {
             errors.push(format!("{e:#}"));
         }
         errors.extend(types::clashing_type_names(&types));
-        types::untype_clashing_enums(&mut types);
         errors.extend(types::clashing_identifiers(&types));
         ensure!(
             errors.is_empty(),

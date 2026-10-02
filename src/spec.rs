@@ -111,6 +111,7 @@ pub(crate) fn api_with_renames(
     upgrade::boolean_schemas(&mut doc);
     normalize::normalize(&mut doc)?;
     let renames = normalize::rename_reserved_schemas(&mut doc, &filters.reserved);
+    warn_ignored_servers(&doc);
     let raw = doc;
     // `OpenApi` borrows its version string, so it cannot deserialize from a `Value`.
     let doc = serde_json::to_string(&raw)?;
@@ -127,6 +128,53 @@ pub(crate) fn api_with_renames(
         filters,
     )?;
     Ok((api, renames))
+}
+
+/// Warns about each operation whose path item or operation `servers` name a URL the root
+/// `servers` do not: the generated client sends every operation to its one base URL.
+fn warn_ignored_servers(doc: &Value) {
+    let urls = |servers: &Value| -> Vec<String> {
+        servers
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s["url"].as_str().map(str::to_owned))
+            .collect()
+    };
+    let root = urls(&doc["servers"]);
+    let Some(paths) = doc["paths"].as_object() else {
+        return;
+    };
+    for (path, item) in paths {
+        let Some(item) = item.as_object() else {
+            continue;
+        };
+        for (method, op) in item {
+            if ![
+                "get", "put", "post", "delete", "options", "head", "patch", "trace",
+            ]
+            .contains(&method.as_str())
+            {
+                continue;
+            }
+            let own = match op.get("servers").or_else(|| item.get("servers")) {
+                Some(servers) => urls(servers),
+                None => continue,
+            };
+            if own.is_empty() || own.iter().all(|u| root.contains(u)) {
+                continue;
+            }
+            let id = op["operationId"].as_str().unwrap_or(path);
+            let _span = tracing::warn_span!("operation", name = %id).entered();
+            tracing::warn!(
+                "{} {path} declares its own `servers` ({}), which perseid ignores: the SDK sends it \
+                 to the client's base URL; move the operation to a spec of its own, or set \
+                 the base URL of the client when creating it",
+                method.to_uppercase(),
+                own.join(", ")
+            );
+        }
+    }
 }
 
 fn webhooks(spec: &OpenApi) -> Vec<String> {
