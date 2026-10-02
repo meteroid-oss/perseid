@@ -1,10 +1,28 @@
-{% from "types/macros.ts.jinja" import js_type -%}
-{% for c in referenced_components -%}
-import type { {{ c | to_upper_camel_case }} } from "./{{ c | to_lower_camel_case }}.js";
-{% endfor -%}
-{% for c in union_refs | default([]) if c != type.name and c not in referenced_components -%}
-import type { {{ c | to_upper_camel_case }} } from "./{{ c | to_lower_camel_case }}.js";
-{% endfor -%}
+{% import "types/macros.ts.jinja" as m -%}
+{% set type_name = type.name | to_upper_camel_case -%}
+{#- The serializer converts what the target needs (int64 values, dates, models); for plain
+    JSON values it is the identity. -#}
+{% set serializer -%}
+/** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
+export const {{ type_name }}Serializer = {
+    parse(json: any): {{ type_name }} {
+        return {{ m.from_json("json", type.target) if m.converted(type.target) else "json" }};
+    },
 
+    serialize(value: {{ type_name }}): any {
+        return {{ m.to_json("value", type.target) if m.converted(type.target, true) else "value" }};
+    },
+};
+{%- endset -%}
+{% for c in (referenced_components | list) + (union_refs | default([]) | reject("in", referenced_components) | list) if c != type.name -%}
+{% set c_name = c | to_upper_camel_case -%}
+{% if (c_name ~ "Serializer.") in serializer -%}
+import { type {{ c_name }}, {{ c_name }}Serializer } from "./{{ c | to_lower_camel_case }}.js";
+{% else -%}
+import type { {{ c_name }} } from "./{{ c | to_lower_camel_case }}.js";
+{% endif -%}
+{% endfor %}
 {{ doc_comment }}
-export type {{ type.name | to_upper_camel_case }} = {{ js_type(type.target) }};
+export type {{ type_name }} = {{ m.js_type(type.target) }};
+
+{{ serializer }}

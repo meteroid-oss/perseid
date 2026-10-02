@@ -1,11 +1,14 @@
 {% set type_name = type.name | to_upper_camel_case -%}
-{% set ns = namespace(names=[]) -%}
-{% for name, value in type.variants %}{% set ns.names = ns.names + [name] %}{% endfor -%}
+{% set ns = namespace(names=[], unsafe=false) -%}
+{% for name, value in type.variants %}{% set ns.names = ns.names + [name] %}{% if value > 9007199254740991 or value < -9007199254740991 %}{% set ns.unsafe = true %}{% endif %}{% endfor -%}
 {% set members = ns.names | idents("pascal", none, "schema `" ~ type.name ~ "`") -%}
+{#- A value beyond `Number.MAX_SAFE_INTEGER` cannot be a number literal: unless int64 values are
+    numbers, the values are int64 ones, `bigint` or `string` literals. -#}
+{% set int64 = sdk.int64 | default("number") if ns.unsafe else "number" -%}
 {{ doc_comment }}
 export const {{ type_name }} = {
     {% for name, value in type.variants -%}
-    {{ members[loop.index0] }}: {{ value }},
+    {{ members[loop.index0] }}: {% if int64 == "bigint" %}{{ value }}n{% elif int64 == "string" %}"{{ value }}"{% else %}{{ value }}{% endif %},
     {% endfor -%}
 } as const;
 
@@ -14,10 +17,10 @@ export type {{ type_name }} = (typeof {{ type_name }})[keyof typeof {{ type_name
 /** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
     parse(json: any): {{ type_name }} {
-        return json;
+        return {% if int64 == "bigint" %}BigInt(json) as {{ type_name }}{% elif int64 == "string" %}String(json) as {{ type_name }}{% else %}json{% endif %};
     },
 
     serialize(value: {{ type_name }}): any {
-        return value;
+        return {% if int64 == "string" %}BigInt(value){% else %}value{% endif %};
     },
 };

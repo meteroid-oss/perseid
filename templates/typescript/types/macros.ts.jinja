@@ -62,6 +62,9 @@
         Array.isArray({{ expr }})
     {%- elif json_type == "object" -%}
         isJsonObject({{ expr }})
+    {%- elif json_type == "integer" and sdk.int64 | default("number") == "bigint" -%}
+        {#- `parseJson` reads the integers beyond `Number.MAX_SAFE_INTEGER` as `bigint`. -#}
+        (typeof {{ expr }} === "number" || typeof {{ expr }} === "bigint")
     {%- else -%}
         typeof {{ expr }} === "{{ "number" if json_type == "integer" else json_type }}"
     {%- endif -%}
