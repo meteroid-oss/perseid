@@ -64,6 +64,29 @@
     {%- endif -%}
 {%- endmacro %}
 
+{#- The annotation of a query parameter: a union of scalars or lists of them is typed. -#}
+{% macro param_type(p) -%}
+    {%- if p.typed_union is defined -%}
+        {%- for variant in p.typed_union.union_variants() -%}
+            {%- if not loop.first %} | {% endif -%}
+            {%- if variant.empty %}t.Literal[""]
+            {%- elif variant.type.is_json_object() %}dict[str, t.Any]
+            {%- else %}{{ py_type(variant.type) }}{% endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{ py_type(p.type) }}
+    {%- endif -%}
+{%- endmacro %}
+
+{#- The models the variants of a union reference, each followed by a space. -#}
+{% macro union_refs(ty) -%}
+    {%- for variant in ty.union_variants() -%}
+        {%- if variant.type.is_schema_ref() %}{{ variant.type.to_python() }} {% endif -%}
+        {%- if (variant.type.is_list() or variant.type.is_set()) and variant.type.inner_type().is_schema_ref() -%}
+            {{ variant.type.inner_type().to_python() }} {% endif -%}
+    {%- endfor -%}
+{%- endmacro %}
+
 {#- The `ObjectUnion` metadata telling apart the object variants of `ty`. -#}
 {% macro object_union(ty) -%}
     {%- macro literal(value) -%}

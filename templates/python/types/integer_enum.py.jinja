@@ -3,9 +3,8 @@ from ..serialization import IntEnum
 
 
 class {{ type.name | to_upper_camel_case }}(IntEnum):
-    {% if type.description is defined -%}
-        {{ docstring(type.description) | indent(4) }}
-    {% endif %}
+    {{ docstring(type.description if type.description is defined else "The values of `" ~ type.name ~ "`; others are kept as received.") | indent(4) }}
+
     {%- set members = type.variants | map("first") | list | idents("shouty", "python", "schema `" ~ type.name ~ "`") %}
     {%- for name, value in type.variants %}
     {{ members[loop.index0] }} = {{ value }}

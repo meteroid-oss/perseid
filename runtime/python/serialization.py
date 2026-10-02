@@ -9,8 +9,8 @@ and dependency free.
   field that the API accepts as ``null`` defaults to :data:`UNSET` instead:
   ``UNSET`` is omitted, while ``None`` is sent as ``null`` (to clear a value).
   A required field is always sent.
-* Unknown JSON keys are ignored, and so are enum values and union variants
-  added to the API after this SDK was generated: they are kept as received.
+* JSON properties, enum values and union variants added to the API after
+  this SDK was generated are kept as received, and sent back unchanged.
 * ``Decimal`` values travel as JSON strings, ``datetime`` values as RFC 3339
   strings. Only finite decimals are valid: ``NaN`` and ``Infinity`` are
   rejected in both directions.
@@ -30,12 +30,13 @@ import typing as t
 from decimal import Decimal
 
 __all__ = [
+    "FROM_CONTENT",
     "UNSET",
+    "@@CLIENT_NAME@@Error",
     "BaseModel",
     "Discriminator",
-    "FROM_CONTENT",
     "IntEnum",
-    "@@CLIENT_NAME@@Error",
+    "JSONValue",
     "ModelParseError",
     "StrEnum",
     "TaggedUnionModel",
@@ -49,6 +50,11 @@ __all__ = [
 ]
 
 _M = t.TypeVar("_M", bound="BaseModel")
+
+JSONValue: t.TypeAlias = (
+    "dict[str, JSONValue] | list[JSONValue] | str | int | float | bool | None"
+)
+"""A decoded JSON value."""
 
 
 # `@@CLIENT_NAME@@Error` is defined here rather than in `errors.py` because the
@@ -302,6 +308,7 @@ def parse_datetime(value: t.Any) -> _datetime.datetime:
 # --------------------------------------------------------------------------
 
 _hints_cache: dict[type, dict[str, t.Any]] = {}
+_known_keys_cache: dict[type, frozenset[str] | None] = {}
 
 
 def _type_hints(cls: type) -> dict[str, t.Any]:
@@ -325,7 +332,8 @@ def _namespace(cls: type) -> dict[str, t.Any]:
     if namespace is None:
         namespace = {}
         if __package__:
-            namespace.update(vars(importlib.import_module(".models", __package__)))
+            models = importlib.import_module(".models", __package__)
+            namespace.update({name: getattr(models, name) for name in models.__all__})
         namespace.update(vars(sys.modules[cls.__module__]))
         _namespaces[cls.__module__] = namespace
     return namespace
@@ -503,6 +511,58 @@ class BaseModel:
     def _json_key(cls, name: str) -> str:
         return cls._JSON_KEYS.get(name, name)
 
+    @property
+    def extra_fields(self) -> dict[str, t.Any]:
+        """JSON properties this SDK version does not know, as received.
+
+        They are sent back with the model; add entries to send properties the
+        SDK does not declare yet.
+        """
+        extra: dict[str, t.Any] | None = self.__dict__.get("_extra")
+        if extra is None:
+            extra = self.__dict__["_extra"] = {}
+        return extra
+
+    if not t.TYPE_CHECKING:
+
+        def __getattr__(self, name: str) -> t.Any:
+            extra = self.__dict__.get("_extra")
+            if extra is not None and name in extra and not name.startswith("__"):
+                return extra[name]
+            raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+    @classmethod
+    def _known_keys(cls) -> frozenset[str] | None:
+        """The JSON keys of the fields and of flattened models, ``None`` when unbounded."""
+        if cls not in _known_keys_cache:
+            _known_keys_cache[cls] = cls._field_keys()
+        return _known_keys_cache[cls]
+
+    @classmethod
+    def _field_keys(cls) -> frozenset[str] | None:
+        keys: set[str] = set()
+        hints = _type_hints(cls)
+        for field in dataclasses.fields(cls):
+            if field.name not in cls._FLATTENED:
+                keys.add(cls._json_key(field.name))
+                continue
+            model = _model_of(hints.get(field.name))
+            inner = None if model is None else model._known_keys()
+            if inner is None:
+                return None
+            keys |= inner
+        return frozenset(keys)
+
+    def _keep_extra(self, data: t.Mapping[str, t.Any], known: frozenset[str] | None) -> None:
+        extra = {k: v for k, v in data.items() if known is not None and k not in known}
+        if extra or "_extra" in self.__dict__:
+            self.__dict__["_extra"] = extra
+
+    def _with_extra(self, out: dict[str, t.Any]) -> dict[str, t.Any]:
+        for key, value in self.extra_fields.items():
+            out.setdefault(key, value)
+        return out
+
     def _fields_to_dict(self, skip: t.Container[str] = ()) -> dict[str, t.Any]:
         out: dict[str, t.Any] = {}
         hints = _type_hints(type(self))
@@ -538,6 +598,8 @@ class BaseModel:
             ctx = f"{cls.__name__}.{field.name}"
             if field.name in cls._FLATTENED:
                 kwargs[field.name] = _from_json_value(annotation, data, ctx)
+                if isinstance(kwargs[field.name], BaseModel):
+                    kwargs[field.name]._keep_extra({}, None)
                 continue
             key = cls._json_key(field.name)
             if key in data:
@@ -549,24 +611,38 @@ class BaseModel:
         return kwargs
 
     def to_dict(self) -> dict[str, t.Any]:
-        """Serialize into a JSON-compatible dict."""
-        return self._fields_to_dict()
+        """Serialize into a JSON-compatible dict, with :attr:`extra_fields`."""
+        return self._with_extra(self._fields_to_dict())
 
     def to_json(self) -> str:
+        """Serialize into a JSON string."""
         return json.dumps(self.to_dict())
 
     @classmethod
     def from_dict(cls: type[_M], data: t.Mapping[str, t.Any]) -> _M:
-        """Build a model from a decoded JSON object, ignoring unknown keys."""
+        """Build a model from a decoded JSON object, unknown keys in :attr:`extra_fields`."""
         if not isinstance(data, t.Mapping):
             raise ModelParseError(
                 f"{cls.__name__}: expected an object, got {type(data).__name__}"
             )
-        return cls(**cls._fields_from_dict(data))
+        model = cls(**cls._fields_from_dict(data))
+        model._keep_extra(data, cls._known_keys())
+        return model
 
     @classmethod
     def from_json(cls: type[_M], data: str | bytes) -> _M:
+        """Build a model from a JSON string."""
         return cls.from_dict(json.loads(data))
+
+
+def _model_of(annotation: t.Any) -> type[BaseModel] | None:
+    """The model class of an annotation such as ``Address`` or ``Address | None``."""
+    if t.get_origin(annotation) in _UNION_TYPES:
+        members = [a for a in t.get_args(annotation) if a not in (_NoneType, Unset)]
+        annotation = members[0] if len(members) == 1 else None
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    return None
 
 
 def _accepts_none(annotation: t.Any) -> bool:
@@ -596,16 +672,17 @@ class TaggedUnionModel(BaseModel):
     #: JSON key holding the variant payload; ``None`` when internally tagged
     #: (i.e. the payload's fields sit next to the discriminator).
     _CONTENT_KEY: t.ClassVar[str | None] = None
-    #: Variant name -> model, or model name in the models package (``None``
-    #: for variants without a payload).
-    _VARIANTS: t.ClassVar[t.Mapping[str, str | type[BaseModel] | None]] = {}
+    #: Variant name -> model name in the models package (``None`` for
+    #: variants without a payload).
+    _VARIANTS: t.ClassVar[t.Mapping[str, str | None]] = {}
 
     @classmethod
     def _variant(cls, tag: str) -> type[BaseModel] | None:
         variant = cls._VARIANTS[tag]
-        if isinstance(variant, str):
-            variant = _namespace(cls)[variant]
-        return variant
+        if variant is None:
+            return None
+        model: type[BaseModel] = _namespace(cls)[variant]
+        return model
 
     def __post_init__(self) -> None:
         if getattr(self, self._DISCRIMINATOR_ATTR) is None:
@@ -637,7 +714,15 @@ class TaggedUnionModel(BaseModel):
         elif content is not None:
             raise TypeError(f"{type(self).__name__}: variant {tag!r} must serialize to an object")
         out[self._DISCRIMINATOR] = tag
-        return out
+        return self._with_extra(out)
+
+    @classmethod
+    def _field_keys(cls) -> frozenset[str] | None:
+        keys = super()._field_keys()
+        if keys is None:
+            return None
+        content = set() if cls._CONTENT_KEY is None else {cls._CONTENT_KEY}
+        return keys - {cls._json_key(cls._CONTENT_ATTR)} | {cls._DISCRIMINATOR, *content}
 
     @classmethod
     def from_dict(cls: type[_M], data: t.Mapping[str, t.Any]) -> _M:
@@ -664,6 +749,12 @@ class TaggedUnionModel(BaseModel):
         kwargs = union._fields_from_dict(data, skip=skip)
         kwargs[union._DISCRIMINATOR_ATTR] = tag
         kwargs[union._CONTENT_ATTR] = content
-        return cls(**kwargs)
+        model = cls(**kwargs)
+        known = union._known_keys()
+        if union._CONTENT_KEY is not None:
+            model._keep_extra(data, known)
+        elif isinstance(content, BaseModel) and known is not None:
+            content._keep_extra(content.extra_fields, known)
+        return model
 
 
