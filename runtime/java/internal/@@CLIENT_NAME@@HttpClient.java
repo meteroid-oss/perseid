@@ -508,6 +508,20 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                     this, true, response -> EventStream.typed(response, event -> decodeEvent(event, eventType)));
         }
 
+        /**
+         * Expects a {@code text/event-stream} body whose events carry {@code type} as JSON, for
+         * event types a class cannot name, such as unions or lists.
+         *
+         * @param <T> the event type
+         * @param type the event type
+         * @return the exchange
+         */
+        public <T> Exchange<EventStream<T>> returningEvents(TypeReference<T> type) {
+            JavaType eventType = objectMapper.getTypeFactory().constructType(type);
+            return new Exchange<>(
+                    this, true, response -> EventStream.typed(response, event -> decodeEvent(event, eventType)));
+        }
+
         private Request request(boolean streaming) {
             RequestBody content = body;
             if (json != null) {

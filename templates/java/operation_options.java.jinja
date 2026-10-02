@@ -43,7 +43,9 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.OffsetDateTime;
 import java.net.URI;
-{% for c in referenced_components -%}
+{#- Aliases have no model class: their target is imported instead. -#}
+{% set alias_events = resource.operations | selectattr("event_json_type", "defined") | map(attribute="event_schema_name") | list -%}
+{% for c in referenced_components if c not in alias_events -%}
 import {{ sdk.java_package }}.models.{{ c | to_upper_camel_case }};
 {% endfor -%}
 

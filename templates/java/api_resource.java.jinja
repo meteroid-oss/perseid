@@ -26,7 +26,14 @@
         {% set bu.names = bu.names + [op.response_body_union] -%}
         {% set bu.decls = bu.decls + [[op.response_body_json_type, op.response_body_union]] -%}
     {% endif -%}
+    {#- An event schema that is an alias of a union: the union, named after the alias. -#}
+    {% if op.event_json_type is defined and m.has_union(op.event_json_type) and op.event_schema_name not in bu.names -%}
+        {% set bu.names = bu.names + [op.event_schema_name] -%}
+        {% set bu.decls = bu.decls + [[op.event_json_type, op.event_schema_name]] -%}
+    {% endif -%}
 {% endfor -%}
+{#- Aliases have no model class: their target is imported instead. -#}
+{% set alias_events = resource.operations | selectattr("event_json_type", "defined") | map(attribute="event_schema_name") | list -%}
 {#- Everything both resource classes need of each operation. -#}
 {% set ops = namespace(list=[]) -%}
 {% for op in resource.operations -%}
@@ -36,7 +43,11 @@
     {% set returns = "returningNothing()" -%}
     {% set res_type = "Void" -%}
     {% if op.response_is_event_stream -%}
-        {% if op.event_schema_name is defined -%}
+        {% if op.event_json_type is defined -%}
+            {% set event_ty = m.java_type(op.event_json_type, resource_type_name ~ "." ~ op.event_schema_name) -%}
+            {% set res_type = STREAM ~ "<" ~ event_ty ~ ">" -%}
+            {% set returns = "returningEvents(new TypeReference<" ~ event_ty ~ ">() {})" -%}
+        {% elif op.event_schema_name is defined -%}
             {% set event_ty = op.event_schema_name | to_upper_camel_case -%}
             {% set res_type = STREAM ~ "<" ~ event_ty ~ ">" -%}
             {% set returns = "returningEvents(" ~ event_ty ~ ".class)" -%}
@@ -334,7 +345,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-{% for c in referenced_components -%}
+{% for c in referenced_components if c not in alias_events -%}
 import {{ sdk.java_package }}.models.{{ c | to_upper_camel_case }};
 {% endfor %}
 
@@ -436,7 +447,7 @@ import java.io.IOException;
 import okhttp3.Headers;
 import okhttp3.HttpUrl;
 {% for c in referenced_components -%}
-{% if c | to_upper_camel_case != resource_type_name -%}
+{% if c | to_upper_camel_case != resource_type_name and c not in alias_events -%}
 import {{ sdk.java_package }}.models.{{ c | to_upper_camel_case }};
 {% endif -%}
 {% endfor %}

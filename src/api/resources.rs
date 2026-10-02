@@ -427,6 +427,12 @@ impl Resource {
             }
             res.extend(
                 operation
+                    .event_json_type
+                    .iter()
+                    .flat_map(|ty| ty.referenced_schema().into_iter().chain(ty.union_refs())),
+            );
+            res.extend(
+                operation
                     .error_response_schema_names
                     .iter()
                     .map(String::as_str),
@@ -654,6 +660,14 @@ pub(crate) struct Operation {
     /// Schema of the JSON `data` of each event, when the `text/event-stream` response names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) event_schema_name: Option<String>,
+    /// Type of each event when `event_schema_name` is an alias, for SDKs without named aliases:
+    /// the alias target, a union named after the alias.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_field_type"
+    )]
+    pub(crate) event_json_type: Option<FieldType>,
     /// Boolean body property the `_stream` twin sets to `true`, such as OpenAI's `stream`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stream_property: Option<String>,
@@ -934,6 +948,7 @@ impl Operation {
             response_is_event_stream: response.kind == ResponseKind::EventStream,
             response_may_be_empty: response.may_be_empty,
             event_schema_name: response.event_schema_name,
+            event_json_type: None,
             stream_property: None,
             json_or_event_stream: response.also_event_stream,
             body_stream_property,
@@ -970,6 +985,13 @@ impl Operation {
         self.error_response_schema_names
             .retain(|name| !aliases.contains_key(name));
         self.errors.retain(|_, name| !aliases.contains_key(name));
+        if let Some(target) = self
+            .event_schema_name
+            .as_ref()
+            .and_then(|name| aliases.get(name))
+        {
+            self.event_json_type = Some(target.clone());
+        }
         if let Some(name) = self.response_body_schema_name.clone()
             && let Some(target) = aliases.get(&name)
         {
@@ -1119,7 +1141,8 @@ impl Operation {
             .iter_mut()
             .flat_map(|p| std::iter::once(&mut p.r#type).chain(p.typed_union.as_mut()))
             .chain(self.request_body_json_type.as_mut())
-            .chain(self.response_body_json_type.as_mut());
+            .chain(self.response_body_json_type.as_mut())
+            .chain(self.event_json_type.as_mut());
         for ty in types {
             ty.settle_object_unions(best_match, counts);
         }
@@ -2132,6 +2155,28 @@ mod tests {
         let stream = op.event_stream_variant().unwrap();
         assert_eq!(stream.event_schema_name.as_deref(), Some("Chunk"));
         assert_eq!(stream.stream_property.as_deref(), Some("stream"));
+    }
+
+    #[test]
+    fn inlined_event_aliases_keep_their_name_and_type_the_events() {
+        let mut op: Operation = serde_json::from_value(json!({
+            "id": "events", "name": "events", "method": "get", "path": "/events",
+            "deprecated": false, "path_params": [], "path_styles": {}, "typed_path_params": [],
+            "header_params": [], "query_params": [], "request_body_all_optional": false,
+            "request_body_optional": false, "request_body_kind": "none", "multipart_fields": [],
+            "response_is_event_stream": true, "event_schema_name": "Event",
+        }))
+        .unwrap();
+        let union = FieldType::Union {
+            variants: vec![],
+            mode: Default::default(),
+            decode: Default::default(),
+            requested: None,
+        };
+        let aliases = BTreeMap::from([("Event".to_owned(), union.clone())]);
+        op.inline_body_aliases(&aliases).unwrap();
+        assert_eq!(op.event_schema_name.as_deref(), Some("Event"));
+        assert_eq!(op.event_json_type, Some(union));
     }
 
     #[test]

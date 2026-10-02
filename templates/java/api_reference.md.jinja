@@ -39,7 +39,8 @@
     ({{ args.list | join(", ") }})
 {%- endmacro -%}
 {% macro returned(op) -%}
-    {%- if op.response_is_event_stream %}EventStream<{{ op.event_schema_name | to_upper_camel_case if op.event_schema_name is defined else "SseEvent" }}>
+    {%- if op.response_is_event_stream and op.event_json_type is defined %}EventStream<{{ import_m.java_type(op.event_json_type, op.event_schema_name) }}>
+    {%- elif op.response_is_event_stream %}EventStream<{{ op.event_schema_name | to_upper_camel_case if op.event_schema_name is defined else "SseEvent" }}>
     {%- elif op.response_is_binary %}byte[]
     {%- elif op.response_is_text %}String
     {%- else -%}
@@ -51,7 +52,8 @@
     {%- endif -%}
 {%- endmacro -%}
 {% macro returns(op) -%}
-    {%- if op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
+    {%- if op.response_is_event_stream and op.event_json_type is defined %}stream of `{{ import_m.java_type(op.event_json_type, op.event_schema_name) }}`
+    {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
     {%- elif op.response_is_binary %}bytes
     {%- elif op.response_is_text %}text
     {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
