@@ -528,6 +528,28 @@ class ClientTest(unittest.TestCase):
         shape = asyncio.run(run())
         self.assertIsInstance(shape.content, models.Circle)
 
+    def test_a_bodiless_2xx_next_to_a_json_one_is_none(self) -> None:
+        update = models.WidgetUpdate(name="n")
+        responses = (httpx.Response(204), httpx.Response(200, json={"id": "w", "name": "n"}))
+        with client(self.respond(*responses)) as api:
+            self.assertIsNone(api.widgets.update("w", update))
+            self.assertEqual(api.widgets.update("w", update), models.Widget(id="w", name="n"))
+        with client(self.respond(httpx.Response(204))) as api:
+            raw = api.with_raw_response.widgets.update("w", update)
+        self.assertEqual((raw.status_code, raw.parse()), (204, None))
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(204)
+
+        async def run() -> object:
+            transport = httpx.MockTransport(handler)
+            async with torture.AsyncTorture(
+                "token", http_client=httpx.AsyncClient(transport=transport)
+            ) as api:
+                return await api.widgets.update("w", update)
+
+        self.assertIsNone(asyncio.run(run()))
+
     def test_keyword_resources_are_escaped(self) -> None:
         reserved = SAMPLES["Reserved"]
         with client(self.respond(httpx.Response(200, json=reserved))) as api:

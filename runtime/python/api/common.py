@@ -75,6 +75,7 @@ __all__ = [
     "ErrorTypes",
     "QueryParams",
     "Timeout",
+    "decode_optional_response",
     "decode_response",
     "default_retry_schedule",
     "serialize_form_body",
@@ -298,6 +299,21 @@ def decode_response(response: httpx.Response, type_: object) -> object:
     # `ValueError`s; `TypeError` covers a JSON shape the model code trips on.
     except (ValueError, TypeError) as exc:
         raise APIResponseValidationError(response, str(exc)) from exc
+
+
+@t.overload
+def decode_optional_response(response: httpx.Response, type_: type[_T]) -> _T | None: ...
+
+
+@t.overload
+def decode_optional_response(response: httpx.Response, type_: object) -> t.Any: ...
+
+
+def decode_optional_response(response: httpx.Response, type_: object) -> object:
+    """Like :func:`decode_response`, but ``None`` for a 2xx without a body, such as a 204."""
+    if not response.content:
+        return None
+    return decode_response(response, type_)
 
 
 def _retry_after(response: httpx.Response) -> float | None:

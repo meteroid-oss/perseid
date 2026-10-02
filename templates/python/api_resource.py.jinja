@@ -12,6 +12,10 @@ from __future__ import annotations
 {% set body_kinds = resource.operations | map(attribute="request_body_kind") | list -%}
 {% set streams = resource.operations | selectattr("response_is_event_stream") | list -%}
 {% set paginated = resource.operations | selectattr("pagination", "defined") | list -%}
+{% set may_be_empty = namespace(any=false) -%}
+{% for op in resource.operations if op.response_may_be_empty | default(false) and op.pagination is not defined and not (op.response_is_event_stream or op.response_is_binary or op.response_is_text) -%}
+    {% if op.response_body_json_type is defined or op.response_body_schema_name is defined %}{% set may_be_empty.any = true %}{% endif -%}
+{% endfor -%}
 {#- Models a method names that `referenced_components` leaves out: event and typed union ones. -#}
 {% set extra_models = namespace(names=[]) -%}
 {% for op in resource.operations -%}
@@ -55,6 +59,9 @@ from .common import (
     ApiBaseSync,
     ApiRequest,
     Timeout,
+{%- if may_be_empty.any %}
+    decode_optional_response,
+{%- endif %}
     decode_response,
     serialize_form_body,
     serialize_query_params,
@@ -155,6 +162,9 @@ class {{ class_name }}({{ base_class }}):
 {%- set return_type = "str" %}
 {%- elif response_type is not none %}
 {%- set return_type = response_type %}
+{%- if op.response_may_be_empty | default(false) and op.pagination is not defined %}
+{%- set return_type = response_type ~ " | None" %}
+{%- endif %}
 {%- else %}
 {%- set return_type = "None" %}
 {%- endif %}
@@ -396,12 +406,15 @@ class {{ class_name }}({{ base_class }}):
         return response.content
 {%- elif op.response_is_text %}
         return response.text
-{%- elif return_type != "None" and sdk.flat_unions %}
-        {#- A union alias is not a class, so `decode_response` cannot infer its type. #}
-        decoded: {{ unshadow(return_type) }} = decode_response(response, {{ return_type }})
-        return decoded
 {%- elif return_type != "None" %}
-        return decode_response(response, {{ return_type }})
+{%- set decode = "decode_optional_response" if return_type != response_type else "decode_response" %}
+{%- if sdk.flat_unions %}
+        {#- A union alias is not a class, so `decode_response` cannot infer its type. #}
+        decoded: {{ unshadow(return_type) }} = {{ decode }}(response, {{ response_type }})
+        return decoded
+{%- else %}
+        return {{ decode }}(response, {{ response_type }})
+{%- endif %}
 {%- endif %}
 {%- endif %}
 {%- endfor %}
