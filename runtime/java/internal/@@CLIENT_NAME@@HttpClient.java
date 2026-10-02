@@ -35,6 +35,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -331,6 +332,32 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
          */
         public <T> Exchange<T> returning(JavaType type) {
             return new Exchange<>(this, false, response -> readJson(response, type));
+        }
+
+        /**
+         * Expects a JSON body of {@code type}, or none.
+         *
+         * @param <T> the body type
+         * @param type the body class
+         * @return the exchange, empty without a body
+         */
+        public <T> Exchange<Optional<T>> returningOptional(Class<T> type) {
+            return returningOptional(objectMapper.getTypeFactory().constructType(type));
+        }
+
+        /**
+         * Expects a JSON body of {@code type}, or none.
+         *
+         * @param <T> the body type
+         * @param type the body type
+         * @return the exchange, empty without a body
+         */
+        public <T> Exchange<Optional<T>> returningOptional(TypeReference<T> type) {
+            return returningOptional(objectMapper.getTypeFactory().constructType(type));
+        }
+
+        private <T> Exchange<Optional<T>> returningOptional(JavaType type) {
+            return new Exchange<>(this, false, response -> Optional.ofNullable(readJson(response, type)));
         }
 
         /**
@@ -771,14 +798,14 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
     /** The delay before retrying after {@code response}, or null to return it. */
     private Duration retryDelay(Response response, int attempt) {
         int status = response.code();
-        if (status != 408 && status != 429 && (status < 500 || status == 501)) {
+        if (status != 408 && status != 429 && status < 500) {
             return null;
         }
         Duration delay = retryAfter(response);
-        if (delay == null) {
+        if (delay == null || delay.isNegative() || delay.compareTo(MAX_RETRY_AFTER) > 0) {
             return backoff(attempt);
         }
-        return delay.compareTo(MAX_RETRY_AFTER) > 0 ? null : delay;
+        return delay;
     }
 
     /** The scheduled delay, the last one past the schedule, with jitter between half and all of it. */
@@ -795,7 +822,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         String millis = response.header("retry-after-ms");
         if (millis != null) {
             try {
-                return Duration.ofMillis(Math.max(0, (long) Double.parseDouble(millis.trim())));
+                return Duration.ofMillis((long) Double.parseDouble(millis.trim()));
             } catch (NumberFormatException ignored) {
                 // Fall back to Retry-After.
             }
@@ -805,12 +832,11 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
             return null;
         }
         try {
-            return Duration.ofSeconds(Math.max(0, Long.parseLong(header.trim())));
+            return Duration.ofSeconds(Long.parseLong(header.trim()));
         } catch (NumberFormatException e) {
             try {
                 ZonedDateTime at = ZonedDateTime.parse(header.trim(), DateTimeFormatter.RFC_1123_DATE_TIME);
-                Duration delay = Duration.between(ZonedDateTime.now(at.getZone()), at);
-                return delay.isNegative() ? Duration.ZERO : delay;
+                return Duration.between(ZonedDateTime.now(at.getZone()), at);
             } catch (DateTimeParseException ignored) {
                 return null;
             }
