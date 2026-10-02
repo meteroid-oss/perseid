@@ -193,11 +193,14 @@ describe("client", () => {
   it("does not retry a failed PATCH without an idempotency key", async () => {
     const { calls, torture } = client([json({}, 500)], { retryScheduleInMs: [1, 1] });
     await assert.rejects(torture.things.update("t1", {}), (error) => {
-      assert.ok(error instanceof sdk.ApiException);
+      assert.ok(error instanceof sdk.APIError);
       assert.equal(error.status, 500);
       return true;
     });
     assert.equal(calls.length, 1);
+    const limited = client([json({}, 429, { "retry-after": "0" })]);
+    await assert.rejects(limited.torture.things.update("t1", {}), sdk.RateLimitError);
+    assert.equal(limited.calls.length, 1);
   });
 
   it("stops retrying when the caller aborts", async () => {
@@ -210,7 +213,7 @@ describe("client", () => {
     ]);
     await assert.rejects(
       torture.things.retrieve("t1", { signal: controller.signal }),
-      (error) => error.name === "AbortError"
+      (error) => error instanceof sdk.APIUserAbortError && error.cause.name === "AbortError"
     );
     assert.equal(calls.length, 1);
   });
@@ -223,7 +226,10 @@ describe("client", () => {
     const alive = setInterval(() => {}, 1000);
     await assert.rejects(
       torture.things.retrieve("t1", { timeout: 10 }),
-      (error) => error instanceof sdk.ApiTimeoutError && error.name === "TimeoutError"
+      (error) =>
+        error instanceof sdk.APIConnectionTimeoutError &&
+        error instanceof sdk.ApiTimeoutError &&
+        error.name === "APIConnectionTimeoutError"
     );
     clearInterval(alive);
     assert.equal(calls.length, 2);
@@ -234,7 +240,7 @@ describe("client", () => {
     const { torture } = client([json(body, 422, { "x-request-id": "req_1" })]);
     await assert.rejects(torture.things.create({ name: "n", kind: "alpha" }), (error) => {
       assert.ok(error instanceof sdk.UnprocessableEntityError);
-      assert.ok(error instanceof sdk.ApiError && error instanceof sdk.ApiException);
+      assert.ok(error instanceof sdk.APIError && error instanceof sdk.TortureError);
       assert.equal(error.name, "UnprocessableEntityError");
       assert.equal(error.status, 422);
       assert.deepEqual(error.error, body);
@@ -244,7 +250,7 @@ describe("client", () => {
     });
   });
 
-  it("keeps undeclared and unparsable error bodies as text", async () => {
+  it("keeps unparsable error bodies as text, and undeclared ones as JSON", async () => {
     const { torture } = client([new Response("gone", { status: 404 })]);
     await assert.rejects(torture.things.retrieve("t1"), (error) => {
       assert.ok(error instanceof sdk.NotFoundError);
@@ -253,7 +259,11 @@ describe("client", () => {
       return true;
     });
     const { torture: other } = client([json({}, 418), json({}, 503)], { numRetries: 0 });
-    await assert.rejects(other.things.retrieve("t1"), (error) => error.constructor === sdk.ApiError);
+    await assert.rejects(other.things.retrieve("t1"), (error) => {
+      assert.equal(error.constructor, sdk.APIError);
+      assert.deepEqual(error.error, {});
+      return true;
+    });
     await assert.rejects(other.things.retrieve("t1"), sdk.InternalServerError);
     assert.equal(sdk.Torture.NotFoundError, sdk.NotFoundError);
   });

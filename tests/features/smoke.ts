@@ -1,5 +1,11 @@
 import { strict as assert } from "node:assert";
-import { Features } from "../src";
+import {
+  APIConnectionError,
+  AuthenticationError,
+  Features,
+  FeaturesError,
+  type Widget,
+} from "../src";
 
 const serverUrl = process.env.FEATURES_URL!;
 
@@ -12,7 +18,7 @@ async function collect<T extends { id: string }>(items: AsyncIterable<T>): Promi
 }
 
 async function main() {
-  const client = new Features("tok", { serverUrl });
+  const client = new Features({ apiKey: "tok", serverUrl });
   assert.equal((await client.account.retrieveHealth()).status, "||");
   assert.equal((await client.account.retrieveMachine()).status, "Bearer tok||");
   assert.deepEqual(await collect(client.widgets.listIter()), ["w1", "w2", "w3"]);
@@ -31,7 +37,57 @@ async function main() {
 
   const keyed = new Features(null, { serverUrl, apiKeys: { apiKey: "k" } });
   assert.deepEqual(await collect(keyed.widgets.listIter()), ["w1", "w2", "w3"]);
-  await assert.rejects(new Features(null, { serverUrl }).widgets.list());
+  await assert.rejects(new Features({ serverUrl }).widgets.list(), (error: unknown) => {
+    assert.ok(error instanceof AuthenticationError && error instanceof FeaturesError);
+    assert.deepEqual(error.error, { error: "unauthorized" });
+    assert.equal(error.requestId, "req_mock");
+    return true;
+  });
+  await assert.rejects(
+    new Features({ apiKey: "tok", serverUrl: "http://127.0.0.1:9", maxRetries: 0 }).widgets.list(),
+    APIConnectionError
+  );
+
+  process.env.FEATURES_API_KEY = "env";
+  process.env.FEATURES_BASE_URL = serverUrl;
+  assert.equal((await new Features().account.retrieveMachine()).status, "Bearer env||");
+  assert.equal((await new Features({ apiKey: "arg" }).account.retrieveMachine()).status, "Bearer arg||");
+  delete process.env.FEATURES_API_KEY;
+  delete process.env.FEATURES_BASE_URL;
+
+  const first = await client.widgets.list();
+  assert.deepEqual(first.items.map((widget: Widget) => widget.id), ["w1", "w2"]);
+  assert.equal((first.items[0] as Widget & { color?: string }).color, "red");
+  assert.ok(first.hasNextPage());
+  const second = await first.getNextPage();
+  assert.deepEqual(second.items.map((widget: Widget) => widget.id), ["w3"]);
+  assert.equal(second.body.nextCursor, null);
+  assert.ok(!second.hasNextPage());
+  const pageIds = [];
+  for await (const page of first.iterPages()) {
+    pageIds.push(page.items.length);
+  }
+  assert.deepEqual(pageIds, [2, 1]);
+  assert.deepEqual(await collect(client.widgets.list()), ["w1", "w2", "w3"]);
+
+  const { data: health, response, requestId } = await client.account
+    .retrieveHealth()
+    .withResponse();
+  assert.equal(health.status, "||");
+  assert.equal(response.status, 200);
+  assert.equal(requestId, "req_mock");
+  assert.equal((await client.account.retrieveHealth().asResponse()).headers.get("x-request-id"), "req_mock");
+
+  const request = { prompt: "hey" };
+  assert.equal((await client.streaming.createCompletion(request)).text, "HEY");
+  const stream = await client.streaming.createCompletionStream(request);
+  const deltas = [];
+  for await (const chunk of stream) {
+    deltas.push(chunk.delta);
+    assert.equal(stream.lastEvent?.event, "message");
+  }
+  assert.deepEqual(deltas, ["h", "e", "y"]);
+  assert.deepEqual(request, { prompt: "hey" });
 
   const events = [];
   for await (const event of await client.streaming.retrieveEventsStream({ topic: "news" })) {
@@ -95,10 +151,10 @@ async function main() {
       "&shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b"
   );
   assert.equal(
-    (await client.wire.betaSearch({ limit: 2, features: "x,y" })).status,
+    (await client.wire.betaSearch({ limit: 2, features: ["x", "y"] })).status,
     "beta=true&limit=2|features=x,y"
   );
-  const image = await client.wire.updateImage("42", new TextEncoder().encode("png"));
+  const image = await client.wire.updateImage(42, new TextEncoder().encode("png"));
   assert.equal(image.status, "42:image/png:png");
   console.log("typescript smoke test passed");
 }
