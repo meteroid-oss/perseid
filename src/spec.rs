@@ -6,6 +6,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    time::Duration,
 };
 
 use aide::openapi::OpenApi;
@@ -55,7 +56,9 @@ const MAX_SPEC_BYTES: u64 = 200 * 1024 * 1024;
 /// Reads an OpenAPI document (JSON or YAML) from a path or an http(s) URL, as JSON text, upgraded to 3.1 when it is 3.0.
 pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
     let text = if location.starts_with("https://") || location.starts_with("http://") {
-        ureq::get(location)
+        let agent: ureq::Agent = crate::http::config(Duration::from_secs(300)).build().into();
+        agent
+            .get(location)
             .call()
             .and_then(|mut r| {
                 r.body_mut()

@@ -24,10 +24,8 @@ fn base(key: &str, default: &str) -> String {
 }
 
 fn agent() -> Agent {
-    Agent::config_builder()
+    crate::http::config(Duration::from_secs(60))
         .http_status_as_error(false)
-        .user_agent(concat!("perseid/", env!("CARGO_PKG_VERSION")))
-        .timeout_global(Some(Duration::from_secs(60)))
         .build()
         .into()
 }
