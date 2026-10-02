@@ -13,9 +13,11 @@ use super::{
 {% set recursive = recursive_refs | map("to_upper_camel_case") | list -%}
 {% set type_name = type.name | to_upper_camel_case -%}
 {% set defaults = type.discriminator_defaults | default({}) -%}
-{% set defaulted = type.fields | selectattr("required") | rejectattr("nullable") | rejectattr("flatten") | selectattr("name", "in", defaults) | map(attribute="name") | list -%}
+{% set required = type.fields | selectattr("required") | rejectattr("nullable") | list -%}
+{% set defaulted = required | selectattr("name", "in", defaults) | map(attribute="name") | list -%}
+{% set has_default = (required | length) == (defaulted | length) -%}
 {{ doc_comment }}
-#[derive(Clone, Debug, {% if not defaulted %}Default, {% endif %}PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, {% if has_default and not defaulted %}Default, {% endif %}PartialEq, Deserialize, Serialize)]
 {% set extra = extra_name(type.fields) -%}
 pub struct {{ type_name }} {
     {{ struct_fields(type.fields, recursive, patch_body, owner=type_name) }}
@@ -25,7 +27,7 @@ pub struct {{ type_name }} {
 impl {{ type_name }} {
     {{ struct_new(type.fields, recursive, owner=type_name, defaults=defaults, extra=extra) }}
 }
-{% if defaulted %}
+{% if has_default and defaulted %}
 
 /// Sets {% for field in defaulted %}{% if not loop.first %}, {% endif %}`{{ field }}` to `{{ defaults[field] }}`{% endfor %}.
 impl {{ default_trait() }} for {{ type_name }} {

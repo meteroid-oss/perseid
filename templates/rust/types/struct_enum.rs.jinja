@@ -22,7 +22,7 @@ use super::{
 
 {% if shared -%}
 {{ doc_comment }}
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct {{ type_name }} {
     {{ struct_fields(shared, recursive, patch_body, owner=type_name) }}
 
@@ -34,8 +34,9 @@ pub struct {{ type_name }} {
 
 {% for variant in type.variants if variant.type == "struct" and variant.fields -%}
 {% set struct_name = type_name ~ (variant.name | to_rust_variant) ~ "Variant" -%}
+{% set required = variant.fields | selectattr("required") | rejectattr("nullable") | rejectattr("name", "equalto", tag) | list -%}
 /// The `{{ variant.name }}` variant of [`{{ enum_name }}`].
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, {% if not required %}Default, {% endif %}PartialEq, Deserialize, Serialize)]
 {% set extra = extra_name(variant.fields) -%}
 pub struct {{ struct_name }} {
     {{ struct_fields(variant.fields, recursive, false, tag, owner=struct_name) }}
@@ -62,15 +63,11 @@ Box<{{ variant.schema_ref | to_upper_camel_case }}>
 ///
 {% endif -%}
 /// Variants are told apart by `{{ tag }}`{% if adjacent %}, their fields sit under `{{ type.content_field }}`{% endif %}.
-{% set unit_default = not payload(type.variants[0]) -%}
-#[derive(Clone, Debug, {% if unit_default %}Default, {% endif %}PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum {{ enum_name }} {
     {% for variant in type.variants -%}
         {% set p = payload(variant) -%}
-        {% if loop.first and unit_default -%}
-        #[default]
-        {% endif -%}
         {{ variant.name | to_rust_variant }}{% if p %}({{ p }}){% endif %},
     {% endfor -%}
     /// A variant this version of the SDK does not know yet, as received.
@@ -90,13 +87,6 @@ impl {{ enum_name }} {
     }
 }
 
-{% if not unit_default -%}
-impl Default for {{ enum_name }} {
-    fn default() -> Self {
-        Self::{{ type.variants[0].name | to_rust_variant }}(Default::default())
-    }
-}
-{% endif %}
 
 impl Serialize for {{ enum_name }} {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
