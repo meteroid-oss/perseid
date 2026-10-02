@@ -1,4 +1,4 @@
-package unions
+package unionssdk
 
 import (
 	"encoding/json"
@@ -222,8 +222,8 @@ func TestRefinedAliasVariantsResolveToTheirSchema(t *testing.T) {
 }
 
 func TestOpenEnumsKeepUnknownValues(t *testing.T) {
-	if !ModelIds("alpha-1").IsKnown() || ModelIds("zeta").IsKnown() {
-		t.Error("ModelIds.IsKnown")
+	if !ModelIDs("alpha-1").IsKnown() || ModelIDs("zeta").IsKnown() {
+		t.Error("ModelIDs.IsKnown")
 	}
 	if len(AllVoiceValues) != 4 || len(AllIncludeValues) != 3 {
 		t.Errorf("merged enums: %v %v", AllVoiceValues, AllIncludeValues)
