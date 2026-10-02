@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::{
     api::{
         Api, Resource, Types,
-        types::{Type, TypeData},
+        types::{self, Type, TypeData},
     },
     postprocessing::Postprocessor,
     template,
@@ -184,6 +184,7 @@ impl Generator<'_> {
                 .collect::<std::collections::BTreeMap<_, _>>(),
         );
         let errors = errors_context(&api);
+        let recursive_aliases = types::recursive_aliases(&api.types);
         for (name, ty) in &api.types {
             let mut referenced_components = ty.referenced_components();
             // A recursive type refers to itself, which is not an import.
@@ -211,6 +212,7 @@ impl Generator<'_> {
                     type => ty,
                     referenced_components,
                     recursive_refs,
+                    recursive_alias => recursive_aliases.contains(name),
                     union_refs,
                     patch_body,
                     inherited_fields,

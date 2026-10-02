@@ -79,7 +79,7 @@ DEFAULT_TIMEOUT: float = @@TIMEOUT@@
 DEFAULT_NUM_RETRIES = 2
 _MAX_BACKOFF = 8.0
 _MAX_RETRY_AFTER = 60.0
-_REPLAYABLE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "PUT", "DELETE"})
+_REPLAYABLE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE", "PUT", "DELETE"})
 _UNSENT_ERRORS = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
 
 QueryParams = list[tuple[str, str]]

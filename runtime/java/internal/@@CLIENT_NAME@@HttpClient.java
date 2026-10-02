@@ -41,7 +41,7 @@ import java.util.concurrent.ThreadLocalRandom;
 public class @@CLIENT_NAME@@HttpClient {
     private static final MediaType JSON = MediaType.parse("application/json");
     private static final Set<String> IDEMPOTENT_METHODS =
-            Set.of("GET", "HEAD", "PUT", "DELETE", "OPTIONS");
+            Set.of("GET", "HEAD", "PUT", "DELETE", "OPTIONS", "TRACE");
     private static final Set<String> BODY_METHODS = Set.of("POST", "PUT", "PATCH");
     /** A longer {@code Retry-After} is not waited for: the error is returned instead. */
     private static final Duration MAX_RETRY_AFTER = Duration.ofSeconds(60);

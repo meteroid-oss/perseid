@@ -230,7 +230,7 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 
 	// Replaying a non-idempotent request could apply it twice, while a 429 was not processed.
 	idempotent := req.headers.Get("idempotency-key") != "" ||
-		slices.Contains([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodOptions}, req.method)
+		slices.Contains([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodTrace}, req.method)
 	for attempt := 0; ; attempt++ {
 		res := c.attempt(ctx, req, endpoint, attempt, call.timeout)
 		if res.err == nil {

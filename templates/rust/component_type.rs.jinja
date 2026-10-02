@@ -27,8 +27,16 @@
     {{ union_enum(type_name, type.target) }}
     {% else -%}
     {% set union = union_name(type_name, "item", type.target) -%}
+    {% if recursive_alias -%}
+    {# A type alias cannot name itself, so a recursive one is a transparent newtype. #}
+    {{ doc_comment }}
+    #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+    #[serde(transparent)]
+    pub struct {{ type_name }}(pub {{ rust_type(type.target, union) }});
+    {% else -%}
     {{ doc_comment }}
     pub type {{ type_name }} = {{ rust_type(type.target, union) }};
+    {% endif -%}
     {% if union %}{{ union_enum(union, type.target) }}{% endif %}
     {% endif -%}
 {% else -%}

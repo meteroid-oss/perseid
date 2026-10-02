@@ -18,9 +18,10 @@ const IDEMPOTENT_METHODS: ReadonlySet<HttpMethod> = new Set([
   "PUT",
   "DELETE",
   "OPTIONS",
+  "TRACE",
 ]);
 
-export type HttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "DELETE" | "OPTIONS" | "PATCH";
+export type HttpMethod = "GET" | "HEAD" | "POST" | "PUT" | "DELETE" | "OPTIONS" | "PATCH" | "TRACE";
 
 /** Options for a single call, the last argument of every API method. */
 export interface RequestOptions {

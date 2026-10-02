@@ -667,6 +667,44 @@ pub(crate) fn inline_aliases(types: &mut Types, resources: &mut Resources) -> an
     Ok(())
 }
 
+/// Aliases that lead back to themselves through other aliases, such as
+/// `Tree: {type: array, items: {$ref: Tree}}`. A type alias cannot name itself in Rust, so
+/// those are declared as newtypes.
+pub(crate) fn recursive_aliases(types: &Types) -> BTreeSet<String> {
+    let alias_refs = |name: &str| -> Vec<&str> {
+        match types.get(name).map(|t| &t.data) {
+            Some(TypeData::Alias { target }) => target
+                .referenced_schema()
+                .into_iter()
+                .chain(target.union_refs())
+                .filter(|r| matches!(types.get(*r).map(|t| &t.data), Some(TypeData::Alias { .. })))
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    types
+        .iter()
+        .filter(|(name, ty)| {
+            matches!(&ty.data, TypeData::Alias { .. }) && {
+                let mut seen = BTreeSet::new();
+                let mut stack = alias_refs(name);
+                let mut found = false;
+                while let Some(next) = stack.pop() {
+                    if next == name.as_str() {
+                        found = true;
+                        break;
+                    }
+                    if seen.insert(next) {
+                        stack.extend(alias_refs(next));
+                    }
+                }
+                found
+            }
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 fn resolve_alias_targets(types: &Types) -> anyhow::Result<BTreeMap<String, FieldType>> {
     fn resolve<'a>(
         name: &'a str,
@@ -677,7 +715,12 @@ fn resolve_alias_targets(types: &Types) -> anyhow::Result<BTreeMap<String, Field
         if resolved.contains_key(name) {
             return Ok(());
         }
-        ensure!(!stack.contains(&name), "cyclic alias schema `{name}`");
+        if stack.contains(&name) {
+            // A cycle cannot be inlined: the reference closing it is untyped JSON, which every
+            // target can hold (Rust keeps aliases and breaks the cycle with a newtype instead).
+            resolved.insert(name.to_owned(), FieldType::JsonObject);
+            return Ok(());
+        }
         stack.push(name);
         let source = raw[name];
         for inner in source
@@ -2773,13 +2816,48 @@ mod tests {
     }
 
     #[test]
-    fn cyclic_aliases_are_rejected() {
+    fn cyclic_aliases_resolve_to_untyped_json() {
         let mut types = types_from(json!({
             "A": {"$ref": "#/components/schemas/B"},
             "B": {"$ref": "#/components/schemas/A"}
         }));
-        let error = inline_aliases(&mut types, &mut Resources::new()).unwrap_err();
-        assert!(error.to_string().contains("cyclic alias"));
+        inline_aliases(&mut types, &mut Resources::new()).unwrap();
+        assert!(matches!(
+            types["A"].data,
+            TypeData::Alias { ref target } if **target == FieldType::JsonObject
+        ));
+    }
+
+    #[test]
+    fn recursive_array_alias_is_inlined_with_untyped_items() {
+        let mut types = types_from(json!({
+            "Tree": {"type": "array", "items": {"$ref": "#/components/schemas/Tree"}},
+            "Plain": {"type": "array", "items": {"type": "string"}}
+        }));
+        assert_eq!(
+            recursive_aliases(&types),
+            BTreeSet::from(["Tree".to_owned()])
+        );
+        inline_aliases(&mut types, &mut Resources::new()).unwrap();
+        let TypeData::Alias { target } = &types["Tree"].data else {
+            panic!("not an alias");
+        };
+        // Tree items are trees, so lists; the reference that closes the cycle is untyped.
+        let FieldType::List { inner } = &**target else {
+            panic!("not a list: {target:?}");
+        };
+        assert!(matches!(&**inner, FieldType::List { inner } if **inner == FieldType::JsonObject));
+    }
+
+    #[test]
+    fn recursive_map_alias_is_detected() {
+        let types = types_from(json!({
+            "Map": {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/Map"}}
+        }));
+        assert_eq!(
+            recursive_aliases(&types),
+            BTreeSet::from(["Map".to_owned()])
+        );
     }
 
     #[test]

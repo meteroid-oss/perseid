@@ -258,7 +258,8 @@ internal sealed class ApiTransport : IDisposable
         || method == HttpMethod.Head
         || method == HttpMethod.Put
         || method == HttpMethod.Delete
-        || method == HttpMethod.Options;
+        || method == HttpMethod.Options
+        || method == HttpMethod.Trace;
 
     private TimeSpan RetryDelay(int attempt, HttpResponseMessage? response)
     {
