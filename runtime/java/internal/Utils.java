@@ -527,7 +527,11 @@ public final class Utils {
         mapper.enable(JsonParser.Feature.INCLUDE_SOURCE_IN_LOCATION);
         mapper.registerModule(new JavaTimeModule());
         mapper.registerModule(new Jdk8Module());
-        mapper.registerModule(new SimpleModule().addSerializer(new DecimalSerializer()));
+        mapper.registerModule(
+                new SimpleModule()
+                        .addSerializer(new DecimalSerializer())
+                        // A set keeps the order of its JSON array, as the builders' sets do.
+                        .addAbstractTypeMapping(Set.class, LinkedHashSet.class));
         return mapper;
     }
 
