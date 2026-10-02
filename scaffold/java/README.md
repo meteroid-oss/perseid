@@ -36,7 +36,9 @@ try (@@CLIENT_NAME@@ client = @@CLIENT_NAME@@.fromEnv()) {
 ```
 
 Without an API key, the client reads `@@ENV_PREFIX@@_API_KEY`, and `@@ENV_PREFIX@@_BASE_URL`
-overrides the default base URL; explicit settings win. The client is `AutoCloseable`: closing it
+overrides the server of the API, `@@CLIENT_NAME@@.DEFAULT_BASE_URL`; explicit settings win. An API
+without a server has no default: the client then throws an `IllegalStateException` until one of
+them sets the base URL. The client is `AutoCloseable`: closing it
 releases its threads and connections. `httpClient(OkHttpClient)` shares your own OkHttp client
 (left open on close), and `addInterceptor` wraps every attempt for logging, caching or signing.
 Requests are logged through `System.Logger` (`@@JAVA_PACKAGE@@`) at `DEBUG`, or at `INFO` with
@@ -55,9 +57,26 @@ Models are immutable: `Widget.builder().id("w1").name("n").build()` checks requi
 and `widget.toBuilder().name("m").build()` changes a copy. Required properties are read directly
 (`widget.id()`), others as an `Optional`. For an optional property that accepts `null`, passing
 `null` to the builder sends `null`, while leaving it unset leaves it out. Properties this SDK
-version does not know are kept in `additionalProperties()` and sent back. Enums keep values added
-to the API later (`isKnown()`, `known()` to `switch` on), and so do unions (`isUnrecognized()`);
-a tagged union tells its variants apart with `isCircle()` and `asCircle()`.
+version does not know are kept in `additionalProperties()` and sent back.
+
+Enums keep values added to the API later: `isKnown()` tells them apart, `value()` is an enum to
+`switch` on with `_UNKNOWN` for them, `known()` throws on them, and `asString()` is the raw value.
+Unions keep unknown variants too (`isUnrecognized()`). A union tells its variants apart with
+`isCircle()` and `asCircle()`, or with a visitor whose `visitUnknown` throws unless overridden:
+
+```java
+String description = shape.accept(new Shape.Visitor<String>() {
+    @Override
+    public String visitCircle(Circle circle) {
+        return "circle of radius " + circle.radius();
+    }
+
+    @Override
+    public String visitSquare(Square square) {
+        return "square of side " + square.side();
+    }
+});
+```
 
 ## Async and raw responses
 
