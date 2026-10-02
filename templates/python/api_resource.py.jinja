@@ -519,8 +519,8 @@ class {{ class_name }}({{ base_class }}):
 {%- elif return_type != "None" %}
 {%- set decode = "decode_optional_response" if return_type != response_type else "decode_response" %}
 {%- set response_schema = types[op.response_body_schema_name] if op.response_body_schema_name is defined else none %}
-{%- if response_schema and response_schema.kind == "struct_enum" and is_flat_union(response_schema) %}
-        {#- A union alias is not a class, so `decode_response` cannot infer its type. #}
+{%- if op.response_body_union is defined or (response_schema and (response_schema.kind == "alias" or (response_schema.kind == "struct_enum" and is_flat_union(response_schema)))) %}
+        {#- A type alias (such as a union) is not a class, so `decode_response` cannot infer its type. #}
         decoded: {{ unshadow(return_type) }} = {{ decode }}(response, {{ response_type }})
         return decoded
 {%- else %}
