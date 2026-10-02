@@ -19,7 +19,7 @@ async function collect<T extends { id: string }>(items: AsyncIterable<T>): Promi
 
 async function main() {
   const client = new Features({ apiKey: "tok", serverUrl });
-  assert.equal((await client.account.retrieveHealth()).status, "||");
+  assert.equal((await client.account.checkHealth()).status, "||");
   assert.equal((await client.account.retrieveMachine()).status, "Bearer tok||");
   assert.deepEqual(await collect(client.widgets.listIter()), ["w1", "w2", "w3"]);
   assert.deepEqual(
@@ -30,7 +30,7 @@ async function main() {
   assert.deepEqual(await collect(client.records.listIter()), ["r1", "r2", "r3"]);
 
   const basic = new Features(null, { serverUrl, basicAuth: { username: "u", password: "p" } });
-  assert.equal((await basic.account.session()).status, "Basic dTpw||");
+  assert.equal((await basic.account.createSession()).status, "Basic dTpw||");
 
   const provided = new Features(null, { serverUrl, tokenProvider: async () => "fresh" });
   assert.equal((await provided.account.retrieveMachine()).status, "Bearer fresh||");
@@ -71,12 +71,12 @@ async function main() {
   assert.deepEqual(await collect(client.widgets.list()), ["w1", "w2", "w3"]);
 
   const { data: health, response, requestId } = await client.account
-    .retrieveHealth()
+    .checkHealth()
     .withResponse();
   assert.equal(health.status, "||");
   assert.equal(response.status, 200);
   assert.equal(requestId, "req_mock");
-  assert.equal((await client.account.retrieveHealth().asResponse()).headers.get("x-request-id"), "req_mock");
+  assert.equal((await client.account.checkHealth().asResponse()).headers.get("x-request-id"), "req_mock");
 
   const request = { prompt: "hey" };
   assert.equal((await client.streaming.createCompletion(request)).text, "HEY");
@@ -98,7 +98,7 @@ async function main() {
     { event: "message", data: "line1\nline2", id: "1", retry: undefined },
     { event: "message", data: '{"n": 3}', id: "3", retry: 1500 },
   ]);
-  const uploaded = await client.streaming.createFile({
+  const uploaded = await client.streaming.uploadFile({
     file: { data: new TextEncoder().encode("hello"), filename: "a.txt", contentType: "text/plain" },
     name: "doc",
     count: 2,
@@ -109,7 +109,7 @@ async function main() {
     uploaded.status,
     'count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc;tags=::a;tags=::b'
   );
-  const content = await client.streaming.updateFileContent("f1", new Blob(["raw bytes"]));
+  const content = await client.streaming.uploadContent("f1", new Blob(["raw bytes"]));
   assert.equal(content.status, "application/octet-stream:raw bytes");
   const streamed = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -118,7 +118,7 @@ async function main() {
     },
   });
   assert.equal(
-    (await client.streaming.updateFileContent("f1", streamed)).status,
+    (await client.streaming.uploadContent("f1", streamed)).status,
     "application/octet-stream:streamed"
   );
   const searched = await client.wire.search({

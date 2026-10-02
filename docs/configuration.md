@@ -167,8 +167,14 @@ A key of an earlier version fails with what to write instead:
 ## Method names
 
 Methods are named after the HTTP method and the path within their resource: `list`, `create`,
-`retrieve`, `update`, `delete`, `list_sources`, `capture`. A name two operations of a resource
-would share falls back to the operation id. `[methods]` and `x-perseid-name` rename one.
+`retrieve`, `update`, `delete`, `list_sources`, `capture`. When the path only says CRUD, an
+operation id starting with another verb names the method, without the resource's own noun:
+`archive_customer` (`DELETE /customers/{id}`) is `customers.archive`, `upload_file` is
+`files.upload`. A `POST` to a singular noun (`/auth/session`) keeps an operation id's
+`create_session`, and a `GET /health` is `check` (`check_health` in another resource).
+Resources are named after tags in snake_case, a single letter staying with the next word
+(`OAuth` is `oauth`, `IPAddress` `ip_address`). A name two operations of a resource would share
+falls back to the operation id. `[methods]` and `x-perseid-name` rename one.
 
 ## Unions of objects
 

@@ -26,7 +26,7 @@ void Equal<T>(T expected, T actual)
 void Ids(string expected, List<string> actual) => Equal(expected, string.Join(",", actual));
 
 using var client = new FeaturesClient("tok", new() { BaseUrl = serverUrl });
-Equal("||", (await client.Account.RetrieveHealthAsync()).Status);
+Equal("||", (await client.Account.CheckHealthAsync()).Status);
 Equal("Bearer tok||", (await client.Account.RetrieveMachineAsync()).Status);
 Ids("w1,w2,w3", await Collect(client.Widgets.ListAutoPagingAsync(), w => w.Id));
 Ids(
@@ -63,7 +63,7 @@ using var basic = new FeaturesClient(
     null,
     new() { BaseUrl = serverUrl, BasicAuth = new("u", "p") }
 );
-Equal("Basic dTpw||", (await basic.Account.SessionAsync()).Status);
+Equal("Basic dTpw||", (await basic.Account.CreateSessionAsync()).Status);
 
 using var provided = new FeaturesClient(
     null,
@@ -98,7 +98,7 @@ using (var explicitly = new FeaturesClient("tok", new() { BaseUrl = "http://127.
 {
     try
     {
-        await explicitly.Account.RetrieveHealthAsync(new() { MaxRetries = 0 });
+        await explicitly.Account.CheckHealthAsync(new() { MaxRetries = 0 });
         throw new Exception("the explicit base URL must win");
     }
     catch (ApiConnectionException e) when (e is not ApiTimeoutException) { }
@@ -134,7 +134,7 @@ await using (var chunks = await client.Streaming.CreateCompletionStreamAsync(com
 Equal("h,i", string.Join(",", deltas));
 Equal(null, completion.Stream);
 
-var uploaded = await client.Streaming.CreateFileAsync(
+var uploaded = await client.Streaming.UploadFileAsync(
     new()
     {
         File = Upload.FromBytes(Encoding.UTF8.GetBytes("hello"), "a.txt", "text/plain"),
@@ -150,12 +150,12 @@ Equal(
 );
 Equal(
     "application/octet-stream:raw bytes",
-    (await client.Streaming.UpdateFileContentAsync("f1", Encoding.UTF8.GetBytes("raw bytes"))).Status
+    (await client.Streaming.UploadContentAsync("f1", Encoding.UTF8.GetBytes("raw bytes"))).Status
 );
 using var streamed = new MemoryStream(Encoding.UTF8.GetBytes("streamed"));
 Equal(
     "application/octet-stream:streamed",
-    (await client.Streaming.UpdateFileContentAsync("f1", streamed)).Status
+    (await client.Streaming.UploadContentAsync("f1", streamed)).Status
 );
 
 var searched = await client.Wire.SearchAsync(

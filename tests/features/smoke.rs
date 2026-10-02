@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use features::api::{
     Features, FeaturesBuilder, Page, Paginator, RequestOptions, SseEvent,
-    StreamingCreateFileBody, StreamingRetrieveEventsStreamOptions, TokenProvider, Upload,
+    StreamingUploadFileBody, StreamingRetrieveEventsStreamOptions, TokenProvider, Upload,
     WidgetsListEventsOptions, WireBetaSearchOptions, WireSearchOptions,
 };
 use features::error::ApiErrorKind;
@@ -31,7 +31,7 @@ where
 #[tokio::test]
 async fn smoke() {
     let tok = client("tok");
-    assert_eq!(tok.account().retrieve_health().await.unwrap().status, "||");
+    assert_eq!(tok.account().check_health().await.unwrap().status, "||");
     assert_eq!(tok.account().retrieve_machine().await.unwrap().status, "Bearer tok||");
     let widgets = tok.widgets();
     assert_eq!(ids(widgets.list_iter(None), |w| w.id).await, ["w1", "w2", "w3"]);
@@ -57,7 +57,7 @@ async fn smoke() {
     assert_eq!(status, "Bearer other||");
 
     let basic = builder().basic_auth("u", "p").build();
-    assert_eq!(basic.account().session().await.unwrap().status, "Basic dTpw||");
+    assert_eq!(basic.account().create_session().await.unwrap().status, "Basic dTpw||");
     let provider = TokenProvider::new(|| async { Ok("fresh".to_owned()) });
     let provided = builder().token_provider(provider).build();
     assert_eq!(provided.account().retrieve_machine().await.unwrap().status, "Bearer fresh||");
@@ -115,7 +115,7 @@ async fn parity() {
     assert_eq!(explicit.account().retrieve_machine().await.unwrap().status, "Bearer explicit||");
     std::env::set_var("FEATURES_BASE_URL", "http://127.0.0.1:9");
     let unreachable = Features::builder().token("t").max_retries(0).build();
-    assert!(unreachable.account().retrieve_health().await.unwrap_err().is_connection());
+    assert!(unreachable.account().check_health().await.unwrap_err().is_connection());
 }
 
 #[tokio::test]
@@ -136,7 +136,7 @@ async fn streaming() {
             SseEvent::new(r#"{"n": 3}"#).with_id("3").with_retry(Duration::from_millis(1500)),
         ]
     );
-    let body = StreamingCreateFileBody {
+    let body = StreamingUploadFileBody {
         file: Upload::bytes("hello").with_filename("a.txt").with_content_type("text/plain"),
         name: "doc".into(),
         count: Some(2),
@@ -144,10 +144,10 @@ async fn streaming() {
         tags: Some(vec!["a".into(), "b".into()]),
     };
     assert_eq!(
-        streaming.create_file(body).await.unwrap().status,
+        streaming.upload_file(body).await.unwrap().status,
         r#"count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc;tags=::a;tags=::b"#
     );
-    let raw = streaming.update_file_content("f1", Upload::bytes("raw")).await.unwrap();
+    let raw = streaming.upload_content("f1", Upload::bytes("raw")).await.unwrap();
     assert_eq!(raw.status, "application/octet-stream:raw");
 }
 

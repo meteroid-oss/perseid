@@ -44,7 +44,7 @@ func TestSmoke(t *testing.T) {
 	ctx := context.Background()
 	url := os.Getenv("FEATURES_URL")
 	client := New("tok", &Options{ServerURL: url})
-	expect(t, status(client.Account().RetrieveHealth(ctx)), "||")
+	expect(t, status(client.Account().CheckHealth(ctx)), "||")
 	expect(t, status(client.Account().RetrieveMachine(ctx)), "Bearer tok||")
 	widget := func(w Widget) string { return w.ID }
 	expect(t, ids(t, client.Widgets().ListIter(ctx, nil), widget), []string{"w1", "w2", "w3"})
@@ -68,7 +68,7 @@ func TestSmoke(t *testing.T) {
 	expect(t, apiErr.RequestID(), "req_mock")
 
 	basic := New("", &Options{ServerURL: url, BasicAuth: &BasicAuth{Username: "u", Password: "p"}})
-	expect(t, status(basic.Account().Session(ctx)), "Basic dTpw||")
+	expect(t, status(basic.Account().CreateSession(ctx)), "Basic dTpw||")
 	provided := New("", &Options{ServerURL: url, TokenProvider: func(context.Context) (string, error) { return "fresh", nil }})
 	expect(t, status(provided.Account().RetrieveMachine(ctx)), "Bearer fresh||")
 	keyed := New("", &Options{ServerURL: url, APIKeys: map[string]string{"api_key": "k"}})
@@ -167,24 +167,24 @@ func TestSmokeStreaming(t *testing.T) {
 	})
 
 	count := int32(2)
-	body := StreamingCreateFileBody{
+	body := StreamingUploadFileBody{
 		File:  Upload{Reader: strings.NewReader("hello"), Filename: "a.txt", ContentType: "text/plain"},
 		Name:  "doc",
 		Count: &count,
 		Meta:  &Health{Status: "ok"},
 		Tags:  []string{"a", "b"},
 	}
-	uploaded, err := client.Streaming().CreateFile(ctx, body)
+	uploaded, err := client.Streaming().UploadFile(ctx, body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	expect(t, uploaded.Status, `count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc;tags=::a;tags=::b`)
-	content, err := client.Streaming().UpdateFileContent(ctx, "f1", strings.NewReader("raw"))
+	content, err := client.Streaming().UploadContent(ctx, "f1", strings.NewReader("raw"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	expect(t, content.Status, "application/octet-stream:raw")
-	piped, err := client.Streaming().UpdateFileContent(ctx, "f1", io.MultiReader(strings.NewReader("pi"), strings.NewReader("ped")))
+	piped, err := client.Streaming().UploadContent(ctx, "f1", io.MultiReader(strings.NewReader("pi"), strings.NewReader("ped")))
 	if err != nil {
 		t.Fatal(err)
 	}
