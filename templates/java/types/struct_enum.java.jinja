@@ -127,6 +127,37 @@ public abstract class {{ type_name }} {
      */
     @JsonProperty({{ disc | tojson }})
     public abstract String {{ disc_getter }}();
+    {% set taken = namespace(names=vars + [disc_getter]) -%}
+    {% for variant in type.variants if variant.type == "struct" and variant.fields is defined and not adjacent -%}
+    {% set taken.names = taken.names + (m.member_names(variant.fields, owner ~ ", variant `" ~ variant.name ~ "`") | split(" ") | list) -%}
+    {% endfor -%}
+    {% for cls in classes -%}
+    {% if ("is" ~ cls) not in taken.names and ("as" ~ cls) not in taken.names -%}
+    {% set what = "the {@code " ~ m.html(ns.names[loop.index0]) ~ "} variant" if not loop.last else "a variant this version of the SDK does not know" %}
+
+    /**
+     * Whether this is {{ what }}.
+     *
+     * @return whether it is
+     */
+    public final boolean is{{ cls }}() {
+        return this instanceof {{ cls }};
+    }
+
+    /**
+     * This value as {{ what }}.
+     *
+     * @return the variant
+     * @throws IllegalStateException if this is another variant
+     */
+    public final {{ cls }} as{{ cls }}() {
+        if (this instanceof {{ cls }}) {
+            return ({{ cls }}) this;
+        }
+        throw new IllegalStateException({{ (("not the " ~ ns.names[loop.index0] ~ " variant: ") if not loop.last else "not a known variant: ") | tojson }} + {{ disc_getter }}());
+    }
+    {%- endif %}
+    {%- endfor %}
 
     {% if shared -%}
     {{ m.value_methods(type_name, vars) }}
