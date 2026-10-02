@@ -99,18 +99,63 @@ components:
         tags: {anyOf: [{type: array, items: {type: string}}, {type: boolean}]}
 """
 
+PAGED_SPEC = """
+openapi: 3.1.0
+info: {title: Paged, version: "1"}
+paths:
+  /items:
+    get:
+      operationId: list_items
+      x-pagination: {page: page, items: result.items, total_pages: result.meta.total_pages}
+      parameters: [{name: page, in: query, schema: {type: integer}}]
+      responses:
+        "200":
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/ItemPage'}}}
+  /logs:
+    get:
+      operationId: list_logs
+      x-pagination: {cursor: after, next_cursor: next, has_more: has_more}
+      parameters: [{name: after, in: query, schema: {type: string}}]
+      responses:
+        "200":
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/LogPage'}}}
+components:
+  schemas:
+    Item: {type: object, required: [id], properties: {id: {type: string}}}
+    ItemPage:
+      type: object
+      properties:
+        result:
+          type: object
+          properties:
+            items: {type: array, items: {$ref: '#/components/schemas/Item'}}
+            meta: {type: object, properties: {total_pages: {type: integer}}}
+    LogPage:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Item'}}
+        next: {type: [string, "null"]}
+        has_more: {type: boolean}
+"""
+
 torture = generate("torture")
+paged = generate("paged", spec=PAGED_SPEC)
 expandable = generate("expandable", spec=EXPANDABLE_SPEC)
 flat = generate("flat", "flat_unions = true\n")
 adjacent = generate("adjacent", spec=ADJACENT_SPEC)
-from torture import Torture, TortureOptions, models  # noqa: E402
-from torture.api import (  # noqa: E402
-    ApiStatusError,
+from torture import RateLimitError, Torture, TortureOptions, models  # noqa: E402
+from torture import (  # noqa: E402
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
     InternalServerError,
     NotFoundError,
+    TortureError,
     UnprocessableEntityError,
 )
-from torture.errors import ApiException, NetworkException  # noqa: E402
 from torture.serialization import UNSET, UnknownVariant, from_json_value  # noqa: E402
 from torture.unions import as_variant, expandable_id  # noqa: E402
 
@@ -268,18 +313,33 @@ class ModelTest(unittest.TestCase):
         untitled = models.ObjectUnions.from_dict({"document": {"body": "b"}}).document
         self.assertIsInstance(untitled, UnknownVariant)
 
+    def test_unknown_properties_stay_with_the_model_that_owns_them(self) -> None:
+        composed = models.Composed.from_dict({**SAMPLES["Composed"], "new": 1})
+        self.assertEqual((composed.extra_fields, composed.base.extra_fields), ({"new": 1}, {}))
+        composed.extra = "changed"
+        self.assertEqual(composed.to_dict()["extra"], "changed")
+        shape = models.Shape.from_dict({"type": "circle", "radius": 1.0, "color": "red"})
+        self.assertEqual(shape.content.extra_fields, {"color": "red"})
+        self.assertEqual(shape.to_dict(), {"type": "circle", "radius": 1.0, "color": "red"})
+        source = adjacent.models.Source.from_dict({"id": "1", "type": "none", "v": 2})
+        self.assertEqual(source.extra_fields, {"v": 2})
+        self.assertEqual(source.to_dict(), {"id": "1", "type": "none", "v": 2})
+
     def test_recursive_models_import_and_parse(self) -> None:
         tree = models.TreeNode.from_dict(SAMPLES["TreeNode"])
         self.assertEqual(tree.children[0].value, "c")
         self.assertIsInstance(tree.next, models.TreeNode)
 
 
-def client(handler, **options) -> Torture:
+def client(handler, retry_schedule: list[float] | None = None, **options) -> Torture:
+    """A client of `handler`; `retry_schedule` replaces the backoff delays, to keep tests fast."""
     transport = httpx.MockTransport(handler)
     return Torture(
         "token",
-        TortureOptions(timeout=5, **options),
-        httpx.Client(transport=transport),
+        TortureOptions(retry_schedule=retry_schedule),
+        timeout=5,
+        http_client=httpx.Client(transport=transport),
+        **options,
     )
 
 
@@ -353,16 +413,34 @@ class ClientTest(unittest.TestCase):
             api.things.update("t", models.ThingPatch(name="n", description=None))
         self.assertEqual(json.loads(self.requests[0].content), {"name": "n", "description": None})
 
-    def test_429_is_retried_after_the_delay_the_server_asks_for(self) -> None:
-        responses = (
-            httpx.Response(429, headers={"retry-after": "0.2"}),
-            httpx.Response(200, json=THING),
-        )
+    def test_retries_wait_the_delay_the_server_asks_for(self) -> None:
+        for status in (429, 500, 408):
+            with self.subTest(status=status):
+                self.requests.clear()
+                responses = (
+                    httpx.Response(status, headers={"retry-after-ms": "200"}),
+                    httpx.Response(200, json=THING),
+                )
+                with client(self.respond(*responses), max_retries=1) as api:
+                    started = time.monotonic()
+                    api.things.retrieve("t")
+                self.assertGreaterEqual(time.monotonic() - started, 0.2)
+                self.assertEqual(self.requests[1].headers["torture-retry-count"], "1")
+
+    def test_max_retries_can_change_for_one_call(self) -> None:
+        responses = (httpx.Response(503), httpx.Response(200, json=THING))
         with client(self.respond(*responses), retry_schedule=[0.0]) as api:
-            started = time.monotonic()
-            api.things.update("t", models.ThingPatch())
-        self.assertGreaterEqual(time.monotonic() - started, 0.2)
-        self.assertEqual(self.requests[1].headers["torture-retry-count"], "1")
+            with self.assertRaises(InternalServerError):
+                api.with_options(max_retries=0).things.retrieve("t")
+            self.assertEqual(len(self.requests), 1)
+            self.assertEqual(api.things.retrieve("t").id, "a/b")
+
+    def test_non_idempotent_requests_are_not_replayed_on_429(self) -> None:
+        responses = (httpx.Response(429, headers={"retry-after": "0"}), httpx.Response(200))
+        with client(self.respond(*responses), retry_schedule=[0.0]) as api:
+            with self.assertRaises(RateLimitError):
+                api.things.update("t", models.ThingPatch())
+        self.assertEqual(len(self.requests), 1)
 
     def test_non_idempotent_requests_are_not_replayed_on_5xx(self) -> None:
         responses = (
@@ -371,7 +449,7 @@ class ClientTest(unittest.TestCase):
             httpx.Response(200, json=THING),
         )
         with client(self.respond(*responses), retry_schedule=[0.0]) as api:
-            with self.assertRaises(ApiException) as raised:
+            with self.assertRaises(APIStatusError) as raised:
                 api.things.update("t", models.ThingPatch())
             self.assertEqual(raised.exception.headers["x-request-id"], "req_1")
             self.assertEqual(len(self.requests), 1)
@@ -386,9 +464,40 @@ class ClientTest(unittest.TestCase):
             raise httpx.ReadTimeout("slow", request=request)
 
         with client(handler, retry_schedule=[0.0, 0.0]) as api:
-            with self.assertRaises(NetworkException):
+            with self.assertRaises(APITimeoutError) as raised:
                 api.things.retrieve("t")
         self.assertEqual(len(self.requests), 3)
+        self.assertIs(raised.exception.request, self.requests[-1])
+
+    def test_connection_errors_are_sdk_errors(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused", request=request)
+
+        with client(handler, max_retries=0) as api:
+            with self.assertRaises(APIConnectionError) as raised:
+                api.things.retrieve("t")
+        self.assertNotIsInstance(raised.exception, APITimeoutError)
+        self.assertIsInstance(raised.exception, TortureError)
+        self.assertIsInstance(raised.exception.__cause__, httpx.ConnectError)
+
+    def test_raw_responses_carry_status_headers_and_the_decoded_body(self) -> None:
+        response = httpx.Response(200, json=THING, headers={"x-request-id": "req_1"})
+        with client(self.respond(response)) as api:
+            raw = api.with_raw_response.things.retrieve("a/b")
+            same = api.things.with_raw_response.retrieve("a/b")
+        self.assertEqual((raw.status_code, raw.request_id, raw.method), (200, "req_1", "GET"))
+        self.assertEqual(raw.parse(), same.parse())
+        self.assertEqual(raw.parse().id, "a/b")
+
+    def test_unknown_properties_are_kept_and_sent_back(self) -> None:
+        data = {**THING, "added_later": {"x": 1}}
+        with client(self.respond(httpx.Response(200, json=data))) as api:
+            thing = api.things.retrieve("a/b")
+        self.assertEqual(thing.extra_fields, {"added_later": {"x": 1}})
+        self.assertEqual(thing.added_later, {"x": 1})  # type: ignore[attr-defined]
+        self.assertEqual(json.loads(json.dumps(thing.to_dict())), data)
+        with self.assertRaises(AttributeError):
+            thing.missing  # type: ignore[attr-defined]  # noqa: B018
 
     def test_async_client(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -396,8 +505,8 @@ class ClientTest(unittest.TestCase):
 
         async def run():
             transport = httpx.MockTransport(handler)
-            async with torture.TortureAsync(
-                "token", httpx_client=httpx.AsyncClient(transport=transport)
+            async with torture.AsyncTorture(
+                "token", http_client=httpx.AsyncClient(transport=transport)
             ) as api:
                 return await api.shapes.create(
                     models.Shape(type="circle", content=models.Circle(radius=1.5, type="circle"))
@@ -412,6 +521,55 @@ class ClientTest(unittest.TestCase):
             echoed = api.class_.reserved(models.Reserved.from_dict(reserved))
         self.assertEqual(echoed.class_, "c")
         self.assertEqual(json.loads(self.requests[0].content), reserved)
+
+
+class PaginationTest(unittest.TestCase):
+    PAGES = {
+        "/items": {
+            "1": {"result": {"items": [{"id": "a"}, {"id": "b"}], "meta": {"total_pages": 2}}},
+            "2": {"result": {"items": [{"id": "c"}], "meta": {"total_pages": 2}}},
+        },
+        "/logs": {
+            None: {"data": [{"id": "l1"}], "next": "n1", "has_more": True},
+            "n1": {"data": [{"id": "l2"}], "has_more": False},
+        },
+    }
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        param = request.url.params.get("page" if request.url.path == "/items" else "after")
+        page = self.PAGES[request.url.path][param]
+        return httpx.Response(200, json=page)
+
+    def test_pages_and_their_items(self) -> None:
+        transport = httpx.MockTransport(self.handler)
+        api = paged.Paged("k", base_url="https://paged.test", http_client=httpx.Client(transport=transport))
+        page = api.items.list()
+        self.assertEqual([item.id for item in page.items], ["a", "b"])
+        self.assertTrue(page.has_next_page())
+        self.assertEqual(page.body.result.meta.total_pages, 2)
+        last = page.get_next_page()
+        self.assertEqual(([item.id for item in last.items], last.has_next_page()), (["c"], False))
+        with self.assertRaises(RuntimeError):
+            last.get_next_page()
+        self.assertEqual([item.id for item in api.items.list()], ["a", "b", "c"])
+        logs = api.logs.list()
+        self.assertEqual([len(p.items) for p in logs.iter_pages()], [1, 1])
+        self.assertEqual([item.id for item in logs], ["l1", "l2"])
+
+    def test_async_pages(self) -> None:
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return self.handler(request)
+
+        async def run() -> tuple[list[str], list[str]]:
+            transport = httpx.MockTransport(handler)
+            async with paged.AsyncPaged(
+                "k", base_url="https://paged.test", http_client=httpx.AsyncClient(transport=transport)
+            ) as api:
+                first = await api.items.list()
+                pages = [[item.id for item in p.items] async for p in first.iter_pages()]
+                return [item.id async for item in api.logs.list()], pages[1]
+
+        self.assertEqual(asyncio.run(run()), (["l1", "l2"], ["c"]))
 
 
 class ScoresTest(unittest.TestCase):
@@ -435,19 +593,19 @@ class ScoresTest(unittest.TestCase):
         with client(self.respond(invalid)) as api:
             with self.assertRaises(UnprocessableEntityError) as raised:
                 api.things.create(create)
-        self.assertIsInstance(raised.exception, ApiException)
+        self.assertIsInstance(raised.exception, APIStatusError)
         self.assertEqual(raised.exception.body, models.ValidationError(message="bad", fields={"name": ["short"]}))
         self.assertEqual(raised.exception.request_id, "r1")
-        for status, error in ((404, NotFoundError), (500, InternalServerError), (418, ApiStatusError)):
+        for status, error in ((404, NotFoundError), (500, InternalServerError), (418, APIStatusError)):
             with self.subTest(status=status):
                 response = httpx.Response(status, json={"title": "t"})
-                with client(self.respond(response), num_retries=0) as api:
+                with client(self.respond(response), max_retries=0) as api:
                     with self.assertRaises(error) as raised:
                         api.widgets.create(models.WidgetUpdate(name="n"))
                 self.assertIs(type(raised.exception), error)
-                expected = models.Problem(title="t") if status < 500 else None
+                expected = models.Problem(title="t") if status < 500 else {"title": "t"}
                 self.assertEqual(raised.exception.body, expected)
-        with client(self.respond(httpx.Response(503, text="<html>")), num_retries=0) as api:
+        with client(self.respond(httpx.Response(503, text="<html>")), max_retries=0) as api:
             with self.assertRaises(InternalServerError) as raised:
                 api.widgets.list()
         self.assertIsNone(raised.exception.body)
@@ -488,7 +646,7 @@ class ScoresTest(unittest.TestCase):
 
     def test_resource_method_names(self) -> None:
         transport = httpx.MockTransport(self.respond(httpx.Response(200, json=THING)))
-        with Torture("token", httpx_client=httpx.Client(transport=transport)) as api:
+        with Torture("token", http_client=httpx.Client(transport=transport)) as api:
             thing = api.things.retrieve("a/b")
             api.things.update("a/b", models.ThingPatch())
         self.assertEqual(thing.id, "a/b")
