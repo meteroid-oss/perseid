@@ -85,14 +85,34 @@ and editors look for.
 
 ## Java
 
-Plain classes with explicit accessors, OkHttp underneath. `x(null)` sends an explicit `null` for
-optional nullable fields. Every method has an overload taking a `RequestOptions` (headers, timeout,
-max retries, idempotency key) last. Errors are unchecked `ApiException`s, with a subclass per
-common status (`NotFoundException`, `RateLimitException`...) and
-`ApiConnectionException`/`ApiTimeoutException` when no response came; `getError(Type.class)`
-parses the body as the schema the operation declares. Enums are classes with a constant per value:
-an unknown value is kept and sent back unchanged, `isKnown()` tells it apart and `known()` returns
-an enum to `switch` on. Unions of a primitive and an object are typed
+Final classes with fluent accessors, OkHttp and Jackson underneath, for Java 11 and later. Models
+are immutable: `Widget.builder()...build()` throws on a missing required property and
+`toBuilder()` changes a copy. Required properties are read directly, the others as `Optional`s;
+for optional nullable ones, `x(null)` on the builder sends `null` while leaving `x` unset leaves it
+out. Properties the SDK does not know are kept in `additionalProperties()` and sent back.
+
+`new Client(options)` or `Client.fromEnv()` builds an `AutoCloseable` client from immutable
+`ClientOptions.builder()` settings. Required path, query and header parameters are method
+arguments; optional ones go in an immutable `...Options.builder()`, and unions of scalars such as
+`string | string[]` are typed (`Ids.ofList(...)`). Every method has an overload taking a
+`RequestOptions` (headers, timeout, max retries, idempotency key) last. `client.async()` has the
+same methods returning `CompletableFuture`s over OkHttp's async calls, and `withRawResponse()`
+returns `ApiResponse`s with the status and headers. `...Iter` methods return a `Paginator`
+(`Iterable`, `stream()`, `firstPage()`, `pages()`) of `Page`s (`items()`, `hasNextPage()`,
+`nextPage()`), or an `AsyncPaginator` (`forEach`, `toList`). Event streams are typed
+`EventStream<Chunk>`s ending at `[DONE]`, with `lastEvent()` for the raw event. Requests are
+logged through `System.Logger`.
+
+Every exception is unchecked and derives from `ClientException`: `ApiException` for error
+responses (`statusCode()`, `headers()`, `body()`, `requestId()`), with a subclass per common status
+(`NotFoundException`, `RateLimitException`...), `ApiConnectionException` and its
+`ApiTimeoutException` when no response came, and `InvalidDataException` for a response that is not
+what the API describes, such as a required property left out (thrown by its getter).
+`error(Type.class)` parses the body as the schema the operation declares, and `error()` falls back
+to a `JsonNode`. `exceptions/ApiException.java` is yours: SDKs scaffolded by an earlier perseid must update it
+to the constructor taking the status, headers, body and parsed error. Enums are classes with a
+constant per value: an unknown value is kept and sent back unchanged, `isKnown()` tells it apart
+and `known()` returns an enum to `switch` on. Unions of a primitive and an object are typed
 (`Charge.ChargeCustomer.ofString("cus_1")`, `id()` for expandable objects); unions of objects keep
 unmatched objects as `Unrecognized`, and `decodeAs(Customer.class)` reads a value as another
 variant. The HTTP plumbing lives in an `internal` package.
