@@ -9,6 +9,8 @@ use anyhow::{Context as _, Result, bail};
 use heck::{ToSnakeCase as _, ToUpperCamelCase as _};
 use serde_json::{Map, Value, json};
 
+use super::upgrade;
+
 const METHODS: [&str; 8] = [
     "get", "put", "post", "delete", "options", "head", "patch", "trace",
 ];
@@ -24,8 +26,10 @@ const PROPERTY_ANNOTATIONS: [&str; 5] = [
 
 pub(super) fn normalize(doc: &mut Value) -> Result<()> {
     canonicalize_refs(doc);
+    upgrade::type_unions(doc);
     let root = doc.clone();
     inline_operation_refs(doc, &root)?;
+    open_enums(doc);
     lower_base_discriminators(doc);
     infer_discriminators(doc);
     Promoter::run(doc);
@@ -744,6 +748,251 @@ fn tags(
         }
     }
     Some(found)
+}
+
+/// The values a schema of strings contributes to an open enum, with their documentation.
+struct Strings {
+    /// Known values, empty for a plain string.
+    values: Vec<(String, Option<String>)>,
+    nullable: bool,
+}
+
+/// What `schema` allows when it only allows strings: a plain string, a string enum, a constant,
+/// or a reference to one of those. `None` for anything else, such as a formatted string.
+fn string_values(schema: &Value, schemas: &Map<String, Value>, depth: usize) -> Option<Strings> {
+    const FOREIGN: [&str; 10] = [
+        "format",
+        "allOf",
+        "oneOf",
+        "anyOf",
+        "not",
+        "properties",
+        "items",
+        "additionalProperties",
+        "patternProperties",
+        "discriminator",
+    ];
+    let map = schema.as_object()?;
+    if let Some(target) = map.get("$ref").and_then(Value::as_str) {
+        let mut rest = map.clone();
+        rest.remove("$ref");
+        if depth > 8 || !is_annotation(&Value::Object(rest)) {
+            return None;
+        }
+        let name = target.strip_prefix(SCHEMA_PREFIX)?;
+        return string_values(schemas.get(name)?, schemas, depth + 1);
+    }
+    if FOREIGN.iter().any(|k| map.contains_key(*k)) {
+        return None;
+    }
+    let mut nullable = false;
+    match map.get("type") {
+        None => {}
+        Some(Value::String(t)) if t == "string" => {}
+        Some(Value::Array(types)) => {
+            for t in types {
+                match t.as_str() {
+                    Some("string") => {}
+                    Some("null") => nullable = true,
+                    _ => return None,
+                }
+            }
+        }
+        Some(_) => return None,
+    }
+    let doc = map
+        .get("description")
+        .and_then(Value::as_str)
+        .filter(|d| !d.is_empty())
+        .map(ToOwned::to_owned);
+    let mut values = Vec::new();
+    if let Some(Value::Array(items)) = map.get("enum") {
+        let docs = map
+            .get("x-enum-descriptions")
+            .and_then(Value::as_array)
+            .filter(|d| d.len() == items.len());
+        for (i, item) in items.iter().enumerate() {
+            match item {
+                Value::Null => nullable = true,
+                Value::String(value) => {
+                    let described = docs
+                        .and_then(|d| d[i].as_str())
+                        .filter(|d| !d.is_empty())
+                        .map(ToOwned::to_owned);
+                    let single = doc.clone().filter(|_| items.len() == 1);
+                    values.push((value.clone(), described.or(single)));
+                }
+                _ => return None,
+            }
+        }
+    } else if let Some(constant) = map.get("const") {
+        values.push((constant.as_str()?.to_owned(), doc));
+    } else if map.get("type").is_none() {
+        return None;
+    }
+    Some(Strings { values, nullable })
+}
+
+/// The `oneOf`/`anyOf` key of a plain union: no discriminator, no properties of its own, and
+/// not opted out with `x-perseid-union: json`.
+fn plain_union_key(map: &Map<String, Value>) -> Option<&'static str> {
+    let key = match (map.contains_key("oneOf"), map.contains_key("anyOf")) {
+        (true, false) => "oneOf",
+        (false, true) => "anyOf",
+        _ => return None,
+    };
+    let blocked = [
+        "discriminator",
+        "properties",
+        "allOf",
+        "enum",
+        "const",
+        "$ref",
+    ];
+    if blocked.iter().any(|k| map.contains_key(*k))
+        || map.get("x-perseid-union").is_some_and(|v| v == "json")
+    {
+        return None;
+    }
+    Some(key)
+}
+
+/// Turns a union whose members are all strings (plain strings, string enums, constants,
+/// references to string enums) into one open string enum: the union of the known values, with
+/// the descriptions of constants as `x-enum-descriptions`. Enums keep values they do not know,
+/// so a plain `string` member needs no type of its own. The schema keeps its name, and a
+/// referenced enum stays a type of its own: the union carries a copy of its values.
+fn open_enum(map: &mut Map<String, Value>, schemas: &Map<String, Value>) -> bool {
+    let Some(key) = plain_union_key(map) else {
+        return false;
+    };
+    if map.get("type").is_some_and(|t| t != "string") {
+        return false;
+    }
+    let Some(Value::Array(variants)) = map.get(key) else {
+        return false;
+    };
+    let mut nullable = false;
+    let mut members = 0;
+    let mut values: Vec<(String, Option<String>)> = Vec::new();
+    for variant in variants {
+        if is_null_schema(variant) {
+            nullable = true;
+            continue;
+        }
+        let Some(strings) = string_values(variant, schemas, 0) else {
+            return false;
+        };
+        members += 1;
+        nullable |= strings.nullable;
+        for (value, doc) in strings.values {
+            match values.iter_mut().find(|(known, _)| *known == value) {
+                Some(known) => {
+                    if known.1.is_none() {
+                        known.1 = doc;
+                    }
+                }
+                None => values.push((value, doc)),
+            }
+        }
+    }
+    // `oneOf: [X, null]` is a nullable `X`, not a union.
+    if members < 2 {
+        return false;
+    }
+    map.remove(key);
+    map.insert(
+        "type".into(),
+        if nullable {
+            json!(["string", "null"])
+        } else {
+            json!("string")
+        },
+    );
+    if !values.is_empty() {
+        map.insert(
+            "enum".into(),
+            Value::Array(values.iter().map(|(v, _)| json!(v)).collect()),
+        );
+    }
+    if values.iter().any(|(_, doc)| doc.is_some()) {
+        map.insert(
+            "x-enum-descriptions".into(),
+            Value::Array(
+                values
+                    .iter()
+                    .map(|(_, doc)| json!(doc.as_deref().unwrap_or_default()))
+                    .collect(),
+            ),
+        );
+    }
+    true
+}
+
+/// A union of `integer` and `number` is the `number`: every integer is one.
+fn collapse_numbers(map: &mut Map<String, Value>) -> bool {
+    let Some(key) = plain_union_key(map) else {
+        return false;
+    };
+    if map.contains_key("type") {
+        return false;
+    }
+    let Some(Value::Array(variants)) = map.get_mut(key) else {
+        return false;
+    };
+    let kind = |v: &Value| -> Option<String> {
+        const FOREIGN: [&str; 8] = [
+            "enum",
+            "const",
+            "$ref",
+            "oneOf",
+            "anyOf",
+            "allOf",
+            "properties",
+            "items",
+        ];
+        let object = v.as_object()?;
+        if FOREIGN.iter().any(|k| object.contains_key(*k)) {
+            return None;
+        }
+        object.get("type")?.as_str().map(ToOwned::to_owned)
+    };
+    let kinds: Vec<Option<String>> = variants.iter().map(kind).collect();
+    let has = |t: &str| kinds.iter().any(|k| k.as_deref() == Some(t));
+    if !(has("integer") && has("number")) {
+        return false;
+    }
+    let mut kinds = kinds.into_iter();
+    variants.retain(|_| kinds.next().flatten().as_deref() != Some("integer"));
+    if variants.len() == 1 {
+        let Value::Object(variant) = variants.remove(0) else {
+            return true;
+        };
+        map.remove(key);
+        for (k, v) in variant {
+            map.entry(k).or_insert(v);
+        }
+    }
+    true
+}
+
+/// Rewrites the unions of strings into open enums and those of `integer` and `number` into
+/// `number`, until no union is left to rewrite (a union can reference another one).
+fn open_enums(doc: &mut Value) {
+    for _ in 0..4 {
+        let schemas = doc
+            .pointer("/components/schemas")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let mut changed = false;
+        upgrade::each_schema(doc, &mut |map: &mut Map<String, Value>| {
+            changed |= open_enum(map, &schemas) || collapse_numbers(map);
+        });
+        if !changed {
+            break;
+        }
+    }
 }
 
 fn is_null_schema(schema: &Value) -> bool {
@@ -2213,5 +2462,108 @@ mod tests {
         assert_eq!(holder["x"]["$ref"], "#/components/schemas/a_b");
         assert_eq!(holder["y"], json!({ "type": "string" }));
         assert_eq!(holder["z"]["$ref"], "#/components/schemas/Sp ace");
+    }
+
+    fn schemas_of(doc: Value) -> Value {
+        normalized(json!({ "paths": {}, "components": { "schemas": doc } }))["components"]
+            ["schemas"]
+            .clone()
+    }
+
+    #[test]
+    fn unions_of_strings_become_one_open_enum() {
+        let s = schemas_of(json!({
+            "Model": { "description": "d", "anyOf": [
+                { "type": "string" },
+                { "type": "string", "enum": ["a", "b"] },
+                { "$ref": "#/components/schemas/Known" },
+                { "type": "null" }
+            ] },
+            "Known": { "type": "string", "enum": ["b", "c"] }
+        }));
+        assert_eq!(
+            s["Model"],
+            json!({ "description": "d", "type": ["string", "null"], "enum": ["a", "b", "c"] })
+        );
+        // The referenced enum stays a type of its own.
+        assert_eq!(s["Known"], json!({ "type": "string", "enum": ["b", "c"] }));
+    }
+
+    #[test]
+    fn unions_of_constants_are_an_enum_with_value_docs() {
+        let s = schemas_of(json!({
+            "Mode": { "oneOf": [
+                { "const": "fast", "description": "Quick" },
+                { "type": "string", "const": "slow" },
+                { "const": "auto", "description": "Picks" }
+            ] }
+        }));
+        assert_eq!(
+            s["Mode"],
+            json!({
+                "type": "string",
+                "enum": ["fast", "slow", "auto"],
+                "x-enum-descriptions": ["Quick", "", "Picks"]
+            })
+        );
+    }
+
+    #[test]
+    fn union_enums_referencing_unions_are_merged_too() {
+        let s = schemas_of(json!({
+            "Outer": { "anyOf": [{ "type": "string" }, { "$ref": "#/components/schemas/Inner" }] },
+            "Inner": { "oneOf": [{ "const": "x" }, { "const": "y" }] }
+        }));
+        assert_eq!(s["Outer"], json!({ "type": "string", "enum": ["x", "y"] }));
+    }
+
+    #[test]
+    fn unions_with_other_members_or_formats_are_kept() {
+        let doc = json!({
+            "Dated": { "anyOf": [{ "type": "string", "format": "date-time" }, { "type": "string" }] },
+            "Mixed": { "anyOf": [{ "type": "string" }, { "type": "integer" }] },
+            "Wrapped": { "anyOf": [{ "type": "string", "enum": ["a", "b"] }, { "type": "null" }] },
+            "Tagged": { "oneOf": [{ "const": "a" }, { "const": "b" }], "x-perseid-union": "json" }
+        });
+        assert_eq!(schemas_of(doc.clone()), doc);
+    }
+
+    #[test]
+    fn integer_and_number_in_a_union_collapse_to_number() {
+        let s = schemas_of(json!({
+            "Both": { "description": "d", "oneOf": [{ "type": "integer" }, { "type": "number" }] },
+            "Nullable": { "anyOf": [{ "type": "integer" }, { "type": "number" }, { "type": "null" }] },
+            "More": { "anyOf": [{ "type": "integer" }, { "type": "number" }, { "type": "string" }] }
+        }));
+        assert_eq!(s["Both"], json!({ "description": "d", "type": "number" }));
+        assert_eq!(
+            s["Nullable"],
+            json!({ "anyOf": [{ "type": "number" }, { "type": "null" }] })
+        );
+        assert_eq!(
+            s["More"],
+            json!({ "anyOf": [{ "type": "number" }, { "type": "string" }] })
+        );
+    }
+
+    #[test]
+    fn open_enums_are_found_in_properties_and_parameters() {
+        let doc = normalized(json!({
+            "paths": { "/x": { "get": {
+                "operationId": "op",
+                "parameters": [{ "name": "m", "in": "query", "schema": {
+                    "anyOf": [{ "type": "string" }, { "const": "a" }, { "const": "b" }]
+                } }],
+                "responses": {}
+            } } },
+            "components": { "schemas": { "Holder": { "type": "object", "properties": {
+                "enum": { "type": "string" },
+                "model": { "anyOf": [{ "type": "string" }, { "enum": ["a", "b"] }] }
+            } } } }
+        }));
+        let model = &doc["components"]["schemas"]["Holder"]["properties"]["model"];
+        assert_eq!(model, &json!({ "type": "string", "enum": ["a", "b"] }));
+        let param = &doc["paths"]["/x"]["get"]["parameters"][0]["schema"];
+        assert_eq!(param, &json!({ "type": "string", "enum": ["a", "b"] }));
     }
 }
