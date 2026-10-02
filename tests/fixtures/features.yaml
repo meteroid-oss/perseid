@@ -112,7 +112,7 @@ paths:
       operationId: machine_status
       tags: [account]
       security:
-        - oauth: []
+        - oauth: [machines.read]
       responses:
         '200':
           description: ok
@@ -772,8 +772,9 @@ components:
       type: oauth2
       flows:
         clientCredentials:
-          tokenUrl: https://features.example.com/oauth/token
-          scopes: {}
+          tokenUrl: /oauth/token
+          scopes:
+            machines.read: Read the machine status
   schemas:
     Widget:
       type: object

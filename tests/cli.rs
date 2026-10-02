@@ -3384,3 +3384,38 @@ components:
         "{python}"
     );
 }
+
+#[test]
+fn oauth2_client_credentials_clients_get_the_credentials_options_and_the_token_url() {
+    let dir = project_from("oauth.yaml", &LANGUAGES);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    for language in LANGUAGES {
+        let sources = files(&dir.path().join(language));
+        let all: String = sources.iter().map(|(_, text)| text.as_str()).collect();
+        assert!(all.contains("/oauth/token"), "{language}: no token URL");
+        assert!(
+            all.contains("secrets.read secrets.write"),
+            "{language}: the scopes of the requirements are not asked for"
+        );
+        assert!(
+            all.contains("VAULT_CLIENT_ID") && all.contains("VAULT_CLIENT_SECRET"),
+            "{language}: the client credentials are not read from the environment"
+        );
+    }
+}
+
+#[test]
+fn specs_without_a_client_credentials_flow_get_no_credentials_options() {
+    let dir = project_from("petstore.yaml", &["typescript", "python", "rust", "csharp"]);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    for language in ["typescript", "python", "rust", "csharp"] {
+        for (name, text) in files(&dir.path().join(language)) {
+            assert!(
+                !text.contains("PETSTORE_CLIENT_ID"),
+                "{language}/{name} reads a client id"
+            );
+        }
+    }
+}

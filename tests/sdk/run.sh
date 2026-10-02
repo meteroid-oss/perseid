@@ -41,7 +41,13 @@ case "$lang" in
     )
     for spec in "$here/../fixtures/torture.yaml" "$here"/../fixtures/edge-*.yaml; do
       rust_samples "$spec"
-    done ;;
+    done
+    # The OAuth2 client credentials tests run on the SDK of tests/fixtures/oauth.yaml.
+    (mkdir "$work/oauth" && cd "$work/oauth" \
+      && perseid init --sdks rust --spec "$here/../fixtures/oauth.yaml" > /dev/null \
+      && perseid generate rust > /dev/null \
+      && mkdir -p rust/tests && cp "$here/rust/oauth/"*.rs rust/tests/ \
+      && cd rust && cargo test --test oauth) ;;
   typescript)
     # The tests generate more SDKs themselves (features, torture, realworld and, with their
     # `perseid samples`, the sample round trips of torture and every edge fixture).
@@ -73,7 +79,13 @@ case "$lang" in
     )
     for spec in "$here/../fixtures/torture.yaml" "$here"/../fixtures/edge-*.yaml; do
       go_samples "$spec"
-    done ;;
+    done
+    # The OAuth2 client credentials tests run on the SDK of tests/fixtures/oauth.yaml.
+    (mkdir "$work/oauth" && cd "$work/oauth" \
+      && perseid init --sdks go --spec "$here/../fixtures/oauth.yaml" > /dev/null \
+      && perseid generate go > /dev/null \
+      && cp "$here/go/_oauth/"*_test.go go/ \
+      && cd go && go vet ./... && go test ./...) ;;
   java)
     gradle_test() {
       cat >> build.gradle <<'GRADLE'
@@ -85,7 +97,7 @@ test { useJUnitPlatform(); testLogging { events "passed", "skipped", "failed"; e
 GRADLE
       gradle test --no-daemon
     }
-    rm -rf _torture _samples && gradle_test
+    rm -rf _torture _samples _oauth && gradle_test
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
     # Without servers, the client has no default base URL.
     sed -i '/^servers:/,/^paths:/{/^paths:/!d}' "$work/torture/openapi.yaml"
@@ -108,9 +120,14 @@ GRADLE
     )
     for spec in "$here"/../fixtures/edge-*.yaml; do
       java_samples "$spec"
-    done ;;
+    done
+    # The OAuth2 client credentials tests run on the SDK of tests/fixtures/oauth.yaml.
+    (mkdir "$work/oauth" && cd "$work/oauth" \
+      && perseid init --sdks java --spec "$here/../fixtures/oauth.yaml" > /dev/null \
+      && perseid generate java > /dev/null \
+      && cp -r "$here/java/_oauth/." java/ && cd java && gradle_test) ;;
   csharp)
-    rm -rf _torture _samples && dotnet test Tests
+    rm -rf _torture _samples _oauth && dotnet test Tests
     # Generates the SDK of one fixture, writes the samples of its models (`perseid samples`) and runs
     # `dotnet test` on it: every test of tests/sdk/csharp/_torture for the torture fixture, only the
     # sample round trips for the others.
@@ -156,5 +173,10 @@ CSPROJ
     )
     for spec in "$here/../fixtures/torture.yaml" "$here"/../fixtures/edge-*.yaml; do
       csharp_samples "$spec"
-    done ;;
+    done
+    # The OAuth2 client credentials tests run on the SDK of tests/fixtures/oauth.yaml.
+    (mkdir "$work/oauth" && cd "$work/oauth" \
+      && perseid init --sdks csharp --spec "$here/../fixtures/oauth.yaml" > /dev/null \
+      && perseid generate csharp > /dev/null \
+      && cp -r "$here/csharp/_oauth/." csharp/ && cd csharp && dotnet test Tests) ;;
 esac

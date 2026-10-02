@@ -93,6 +93,26 @@ property. Every response carries `x-request-id: req_mock`.
 | `cookie_session` | cookie parameter `session_id = "abc123"`: header `Cookie: session_id=abc123` | `200 {"status":"abc123"}` | status `abc123` |
 | `cookie_auth` | client built with the cookie key `ck1` for security scheme `api_key_cookie` (apiKey in cookie `auth_token`): header `Cookie: auth_token=ck1`, no `Authorization` | `200 {"status":"ck1"}`; without the cookie `401` | status `ck1` |
 
+## OAuth2 client credentials
+
+`machine_status` takes the `oauth` scheme (`clientCredentials`, `tokenUrl: /oauth/token` relative to
+the base URL, scope `machines.read`). The SDK is built with a client id and the client secret
+`p@ss word` (no token, no token provider) and fetches the token itself:
+`POST /oauth/token` with `grant_type=client_credentials&scope=machines.read`, the credentials in an
+HTTP basic `Authorization` header form-encoded before the base64 (RFC 6749 2.3.1), or, with the
+client auth option set to `body`, as `client_id` and `client_secret` form fields. The token endpoint
+answers `200 {"access_token":"at-<client id>-<n>","token_type":"Bearer","expires_in":3600}`, `n`
+counting the tokens issued to that client id, and `401 {"error":"invalid_client"}` for a wrong
+secret. `GET /__server/attempts/<client id>` counts the token requests. `<lang>` is the language
+of the smoke test.
+
+| Id | Send | Server returns | Client asserts |
+|---|---|---|---|
+| `oauth_fetch` | client id `<lang>-oauth`, `machine_status` called twice | `200 {"status":"Bearer at-<lang>-oauth-1||"}` both times | both statuses `Bearer at-<lang>-oauth-1||`; the attempts of `<lang>-oauth` is `1` (one token request, token cached) |
+| `oauth_body` | client id `<lang>-oauth-body`, client auth in the body, `machine_status` once | `200 {"status":"Bearer at-<lang>-oauth-body-1||"}` | status `Bearer at-<lang>-oauth-body-1||` |
+| `oauth_renew` | client id `<lang>-oauth-revoked`, `machine_status` once: the API revokes the first token issued to a client named `*-revoked-*` | first call with token `...-1`: `401`; the client fetches another token and sends the call again: `200 {"status":"Bearer at-<lang>-oauth-revoked-2||"}` | status `Bearer at-<lang>-oauth-revoked-2||`; the attempts of `<lang>-oauth-revoked` is `2`; retries may be disabled |
+| `oauth_invalid` | client id `<lang>-oauth-bad` with another secret, `machine_status` once, retries disabled | token endpoint `401 {"error":"invalid_client"}` | the call fails with the SDK's `401` error, the body `{"error":"invalid_client"}` |
+
 ## Retries and idempotency
 
 Retries enabled (2) unless stated. The first retry delay comes from `Retry-After`.

@@ -43,7 +43,7 @@ sha2 = { version = "0.10", optional = true }
 base64 = { version = "0.22", optional = true }
 
 # Async runtime
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

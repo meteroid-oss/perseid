@@ -1,0 +1,58 @@
+openapi: 3.1.0
+info:
+  title: Vault API
+  version: 1.0.0
+servers:
+  - url: https://vault.example.com/v1
+security:
+  - oauth: [secrets.read]
+paths:
+  /health:
+    get:
+      operationId: health
+      tags: [account]
+      security: []
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /machine:
+    get:
+      operationId: machine_status
+      tags: [account]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /session:
+    post:
+      operationId: create_session
+      tags: [account]
+      security:
+        - oauth: [secrets.write]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+components:
+  securitySchemes:
+    oauth:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: /oauth/token
+          scopes:
+            secrets.read: Read secrets
+            secrets.write: Write secrets
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string }

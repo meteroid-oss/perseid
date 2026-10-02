@@ -3,13 +3,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import threading
+import time
 import typing as t
 import urllib.parse
 
 import httpx
 
 __all__ = [
+    "OAuthTokens",
     "Security",
     "SecurityScheme",
     "TokenProvider",
@@ -17,7 +21,9 @@ __all__ = [
     "async_token",
     "chosen_schemes",
     "needs_token_provider",
+    "oauth_scheme",
     "sync_token",
+    "token_url",
 ]
 
 TokenProvider = t.Callable[[], str | t.Awaitable[str]]
@@ -34,6 +40,74 @@ class SecurityScheme(t.NamedTuple):
     """``bearer``, ``basic`` or ``api_key``."""
     location: str = ""
     param: str = ""
+    token_url: str = ""
+    """OAuth2 token endpoint of the client credentials flow, absolute or relative to the base URL."""
+    scope: str = ""
+    """Space-separated scopes asked for with the access token."""
+
+
+_EXPIRY_MARGIN = 60.0
+"""Seconds before its expiry that an access token is renewed, or half its life when shorter."""
+
+
+class OAuthTokens:
+    """OAuth2 client credentials: an access token per token URL, kept until it is about to expire.
+
+    The client fetches a token on first use with :attr:`client_id` and :attr:`client_secret`,
+    sending them in an HTTP basic header (``client_auth="basic"``) or as form fields (``"body"``).
+    The lock makes concurrent callers share one token request.
+    """
+
+    def __init__(self, client_id: str, client_secret: str, client_auth: str = "basic") -> None:
+        if client_auth not in ("basic", "body"):
+            raise ValueError("oauth_client_auth must be 'basic' or 'body'")
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.client_auth = client_auth
+        self.lock = threading.Lock()
+        self._async_lock: asyncio.Lock | None = None
+        self._tokens: dict[str, tuple[str, float]] = {}
+
+    def async_lock(self) -> asyncio.Lock:
+        if self._async_lock is None:
+            self._async_lock = asyncio.Lock()
+        return self._async_lock
+
+    def cached(self, url: str) -> str | None:
+        """The access token fetched from ``url``, unless it is about to expire."""
+        entry = self._tokens.get(url)
+        return entry[0] if entry is not None and entry[1] > time.monotonic() else None
+
+    def store(self, url: str, token: str, expires_in: float | None) -> str:
+        """Keeps ``token``, which lives ``expires_in`` seconds, forever when ``None``."""
+        life = float("inf") if expires_in is None else max(expires_in, 0.0)
+        self._tokens[url] = (token, time.monotonic() + life - min(_EXPIRY_MARGIN, life / 2))
+        return token
+
+    def invalidate(self, url: str, token: str) -> None:
+        """Forgets ``token`` after the API rejected it, unless a newer one replaced it."""
+        entry = self._tokens.get(url)
+        if entry is not None and entry[0] == token:
+            del self._tokens[url]
+
+    def request_parts(self, scope: str) -> tuple[list[tuple[str, str]], dict[str, str]]:
+        """The form fields and headers of a token request."""
+        form = [("grant_type", "client_credentials")]
+        if scope:
+            form.append(("scope", scope))
+        if self.client_auth == "body":
+            form += [("client_id", self.client_id), ("client_secret", self.client_secret)]
+            return form, {}
+        # RFC 6749 2.3.1: both are form-encoded before the base64.
+        raw = f"{urllib.parse.quote_plus(self.client_id)}:{urllib.parse.quote_plus(self.client_secret)}"
+        return form, {"authorization": f"Basic {base64.b64encode(raw.encode()).decode()}"}
+
+
+def token_url(base_path: str, url: str) -> str:
+    """``url`` as an absolute URL: a relative one is resolved against the base URL."""
+    if "://" in url:
+        return url
+    return f"{base_path}{url if url.startswith('/') else '/' + url}"
 
 
 class _Credentials(t.Protocol):
@@ -42,6 +116,7 @@ class _Credentials(t.Protocol):
     basic_auth: tuple[str, str] | None
     api_keys: t.Mapping[str, str]
     security_schemes: t.Mapping[str, SecurityScheme]
+    oauth: OAuthTokens | None
 
 
 def _configured(cfg: _Credentials, name: str) -> bool:
@@ -49,7 +124,11 @@ def _configured(cfg: _Credentials, name: str) -> bool:
     if scheme is None:
         return False
     if scheme.kind == "bearer":
-        return cfg.token_provider is not None or bool(cfg.bearer_access_token)
+        return (
+            cfg.token_provider is not None
+            or bool(cfg.bearer_access_token)
+            or (bool(scheme.token_url) and cfg.oauth is not None)
+        )
     if scheme.kind == "basic":
         return cfg.basic_auth is not None
     return bool(cfg.api_keys.get(name) or cfg.bearer_access_token)
@@ -68,6 +147,18 @@ def needs_token_provider(cfg: _Credentials, names: t.Sequence[str]) -> bool:
     return cfg.token_provider is not None and any(
         cfg.security_schemes[name].kind == "bearer" for name in names
     )
+
+
+def oauth_scheme(cfg: _Credentials, names: t.Sequence[str]) -> SecurityScheme | None:
+    """The OAuth2 scheme among ``names`` whose token the client fetches, when neither a token
+    provider nor a token is set."""
+    if cfg.oauth is None or cfg.token_provider is not None or cfg.bearer_access_token:
+        return None
+    for name in names:
+        scheme = cfg.security_schemes[name]
+        if scheme.kind == "bearer" and scheme.token_url:
+            return scheme
+    return None
 
 
 def sync_token(cfg: _Credentials) -> str:

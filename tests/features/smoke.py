@@ -270,6 +270,28 @@ cookied = Features(base_url=URL, api_keys={"api_key_cookie": "ck1"})
 assert cookied.cookies.retrieve_scenarios_cookie_auth().status == "ck1"
 raises(AuthenticationError, Features(base_url=URL).cookies.retrieve_scenarios_cookie_auth)
 
+# OAuth2 client credentials.
+OAUTH_SECRET = "p@ss word"
+oauth = Features(base_url=URL, client_id="python-oauth", client_secret=OAUTH_SECRET)
+assert oauth.account.retrieve_machine().status == "Bearer at-python-oauth-1||"
+assert oauth.account.retrieve_machine().status == "Bearer at-python-oauth-1||"
+assert server_state("python-oauth")["attempts"] == 1, "the token is cached"
+in_body = Features(
+    base_url=URL, client_id="python-oauth-body", client_secret=OAUTH_SECRET, oauth_client_auth="body"
+)
+assert in_body.account.retrieve_machine().status == "Bearer at-python-oauth-body-1||"
+revoked = Features(base_url=URL, client_id="python-oauth-revoked", client_secret=OAUTH_SECRET, max_retries=0)
+assert revoked.account.retrieve_machine().status == "Bearer at-python-oauth-revoked-2||"
+assert server_state("python-oauth-revoked")["attempts"] == 2, "a rejected token is replaced"
+invalid = Features(base_url=URL, client_id="python-oauth-bad", client_secret="wrong", max_retries=0)
+invalid_error = raises(AuthenticationError, invalid.account.retrieve_machine)
+assert field(invalid_error.body, "error") == "invalid_client", invalid_error
+os.environ["FEATURES_CLIENT_ID"], os.environ["FEATURES_CLIENT_SECRET"] = "python-oauth-env", OAUTH_SECRET
+assert Features(base_url=URL).account.retrieve_machine().status == "Bearer at-python-oauth-env-1||"
+del os.environ["FEATURES_CLIENT_ID"], os.environ["FEATURES_CLIENT_SECRET"]
+token_wins = Features(base_url=URL, api_key="tok", client_id="python-oauth", client_secret=OAUTH_SECRET)
+assert token_wins.account.retrieve_machine().status == "Bearer tok||"
+
 # Retries and idempotency.
 flaky = scenario_id("flaky")
 started = time.monotonic()
@@ -419,6 +441,14 @@ async def main():
         assert server_state(limited)["attempts"] == 1
     async with AsyncFeatures(base_url=URL, token_provider=fresh) as client:
         assert (await client.account.retrieve_machine()).status == "Bearer async-fresh||"
+    async with AsyncFeatures(base_url=URL, client_id="python-oauth-async", client_secret=OAUTH_SECRET) as client:
+        first, second = await asyncio.gather(client.account.retrieve_machine(), client.account.retrieve_machine())
+        assert first.status == second.status == "Bearer at-python-oauth-async-1||"
+        assert server_state("python-oauth-async")["attempts"] == 1, "concurrent calls share one token request"
+    async with AsyncFeatures(
+        base_url=URL, client_id="python-oauth-async-revoked", client_secret=OAUTH_SECRET
+    ) as client:
+        assert (await client.account.retrieve_machine()).status == "Bearer at-python-oauth-async-revoked-2||"
 
 
 asyncio.run(main())

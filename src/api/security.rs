@@ -30,9 +30,13 @@ pub(crate) struct SecurityScheme {
     pub(crate) param: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
-    /// OAuth2 client credentials token endpoint, when the spec declares one.
+    /// OAuth2 client credentials token endpoint, when the spec declares one: absolute, or relative
+    /// to the server URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) token_url: Option<String>,
+    /// The space-separated scopes the operations require of an OAuth2 scheme, asked for with the
+    /// token. Empty when no requirement names one.
+    pub(crate) scope: String,
 }
 
 pub(crate) struct Security {
@@ -46,7 +50,7 @@ impl Security {
     pub(crate) fn from_spec(spec: &Value) -> Self {
         let declared = spec["components"]["securitySchemes"].as_object();
         let mut skipped: Vec<(String, String)> = Vec::new();
-        let schemes: Vec<_> = match declared {
+        let mut schemes: Vec<_> = match declared {
             Some(declared) if !declared.is_empty() => declared
                 .iter()
                 .filter_map(|(name, scheme)| match parse_scheme(name, scheme) {
@@ -64,6 +68,7 @@ impl Security {
                 param: None,
                 description: None,
                 token_url: None,
+                scope: String::new(),
             }],
         };
         let global = match spec.get("security") {
@@ -110,6 +115,9 @@ impl Security {
                  yourself with the client's extra headers"
             );
         }
+        for scheme in schemes.iter_mut().filter(|s| s.token_url.is_some()) {
+            scheme.scope = required_scopes(spec, &scheme.name);
+        }
         let default = if spec.get("security").is_some() {
             global
         } else {
@@ -133,6 +141,29 @@ impl Security {
             .filter(|req| **req != self.default)
             .cloned()
     }
+}
+
+/// The scopes the global and operation requirements ask of the scheme `name`, sorted and joined.
+fn required_scopes(spec: &Value, name: &str) -> String {
+    let operations = spec["paths"]
+        .as_object()
+        .into_iter()
+        .flat_map(|paths| paths.values())
+        .filter_map(Value::as_object)
+        .flat_map(|item| item.iter())
+        .filter(|(method, _)| HTTP_METHODS.contains(&method.as_str()))
+        .map(|(_, op)| &op["security"]);
+    let mut scopes: Vec<&str> = std::iter::once(&spec["security"])
+        .chain(operations)
+        .filter_map(Value::as_array)
+        .flatten()
+        .filter_map(|alternative| alternative[name].as_array())
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    scopes.sort_unstable();
+    scopes.dedup();
+    scopes.join(" ")
 }
 
 const HTTP_METHODS: [&str; 8] = [
@@ -182,9 +213,17 @@ fn parse_scheme(name: &str, scheme: &Value) -> Result<SecurityScheme, String> {
         },
         Some("apiKey") => (SchemeKind::ApiKey, text("in"), text("name"), None),
         Some("oauth2") => {
+            // A relative URL is resolved against the server URL: it always starts with a slash.
             let token_url = scheme["flows"]["clientCredentials"]["tokenUrl"]
                 .as_str()
-                .map(str::to_owned);
+                .filter(|url| !url.is_empty())
+                .map(|url| {
+                    if url.contains("://") || url.starts_with('/') {
+                        url.to_owned()
+                    } else {
+                        format!("/{url}")
+                    }
+                });
             (SchemeKind::Bearer, None, None, token_url)
         }
         Some("openIdConnect") => (SchemeKind::Bearer, None, None, None),
@@ -198,6 +237,7 @@ fn parse_scheme(name: &str, scheme: &Value) -> Result<SecurityScheme, String> {
         param,
         description: text("description"),
         token_url,
+        scope: String::new(),
     })
 }
 
@@ -243,11 +283,40 @@ mod tests {
         );
         let oauth = security.schemes.iter().find(|s| s.name == "oauth").unwrap();
         assert_eq!(oauth.token_url.as_deref(), Some("https://t"));
+        assert_eq!(oauth.scope, "");
         let key = security.schemes.iter().find(|s| s.name == "key").unwrap();
         assert_eq!(
             (key.location.as_deref(), key.param.as_deref()),
             (Some("query"), Some("api_key"))
         );
+    }
+
+    #[test]
+    fn oauth_schemes_ask_for_the_scopes_requirements_name() {
+        let spec = json!({
+            "security": [{"oauth": ["write", "read"]}],
+            "components": {"securitySchemes": {
+                "oauth": {"type": "oauth2", "flows": {"clientCredentials": {"tokenUrl": "/token", "scopes": {"admin": ""}}}},
+                "plain": {"type": "oauth2", "flows": {"authorizationCode": {"authorizationUrl": "/a", "tokenUrl": "/t", "scopes": {}}}},
+            }},
+            "paths": {
+                "/a": {"get": {"operationId": "a", "security": [{"oauth": ["read", "list"]}, {"plain": ["x"]}]}},
+                "/b": {"get": {"operationId": "b"}},
+            }
+        });
+        let security = Security::from_spec(&spec);
+        let oauth = security.schemes.iter().find(|s| s.name == "oauth").unwrap();
+        assert_eq!(oauth.token_url.as_deref(), Some("/token"));
+        assert_eq!(oauth.scope, "list read write");
+        let relative = parse_scheme(
+            "r",
+            &json!({"type": "oauth2", "flows": {"clientCredentials": {"tokenUrl": "oauth/token", "scopes": {}}}}),
+        )
+        .unwrap();
+        assert_eq!(relative.token_url.as_deref(), Some("/oauth/token"));
+        let plain = security.schemes.iter().find(|s| s.name == "plain").unwrap();
+        assert_eq!(plain.token_url, None);
+        assert_eq!(plain.scope, "");
     }
 
     #[test]

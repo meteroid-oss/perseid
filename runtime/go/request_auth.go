@@ -5,6 +5,14 @@ package @@PACKAGE_NAME@@
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 )
 
 // BasicAuth holds HTTP basic credentials.
@@ -19,6 +27,177 @@ type securityScheme struct {
 	kind     string
 	location string
 	param    string
+	// tokenURL is the OAuth2 token endpoint of a bearer scheme, absolute or relative to the
+	// server URL, and scope what is asked for with the token.
+	tokenURL string
+	scope    string
+}
+
+// oauthExpiryMargin is how long before its expiry an access token is renewed, or half its life
+// when that is shorter.
+const oauthExpiryMargin = time.Minute
+
+// oauthTokens runs the OAuth2 client credentials flow: it keeps an access token per token URL
+// until it is about to expire and shares one token request among concurrent callers.
+type oauthTokens struct {
+	clientID     string
+	clientSecret string
+	// inBody sends the client credentials as form fields instead of an HTTP basic header.
+	inBody bool
+
+	mu      sync.Mutex
+	tokens  map[string]oauthToken
+	flights map[string]*tokenFlight
+}
+
+type oauthToken struct {
+	value string
+	// expires is the zero time for a token without a lifetime.
+	expires time.Time
+}
+
+// tokenFlight is a token request in progress.
+type tokenFlight struct {
+	done  chan struct{}
+	token string
+	err   error
+}
+
+func newOAuthTokens(clientID, clientSecret, clientAuth string) *oauthTokens {
+	return &oauthTokens{
+		clientID:     clientID,
+		clientSecret: clientSecret,
+		inBody:       clientAuth == "body",
+		tokens:       map[string]oauthToken{},
+		flights:      map[string]*tokenFlight{},
+	}
+}
+
+// token returns the access token cached for key (its token URL), else the one fetch obtains:
+// concurrent callers share a single fetch.
+func (o *oauthTokens) token(ctx context.Context, key string, fetch func(context.Context) (string, time.Time, error)) (string, error) {
+	for {
+		o.mu.Lock()
+		if t, ok := o.tokens[key]; ok && (t.expires.IsZero() || time.Now().Before(t.expires)) {
+			o.mu.Unlock()
+			return t.value, nil
+		}
+		flight, running := o.flights[key]
+		if !running {
+			flight = &tokenFlight{done: make(chan struct{})}
+			o.flights[key] = flight
+		}
+		o.mu.Unlock()
+
+		if running {
+			select {
+			case <-flight.done:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+			// The caller that fetched it gave up: try again rather than inherit its cancellation.
+			if flight.err != nil && ctx.Err() == nil &&
+				(errors.Is(flight.err, context.Canceled) || errors.Is(flight.err, context.DeadlineExceeded)) {
+				continue
+			}
+			return flight.token, flight.err
+		}
+
+		value, expires, err := fetch(ctx)
+		o.mu.Lock()
+		if err == nil {
+			o.tokens[key] = oauthToken{value: value, expires: expires}
+		}
+		delete(o.flights, key)
+		o.mu.Unlock()
+		flight.token, flight.err = value, err
+		close(flight.done)
+		return value, err
+	}
+}
+
+// invalidate forgets token of key after the API rejected it, unless a newer one replaced it.
+func (o *oauthTokens) invalidate(key, token string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.tokens[key].value == token {
+		delete(o.tokens, key)
+	}
+}
+
+// oauthUse is the access token a request carries, which a 401 response replaces.
+type oauthUse struct {
+	scheme securityScheme
+	url    string
+	token  string
+}
+
+// tokenEndpoint is the URL a token endpoint is requested at, and the path or URL to request it by.
+func (c *config) tokenEndpoint(tokenURL string) (key, target string) {
+	if strings.Contains(tokenURL, "://") {
+		return tokenURL, tokenURL
+	}
+	if !strings.HasPrefix(tokenURL, "/") {
+		tokenURL = "/" + tokenURL
+	}
+	return c.serverURL + tokenURL, tokenURL
+}
+
+// oauthToken returns the access token of a bearer scheme with the URL it came from.
+func (c *Client) oauthToken(ctx context.Context, scheme securityScheme) (string, string, error) {
+	key, target := c.cfg.tokenEndpoint(scheme.tokenURL)
+	token, err := c.cfg.oauth.token(ctx, key, func(ctx context.Context) (string, time.Time, error) {
+		return c.fetchToken(ctx, target, scheme.scope)
+	})
+	return key, token, err
+}
+
+// fetchToken requests an access token with the client credentials grant. The request goes
+// through the client's middleware, timeout and retries like any other.
+func (c *Client) fetchToken(ctx context.Context, target, scope string) (string, time.Time, error) {
+	oauth := c.cfg.oauth
+	form := url.Values{"grant_type": {"client_credentials"}}
+	if scope != "" {
+		form.Set("scope", scope)
+	}
+	req := newRequest(http.MethodPost, target, nil)
+	req.security = [][]string{}
+	if oauth.inBody {
+		form.Set("client_id", oauth.clientID)
+		form.Set("client_secret", oauth.clientSecret)
+	} else {
+		// RFC 6749 2.3.1: both are form-encoded before the base64.
+		credentials := url.QueryEscape(oauth.clientID) + ":" + url.QueryEscape(oauth.clientSecret)
+		req.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(credentials)))
+	}
+	req.body = []byte(form.Encode())
+	req.contentType = "application/x-www-form-urlencoded"
+
+	body, status, err := c.do(ctx, req)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	var grant struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   any    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(body, &grant); err != nil {
+		return "", time.Time{}, &DecodeError{StatusCode: status, RawBody: body, Err: err}
+	}
+	if grant.AccessToken == "" {
+		return "", time.Time{}, &DecodeError{StatusCode: status, RawBody: body, Err: errors.New("the token endpoint answered without an access_token")}
+	}
+	var expires time.Time
+	seconds, ok := grant.ExpiresIn.(float64)
+	if text, isText := grant.ExpiresIn.(string); isText {
+		parsed, err := strconv.ParseFloat(text, 64)
+		seconds, ok = parsed, err == nil
+	}
+	if ok {
+		life := time.Duration(max(seconds, 0) * float64(time.Second))
+		expires = time.Now().Add(life - min(oauthExpiryMargin, life/2))
+	}
+	return grant.AccessToken, expires, nil
 }
 
 func (c *config) configured(name string) bool {
@@ -27,7 +206,7 @@ func (c *config) configured(name string) bool {
 	case !ok:
 		return false
 	case scheme.kind == "bearer":
-		return c.tokenProvider != nil || c.token != ""
+		return c.tokenProvider != nil || c.token != "" || (scheme.tokenURL != "" && c.oauth != nil)
 	case scheme.kind == "basic":
 		return c.basicAuth != nil
 	default:
@@ -36,13 +215,15 @@ func (c *config) configured(name string) bool {
 }
 
 // authenticate adds the credentials of the first alternative of security whose
-// schemes are all configured.
-func (c *config) authenticate(ctx context.Context, req *request, security [][]string) error {
+// schemes are all configured. It returns the OAuth2 access token it used, if any.
+func (c *Client) authenticate(ctx context.Context, req *request, security [][]string) (*oauthUse, error) {
+	cfg := c.cfg
+	var used *oauthUse
 	var chosen []string
 	for _, names := range security {
 		ok := len(names) > 0
 		for _, name := range names {
-			ok = ok && c.configured(name)
+			ok = ok && cfg.configured(name)
 		}
 		if ok {
 			chosen = names
@@ -53,21 +234,29 @@ func (c *config) authenticate(ctx context.Context, req *request, security [][]st
 		scheme := securitySchemes[name]
 		switch scheme.kind {
 		case "bearer":
-			token := c.token
-			if c.tokenProvider != nil {
+			token := cfg.token
+			switch {
+			case cfg.tokenProvider != nil:
 				var err error
-				if token, err = c.tokenProvider(ctx); err != nil {
-					return requestError("token provider: %w", err)
+				if token, err = cfg.tokenProvider(ctx); err != nil {
+					return nil, requestError("token provider: %w", err)
 				}
+			case token == "" && scheme.tokenURL != "" && cfg.oauth != nil:
+				endpoint, fetched, err := c.oauthToken(ctx, scheme)
+				if err != nil {
+					return nil, err
+				}
+				token = fetched
+				used = &oauthUse{scheme: scheme, url: endpoint, token: fetched}
 			}
 			req.SetHeader("Authorization", "Bearer "+token)
 		case "basic":
-			credentials := c.basicAuth.Username + ":" + c.basicAuth.Password
+			credentials := cfg.basicAuth.Username + ":" + cfg.basicAuth.Password
 			req.SetHeader("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(credentials)))
 		default:
-			key := c.apiKeys[name]
+			key := cfg.apiKeys[name]
 			if key == "" {
-				key = c.token
+				key = cfg.token
 			}
 			switch scheme.location {
 			case "query":
@@ -79,5 +268,5 @@ func (c *config) authenticate(ctx context.Context, req *request, security [][]st
 			}
 		}
 	}
-	return nil
+	return used, nil
 }

@@ -517,6 +517,53 @@ async fn cookies_are_sent_as_parameters_and_as_credentials() {
     assert_eq!(error.api().unwrap().payload().unwrap().error, "unauthorized");
 }
 
+const OAUTH_SECRET: &str = "p@ss word";
+
+fn oauth_client(id: &str) -> FeaturesBuilder {
+    builder().client_credentials(id, OAUTH_SECRET).max_retries(0)
+}
+
+#[tokio::test]
+async fn oauth_tokens_are_fetched_once_and_cached() {
+    let client = oauth_client("rust-oauth").build().unwrap();
+    let status = || async { client.account().retrieve_machine().await.unwrap().status };
+    assert_eq!(status().await, "Bearer at-rust-oauth-1||");
+    assert_eq!(status().await, "Bearer at-rust-oauth-1||");
+    assert_eq!(server_state("rust-oauth").0, 1);
+
+    let in_body = oauth_client("rust-oauth-body").client_credentials_in_body().build().unwrap();
+    assert_eq!(
+        in_body.account().retrieve_machine().await.unwrap().status,
+        "Bearer at-rust-oauth-body-1||"
+    );
+
+    let concurrent = oauth_client("rust-oauth-concurrent").build().unwrap();
+    let (first, second) =
+        tokio::join!(concurrent.account().retrieve_machine(), concurrent.account().retrieve_machine());
+    assert_eq!(first.unwrap().status, "Bearer at-rust-oauth-concurrent-1||");
+    assert_eq!(second.unwrap().status, "Bearer at-rust-oauth-concurrent-1||");
+    assert_eq!(server_state("rust-oauth-concurrent").0, 1);
+
+    // A token wins over the client credentials.
+    let with_token = oauth_client("rust-oauth").token("tok").build().unwrap();
+    assert_eq!(with_token.account().retrieve_machine().await.unwrap().status, "Bearer tok||");
+}
+
+#[tokio::test]
+async fn a_rejected_oauth_token_is_replaced_once() {
+    let client = oauth_client("rust-oauth-revoked").build().unwrap();
+    assert_eq!(
+        client.account().retrieve_machine().await.unwrap().status,
+        "Bearer at-rust-oauth-revoked-2||"
+    );
+    assert_eq!(server_state("rust-oauth-revoked").0, 2);
+
+    let invalid = builder().client_credentials("rust-oauth-bad", "wrong").max_retries(0).build().unwrap();
+    let error = invalid.account().retrieve_machine().await.unwrap_err();
+    assert_eq!(error.kind(), Some(ApiErrorKind::Unauthorized), "{error:?}");
+    assert_eq!(error.api().unwrap().payload().unwrap().error, "invalid_client");
+}
+
 fn client_without_credentials() -> Features {
     builder().build().unwrap()
 }

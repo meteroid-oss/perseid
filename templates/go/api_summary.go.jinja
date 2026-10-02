@@ -20,7 +20,7 @@ import "time"
 const DefaultTimeout = {{ sdk.timeout | default(60) }} * time.Second
 
 var securitySchemes = map[string]securityScheme{
-{% for scheme in api.security_schemes %}	{{ scheme.name | tojson }}: {kind: "{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, location: "{{ scheme.in }}", param: {{ scheme.param | tojson }}{% endif %}},
+{% for scheme in api.security_schemes %}	{{ scheme.name | tojson }}: {kind: "{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, location: "{{ scheme.in }}", param: {{ scheme.param | tojson }}{% elif scheme.token_url %}, tokenURL: {{ scheme.token_url | tojson }}, scope: {{ scheme.scope | tojson }}{% endif %}},
 {% endfor %}}
 
 // defaultSecurity lists the alternatives of security schemes most operations accept.

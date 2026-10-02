@@ -135,6 +135,7 @@ pub(crate) mod pages {
 {% endif %}
 
 {% set kinds = api.security_schemes | map(attribute="kind") | list -%}
+{% set oauth = api.security_schemes | selectattr("token_url") | list -%}
 {% set client = sdk.client_name -%}
 {% set client_rs %}// this file is @generated
 //! The `{{ client }}` client and its builder.
@@ -149,16 +150,20 @@ use super::{
 };
 use crate::{error::Error, request::Failure, Configuration};
 
-use super::auth_schemes::{Credentials, Scheme, Security};
+use super::auth_schemes::{Credentials, {% if oauth %}OAuthClient, {% endif %}Scheme, Security};
 
 const CRATE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BASE_URL: Option<&str> = {% if sdk.has_default_base_url %}Some({{ sdk.default_base_url | rust_str }}){% else %}None{% endif %};
 const API_KEY_ENV: &str = "{{ sdk.env_prefix }}_API_KEY";
 const BASE_URL_ENV: &str = "{{ sdk.env_prefix }}_BASE_URL";
+{% if oauth -%}
+const CLIENT_ID_ENV: &str = "{{ sdk.env_prefix }}_CLIENT_ID";
+const CLIENT_SECRET_ENV: &str = "{{ sdk.env_prefix }}_CLIENT_SECRET";
+{% endif -%}
 
 static SECURITY_SCHEMES: &[(&str, Scheme)] = &[
 {%- for scheme in api.security_schemes %}
-    ("{{ scheme.name }}", {% if scheme.kind == "bearer" %}Scheme::Bearer{% elif scheme.kind == "basic" %}Scheme::Basic{% else %}Scheme::ApiKey("{{ scheme.in }}", {% if scheme.in == "header" %}{{ scheme.param | lower | rust_str }}{% else %}{{ scheme.param | rust_str }}{% endif %}){% endif %}),
+    ("{{ scheme.name }}", {% if scheme.kind == "bearer" and scheme.token_url %}Scheme::OAuth({{ scheme.token_url | rust_str }}, {{ scheme.scope | rust_str }}){% elif scheme.kind == "bearer" %}Scheme::Bearer{% elif scheme.kind == "basic" %}Scheme::Basic{% else %}Scheme::ApiKey("{{ scheme.in }}", {% if scheme.in == "header" %}{{ scheme.param | lower | rust_str }}{% else %}{{ scheme.param | rust_str }}{% endif %}){% endif %}),
 {%- endfor %}
 ];
 
@@ -271,6 +276,11 @@ pub struct {{ client }}Builder {
     token_provider: Option<super::TokenProvider>,
     basic_auth: Option<super::BasicAuth>,
     api_keys: std::collections::HashMap<String, String>,
+{%- if oauth %}
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    client_auth_in_body: bool,
+{%- endif %}
 }
 
 impl {{ client }}Builder {
@@ -349,6 +359,29 @@ impl {{ client }}Builder {
         self
     }
 {%- endif %}
+{%- if oauth %}
+
+    /// The OAuth2 client credentials of the client credentials flow. They make the client fetch the
+    /// access token of {% for scheme in oauth %}`{{ scheme.name }}`{% if not loop.last %}, {% endif %}{% endfor %} from its token URL on first use, keep it until it
+    /// expires, and fetch a new one when the API rejects it. A token provider and the token take
+    /// precedence. Default: `{{ sdk.env_prefix }}_CLIENT_ID` and `{{ sdk.env_prefix }}_CLIENT_SECRET`.
+    pub fn client_credentials(
+        mut self,
+        client_id: impl Into<String>,
+        client_secret: impl Into<String>,
+    ) -> Self {
+        self.client_id = Some(client_id.into());
+        self.client_secret = Some(client_secret.into());
+        self
+    }
+
+    /// Sends the OAuth2 client credentials as form fields of the token request instead of an HTTP
+    /// basic `Authorization` header.
+    pub fn client_credentials_in_body(mut self) -> Self {
+        self.client_auth_in_body = true;
+        self
+    }
+{%- endif %}
 {%- if "basic" in kinds %}
 
     /// HTTP basic credentials.
@@ -410,6 +443,11 @@ impl {{ client }}Builder {
                 schemes: SECURITY_SCHEMES,
                 security: DEFAULT_SECURITY,
                 token_provider: self.token_provider,
+                oauth: {% if oauth %}self
+                    .client_id
+                    .or_else(|| env(CLIENT_ID_ENV))
+                    .zip(self.client_secret.or_else(|| env(CLIENT_SECRET_ENV)))
+                    .map(|(id, secret)| OAuthClient::new(id, secret, self.client_auth_in_body)){% else %}None{% endif %},
                 basic_auth: self.basic_auth,
                 api_keys: self.api_keys,
             },
@@ -435,6 +473,11 @@ impl Default for {{ client }}Builder {
             token_provider: None,
             basic_auth: None,
             api_keys: std::collections::HashMap::new(),
+{%- if oauth %}
+            client_id: None,
+            client_secret: None,
+            client_auth_in_body: false,
+{%- endif %}
         }
     }
 }

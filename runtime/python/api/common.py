@@ -42,6 +42,7 @@ from ..serialization import (
     to_json_value,
 )
 from ._auth import (
+    OAuthTokens,
     Security,
     SecurityScheme,
     TokenProvider,
@@ -49,7 +50,9 @@ from ._auth import (
     async_token,
     chosen_schemes,
     needs_token_provider,
+    oauth_scheme,
     sync_token,
+    token_url,
 )
 from ._errors import error_class
 from ._response import capture_response
@@ -282,6 +285,7 @@ class Configuration:
     bearer_access_token: str | None = None
     token_provider: TokenProvider | None = None
     basic_auth: tuple[str, str] | None = None
+    oauth: OAuthTokens | None = None
     api_keys: t.Mapping[str, str] = dataclasses.field(default_factory=dict[str, str])
     security_schemes: t.Mapping[str, SecurityScheme] = dataclasses.field(
         default_factory=dict[str, SecurityScheme]
@@ -532,7 +536,7 @@ class ApiBase:
             )
         request = client.build_request(
             method,
-            f"{self._cfg.base_path}{path}",
+            path if "://" in path else f"{self._cfg.base_path}{path}",
             params=tuple(params) or None,
             headers=headers,
             content=content,
@@ -546,6 +550,59 @@ class ApiBase:
     def _needs_token(self, spec: ApiRequest) -> bool:
         security = self._cfg.security if spec.security is None else spec.security
         return needs_token_provider(self._cfg, chosen_schemes(self._cfg, security))
+
+    def _oauth_scheme(self, spec: ApiRequest) -> SecurityScheme | None:
+        """The OAuth2 scheme whose access token this client fetches for ``spec``, if any."""
+        security = self._cfg.security if spec.security is None else spec.security
+        return oauth_scheme(self._cfg, chosen_schemes(self._cfg, security))
+
+    def _token_request(self, scheme: SecurityScheme) -> tuple[str, ApiRequest]:
+        """The URL of the token endpoint of ``scheme`` and the client credentials request to it."""
+        oauth = self._cfg.oauth
+        assert oauth is not None
+        url = token_url(self._cfg.base_path, scheme.token_url)
+        form, headers = oauth.request_parts(scheme.scope)
+        return url, ApiRequest(
+            "POST", url, form_body=form, security=(), extra_headers=headers
+        )
+
+    def _rejected_token(
+        self,
+        response: httpx.Response,
+        request: httpx.Request,
+        used: tuple[str, str] | None,
+        renewed: bool,
+        replayable: bool,
+    ) -> bool:
+        """Whether ``response`` rejects the OAuth2 access token ``used`` (its token URL and
+        value) that the request carried, which is then forgotten."""
+        oauth = self._cfg.oauth
+        if (
+            oauth is None
+            or used is None
+            or renewed
+            or not replayable
+            or response.status_code != 401
+            or request.headers.get("authorization") != f"Bearer {used[1]}"
+        ):
+            return False
+        oauth.invalidate(*used)
+        return True
+
+    @staticmethod
+    def _parse_token(response: httpx.Response) -> tuple[str, float | None]:
+        """The access token and its lifetime in seconds of a token endpoint response."""
+        try:
+            body = response.json()
+            token = body["access_token"]
+            if not isinstance(token, str) or not token:
+                raise ValueError("access_token is not a string")
+            expires = body.get("expires_in")
+            return token, None if expires is None else float(expires)
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise APIResponseValidationError(
+                response, f"the token endpoint response has no usable access_token: {exc}"
+            ) from exc
 
     def _retry_delay(
         self, spec: ApiRequest, attempt: int, replayable: bool, response: httpx.Response | None
@@ -587,10 +644,28 @@ class ApiBaseSync(ApiBase):
             response.read()
         return response
 
+    def _oauth_token(self, scheme: SecurityScheme) -> tuple[str, str]:
+        """The access token of ``scheme`` with its token URL: the cached one, else a new one.
+        Concurrent callers share one token request."""
+        oauth = self._cfg.oauth
+        assert oauth is not None
+        url, spec = self._token_request(scheme)
+        with oauth.lock:
+            token = oauth.cached(url)
+            if token is None:
+                token = oauth.store(url, *self._parse_token(self._request(spec)))
+        return url, token
+
     def _request(self, spec: ApiRequest) -> httpx.Response:
         token = sync_token(self._cfg) if self._needs_token(spec) else None
+        scheme = self._oauth_scheme(spec)
+        used: tuple[str, str] | None = None
+        if scheme is not None:
+            used = self._oauth_token(scheme)
+            token = used[1]
         request, replayable = self._build(self._httpx_client, spec, token)
         attempt = 0
+        renewed = False
         while True:
             try:
                 response = self._send(request, spec.stream)
@@ -599,6 +674,16 @@ class ApiBaseSync(ApiBase):
                 if delay is None:
                     raise connection_error(exc) from exc
             else:
+                if scheme is not None and self._rejected_token(
+                    response, request, used, renewed, replayable
+                ):
+                    # The API rejected the access token: one request with a new one, which
+                    # does not use up a retry.
+                    renewed = True
+                    response.close()
+                    used = self._oauth_token(scheme)
+                    request.headers["authorization"] = f"Bearer {used[1]}"
+                    continue
                 delay = self._retry_delay(spec, attempt, replayable, response)
                 if delay is None:
                     try:
@@ -630,10 +715,28 @@ class ApiBaseAsync(ApiBase):
             await response.aread()
         return response
 
+    async def _oauth_token(self, scheme: SecurityScheme) -> tuple[str, str]:
+        """The access token of ``scheme`` with its token URL: the cached one, else a new one.
+        Concurrent callers share one token request."""
+        oauth = self._cfg.oauth
+        assert oauth is not None
+        url, spec = self._token_request(scheme)
+        async with oauth.async_lock():
+            token = oauth.cached(url)
+            if token is None:
+                token = oauth.store(url, *self._parse_token(await self._request(spec)))
+        return url, token
+
     async def _request(self, spec: ApiRequest) -> httpx.Response:
         token = await async_token(self._cfg) if self._needs_token(spec) else None
+        scheme = self._oauth_scheme(spec)
+        used: tuple[str, str] | None = None
+        if scheme is not None:
+            used = await self._oauth_token(scheme)
+            token = used[1]
         request, replayable = self._build(self._httpx_client, spec, token)
         attempt = 0
+        renewed = False
         while True:
             try:
                 response = await self._send(request, spec.stream)
@@ -642,6 +745,16 @@ class ApiBaseAsync(ApiBase):
                 if delay is None:
                     raise connection_error(exc) from exc
             else:
+                if scheme is not None and self._rejected_token(
+                    response, request, used, renewed, replayable
+                ):
+                    # The API rejected the access token: one request with a new one, which
+                    # does not use up a retry.
+                    renewed = True
+                    await response.aclose()
+                    used = await self._oauth_token(scheme)
+                    request.headers["authorization"] = f"Bearer {used[1]}"
+                    continue
                 delay = self._retry_delay(spec, attempt, replayable, response)
                 if delay is None:
                     try:

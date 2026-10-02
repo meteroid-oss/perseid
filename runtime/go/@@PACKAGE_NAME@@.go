@@ -27,6 +27,14 @@ const (
 	// when it is given an empty one.
 	APIKeyEnv = "@@ENV_PREFIX@@_API_KEY"
 
+	// ClientIDEnv names the environment variable [New] reads the OAuth2 client id from when
+	// Options.ClientID is empty.
+	ClientIDEnv = "@@ENV_PREFIX@@_CLIENT_ID"
+
+	// ClientSecretEnv names the environment variable [New] reads the OAuth2 client secret from
+	// when Options.ClientSecret is empty.
+	ClientSecretEnv = "@@ENV_PREFIX@@_CLIENT_SECRET"
+
 	// BaseURLEnv names the environment variable that overrides
 	// DefaultServerURL when Options.ServerURL is empty.
 	BaseURLEnv = "@@ENV_PREFIX@@_BASE_URL"
@@ -72,6 +80,18 @@ type Options struct {
 	// e.g. an OAuth2 access token. It takes precedence over the client token.
 	TokenProvider func(ctx context.Context) (string, error)
 
+	// ClientID and ClientSecret are the credentials of the OAuth2 client credentials flow.
+	// Together they make the client fetch the access token of an OAuth2 security scheme from
+	// its token URL on first use, keep it until it expires, and fetch a new one when the API
+	// rejects it. TokenProvider and the client token take precedence. They default to the
+	// @@ENV_PREFIX@@_CLIENT_ID and @@ENV_PREFIX@@_CLIENT_SECRET environment variables.
+	ClientID     string
+	ClientSecret string
+
+	// OAuthClientAuth is how the client credentials reach the token endpoint: "basic" (the
+	// default) in an HTTP basic Authorization header, or "body" as form fields.
+	OAuthClientAuth string
+
 	// BasicAuth holds the credentials of HTTP basic security schemes.
 	BasicAuth *BasicAuth
 
@@ -91,6 +111,7 @@ type config struct {
 	jitter        bool
 	logger        *slog.Logger
 	tokenProvider func(ctx context.Context) (string, error)
+	oauth         *oauthTokens
 	basicAuth     *BasicAuth
 	apiKeys       map[string]string
 }
@@ -115,6 +136,17 @@ func newConfig(token string, options *Options) *config {
 		tokenProvider: opts.TokenProvider,
 		basicAuth:     opts.BasicAuth,
 		apiKeys:       opts.APIKeys,
+	}
+
+	clientID, clientSecret := opts.ClientID, opts.ClientSecret
+	if clientID == "" {
+		clientID = os.Getenv(ClientIDEnv)
+	}
+	if clientSecret == "" {
+		clientSecret = os.Getenv(ClientSecretEnv)
+	}
+	if clientID != "" && clientSecret != "" {
+		cfg.oauth = newOAuthTokens(clientID, clientSecret, opts.OAuthClientAuth)
 	}
 
 	serverURL := opts.ServerURL

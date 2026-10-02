@@ -8,6 +8,7 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex, PoisonError},
     task::{Context, Poll},
+    time::{Duration, Instant},
 };
 
 use crate::error::Error;
@@ -29,11 +30,18 @@ impl TokenProvider {
     }
 }
 
-/// Keeps request futures `Sync` while they await a provider future that is only `Send`.
-struct SyncFuture(Mutex<TokenFuture>);
+/// Keeps request futures `Sync` while they await a provider or token request future that is only
+/// `Send`.
+pub(crate) struct SyncFuture<'a, T>(Mutex<Pin<Box<dyn Future<Output = T> + Send + 'a>>>);
 
-impl Future for SyncFuture {
-    type Output = Result<String, Error>;
+impl<'a, T> SyncFuture<'a, T> {
+    pub(crate) fn new(future: impl Future<Output = T> + Send + 'a) -> Self {
+        Self(Mutex::new(Box::pin(future)))
+    }
+}
+
+impl<T> Future for SyncFuture<'_, T> {
+    type Output = T;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let future = self.get_mut().0.get_mut().unwrap_or_else(PoisonError::into_inner);
@@ -66,6 +74,9 @@ impl fmt::Debug for BasicAuth {
 
 pub(crate) enum Scheme {
     Bearer,
+    /// A bearer token the client can fetch with the OAuth2 client credentials flow: the token URL
+    /// (absolute, or relative to the base URL) and the scopes asked for.
+    OAuth(&'static str, &'static str),
     Basic,
     /// Location (`header`, `query` or `cookie`) and name of the key.
     ApiKey(&'static str, &'static str),
@@ -74,11 +85,84 @@ pub(crate) enum Scheme {
 /// Alternatives of scheme names: the first one whose credentials are all configured is sent.
 pub(crate) type Security = &'static [&'static [&'static str]];
 
+/// Tokens are renewed this long before they expire, or at half their life when it is shorter.
+const EXPIRY_MARGIN: Duration = Duration::from_secs(60);
+
+struct CachedToken {
+    value: String,
+    /// `None` for a token without a lifetime.
+    expires: Option<Instant>,
+}
+
+/// The client credentials of the OAuth2 flow, and the access tokens fetched with them by token URL.
+#[derive(Clone)]
+pub(crate) struct OAuthClient {
+    pub(crate) client_id: String,
+    pub(crate) client_secret: String,
+    /// Sends the client credentials as form fields instead of an HTTP basic header.
+    pub(crate) in_body: bool,
+    // The lock is held while a token is fetched, so concurrent requests share one fetch.
+    tokens: Arc<tokio::sync::Mutex<HashMap<String, CachedToken>>>,
+}
+
+impl OAuthClient {
+    pub(crate) fn new(client_id: String, client_secret: String, in_body: bool) -> Self {
+        Self {
+            client_id,
+            client_secret,
+            in_body,
+            tokens: Arc::default(),
+        }
+    }
+
+    /// The token cached for `url`, else the one `fetch` gets, with its lifetime.
+    pub(crate) async fn token(
+        &self,
+        url: &str,
+        fetch: SyncFuture<'_, Result<(String, Option<Duration>), Error>>,
+    ) -> Result<String, Error> {
+        let mut tokens = self.tokens.lock().await;
+        if let Some(cached) = tokens.get(url) {
+            if cached.expires.is_none_or(|expires| expires > Instant::now()) {
+                return Ok(cached.value.clone());
+            }
+        }
+        let (value, lifetime) = fetch.await?;
+        let expires = lifetime.map(|life| Instant::now() + life - EXPIRY_MARGIN.min(life / 2));
+        tokens.insert(
+            url.to_owned(),
+            CachedToken {
+                value: value.clone(),
+                expires,
+            },
+        );
+        Ok(value)
+    }
+
+    /// Forgets `token` of `url` after the API rejected it, unless a newer one replaced it.
+    pub(crate) async fn invalidate(&self, url: &str, token: &str) {
+        let mut tokens = self.tokens.lock().await;
+        if tokens.get(url).is_some_and(|cached| cached.value == token) {
+            tokens.remove(url);
+        }
+    }
+}
+
+/// The OAuth2 access token a request carries, which a 401 response replaces.
+pub(crate) struct OAuthUse {
+    pub(crate) url: &'static str,
+    pub(crate) scope: &'static str,
+    /// The cache key of the token: the absolute token URL.
+    pub(crate) key: String,
+    pub(crate) token: String,
+}
+
 #[derive(Clone)]
 pub(crate) struct Credentials {
     pub(crate) schemes: &'static [(&'static str, Scheme)],
     pub(crate) security: Security,
     pub(crate) token_provider: Option<TokenProvider>,
+    pub(crate) oauth: Option<OAuthClient>,
     pub(crate) basic_auth: Option<BasicAuth>,
     pub(crate) api_keys: HashMap<String, String>,
 }
@@ -103,27 +187,56 @@ impl Credentials {
     fn configured(&self, name: &str, token: Option<&str>) -> bool {
         match self.scheme(name) {
             Some(Scheme::Bearer) => self.token_provider.is_some() || token.is_some(),
+            Some(Scheme::OAuth(..)) => {
+                self.token_provider.is_some() || token.is_some() || self.oauth.is_some()
+            }
             Some(Scheme::Basic) => self.basic_auth.is_some(),
             Some(Scheme::ApiKey(..)) => self.api_key(name, token).is_some(),
             None => false,
         }
     }
 
+    /// The names of the first alternative whose credentials are all configured.
+    fn chosen(&self, security: Option<Security>, token: Option<&str>) -> &'static [&'static str] {
+        security
+            .unwrap_or(self.security)
+            .iter()
+            .find(|names| !names.is_empty() && names.iter().all(|name| self.configured(name, token)))
+            .copied()
+            .unwrap_or_default()
+    }
+
+    /// The token URL and scopes of the OAuth2 scheme whose access token the client fetches, when
+    /// neither a token provider nor a token is set.
+    pub(crate) fn oauth_scheme(
+        &self,
+        security: Option<Security>,
+        token: Option<&str>,
+    ) -> Option<(&'static str, &'static str)> {
+        if self.oauth.is_none() || self.token_provider.is_some() || token.is_some() {
+            return None;
+        }
+        self.chosen(security, token).iter().find_map(|name| match self.scheme(name) {
+            Some(Scheme::OAuth(url, scope)) => Some((*url, *scope)),
+            _ => None,
+        })
+    }
+
+    /// The headers, query parameters and cookies of the credentials of the first satisfiable
+    /// alternative. `oauth_token` is the access token fetched by [`Self::oauth_scheme`].
     pub(crate) async fn apply(
         &self,
         security: Option<Security>,
         token: Option<&str>,
+        oauth_token: Option<&str>,
     ) -> Result<Applied, Error> {
         let mut applied = Applied::default();
-        let chosen = security.unwrap_or(self.security).iter().find(|names| {
-            !names.is_empty() && names.iter().all(|name| self.configured(name, token))
-        });
-        for name in chosen.copied().unwrap_or_default() {
+        for name in self.chosen(security, token) {
             match self.scheme(name) {
-                Some(Scheme::Bearer) => {
+                Some(Scheme::Bearer | Scheme::OAuth(..)) => {
                     let token = match &self.token_provider {
-                        Some(provider) => SyncFuture(Mutex::new((provider.0)())).await?,
-                        None => token.unwrap_or_default().to_owned(),
+                        Some(provider) => SyncFuture::new((provider.0)()).await?,
+                        None => token.or(oauth_token).unwrap_or_default().to_owned(),
                     };
                     applied.headers.push(("authorization", format!("Bearer {token}")));
                 }
@@ -147,7 +260,7 @@ impl Credentials {
     }
 }
 
-fn base64(input: &[u8]) -> String {
+pub(crate) fn base64(input: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {

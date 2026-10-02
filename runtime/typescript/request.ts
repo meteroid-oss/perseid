@@ -8,7 +8,15 @@ import {
   apiError,
 } from "./apiErrors.js";
 import { APIPromise } from "./apiPromise.js";
-import { applyAuth, type Credentials, type Security, type SecurityScheme } from "./auth.js";
+import {
+  applyAuth,
+  basicAuthorization,
+  type Credentials,
+  type OAuthGrant,
+  type OAuthToken,
+  type Security,
+  type SecurityScheme,
+} from "./auth.js";
 import { parseJson, stringifyJson } from "./json.js";
 import { type Middleware, withMiddleware } from "./middleware.js";
 import { EventStream, type MultipartBody, Stream, type UploadBody } from "./streaming.js";
@@ -68,6 +76,35 @@ export interface @@CLIENT_NAME@@RequestContext extends Credentials {
   maxRetries?: number | undefined;
   defaultHeaders?: Record<string, string | null | undefined> | undefined;
   defaultQuery?: Record<string, string | undefined> | undefined;
+}
+
+/**
+ * @internal Fetches an access token with the client credentials grant. The request goes through
+ * the client's middleware, timeout and retries like any other.
+ */
+export async function fetchOAuthToken(ctx: @@CLIENT_NAME@@RequestContext, grant: OAuthGrant): Promise<OAuthToken> {
+  const absolute = /^[a-z][a-z0-9+.-]*:\/\//i.test(grant.tokenUrl);
+  const request = new @@CLIENT_NAME@@Request("POST", absolute || grant.tokenUrl.startsWith("/") ? grant.tokenUrl : `/${grant.tokenUrl}`);
+  const form: Record<string, string> = { grant_type: "client_credentials" };
+  if (grant.scope !== "") {
+    form.scope = grant.scope;
+  }
+  if (grant.clientAuth === "body") {
+    form.client_id = grant.clientId;
+    form.client_secret = grant.clientSecret;
+  } else {
+    request.setHeaderParam("authorization", basicAuthorization(grant.clientId, grant.clientSecret));
+  }
+  request.setSecurity([]);
+  request.setFormBody(form);
+  return await request.send(ctx, (json: any): OAuthToken => {
+    const token = json?.access_token;
+    if (typeof token !== "string" || token === "") {
+      throw new @@CLIENT_NAME@@Error("the token endpoint answered without an access_token");
+    }
+    const expiresIn = Number(json.expires_in ?? Number.NaN);
+    return { accessToken: token, expiresIn: Number.isNaN(expiresIn) ? undefined : expiresIn };
+  });
 }
 
 /** @internal The variable `name` of the environment, in Node.js, Deno or Bun; none in browsers. */
@@ -457,7 +494,7 @@ export class @@CLIENT_NAME@@Request {
     options: RequestOptions = {},
     stream = false
   ): Promise<Response> {
-    const url = new URL(ctx.baseUrl + this.path);
+    const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(this.path) ? this.path : ctx.baseUrl + this.path);
     const baseName = (name: string) => name.split("[")[0] ?? name;
     const overrides = options.query ?? {};
     const overridden = (name: string) => Object.prototype.hasOwnProperty.call(overrides, name);
@@ -476,7 +513,7 @@ export class @@CLIENT_NAME@@Request {
     }
 
     const authHeaders: Record<string, string> = {};
-    await applyAuth(ctx.auth.schemes, this.security ?? ctx.auth.security, ctx, authHeaders, url);
+    let oauthUse = await applyAuth(ctx.auth.schemes, this.security ?? ctx.auth.security, ctx, authHeaders, url);
 
     const headers: Record<string, string> = {
       accept: "application/json, */*;q=0.8",
@@ -516,6 +553,8 @@ export class @@CLIENT_NAME@@Request {
       }
     };
 
+    // An access token the API rejects is replaced once, without using up a retry.
+    let renewed = false;
     for (let attempt = 0; ; attempt++) {
       if (attempt > 0) {
         headers["@@HEADER_PREFIX@@-retry-count"] = attempt.toString();
@@ -559,6 +598,24 @@ export class @@CLIENT_NAME@@Request {
         log(`-> ${response.status}`);
         if (response.status < 300) {
           return response;
+        }
+        if (
+          response.status === 401 &&
+          oauthUse !== undefined &&
+          !renewed &&
+          !this.oneShot &&
+          headers.authorization === authHeaders.authorization
+        ) {
+          renewed = true;
+          ctx.oauth?.invalidate(oauthUse.name, oauthUse.token);
+          response.body?.cancel().catch(() => {});
+          const fresh: Record<string, string> = {};
+          oauthUse = await applyAuth(ctx.auth.schemes, this.security ?? ctx.auth.security, ctx, fresh, url);
+          if (fresh.authorization !== undefined) {
+            headers.authorization = authHeaders.authorization = fresh.authorization;
+          }
+          attempt--;
+          continue;
         }
         if (attempt >= maxRetries || !shouldRetry(response.status, retryable)) {
           throw await this.error(ctx, response, options.signal);

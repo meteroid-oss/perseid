@@ -335,7 +335,10 @@ func (r *request) SetFormBody(v any, deepObject, unexploded []string) {
 
 // url renders the absolute request URL against the configured server.
 func (r *request) url(serverURL string) (string, error) {
-	if serverURL == "" {
+	// The token endpoint of an OAuth2 scheme may live elsewhere.
+	if strings.Contains(r.path, "://") {
+		serverURL = ""
+	} else if serverURL == "" {
 		return "", requestError("no base URL: set Options.ServerURL or the %s environment variable", BaseURLEnv)
 	}
 	path := r.path
@@ -413,7 +416,8 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 	if security == nil {
 		security = defaultSecurity
 	}
-	if err := cfg.authenticate(ctx, req, security); err != nil {
+	oauth, err := c.authenticate(ctx, req, security)
+	if err != nil {
 		return nil, 0, err
 	}
 	endpoint, err := req.url(cfg.serverURL)
@@ -448,6 +452,8 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 	// Replaying a request that is not idempotent could apply it twice.
 	idempotent := req.headers.Get("idempotency-key") != "" ||
 		slices.Contains([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodTrace}, req.method)
+	// An access token the API rejects is replaced once, without using up a retry.
+	renewed := false
 	for attempt := 0; ; attempt++ {
 		res := c.attempt(ctx, req, endpoint, attempt, call.timeout)
 		if call.response != nil && res.response != nil {
@@ -455,6 +461,19 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 		}
 		if res.err == nil {
 			return res.body, res.status, nil
+		}
+		if oauth != nil && !renewed && res.status == http.StatusUnauthorized && !req.oneShot && ctx.Err() == nil &&
+			req.headers.Get("Authorization") == "Bearer "+oauth.token {
+			renewed = true
+			cfg.oauth.invalidate(oauth.url, oauth.token)
+			_, token, err := c.oauthToken(ctx, oauth.scheme)
+			if err != nil {
+				return nil, 0, err
+			}
+			oauth.token = token
+			req.SetHeader("Authorization", "Bearer "+token)
+			attempt--
+			continue
 		}
 		if !res.retryable || !idempotent || req.oneShot || attempt >= len(call.retrySchedule) || ctx.Err() != nil {
 			return nil, 0, res.err

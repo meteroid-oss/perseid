@@ -222,6 +222,7 @@ internal static class Scenarios
         await ContentAsync(client);
         await EncodingAsync(client, url);
         await CookiesAsync(client, url);
+        await OAuthAsync(url);
         await RetriesAsync(client, url);
         await ErrorsAsync(url);
         await StreamingAsync(client, url);
@@ -535,6 +536,61 @@ internal static class Scenarios
 
         using var anonymous = new FeaturesClient(null, new() { BaseUrl = url });
         await Throws<UnauthorizedException>(() => anonymous.Cookies.RetrieveScenariosCookieAuthAsync());
+    }
+
+    private static async Task OAuthAsync(string url)
+    {
+        const string secret = "p@ss word";
+        FeaturesClient Oauth(string id, string? token = null, bool inBody = false, string clientSecret = secret) =>
+            new(
+                token,
+                new FeaturesClientOptions
+                {
+                    BaseUrl = url,
+                    ClientId = id,
+                    ClientSecret = clientSecret,
+                    OAuthClientAuthInBody = inBody,
+                    MaxRetries = 0,
+                }
+            );
+
+        using (var cached = Oauth("csharp-oauth"))
+        {
+            Equal("Bearer at-csharp-oauth-1||", (await cached.Account.RetrieveMachineAsync()).Status);
+            Equal("Bearer at-csharp-oauth-1||", (await cached.Account.RetrieveMachineAsync()).Status);
+        }
+        Equal(1, (await State(url, "csharp-oauth")).Attempts);
+
+        using (var inBody = Oauth("csharp-oauth-body", inBody: true))
+        {
+            Equal("Bearer at-csharp-oauth-body-1||", (await inBody.Account.RetrieveMachineAsync()).Status);
+        }
+
+        using (var revoked = Oauth("csharp-oauth-revoked"))
+        {
+            Equal("Bearer at-csharp-oauth-revoked-2||", (await revoked.Account.RetrieveMachineAsync()).Status);
+        }
+        Equal(2, (await State(url, "csharp-oauth-revoked")).Attempts);
+
+        using (var concurrent = Oauth("csharp-oauth-concurrent"))
+        {
+            var both = await Task.WhenAll(
+                concurrent.Account.RetrieveMachineAsync(),
+                concurrent.Account.RetrieveMachineAsync()
+            );
+            Equal("Bearer at-csharp-oauth-concurrent-1||", both[0].Status);
+            Equal("Bearer at-csharp-oauth-concurrent-1||", both[1].Status);
+        }
+        Equal(1, (await State(url, "csharp-oauth-concurrent")).Attempts);
+
+        using (var invalid = Oauth("csharp-oauth-bad", clientSecret: "wrong"))
+        {
+            var rejected = await Throws<UnauthorizedException>(() => invalid.Account.RetrieveMachineAsync());
+            Equal("invalid_client", ((JsonElement)rejected.Error!).GetProperty("error").GetString());
+        }
+
+        using var withToken = Oauth("csharp-oauth", token: "tok");
+        Equal("Bearer tok||", (await withToken.Account.RetrieveMachineAsync()).Status);
     }
 
     private static async Task RetriesAsync(FeaturesClient client, string url)

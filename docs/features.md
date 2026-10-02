@@ -8,7 +8,8 @@ alternative that is fully configured:
 
 | Scheme | Configured with |
 |---|---|
-| `http` bearer, `oauth2`, `openIdConnect` | the constructor token, or a token provider called before each request |
+| `http` bearer, `openIdConnect` | the constructor token, or a token provider called before each request |
+| `oauth2` | the same, or with a `clientCredentials` flow, a client id and secret: the client fetches the token itself |
 | `http` basic | `basicAuth` / `basic_auth` / `BasicAuth` / `setBasicAuth` |
 | `apiKey` in a header, query parameter or cookie | the constructor token, or per scheme in `apiKeys` / `api_keys` / `ApiKeys` |
 
@@ -20,8 +21,26 @@ new Acme({ tokenProvider: () => oauth.accessToken() });           // OAuth2, ref
 Without a token, clients read `ACME_API_KEY`, and `ACME_BASE_URL` overrides the base URL. The
 prefix is the `name` in SCREAMING_SNAKE_CASE, or `env_prefix` under `[context]`.
 
-A spec without `securitySchemes` keeps sending `Authorization: Bearer <token>`. There is no
-built-in OAuth2 token exchange yet: bring a token provider.
+A spec without `securitySchemes` keeps sending `Authorization: Bearer <token>`.
+
+### OAuth2 client credentials
+
+For an `oauth2` scheme with a `clientCredentials` flow, the client takes `clientId` and
+`clientSecret` (`client_id`, `client_secret`, `ClientID`, `ClientSecret` ... in each language), by
+default from `ACME_CLIENT_ID` and `ACME_CLIENT_SECRET`:
+
+```ts
+new Acme({ clientId: "...", clientSecret: "..." });
+```
+
+The client posts `grant_type=client_credentials` to the `tokenUrl` on first use (a relative one
+is resolved against the base URL), asking for the scopes the operations require, and sends the
+access token as a bearer token. The credentials travel in an HTTP basic header (RFC 6749), or as
+form fields with the client auth option set to `body`. The token is kept until a minute before
+`expires_in` is up (or half its life when shorter), concurrent requests share one token request,
+the token request goes through the client's middleware, timeout and retries, and an access token
+the API answers with `401` is replaced once and the request sent again. A token provider or the
+constructor token wins over the client credentials.
 
 ## Pagination
 

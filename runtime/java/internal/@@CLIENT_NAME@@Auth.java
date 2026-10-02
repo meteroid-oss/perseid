@@ -3,8 +3,11 @@ package @@JAVA_INTERNAL_PACKAGE@@;
 
 import @@JAVA_PACKAGE@@.@@CLIENT_NAME@@Options;
 
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -14,11 +17,73 @@ import okhttp3.Request;
 
 /** Security schemes of the API and the credentials configured for them. Internal. */
 public final class @@CLIENT_NAME@@Auth {
+    /** The OAuth2 access token a request carries, which a 401 response replaces. */
+    private static final class OAuthUse {
+        final String scheme;
+        final String token;
+
+        OAuthUse(String scheme, String token) {
+            this.scheme = scheme;
+            this.token = token;
+        }
+    }
+
+    /** An access token with the time it stops being used, in {@link System#nanoTime} terms. */
+    private static final class Token {
+        final String value;
+        final boolean expires;
+        final long expiresAt;
+
+        Token(String value, boolean expires, long expiresAt) {
+            this.value = value;
+            this.expires = expires;
+            this.expiresAt = expiresAt;
+        }
+    }
+
+    /** The answer of a token endpoint. */
+    public static final class Grant {
+        final String accessToken;
+        final double expiresIn;
+
+        /**
+         * A token.
+         *
+         * @param accessToken the access token
+         * @param expiresIn its lifetime in seconds, negative when the endpoint declares none
+         */
+        public Grant(String accessToken, double expiresIn) {
+            this.accessToken = accessToken;
+            this.expiresIn = expiresIn;
+        }
+    }
+
+    /** Requests an access token with the client credentials grant. */
+    @FunctionalInterface
+    public interface TokenFetcher {
+        /**
+         * Requests a token.
+         *
+         * @param tokenUrl the absolute token URL, or one relative to the base URL
+         * @param scope the scopes to ask for, empty for none
+         * @param clientId the client id
+         * @param clientSecret the client secret
+         * @param inBody whether the credentials go in the form instead of a basic header
+         * @return the token
+         */
+        Grant fetch(String tokenUrl, String scope, String clientId, String clientSecret, boolean inBody);
+    }
+
+    /** Tokens are renewed this long before they expire, or at half their life when shorter. */
+    private static final long EXPIRY_MARGIN_NANOS = Duration.ofSeconds(60).toNanos();
+
     /** A security scheme: {@code bearer}, {@code basic} or {@code api_key}. */
     public static final class Scheme {
         final String kind;
         final String location;
         final String param;
+        final String tokenUrl;
+        final String scope;
 
         /**
          * A scheme.
@@ -28,9 +93,25 @@ public final class @@CLIENT_NAME@@Auth {
          * @param param the name of the API key header, parameter or cookie
          */
         public Scheme(String kind, String location, String param) {
+            this(kind, location, param, null, "");
+        }
+
+        /**
+         * A bearer scheme whose access token the client can fetch with the OAuth2 client
+         * credentials flow.
+         *
+         * @param kind {@code bearer}
+         * @param location unused
+         * @param param unused
+         * @param tokenUrl the token endpoint, absolute or relative to the base URL
+         * @param scope the space-separated scopes to ask for
+         */
+        public Scheme(String kind, String location, String param, String tokenUrl, String scope) {
             this.kind = kind;
             this.location = location;
             this.param = param;
+            this.tokenUrl = tokenUrl;
+            this.scope = scope;
         }
     }
 
@@ -41,6 +122,11 @@ public final class @@CLIENT_NAME@@Auth {
     private final String username;
     private final String password;
     private final Map<String, String> apiKeys;
+    private final String clientId;
+    private final String clientSecret;
+    private final boolean clientAuthInBody;
+    private final Map<String, Token> tokens = new HashMap<>();
+    private volatile TokenFetcher fetcher;
 
     /**
      * Credentials for {@code schemes}.
@@ -62,6 +148,100 @@ public final class @@CLIENT_NAME@@Auth {
         this.username = options.username().orElse(null);
         this.password = options.password().orElse(null);
         this.apiKeys = options.apiKeys();
+        this.clientId = options.clientId().orElseGet(() -> env(@@CLIENT_NAME@@Options.CLIENT_ID_ENV));
+        this.clientSecret =
+                options.clientSecret().orElseGet(() -> env(@@CLIENT_NAME@@Options.CLIENT_SECRET_ENV));
+        this.clientAuthInBody = options.clientAuthInBody();
+    }
+
+    private static String env(String name) {
+        String value = System.getenv(name);
+        return value == null || value.isEmpty() ? null : value;
+    }
+
+    /** Sets how token requests are sent: through the client that carries these credentials. */
+    void useTokenFetcher(TokenFetcher fetcher) {
+        this.fetcher = fetcher;
+    }
+
+    private boolean oauthConfigured() {
+        return clientId != null && clientSecret != null && fetcher != null;
+    }
+
+    private boolean hasToken() {
+        return token != null && !token.isEmpty();
+    }
+
+    /**
+     * The access token of an OAuth2 scheme: the cached one, else a new one. Concurrent callers
+     * share one token request.
+     */
+    private synchronized String oauthToken(String name, Scheme scheme) {
+        Token cached = tokens.get(name);
+        if (cached != null && (!cached.expires || cached.expiresAt - System.nanoTime() > 0)) {
+            return cached.value;
+        }
+        Grant grant =
+                fetcher.fetch(scheme.tokenUrl, scheme.scope, clientId, clientSecret, clientAuthInBody);
+        boolean expires = grant.expiresIn >= 0;
+        long life = expires ? (long) (grant.expiresIn * 1e9) : 0;
+        Token fresh =
+                new Token(
+                        grant.accessToken,
+                        expires,
+                        System.nanoTime() + life - Math.min(EXPIRY_MARGIN_NANOS, life / 2));
+        tokens.put(name, fresh);
+        return fresh.value;
+    }
+
+    private synchronized void forget(OAuthUse use) {
+        Token cached = tokens.get(use.scheme);
+        if (cached != null && cached.value.equals(use.token)) {
+            tokens.remove(use.scheme);
+        }
+    }
+
+    /**
+     * Whether {@code request} carries an OAuth2 access token that {@link #renew} can replace.
+     *
+     * @param request the request that got a 401 response
+     * @return true when it carries a token, still sent as set
+     */
+    boolean renewable(Request request) {
+        OAuthUse use = request.tag(OAuthUse.class);
+        return use != null && ("Bearer " + use.token).equals(request.header("Authorization"));
+    }
+
+    /**
+     * The request with a new access token after the API rejected its own, which is forgotten.
+     *
+     * @param request a request for which {@link #renewable} holds
+     * @return the same request with the new token
+     */
+    Request renew(Request request) {
+        OAuthUse use = request.tag(OAuthUse.class);
+        forget(use);
+        String fresh = oauthToken(use.scheme, schemes.get(use.scheme));
+        return request.newBuilder()
+                .header("Authorization", "Bearer " + fresh)
+                .tag(OAuthUse.class, new OAuthUse(use.scheme, fresh))
+                .build();
+    }
+
+    /**
+     * The {@code Authorization} header value of client credentials, form-encoded before the
+     * base64 (RFC 6749 section 2.3.1).
+     *
+     * @param clientId the client id
+     * @param clientSecret the client secret
+     * @return the header value
+     */
+    public static String basicAuthorization(String clientId, String clientSecret) {
+        String credentials =
+                URLEncoder.encode(clientId, StandardCharsets.UTF_8)
+                        + ":"
+                        + URLEncoder.encode(clientSecret, StandardCharsets.UTF_8);
+        return "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
     }
 
     private boolean configured(String name) {
@@ -71,7 +251,9 @@ public final class @@CLIENT_NAME@@Auth {
         }
         switch (scheme.kind) {
             case "bearer":
-                return tokenProvider != null || (token != null && !token.isEmpty());
+                return tokenProvider != null
+                        || hasToken()
+                        || (scheme.tokenUrl != null && oauthConfigured());
             case "basic":
                 return username != null;
             default:
@@ -100,7 +282,17 @@ public final class @@CLIENT_NAME@@Auth {
             Scheme scheme = schemes.get(name);
             switch (scheme.kind) {
                 case "bearer":
-                    String bearer = tokenProvider != null ? tokenProvider.get() : token;
+                    String bearer;
+                    if (tokenProvider != null) {
+                        bearer = tokenProvider.get();
+                    } else if (hasToken()) {
+                        bearer = token;
+                    } else if (scheme.tokenUrl != null) {
+                        bearer = oauthToken(name, scheme);
+                        request.tag(OAuthUse.class, new OAuthUse(name, bearer));
+                    } else {
+                        bearer = token;
+                    }
                     request.header("Authorization", "Bearer " + bearer);
                     break;
                 case "basic":

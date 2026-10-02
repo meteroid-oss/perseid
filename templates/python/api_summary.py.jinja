@@ -65,6 +65,7 @@ __all__ = [
 {#- The client entry point lives in its own module so `api/__init__.py` stays a
     plain barrel file. -#}
 {% set kinds = api.security_schemes | map(attribute="kind") | list -%}
+{% set oauth = api.security_schemes | selectattr("token_url") | list -%}
 {% set env = sdk.env_prefix -%}
 {% macro client_class(is_async) -%}
 {%- set cls = ("Async" if is_async else "") ~ client -%}
@@ -113,6 +114,11 @@ class {{ cls }}:
 {%- if "bearer" in kinds %}
         token_provider: TokenProvider | None = None,
 {%- endif %}
+{%- if oauth %}
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        oauth_client_auth: t.Literal["basic", "body"] = "basic",
+{%- endif %}
 {%- if "basic" in kinds %}
         basic_auth: tuple[str, str] | None = None,
 {%- endif %}
@@ -137,6 +143,15 @@ class {{ cls }}:
         :param token_provider: Called before each request for a fresh bearer token,
             such as an OAuth2 access token; it wins over ``api_key``.
 {%- endif %}
+{%- if oauth %}
+        :param client_id: OAuth2 client id of the client credentials flow, read from
+            ``{{ env }}_CLIENT_ID`` when ``None``. With ``client_secret`` it makes the client fetch
+            the bearer token of {% for scheme in oauth %}``{{ scheme.name }}``{% if not loop.last %}, {% endif %}{% endfor %} from its token URL, keep it until it expires and fetch a
+            new one when the API rejects it. ``token_provider`` and ``api_key`` win over it.
+        :param client_secret: OAuth2 client secret, read from ``{{ env }}_CLIENT_SECRET`` when ``None``.
+        :param oauth_client_auth: Sends the client credentials in an HTTP basic ``"basic"``
+            header (the default) or as form fields (``"body"``).
+{%- endif %}
 {%- if "basic" in kinds %}
         :param basic_auth: HTTP basic ``(username, password)``.
 {%- endif %}
@@ -154,6 +169,11 @@ class {{ cls }}:
             default_headers=default_headers,
 {%- if "bearer" in kinds %}
             token_provider=token_provider,
+{%- endif %}
+{%- if oauth %}
+            client_id=client_id,
+            client_secret=client_secret,
+            oauth_client_auth=oauth_client_auth,
 {%- endif %}
 {%- if "basic" in kinds %}
             basic_auth=basic_auth,
@@ -246,7 +266,7 @@ import typing as t
 import httpx
 
 from ..serialization import UNSET, {{ client }}Error, Unset
-from ._auth import SecurityScheme{% if "bearer" in kinds %}, TokenProvider{% endif %}
+from ._auth import {% if oauth %}OAuthTokens, {% endif %}SecurityScheme{% if "bearer" in kinds %}, TokenProvider{% endif %}
 from .common import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, Configuration, Timeout
 from .middleware import AsyncMiddleware, SyncMiddleware
 {% for resource in api.resources -%}
@@ -272,7 +292,7 @@ DEFAULT_BASE_URL = {{ sdk.default_base_url | tojson }}
 
 SECURITY_SCHEMES: dict[str, SecurityScheme] = {
 {%- for scheme in api.security_schemes %}
-    {{ scheme.name | tojson }}: SecurityScheme("{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, "{{ scheme.in }}", {{ scheme.param | tojson }}{% endif %}),
+    {{ scheme.name | tojson }}: SecurityScheme("{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, "{{ scheme.in }}", {{ scheme.param | tojson }}{% elif scheme.token_url %}, token_url={{ scheme.token_url | tojson }}, scope={{ scheme.scope | tojson }}{% endif %}),
 {%- endfor %}
 }
 
@@ -286,6 +306,11 @@ def _configuration(
     default_headers: t.Mapping[str, str] | None,
 {%- if "bearer" in kinds %}
     token_provider: TokenProvider | None,
+{%- endif %}
+{%- if oauth %}
+    client_id: str | None,
+    client_secret: str | None,
+    oauth_client_auth: str,
 {%- endif %}
 {%- if "basic" in kinds %}
     basic_auth: tuple[str, str] | None,
@@ -303,11 +328,18 @@ def _configuration(
             "pass base_url to the client or set the {{ env }}_BASE_URL environment variable"
         )
 {%- endif %}
+{%- if oauth %}
+    client_id = client_id or os.environ.get("{{ env }}_CLIENT_ID")
+    client_secret = client_secret or os.environ.get("{{ env }}_CLIENT_SECRET")
+{%- endif %}
     return Configuration(
         base_path=str(base_url).rstrip("/"),
         bearer_access_token=api_key if api_key is not None else os.environ.get("{{ env }}_API_KEY"),
 {%- if "bearer" in kinds %}
         token_provider=token_provider,
+{%- endif %}
+{%- if oauth %}
+        oauth=OAuthTokens(client_id, client_secret, oauth_client_auth) if client_id and client_secret else None,
 {%- endif %}
 {%- if "basic" in kinds %}
         basic_auth=basic_auth,

@@ -11,14 +11,14 @@ use std::{
 
 use bytes::Bytes;
 use http::{
-    header::{CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, USER_AGENT},
+    header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, USER_AGENT},
     HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
 };
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS, NON_ALPHANUMERIC};
 use serde::de::DeserializeOwned;
 
 use crate::api::{
-    auth_schemes::Security,
+    auth_schemes::{base64, OAuthUse, Security, SyncFuture},
     middleware::{BoxError, Next, Request as MiddlewareRequest, Response},
     upload::{Multipart, RequestBody},
     Call, EventStream, RequestOptions, SseEvent, Upload,
@@ -323,6 +323,18 @@ impl Request {
         self
     }
 
+    /// Sets the `Authorization` header, below the headers of the call.
+    fn with_authorization(mut self, value: String) -> Self {
+        match HeaderValue::try_from(value) {
+            Ok(mut value) => {
+                value.set_sensitive(true);
+                self.headers.insert(AUTHORIZATION, value);
+            }
+            Err(error) => self.fail(error),
+        }
+        self
+    }
+
     /// Overrides the API-wide security requirement.
     pub fn with_security(mut self, security: Security) -> Self {
         self.security = Some(security);
@@ -548,7 +560,14 @@ impl Request {
             return Err(error);
         }
         let token = conf.bearer_access_token.as_deref().filter(|t| !t.is_empty());
-        let auth = conf.credentials.apply(self.security, token).await?;
+        let mut oauth = match conf.credentials.oauth_scheme(self.security, token) {
+            Some((url, scope)) => Some(oauth_token(conf, url, scope).await?),
+            None => None,
+        };
+        let auth = conf
+            .credentials
+            .apply(self.security, token, oauth.as_ref().map(|used| used.token.as_str()))
+            .await?;
         self.query_params
             .extend(auth.query.into_iter().map(|(name, value)| (name.to_owned(), value)));
         for (name, value) in &conf.headers {
@@ -606,6 +625,8 @@ impl Request {
             && self.multipart.as_ref().is_none_or(Multipart::replayable);
         let max_retries = self.max_retries.unwrap_or(conf.max_retries) as usize;
         let mut retries = 0;
+        // An access token the API rejects is replaced once, without using up a retry.
+        let mut renewed = false;
         loop {
             let attempt = self.attempt(conf, event_stream).await;
             if let Attempt::Done(status, headers, body) = attempt {
@@ -614,6 +635,24 @@ impl Request {
                     headers,
                     body,
                 });
+            }
+            if let (Attempt::Status(StatusCode::UNAUTHORIZED, ..), Some(used), false, true) =
+                (&attempt, &oauth, renewed, replayable)
+            {
+                let sent = self.headers.get(AUTHORIZATION).map(HeaderValue::as_bytes);
+                if sent == Some(format!("Bearer {}", used.token).as_bytes()) {
+                    renewed = true;
+                    if let Some(client) = &conf.credentials.oauth {
+                        client.invalidate(&used.key, &used.token).await;
+                    }
+                    let fresh = oauth_token(conf, used.url, used.scope).await?;
+                    let mut value = HeaderValue::try_from(format!("Bearer {}", fresh.token))
+                        .map_err(request_error)?;
+                    value.set_sensitive(true);
+                    self.headers.insert(AUTHORIZATION, value);
+                    oauth = Some(fresh);
+                    continue;
+                }
             }
             if !(idempotent && replayable && attempt.retryable()) || retries >= max_retries {
                 return Err(attempt.into_error());
@@ -683,7 +722,12 @@ impl Request {
         for (name, value) in &self.encoded_path_params {
             path = path.replace(&format!("{{{name}}}"), value);
         }
-        let mut uri = format!("{}{path}", conf.base_path.trim_end_matches('/'));
+        // The token endpoint of an OAuth2 scheme may live elsewhere.
+        let mut uri = if path.contains("://") {
+            path.clone()
+        } else {
+            format!("{}{path}", conf.base_path.trim_end_matches('/'))
+        };
         if !self.query_params.is_empty() {
             let mut query = url::form_urlencoded::Serializer::new(String::new());
             for (name, value) in &self.query_params {
@@ -731,6 +775,81 @@ impl Request {
         }
         Ok(request)
     }
+}
+
+/// The access token of the OAuth2 scheme with token URL `url`: the cached one, else a new one.
+async fn oauth_token(
+    conf: &Configuration,
+    url: &'static str,
+    scope: &'static str,
+) -> Result<OAuthUse, Error> {
+    let client = conf
+        .credentials
+        .oauth
+        .as_ref()
+        .ok_or_else(|| request_error("no OAuth2 client credentials"))?;
+    let key = if url.contains("://") {
+        url.to_owned()
+    } else {
+        format!("{}{url}", conf.base_path.trim_end_matches('/'))
+    };
+    let fetch = SyncFuture::new(fetch_token(conf, url, scope));
+    let token = client.token(&key, fetch).await?;
+    Ok(OAuthUse {
+        url,
+        scope,
+        key,
+        token,
+    })
+}
+
+/// Requests an access token with the client credentials grant, through the client's middleware,
+/// timeout and retries like any other request. Gives the token and its lifetime, if declared.
+async fn fetch_token(
+    conf: &Configuration,
+    token_url: &'static str,
+    scope: &str,
+) -> Result<(String, Option<Duration>), Error> {
+    #[derive(serde::Deserialize)]
+    struct Grant {
+        access_token: String,
+        #[serde(default)]
+        expires_in: Option<serde_json::Value>,
+    }
+
+    let client = conf
+        .credentials
+        .oauth
+        .as_ref()
+        .ok_or_else(|| request_error("no OAuth2 client credentials"))?;
+    let mut form = serde_json::Map::new();
+    form.insert("grant_type".to_owned(), "client_credentials".into());
+    if !scope.is_empty() {
+        form.insert("scope".to_owned(), scope.into());
+    }
+    let mut request = Request::new(Method::POST, token_url).with_security(&[]);
+    if client.in_body {
+        form.insert("client_id".to_owned(), client.client_id.clone().into());
+        form.insert("client_secret".to_owned(), client.client_secret.clone().into());
+    } else {
+        // RFC 6749 2.3.1: both are form-encoded before the base64.
+        let encode = |value: &str| url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>();
+        let credentials = format!("{}:{}", encode(&client.client_id), encode(&client.client_secret));
+        request = request.with_authorization(format!("Basic {}", base64(credentials.as_bytes())));
+    }
+    request = request.with_form_body_param(serde_json::Value::Object(form), &[], &[]);
+    let received = request.send(conf, false).await?;
+    let grant: Grant = serde_json::from_slice(&received.body.bytes()?).map_err(decode_error)?;
+    if grant.access_token.is_empty() {
+        return Err(decode_error("the token endpoint answered without an access_token"));
+    }
+    let seconds = match grant.expires_in {
+        Some(serde_json::Value::Number(number)) => number.as_f64(),
+        Some(serde_json::Value::String(text)) => text.trim().parse::<f64>().ok(),
+        _ => None,
+    };
+    let lifetime = seconds.and_then(|seconds| Duration::try_from_secs_f64(seconds.max(0.0)).ok());
+    Ok((grant.access_token, lifetime))
 }
 
 /// Everything but the unreserved characters, which keeps a cookie value RFC 6265 safe.

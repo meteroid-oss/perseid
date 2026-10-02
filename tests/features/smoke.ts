@@ -186,6 +186,38 @@ async function cookies(client: Features, baseURL: string) {
   assert.ok(anonymous instanceof AuthenticationError);
 }
 
+/** OAuth2 client credentials. */
+async function oauth(baseURL: string) {
+  const secret = "p@ss word";
+  const cached = new Features({ baseURL, clientId: "typescript-oauth", clientSecret: secret });
+  assert.equal((await cached.account.retrieveMachine()).status, "Bearer at-typescript-oauth-1||");
+  assert.equal((await cached.account.retrieveMachine()).status, "Bearer at-typescript-oauth-1||");
+  assert.equal((await seen("typescript-oauth")).attempts, 1, "the token is cached");
+
+  const inBody = new Features({ baseURL, clientId: "typescript-oauth-body", clientSecret: secret, oauthClientAuth: "body" });
+  assert.equal((await inBody.account.retrieveMachine()).status, "Bearer at-typescript-oauth-body-1||");
+
+  const revoked = new Features({ baseURL, clientId: "typescript-oauth-revoked", clientSecret: secret, maxRetries: 0 });
+  assert.equal((await revoked.account.retrieveMachine()).status, "Bearer at-typescript-oauth-revoked-2||");
+  assert.equal((await seen("typescript-oauth-revoked")).attempts, 2, "a rejected token is replaced");
+
+  const concurrent = new Features({ baseURL, clientId: "typescript-oauth-concurrent", clientSecret: secret });
+  const both = await Promise.all([concurrent.account.retrieveMachine(), concurrent.account.retrieveMachine()]);
+  assert.deepEqual(
+    both.map((machine) => machine.status),
+    ["Bearer at-typescript-oauth-concurrent-1||", "Bearer at-typescript-oauth-concurrent-1||"]
+  );
+  assert.equal((await seen("typescript-oauth-concurrent")).attempts, 1, "concurrent calls share one token request");
+
+  const invalid = new Features({ baseURL, clientId: "typescript-oauth-bad", clientSecret: "wrong", maxRetries: 0 });
+  const error = await failure(invalid.account.retrieveMachine());
+  assert.ok(error instanceof AuthenticationError);
+  assert.equal((error.error as { error?: string } | undefined)?.error, "invalid_client");
+
+  const withToken = new Features({ baseURL, apiKey: "tok", clientId: "typescript-oauth", clientSecret: secret });
+  assert.equal((await withToken.account.retrieveMachine()).status, "Bearer tok||");
+}
+
 /** Retries and idempotency. */
 async function retries(client: Features) {
   let id = scenarioId("flaky");
@@ -429,6 +461,7 @@ async function main() {
   await content(client);
   await encoding(client);
   await cookies(client, baseURL);
+  await oauth(baseURL);
   await retries(client);
   await errors(client, baseURL);
   await streaming(client);

@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -553,6 +554,61 @@ func TestScenarioCookies(t *testing.T) {
 
 	_, err = New("", &Options{ServerURL: os.Getenv("FEATURES_URL")}).Cookies().RetrieveScenariosCookieAuth(ctx)
 	expect(t, errors.Is(err, ErrUnauthorized), true)
+}
+
+func TestScenarioOAuth(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv(APIKeyEnv, "")
+	t.Setenv(ClientIDEnv, "")
+	t.Setenv(ClientSecretEnv, "")
+	const secret = "p@ss word"
+	client := func(id, secret string, options Options) *Client {
+		options.ServerURL, options.ClientID, options.ClientSecret = os.Getenv("FEATURES_URL"), id, secret
+		return New("", &options)
+	}
+	status := func(client *Client) string {
+		t.Helper()
+		health, err := client.Account().RetrieveMachine(ctx)
+		must(t, err)
+		return health.Status
+	}
+
+	cached := client("go-oauth", secret, Options{})
+	expect(t, status(cached), "Bearer at-go-oauth-1||")
+	expect(t, status(cached), "Bearer at-go-oauth-1||")
+	expect(t, attemptsOf(t, "go-oauth").Attempts, 1)
+
+	expect(t, status(client("go-oauth-body", secret, Options{OAuthClientAuth: "body"})), "Bearer at-go-oauth-body-1||")
+
+	expect(t, status(client("go-oauth-revoked", secret, Options{MaxRetries: -1})), "Bearer at-go-oauth-revoked-2||")
+	expect(t, attemptsOf(t, "go-oauth-revoked").Attempts, 2)
+
+	concurrent := client("go-oauth-concurrent", secret, Options{})
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if got := status(concurrent); got != "Bearer at-go-oauth-concurrent-1||" {
+				t.Errorf("got %q", got)
+			}
+		}()
+	}
+	wg.Wait()
+	expect(t, attemptsOf(t, "go-oauth-concurrent").Attempts, 1)
+
+	_, err := client("go-oauth-bad", "wrong", Options{MaxRetries: -1}).Account().RetrieveMachine(ctx)
+	expect(t, errors.Is(err, ErrUnauthorized), true)
+	expect(t, apiError(t, err).Body, map[string]any{"error": "invalid_client"})
+
+	t.Setenv(ClientIDEnv, "go-oauth-env")
+	t.Setenv(ClientSecretEnv, secret)
+	fromEnv := New("", &Options{ServerURL: os.Getenv("FEATURES_URL")})
+	expect(t, status(fromEnv), "Bearer at-go-oauth-env-1||")
+
+	// A token wins over the client credentials.
+	withToken := New("tok", &Options{ServerURL: os.Getenv("FEATURES_URL"), ClientID: "go-oauth", ClientSecret: secret})
+	expect(t, status(withToken), "Bearer tok||")
 }
 
 func TestScenarioRetries(t *testing.T) {

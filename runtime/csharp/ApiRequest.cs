@@ -266,6 +266,9 @@ internal sealed class ApiRequest(HttpMethod method, string path, string operatio
         }
     }
 
+    /// <summary>Sets an <c>application/x-www-form-urlencoded</c> body from ready name and value pairs.</summary>
+    public void SetFormFields(IEnumerable<KeyValuePair<string, string>> fields) => _form = [.. fields];
+
     /// <summary>Sets a raw body of the operation's media type, unless the upload names its type.</summary>
     public void SetUploadBody(Upload body, string contentType = "application/octet-stream")
     {
@@ -287,7 +290,8 @@ internal sealed class ApiRequest(HttpMethod method, string path, string operatio
                 );
             }
         }
-        var url = new StringBuilder(baseUrl.TrimEnd('/')).Append(Path);
+        // The token endpoint of an OAuth2 scheme may live elsewhere.
+        var url = new StringBuilder(Path.Contains("://") ? "" : baseUrl.TrimEnd('/')).Append(Path);
         var first = !Path.Contains('?');
         foreach (var (name, value) in _query.Concat(extraQuery))
         {

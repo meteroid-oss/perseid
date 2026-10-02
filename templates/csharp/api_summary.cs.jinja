@@ -1,6 +1,7 @@
 {% import "macros.cs.jinja" as m -%}
 {% set _ = set_summary_filename(sdk.client_name ~ "Client.cs") -%}
 {% set kinds = api.security_schemes | map(attribute="kind") | list -%}
+{% set oauth = api.security_schemes | selectattr("token_url") | list -%}
 {% set options_type = sdk.client_name ~ "ClientOptions" -%}
 {% set keys_type = sdk.client_name ~ "ApiKeys" -%}
 {% for resource in api.resources if resource.subresources | length > 0 -%}
@@ -8,7 +9,7 @@
 {% endfor -%}
 {% set schemes = namespace(list=[]) -%}
 {% for scheme in api.security_schemes -%}
-{% set schemes.list = schemes.list + ["[" ~ (scheme.name | tojson) ~ "] = new(SchemeKind." ~ (scheme.kind | to_upper_camel_case) ~ ((", " ~ (scheme.in | tojson) ~ ", " ~ (scheme.param | tojson)) if scheme.kind == "api_key" else "") ~ ")"] -%}
+{% set schemes.list = schemes.list + ["[" ~ (scheme.name | tojson) ~ "] = new(SchemeKind." ~ (scheme.kind | to_upper_camel_case) ~ ((", " ~ (scheme.in | tojson) ~ ", " ~ (scheme.param | tojson)) if scheme.kind == "api_key" else ((", null, null, " ~ (scheme.token_url | tojson) ~ ", " ~ (scheme.scope | tojson)) if scheme.token_url else "")) ~ ")"] -%}
 {% endfor -%}
 {% set requirements = namespace(list=[]) -%}
 {% for requirement in api.security -%}
@@ -111,22 +112,31 @@ public sealed partial class {{ sdk.client_name }}Client : I{{ sdk.client_name }}
 
     {{ m.wrap("private static ApiTransport CreateTransport", ["string? token", options_type ~ " options", "HttpClient? http"], 4) }}
     {
+{%- if oauth %}
+        var clientId = options.ClientId ?? ApiTransport.NonEmpty(Environment.GetEnvironmentVariable("{{ sdk.env_prefix }}_CLIENT_ID"));
+        var clientSecret = options.ClientSecret ?? ApiTransport.NonEmpty(Environment.GetEnvironmentVariable("{{ sdk.env_prefix }}_CLIENT_SECRET"));
+{%- endif %}
         var credentials = new Credentials(
             token ?? options.Token ?? ApiTransport.NonEmpty(Environment.GetEnvironmentVariable("{{ sdk.env_prefix }}_API_KEY")),
             {% if "bearer" in kinds %}options.TokenProvider{% else %}null{% endif %},
             {% if "basic" in kinds %}options.BasicAuth{% else %}null{% endif %},
 {%- set dictionary = "new Dictionary<string, string?> { " ~ (keys.list | join(", ")) ~ " }" %}
 {%- if not keys.list %}
-            new Dictionary<string, string?>()
+            new Dictionary<string, string?>(){% if oauth %},{% endif %}
 {%- elif 12 + (dictionary | length) <= 120 %}
-            {{ dictionary }}
+            {{ dictionary }}{% if oauth %},{% endif %}
 {%- else %}
             new Dictionary<string, string?>
             {
 {%- for key in keys.list %}
                 {{ key }},
 {%- endfor %}
-            }
+            }{% if oauth %},{% endif %}
+{%- endif %}
+{%- if oauth %}
+            clientId is not null && clientSecret is not null
+                ? new OAuthClient(clientId, clientSecret, options.OAuthClientAuthInBody)
+                : null
 {%- endif %}
         );
         return new ApiTransport(s_auth, credentials, options, http);
@@ -159,6 +169,21 @@ public sealed partial class {{ options_type }}
     /// <summary>Called before each request for a fresh bearer token, e.g. an OAuth2 access token,
     /// instead of the constructor token.</summary>
     public Func<CancellationToken, ValueTask<string>>? TokenProvider { get; set; }
+{%- endif %}
+{%- if oauth %}
+
+    /// <summary>The OAuth2 client id of the client credentials flow, else <c>{{ sdk.env_prefix }}_CLIENT_ID</c>. With
+    /// <see cref="ClientSecret"/> it makes the client fetch the bearer token of
+    /// {% for scheme in oauth %}<c>{{ scheme.name }}</c>{% if not loop.last %}, {% endif %}{% endfor %} from its token URL on first use, keep it until it expires and fetch a new one when
+    /// the API rejects it. <see cref="TokenProvider"/> and the constructor token take precedence.</summary>
+    public string? ClientId { get; set; }
+
+    /// <summary>The OAuth2 client secret, else <c>{{ sdk.env_prefix }}_CLIENT_SECRET</c>.</summary>
+    public string? ClientSecret { get; set; }
+
+    /// <summary>Sends the OAuth2 client credentials as form fields of the token request instead of an HTTP
+    /// basic <c>Authorization</c> header.</summary>
+    public bool OAuthClientAuthInBody { get; set; }
 {%- endif %}
 {%- if "basic" in kinds %}
 

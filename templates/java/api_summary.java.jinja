@@ -129,7 +129,7 @@ import java.util.Map;
 public final class {{ client }} implements AutoCloseable {
     private static final Map<String, {{ client }}Auth.Scheme> SECURITY_SCHEMES = Map.ofEntries(
 {%- for scheme in api.security_schemes %}
-            Map.entry({{ scheme.name | tojson }}, new {{ client }}Auth.Scheme("{{ scheme.kind }}", {% if scheme.kind == "api_key" %}"{{ scheme.in }}", {{ scheme.param | tojson }}{% else %}null, null{% endif %})){% if not loop.last %},{% endif %}
+            Map.entry({{ scheme.name | tojson }}, new {{ client }}Auth.Scheme("{{ scheme.kind }}", {% if scheme.kind == "api_key" %}"{{ scheme.in }}", {{ scheme.param | tojson }}{% elif scheme.token_url %}null, null, {{ scheme.token_url | tojson }}, {{ scheme.scope | tojson }}{% else %}null, null{% endif %})){% if not loop.last %},{% endif %}
 {%- endfor %}
     );
 

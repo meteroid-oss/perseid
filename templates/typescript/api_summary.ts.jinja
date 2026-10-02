@@ -7,9 +7,14 @@
 {% for resource in api.resources -%}
 import { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}.js";
 {% endfor -%}
+{% set oauth = api.security_schemes | selectattr("token_url") | list -%}
+{% if oauth -%}
+import { OAuthTokens, type OAuthClientAuth, type Security, type SecurityScheme } from "./auth.js";
+{% else -%}
 import type { Security, SecurityScheme } from "./auth.js";
+{% endif -%}
 import type { Middleware } from "./middleware.js";
-import { readEnv, type {{ sdk.client_name }}RequestContext } from "./request.js";
+import { {% if oauth %}fetchOAuthToken, {% endif %}readEnv, type {{ sdk.client_name }}RequestContext } from "./request.js";
 {% set ns = namespace(models=[]) -%}
 {% for _, type in api.types | items %}{% set ns.models = ns.models + [type.name | to_upper_camel_case] %}{% endfor -%}
 {% set model_names = ns.models -%}
@@ -108,6 +113,18 @@ export type {{ sdk.client_name }}Options = {
    */
   tokenProvider?: (() => string | Promise<string>) | undefined;
   {% endif -%}
+  {% if oauth -%}
+  /**
+   * OAuth2 client id of the client credentials flow, which fetches the bearer token of
+   * {% for scheme in oauth %}`{{ scheme.name }}`{% if not loop.last %}, {% endif %}{% endfor %} from its token URL. Defaults to the `{{ sdk.env_prefix }}_CLIENT_ID` environment
+   * variable. `tokenProvider` and `apiKey` take precedence.
+   */
+  clientId?: string | null | undefined;
+  /** OAuth2 client secret. Defaults to the `{{ sdk.env_prefix }}_CLIENT_SECRET` environment variable. */
+  clientSecret?: string | null | undefined;
+  /** Sends the client credentials in an HTTP basic `Authorization` header (default) or as form fields. */
+  oauthClientAuth?: OAuthClientAuth | undefined;
+  {% endif -%}
   {% if "basic" in kinds -%}
   /** HTTP basic credentials. */
   basicAuth?: { username: string; password: string } | undefined;
@@ -131,7 +148,7 @@ const DEFAULT_TIMEOUT_MS = {{ (sdk.timeout * 1000) | int }};
 const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
   schemes: {
     {% for scheme in api.security_schemes -%}
-    {{ scheme.name | tojson }}: { kind: "{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, in: "{{ scheme.in }}", param: {{ scheme.param | tojson }}{% endif %} },
+    {{ scheme.name | tojson }}: { kind: "{{ scheme.kind }}"{% if scheme.kind == "api_key" %}, in: "{{ scheme.in }}", param: {{ scheme.param | tojson }}{% elif scheme.token_url %}, tokenUrl: {{ scheme.token_url | tojson }}, scope: {{ scheme.scope | tojson }}{% endif %} },
     {% endfor -%}
   },
   security: {{ api.security | tojson }},
@@ -177,9 +194,18 @@ export class {{ sdk.client_name }} {
       );
     }
     {% endif -%}
+    {% if oauth -%}
+    const clientId = options.clientId ?? readEnv("{{ sdk.env_prefix }}_CLIENT_ID");
+    const clientSecret = options.clientSecret ?? readEnv("{{ sdk.env_prefix }}_CLIENT_SECRET");
+    {% endif -%}
     this.requestCtx = {
       auth: AUTH,
       token,
+      {% if oauth -%}
+      oauth: clientId && clientSecret
+        ? new OAuthTokens(clientId, clientSecret, options.oauthClientAuth ?? "basic", (grant) => fetchOAuthToken(this.requestCtx, grant))
+        : undefined,
+      {% endif -%}
       {% if "bearer" in kinds %}tokenProvider: options.tokenProvider,{% endif %}
       {% if "basic" in kinds %}basicAuth: options.basicAuth,{% endif %}
       {% if "api_key" in kinds -%}

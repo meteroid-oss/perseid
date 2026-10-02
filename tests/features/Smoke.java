@@ -422,6 +422,21 @@ public class Smoke {
         expect(using(null, options().putApiKey("api_key_cookie", "ck1"), c -> c.cookies().retrieveScenariosCookieAuth().status()), "ck1");
         raises(AuthenticationException.class, () -> using(null, options(), c -> c.cookies().retrieveScenariosCookieAuth()));
 
+        // OAuth2 client credentials.
+        String secret = "p@ss word";
+        try (Features cached = new Features(null, options().clientCredentials("java-oauth", secret).build())) {
+            expect(cached.account().retrieveMachine().status(), "Bearer at-java-oauth-1||");
+            expect(cached.account().retrieveMachine().status(), "Bearer at-java-oauth-1||");
+        }
+        expect(attempts("java-oauth"), 1L);
+        expect(using(null, options().clientCredentials("java-oauth-body", secret).clientAuthInBody(true), c -> c.account().retrieveMachine().status()), "Bearer at-java-oauth-body-1||");
+        expect(using(null, options().clientCredentials("java-oauth-revoked", secret).maxRetries(0), c -> c.account().retrieveMachine().status()), "Bearer at-java-oauth-revoked-2||");
+        expect(attempts("java-oauth-revoked"), 2L);
+        AuthenticationException invalid = raises(AuthenticationException.class, () -> using(
+                null, options().clientCredentials("java-oauth-bad", "wrong").maxRetries(0), c -> c.account().retrieveMachine()));
+        expect(MAPPER.readTree(invalid.body()).get("error").asText(), "invalid_client");
+        expect(using("tok", options().clientCredentials("java-oauth", secret), c -> c.account().retrieveMachine().status()), "Bearer tok||");
+
         // Retries and idempotency.
         String flaky = scenarioId("flaky");
         long started = System.nanoTime();
@@ -508,6 +523,9 @@ public class Smoke {
     }
 
     static void asyncScenarios() throws Exception {
+        try (Features owner = new Features(null, options().clientCredentials("java-oauth-async-revoked", "p@ss word").build())) {
+            expect(owner.async().account().retrieveMachine().get().status(), "Bearer at-java-oauth-async-revoked-2||");
+        }
         try (Features owner = new Features("tok", options().build())) {
             com.features.FeaturesAsync client = owner.async();
             expect(client.items().retrieve("i1").get().name(), "first");

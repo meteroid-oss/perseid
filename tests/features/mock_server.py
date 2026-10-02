@@ -282,6 +282,52 @@ def h_status_echo_auth(req):
     return js({"status": req.auth()})
 
 
+OAUTH_SECRET = "p@ss word"
+
+
+def h_machine(req):
+    """Echoes the credentials, but revokes the first token issued to a client named `*-revoked-*`."""
+    token = req.h("authorization").removeprefix("Bearer ")
+    if token.startswith("at-") and "-revoked-" in token and token.endswith("-1"):
+        return js({"error": "token revoked"}, 401)
+    return h_status_echo_auth(req)
+
+
+def h_oauth_token(req):
+    """Client credentials grant (not part of the spec's operations): the scheme `oauth` of the spec."""
+    form = parse_qsl(req.body.decode("utf-8", "replace"), keep_blank_values=True)
+    fields = dict(form)
+    if len(fields) != len(form):
+        req.problem(f"body: repeated form fields in {req.body[:200]!r}")
+    if fields.get("grant_type") != "client_credentials":
+        req.problem(f"body: grant_type must be client_credentials, got {fields.get('grant_type')!r}")
+    if fields.get("scope") != "machines.read":
+        req.problem(f"body: scope must be machines.read, got {fields.get('scope')!r}")
+    authz = req.h("authorization")
+    if authz:
+        if not authz.startswith("Basic "):
+            req.problem(f"security: Authorization must use the Basic scheme, got {authz!r}")
+            return None
+        if "client_id" in fields or "client_secret" in fields:
+            req.problem("body: client credentials must be sent either in the Authorization header or in the body, not both")
+        try:
+            # RFC 6749 2.3.1: the id and secret are form-encoded before the base64.
+            client_id, _, secret = base64.b64decode(authz[6:], validate=True).decode().partition(":")
+        except ValueError:
+            req.problem(f"security: malformed Basic credentials {authz!r}")
+            return None
+        client_id, secret = unquote_plus(client_id), unquote_plus(secret)
+    else:
+        client_id, secret = fields.get("client_id", ""), fields.get("client_secret")
+    if not client_id or secret != OAUTH_SECRET:
+        return js({"error": "invalid_client"}, 401)
+    with LOCK:
+        state = ATTEMPTS.setdefault(client_id, {"attempts": 0, "keys": []})
+        state["attempts"] += 1
+        n = state["attempts"]
+    return js({"access_token": f"at-{client_id}-{n}", "token_type": "Bearer", "expires_in": 3600})
+
+
 def h_stream_events(req):
     topic = req.qd().get("topic", "")
     return Chunked([chunk.replace("TOPIC", topic) for chunk in STREAM])
@@ -575,7 +621,8 @@ ROUTES = [
     Route("list_records", "GET", r"/records", h_list_records, query=("offset", "limit"), required=("api_key",), security="query_key"),
     Route("health", "GET", r"/health", h_status_echo_auth),
     Route("create_session", "POST", r"/session", h_status_echo_auth, security="basic"),
-    Route("machine_status", "GET", r"/machine", h_status_echo_auth, security="bearer"),
+    Route("machine_status", "GET", r"/machine", h_machine, security="bearer"),
+    Route("oauth_token", "POST", r"/oauth/token", h_oauth_token, content_type="application/x-www-form-urlencoded", body="required", security="client"),
     Route("stream_events", "GET", r"/events/stream", h_stream_events, query=("topic",), security="default"),
     Route("create_completion", "POST", r"/completions", h_completion, content_type="application/json", body="required", security="default"),
     Route("upload_file", "POST", r"/files", h_upload_file, content_type="multipart/form-data", body="required", security="default"),

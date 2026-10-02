@@ -4,6 +4,7 @@ package @@JAVA_INTERNAL_PACKAGE@@;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import @@JAVA_PACKAGE@@.ApiResponse;
 import @@JAVA_PACKAGE@@.@@CLIENT_NAME@@Options;
@@ -95,6 +96,59 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                 options.httpClient().isEmpty(),
                 auth,
                 null);
+        if (auth != null) {
+            auth.useTokenFetcher(this::fetchToken);
+        }
+    }
+
+    /**
+     * Requests an access token with the OAuth2 client credentials grant, through this client's
+     * interceptors, timeouts and retries like any other request.
+     */
+    private @@CLIENT_NAME@@Auth.Grant fetchToken(
+            String tokenUrl, String scope, String clientId, String clientSecret, boolean inBody) {
+        HttpUrl url;
+        if (tokenUrl.contains("://")) {
+            url = HttpUrl.parse(tokenUrl);
+            if (url == null) {
+                throw new IllegalArgumentException("Invalid token URL: " + tokenUrl);
+            }
+        } else {
+            url = baseUrl.newBuilder().addPathSegments(tokenUrl.replaceFirst("^/+", "")).build();
+        }
+        FormBody.Builder form = new FormBody.Builder().add("grant_type", "client_credentials");
+        if (!scope.isEmpty()) {
+            form.add("scope", scope);
+        }
+        Headers headers = Headers.of();
+        if (inBody) {
+            form.add("client_id", clientId).add("client_secret", clientSecret);
+        } else {
+            headers = Headers.of("Authorization", @@CLIENT_NAME@@Auth.basicAuthorization(clientId, clientSecret));
+        }
+        JsonNode answer =
+                withSecurity(List.of())
+                        .call("POST", url)
+                        .headers(headers)
+                        .body(form.build())
+                        .returning(JsonNode.class)
+                        .send();
+        String accessToken = answer == null ? "" : answer.path("access_token").asText("");
+        if (accessToken.isEmpty()) {
+            throw new InvalidDataException("the token endpoint answered without an access_token");
+        }
+        JsonNode expires = answer.path("expires_in");
+        double seconds = -1;
+        if (expires.isNumber()) {
+            seconds = Math.max(expires.asDouble(), 0);
+        } else if (expires.isTextual()) {
+            try {
+                seconds = Math.max(Double.parseDouble(expires.asText().trim()), 0);
+            } catch (NumberFormatException ignored) {
+                // Declares no usable lifetime.
+            }
+        }
+        return new @@CLIENT_NAME@@Auth.Grant(accessToken, seconds);
     }
 
     private @@CLIENT_NAME@@HttpClient(
@@ -789,6 +843,8 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
      */
     private Response execute(Request request, OkHttpClient http, int retries) throws IOException {
         boolean retryable = retryable(request);
+        // An access token the API rejects is replaced once, without using up a retry.
+        boolean renewed = false;
         for (int attempt = 0; ; attempt++) {
             boolean lastAttempt = !retryable || attempt >= retries;
             Response response;
@@ -801,6 +857,13 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                 sleep(backoff(attempt));
                 continue;
             }
+            if (!renewed && rejectedToken(request, response)) {
+                renewed = true;
+                response.close();
+                request = auth.renew(request);
+                attempt--;
+                continue;
+            }
             Duration delay = lastAttempt ? null : retryDelay(response, attempt);
             if (delay == null) {
                 return response;
@@ -810,9 +873,18 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         }
     }
 
+    /** Whether {@code response} rejects the OAuth2 access token {@code request} carries. */
+    private boolean rejectedToken(Request request, Response response) {
+        RequestBody body = request.body();
+        return response.code() == 401
+                && auth != null
+                && (body == null || !body.isOneShot())
+                && auth.renewable(request);
+    }
+
     private CompletableFuture<Response> executeAsync(Request request, OkHttpClient http, int retries) {
         CompletableFuture<Response> result = new CompletableFuture<>();
-        executeAsync(request, http, retryable(request) ? retries : 0, 0, result);
+        executeAsync(request, http, retryable(request) ? retries : 0, 0, false, result);
         return result;
     }
 
@@ -821,6 +893,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
             OkHttpClient http,
             int retries,
             int attempt,
+            boolean renewed,
             CompletableFuture<Response> result) {
         if (result.isDone()) {
             return;
@@ -842,12 +915,25 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                         } else {
                             later(
                                     backoff(attempt),
-                                    () -> executeAsync(request, http, retries, attempt + 1, result));
+                                    () -> executeAsync(request, http, retries, attempt + 1, renewed, result));
                         }
                     }
 
                     @Override
                     public void onResponse(okhttp3.Call call, Response response) {
+                        if (!renewed && rejectedToken(request, response)) {
+                            response.close();
+                            // Fetching a token blocks, so it does not run on the dispatcher's thread.
+                            CompletableFuture.runAsync(
+                                    () -> {
+                                        try {
+                                            executeAsync(auth.renew(request), http, retries, attempt, true, result);
+                                        } catch (RuntimeException e) {
+                                            result.completeExceptionally(e);
+                                        }
+                                    });
+                            return;
+                        }
                         Duration delay = lastAttempt ? null : retryDelay(response, attempt);
                         if (delay == null) {
                             if (!result.complete(response)) {
@@ -856,7 +942,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                             return;
                         }
                         response.close();
-                        later(delay, () -> executeAsync(request, http, retries, attempt + 1, result));
+                        later(delay, () -> executeAsync(request, http, retries, attempt + 1, renewed, result));
                     }
                 });
     }

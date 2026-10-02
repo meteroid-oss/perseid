@@ -26,6 +26,12 @@ public final class @@CLIENT_NAME@@Options {
     /** Environment variable read for the API key when none is given. */
     public static final String API_KEY_ENV = "@@ENV_PREFIX@@_API_KEY";
 
+    /** Environment variable read for the OAuth2 client id when none is given. */
+    public static final String CLIENT_ID_ENV = "@@ENV_PREFIX@@_CLIENT_ID";
+
+    /** Environment variable read for the OAuth2 client secret when none is given. */
+    public static final String CLIENT_SECRET_ENV = "@@ENV_PREFIX@@_CLIENT_SECRET";
+
     /** Environment variable read for the base URL when none is given. */
     public static final String BASE_URL_ENV = "@@ENV_PREFIX@@_BASE_URL";
 
@@ -39,6 +45,9 @@ public final class @@CLIENT_NAME@@Options {
     private final Supplier<String> tokenProvider;
     private final String username;
     private final String password;
+    private final String clientId;
+    private final String clientSecret;
+    private final boolean clientAuthInBody;
     private final Map<String, String> apiKeys;
     private final Map<String, String> headers;
 
@@ -53,6 +62,9 @@ public final class @@CLIENT_NAME@@Options {
         this.tokenProvider = builder.tokenProvider;
         this.username = builder.username;
         this.password = builder.password;
+        this.clientId = builder.clientId;
+        this.clientSecret = builder.clientSecret;
+        this.clientAuthInBody = builder.clientAuthInBody;
         this.apiKeys = Map.copyOf(builder.apiKeys);
         this.headers = Map.copyOf(builder.headers);
     }
@@ -83,6 +95,9 @@ public final class @@CLIENT_NAME@@Options {
         builder.tokenProvider = tokenProvider;
         builder.username = username;
         builder.password = password;
+        builder.clientId = clientId;
+        builder.clientSecret = clientSecret;
+        builder.clientAuthInBody = clientAuthInBody;
         builder.apiKeys.putAll(apiKeys);
         builder.headers.putAll(headers);
         return builder;
@@ -179,6 +194,34 @@ public final class @@CLIENT_NAME@@Options {
     }
 
     /**
+     * The OAuth2 client id of the client credentials flow.
+     *
+     * @return the id, empty to read {@value #CLIENT_ID_ENV}
+     */
+    public Optional<String> clientId() {
+        return Optional.ofNullable(clientId);
+    }
+
+    /**
+     * The OAuth2 client secret of the client credentials flow.
+     *
+     * @return the secret, empty to read {@value #CLIENT_SECRET_ENV}
+     */
+    public Optional<String> clientSecret() {
+        return Optional.ofNullable(clientSecret);
+    }
+
+    /**
+     * Whether the OAuth2 client credentials are sent as form fields of the token request instead
+     * of an HTTP basic {@code Authorization} header.
+     *
+     * @return true for form fields
+     */
+    public boolean clientAuthInBody() {
+        return clientAuthInBody;
+    }
+
+    /**
      * API keys by security scheme name.
      *
      * @return the keys, unmodifiable
@@ -221,6 +264,9 @@ public final class @@CLIENT_NAME@@Options {
         private Supplier<String> tokenProvider;
         private String username;
         private String password;
+        private String clientId;
+        private String clientSecret;
+        private boolean clientAuthInBody;
         private final Map<String, String> apiKeys = new LinkedHashMap<>();
         private final Map<String, String> headers = new LinkedHashMap<>();
 
@@ -339,6 +385,35 @@ public final class @@CLIENT_NAME@@Options {
          */
         public Builder tokenProvider(Supplier<String> tokenProvider) {
             this.tokenProvider = tokenProvider;
+            return this;
+        }
+
+        /**
+         * The OAuth2 client credentials of the client credentials flow. They make the client fetch
+         * the access token of an OAuth2 security scheme from its token URL on first use, keep it
+         * until it expires, and fetch a new one when the API rejects it. A token provider and the
+         * API key take precedence. They default to {@value @@CLIENT_NAME@@Options#CLIENT_ID_ENV}
+         * and {@value @@CLIENT_NAME@@Options#CLIENT_SECRET_ENV}.
+         *
+         * @param clientId the client id
+         * @param clientSecret the client secret
+         * @return this builder
+         */
+        public Builder clientCredentials(String clientId, String clientSecret) {
+            this.clientId = Objects.requireNonNull(clientId, "clientId");
+            this.clientSecret = Objects.requireNonNull(clientSecret, "clientSecret");
+            return this;
+        }
+
+        /**
+         * Sends the OAuth2 client credentials as form fields of the token request instead of an
+         * HTTP basic {@code Authorization} header.
+         *
+         * @param clientAuthInBody whether to send them as form fields
+         * @return this builder
+         */
+        public Builder clientAuthInBody(boolean clientAuthInBody) {
+            this.clientAuthInBody = clientAuthInBody;
             return this;
         }
 
