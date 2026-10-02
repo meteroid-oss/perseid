@@ -142,11 +142,13 @@ impl {{ resource_type_name }} {
     {% else -%}
     {% set returned = "()" -%}
     {% endif -%}
+    {% set may_be_empty = op.response_may_be_empty | default(false) and op.pagination is undefined and (op.response_body_schema_name is defined or op.response_body_json_type is defined) -%}
+    {% if may_be_empty %}{% set returned %}Option<{{ returned }}>{% endset %}{% endif -%}
     {% if op.description is defined -%}
         {{ op.description | to_doc_comment(style="rust") }}
     ///
     {% endif -%}
-    /// `{{ op.method | upper }} {{ op.path }}`{% if op.response_is_event_stream %}, as an event stream{% if op.event_schema_name is defined %} of [`{{ op.event_schema_name | to_upper_camel_case }}`](crate::models::{{ op.event_schema_name | to_upper_camel_case }}){% endif %}{% endif %}.
+    /// `{{ op.method | upper }} {{ op.path }}`{% if op.response_is_event_stream %}, as an event stream{% if op.event_schema_name is defined %} of [`{{ op.event_schema_name | to_upper_camel_case }}`](crate::models::{{ op.event_schema_name | to_upper_camel_case }}){% endif %}{% endif %}{% if may_be_empty %}, `None` when the response has no body{% endif %}.
     {% if op.errors -%}
     {% set schemas = op.errors | dictsort | map(attribute=1) | unique | list -%}
     ///
@@ -183,7 +185,7 @@ impl {{ resource_type_name }} {
             {%- if has_required_params -%}
                 options: {{ param_struct_name }},
             {%- else -%}
-                options: Option<{{ param_struct_name }}>,
+                options: impl Into<Option<{{ param_struct_name }}>>,
             {%- endif -%}
         {% endif -%}
     ) -> crate::api::Call<{{ returned }}> {
@@ -193,7 +195,7 @@ impl {{ resource_type_name }} {
                 {% for p in op.query_params %}{{ p.name | to_rust_ident }},{% endfor %}
                 {% for p in op.header_params %}{{ p.name | to_rust_ident }},{% endfor %}
             } = options
-            {%- if not has_required_params %}.unwrap_or_default(){% endif -%}
+            {%- if not has_required_params %}.into().unwrap_or_default(){% endif -%}
             ;
         {% endif -%}
 
@@ -278,6 +280,8 @@ impl {{ resource_type_name }} {
             .text(&self.cfg)
         {% elif op.response_body_schema_name is undefined and op.response_body_json_type is undefined -%}
             .empty(&self.cfg)
+        {% elif may_be_empty -%}
+            .json_or_none(&self.cfg)
         {% else -%}
             .json(&self.cfg)
         {% endif -%}
@@ -306,7 +310,7 @@ impl {{ resource_type_name }} {
         {% if has_required_params -%}
             options: {{ param_struct_name }},
         {%- else -%}
-            options: Option<{{ param_struct_name }}>,
+            options: impl Into<Option<{{ param_struct_name }}>>,
         {%- endif %}
     ) -> crate::api::Paginator<crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}, crate::models::{{ pg.item_schema | to_upper_camel_case }}> {
         {% if pg.style == "cursor" -%}
@@ -349,15 +353,15 @@ impl {{ resource_type_name }} {
         {% if op.deprecated -%}
         #[allow(deprecated)]
         {% endif -%}
-        let call = move |options| {
+        let call = move |options: {{ param_struct_name }}| {
             this.{{ op.name | to_rust_ident }}(
                 {% for p in op.path_params %}&{{ p | to_rust_ident }}, {% endfor %}
                 {% if op.request_body_schema_name is defined %}{{ body_ident }}.clone(), {% elif op.request_body_json_type is defined %}body.clone(), {% endif %}
-                {% if has_required_params %}options{% else %}Some(options){% endif %},
+                options,
             )
         };
         crate::api::Paginator::new(
-            options{% if not has_required_params %}.unwrap_or_default(){% endif %},
+            options{% if not has_required_params %}.into().unwrap_or_default(){% endif %},
             WALK,
             crate::api::pages::{{ (resource.name ~ "_" ~ op.name) | to_upper_snake_case }},
             call,

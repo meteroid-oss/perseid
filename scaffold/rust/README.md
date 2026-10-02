@@ -31,8 +31,10 @@ timeout, retries or the idempotency key of the calls made through it:
 and can move to other tasks.
 
 Operations take their path parameters, their body, then their query and header parameters as an
-options struct: `ItemsListOptions::new(required).limit(10)`. Models keep the properties this
-version of the SDK does not know in `extra`, and send them back.
+options struct: `ItemsListOptions::new(required).limit(10)`. When every parameter is optional,
+pass the struct or `None`: `client.items().list(ItemsListOptions::new().limit(10))`. Models keep
+the properties this version of the SDK does not know in `extra`, and send them back. Operations
+that may answer without a body return an `Option`.
 
 ## Raw responses
 

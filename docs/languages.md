@@ -26,14 +26,17 @@ future of the decoded body; `.with_response().await` also gives the status, head
 the idempotency key of its calls:
 `client.items().with_options(RequestOptions::new().max_retries(0)).list(None)`. Query and header
 parameters are `#[non_exhaustive]` options structs, built with `new(required...)` then a setter per
-optional parameter. A query parameter that is a union of scalars or lists is an enum. Clients, resources, calls and paginators own what they need, so they move into
+optional parameter; when none is required, methods take `impl Into<Option<_>>`, the struct or
+`None`. Operations that also declare a bodiless 2xx return `Option<T>`, `None` on an empty body. A query parameter that is a union of scalars or lists is an enum. Clients, resources, calls and paginators own what they need, so they move into
 `tokio::spawn`. `*_iter` methods return a `Paginator<Page, Item>`, a `futures_core::Stream` of
 items whose `pages()` and `first_page()` give `Page`s (`items()`, `has_next_page()`,
 `next_page()`, the response through `Deref`). Event streams are `Stream`s of `SseEvent`s, or of
 the model each event carries until `[DONE]`, with `last_event()` for the raw event. The `http`
 crate is re-exported as `api::http`.
 
-Structs keep the properties they do not declare in `extra` and send them back. Enums and unions
+Structs keep the properties they do not declare in `extra` (`extra_properties` when the schema has
+an `extra` property) and send them back; `allOf` parts are inlined into one struct. Only structs
+without required fields, or whose required fields have a default, implement `Default`. Enums and unions
 are `#[non_exhaustive]` and decode values this version does not know into an `Unknown` variant
 that serializes back unchanged. Recursive fields are boxed. Dates are `chrono` types. In PATCH
 bodies, nullable optional fields are `Option<Option<T>>`: `Some(None)` sends `null`.
