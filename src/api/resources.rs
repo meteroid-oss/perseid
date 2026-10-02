@@ -525,6 +525,9 @@ pub(crate) struct Operation {
     response_is_text: bool,
     #[serde(default)]
     response_is_event_stream: bool,
+    /// Whether another success status of the operation has no body, such as a `204`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    response_may_be_empty: bool,
     /// Schema of the JSON `data` of each event, when the `text/event-stream` response names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) event_schema_name: Option<String>,
@@ -744,6 +747,7 @@ impl Operation {
             response_is_binary: response.kind == ResponseKind::Binary,
             response_is_text: response.kind == ResponseKind::Text,
             response_is_event_stream: response.kind == ResponseKind::EventStream,
+            response_may_be_empty: response.may_be_empty,
             event_schema_name: response.event_schema_name,
             stream_property: None,
             json_or_event_stream: response.also_event_stream,
@@ -767,6 +771,7 @@ impl Operation {
             response_body_is_list: false,
             response_body_json_type: None,
             response_is_event_stream: true,
+            response_may_be_empty: false,
             stream_property: self.body_stream_property.clone(),
             json_or_event_stream: false,
             x_pagination: Some(serde_json::Value::Bool(false)),
@@ -1195,6 +1200,8 @@ struct ResponseBody {
     also_event_stream: bool,
     /// Named schema of the JSON `data` of each event of a `text/event-stream` body.
     event_schema_name: Option<String>,
+    /// Another success status declares no body.
+    may_be_empty: bool,
 }
 
 /// The boolean `stream` property of the body schema `name`, which switches the response from
@@ -1252,6 +1259,7 @@ fn responses_from_openapi(
     success.sort_by_key(|(code, ..)| *code);
 
     let mut chosen: Option<(String, ResponseBody)> = None;
+    let mut bodiless = false;
     for (_, status, response) in success {
         let status = match status {
             openapi::StatusCode::Code(0) => "default".to_owned(),
@@ -1260,7 +1268,7 @@ fn responses_from_openapi(
         let body = ResponseBody::from_openapi(response, schemas)
             .with_context(|| format!("response `{status}`"))?;
         match &chosen {
-            _ if body.kind == ResponseKind::None => {}
+            _ if body.kind == ResponseKind::None => bodiless = true,
             None => chosen = Some((status, body)),
             Some((first, kept)) if *kept != body => tracing::warn!(
                 "responses `{first}` and `{status}` have different bodies, the SDK decodes `{first}`"
@@ -1278,10 +1286,9 @@ fn responses_from_openapi(
             Some((status, get_schema_name(obj.reference.as_deref())?))
         })
         .collect();
-    Ok((
-        chosen.map(|(_, body)| body).unwrap_or_default(),
-        error_schemas,
-    ))
+    let mut response = chosen.map(|(_, body)| body).unwrap_or_default();
+    response.may_be_empty = bodiless && response.kind != ResponseKind::None;
+    Ok((response, error_schemas))
 }
 
 impl ResponseBody {
@@ -1324,9 +1331,9 @@ impl ResponseBody {
                     kind: ResponseKind::Json,
                     schema_name: Some(schema_name),
                     is_list,
-                    json_type: None,
                     also_event_stream,
                     event_schema_name,
+                    ..Self::default()
                 });
             }
             let json_type = FieldType::from_schema_object(obj.clone())?;
@@ -1653,6 +1660,18 @@ mod tests {
         let stream = op.event_stream_variant().unwrap();
         assert_eq!(stream.event_schema_name.as_deref(), Some("Chunk"));
         assert_eq!(stream.stream_property.as_deref(), Some("stream"));
+    }
+
+    #[test]
+    fn a_bodiless_success_next_to_a_body_may_leave_it_empty() {
+        let json = json!({ "description": "", "content": {
+            "application/json": { "schema": widget() } } });
+        let (body, _) = responses(json!({ "200": json, "204": { "description": "" } })).unwrap();
+        assert!(body.may_be_empty && body.kind == ResponseKind::Json);
+        let (body, _) = responses(json!({ "200": json })).unwrap();
+        assert!(!body.may_be_empty);
+        let (body, _) = responses(json!({ "204": { "description": "" } })).unwrap();
+        assert!(!body.may_be_empty);
     }
 
     #[test]
