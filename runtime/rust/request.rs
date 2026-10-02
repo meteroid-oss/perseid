@@ -790,11 +790,12 @@ pub(crate) fn random() -> u64 {
 fn httpdate(value: &str) -> Option<SystemTime> {
     let mut parts = value.split_whitespace().skip(1);
     let day: u64 = parts.next()?.parse().ok()?;
+    let month = parts.next()?;
     let month = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ]
     .iter()
-    .position(|m| Some(*m) == parts.next())? as u64
+    .position(|m| *m == month)? as u64
         + 1;
     let year: u64 = parts.next()?.parse().ok()?;
     let mut time = parts.next()?.split(':').map(|n| n.parse::<u64>().ok());
