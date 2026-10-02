@@ -59,8 +59,8 @@ async for customer in async_client.customers.list(): ...
 ```
 
 ```go
-for customer, err := range client.Customers().ListIter(ctx, nil).All() { ... }
-page, err := client.Customers().ListPage(ctx, nil) // page.Items, page.HasNextPage(), page.NextPage(ctx)
+for customer, err := range client.Customers().ListAutoPaging(ctx, nil).All() { ... }
+page, err := client.Customers().List(ctx, nil) // page.Items, page.HasNextPage(), page.NextPage(ctx)
 ```
 
 ```rust
