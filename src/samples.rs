@@ -369,30 +369,33 @@ impl<'a> Gen<'a> {
             cx.pick % variants.len()
         };
         let variant = &variants[index];
+        // A variant without content (a bare tag) carries no content field.
         let body = match &variant.content {
             EnumVariantType::Ref {
                 schema_ref: Some(target),
                 ..
-            } => self.model(target, seed, cx),
+            } => Some(self.model(target, seed, cx)),
             EnumVariantType::Ref {
                 schema_ref: None,
                 inner: Some(inner),
-            } => self.of_type(inner, seed, cx, cut),
-            EnumVariantType::Ref { .. } => json!({}),
+            } => Some(self.of_type(inner, seed, cx, cut)),
+            EnumVariantType::Ref { .. } => None,
             EnumVariantType::Struct { fields } => {
                 let mut own = Map::new();
                 self.fields(fields, &BTreeMap::new(), seed, cx, cut, &mut own);
-                Value::Object(own)
+                Some(Value::Object(own))
             }
         };
         let mut out = Map::new();
         out.insert(discriminator.to_owned(), Value::from(variant.name.as_str()));
         match content_field {
             Some(field) => {
-                out.insert(field.clone(), body);
+                if let Some(body) = body {
+                    out.insert(field.clone(), body);
+                }
             }
             None => {
-                if let Value::Object(body) = body {
+                if let Some(Value::Object(body)) = body {
                     for (key, value) in body {
                         if key != discriminator {
                             out.insert(key, value);
