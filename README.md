@@ -47,12 +47,12 @@ or runs as the `ghcr.io/meteroid-oss/perseid` image. Linux and macOS, x64 and ar
 ## What your users get
 
 ```ts
-const petstore = new Petstore("sk_live_...");
+const petstore = new Petstore({ apiKey: "sk_live_..." });
 const pets = await petstore.pets.list({ limit: 10, status: "available" });
 ```
 
 ```python
-petstore = Petstore("sk_live_...")
+petstore = Petstore(api_key="sk_live_...")
 pets = petstore.pets.list(limit=10, status=PetStatus.AVAILABLE)
 ```
 
@@ -63,21 +63,18 @@ var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.
 
 ## Features
 
-- Six languages: Rust, TypeScript, Python, Go, Java and C#.
-- Typed errors by status, retries with backoff and `Retry-After`, idempotency keys, per-call
-  timeouts and headers.
-- Bearer, basic and API key auth, plus a token provider for OAuth2. Cursor, page and offset
-  pagination. Server-sent events and file uploads.
-- Enums and unions that keep values newer than the SDK instead of failing.
-- Sync and async clients in Python.
-- An opt-in [Standard Webhooks](https://www.standardwebhooks.com) verifier in every language.
-- An `api.md` in every SDK listing each method, its HTTP request and models, regenerated with
-  the code, and a README whose examples call your API's own operations.
-- Specs as found in the wild: OpenAPI 3.0, 3.1 and 3.2, `$ref`s to other files, cookie parameters
-  and parameter styles, nullable and recursive schemas, `additionalProperties`, webhook-only specs.
-  Names no language accepts are renamed, clashes are reported together.
-- Middleware, resource snippets and ejectable templates when the defaults don't fit.
-- `perseid generate --check` fails CI when the SDKs drift from the spec.
+| | |
+|---|---|
+| Languages | Rust, TypeScript, Python (sync and async), Go, Java, C# |
+| Requests | Typed errors by status, retries with backoff and `Retry-After`, idempotency keys, per-call timeouts and headers |
+| Auth | Bearer, basic, API keys, OAuth2 client credentials, token providers |
+| Data | Cursor, page and offset pagination, server-sent events, file uploads |
+| Models | Enums and unions that keep values the SDK does not know, unknown properties sent back |
+| Webhooks | An opt-in [Standard Webhooks](https://www.standardwebhooks.com) verifier in every language |
+| Docs | An `api.md` per SDK, regenerated with the code, and a README calling your API's own operations |
+| Specs | OpenAPI 3.0, 3.1 and 3.2, external `$ref`s, parameter styles, nullable and recursive schemas, webhook-only specs |
+| Customizing | Middleware, resource snippets, ejectable templates |
+| CI | `perseid generate --check` fails when the SDKs drift from the spec |
 
 ## How it works
 
@@ -94,11 +91,13 @@ var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.
  sdk-release.yml ─ release-please PR ← you merge ─ tag ─ publish to npm, PyPI, crates.io…
 ```
 
-`perseid init` writes two workflows for you to commit. `sdks.yml` runs the
-`meteroid-oss/perseid` Action when the spec changes. The Action installs perseid and the pinned
-formatters, then runs `perseid generate --pr`. That commits the SDKs to the `perseid/update` branch
-and opens or updates one pull request per repository. `sdk-release.yml` runs release-please on
-merge and publishes each released SDK from the `release` environment.
+`perseid init` writes two workflows for you to commit:
+
+- `sdks.yml` runs the `meteroid-oss/perseid` Action when the spec changes. It installs perseid
+  and the pinned formatters, then runs `perseid generate --pr`, which commits the SDKs to the
+  `perseid/update` branch and opens or updates one pull request per repository.
+- `sdk-release.yml` runs release-please on merge and publishes each released SDK from the
+  `release` environment.
 
 The Actions are pinned to the release line of the perseid that wrote them, such as
 `meteroid-oss/perseid@v0.6`. Run `perseid init` again to refresh them.
@@ -113,23 +112,14 @@ The Actions are pinned to the release line of the perseid that wrote them, such 
 | One repository per language | `repo = "acme/api-{lang}"` | `acme/api-typescript`, `acme/api-python` |
 | One SDKs repository | `repo = "acme/api-sdks"` | `acme/api-sdks`, a folder per language |
 
-perseid never creates repositories. Create them with `gh repo create acme/api-typescript`. The
-first pull request in each one carries the SDK and its release workflow. Add `PERSEID_TOKEN` there
-too (`gh secret set PERSEID_TOKEN -R acme/api-typescript`): the release workflow uses it.
+- perseid never creates repositories: `gh repo create acme/api-typescript`.
+- Add `PERSEID_TOKEN` to each SDK repository too: its release workflow uses it.
+- Spec in another repository? Run `perseid init` in the SDKs repository, then
+  `npx perseid connect acme/api-sdks` in the API repository. It writes a workflow pushing the
+  spec, with a deploy key that reaches the SDKs repository only.
+- A spec served at a URL needs no `connect`: `sdks.yml` fetches it daily.
 
-**Spec in another repository?** Run `perseid init` in the SDKs repository. Then, in the API
-repository:
-
-```sh
-npx perseid connect acme/api-sdks
-```
-
-`connect` writes `.github/workflows/perseid-push.yml` for you to commit. It also offers to add a
-deploy key, which lets the API repository push its spec to `acme/api-sdks` and nothing else. The
-key doesn't expire. The SDKs repository gets no access to the API repository. `--on release`
-pushes the spec only when you publish a GitHub release.
-
-A spec served at a URL needs no `connect`: `sdks.yml` fetches it daily.
+See [repository layouts](docs/ci.md#repository-layouts).
 
 ## Commands
 
@@ -155,7 +145,7 @@ signs in with `GH_TOKEN`, `GITHUB_TOKEN`, the token `gh` stores, or a browser lo
 - [Languages](docs/languages.md): what each SDK looks like
 - [Auth, pagination, streaming, raw responses and encoding](docs/features.md)
 - [Customizing](docs/customizing.md): handwritten code, middleware, snippets, templates, webhooks
-- [Testing](docs/testing.md): how perseid and its SDKs are tested
+- [Testing](docs/testing.md): how perseid itself is tested, for contributors
 
 ## Status
 
@@ -167,8 +157,8 @@ Stripe, GitHub, OpenAI, Twilio, DigitalOcean and Linode specs compile in every l
 operation excluded on Stripe and on OpenAI.
 
 A construct no SDK can express is skipped or typed as untyped JSON, with a warning naming the
-operation or schema; names that clash fail generation, listed together. Leave an operation out with
-`exclude = ["<operation id>"]`, and open an issue with the spec attached.
+operation or schema. Names that clash fail generation, listed together. Leave an operation out
+with `exclude = ["<operation id>"]`, and open an issue with the spec attached.
 
 perseid started as a fork of [Svix's openapi-codegen](https://github.com/svix/openapi-codegen).
 
