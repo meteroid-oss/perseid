@@ -26,6 +26,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The .NET 8 JSON source generator emits property names containing quotes or backslashes unescaped. -->
+    <PackageReference Include="System.Text.Json" Version="9.0.9" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="../README.md" Pack="true" PackagePath="/" Condition="Exists('../README.md')" />
   </ItemGroup>
 </Project>
