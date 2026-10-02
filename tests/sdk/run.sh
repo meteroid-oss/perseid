@@ -48,6 +48,8 @@ GRADLE
     }
     rm -rf _torture && gradle_test
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
+    # Without servers, the client has no default base URL.
+    sed -i '/^servers:/,/^paths:/{/^paths:/!d}' "$work/torture/openapi.yaml"
     cd "$work/torture" && perseid init --sdks java && perseid generate java
     cp -r "$here/java/_torture/." java/ && cd java && gradle_test ;;
   csharp)

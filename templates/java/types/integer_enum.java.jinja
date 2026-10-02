@@ -5,8 +5,7 @@
 {% set ns = namespace(names=[], values=[]) -%}
 {% for varname, value in type.variants %}{% set ns.names = ns.names + [varname] %}{% set ns.values = ns.values + [value ~ "L"] %}{% endfor -%}
 {% set owner = "schema `" ~ type.name ~ "`" -%}
-{% set unknown = "UNRECOGNIZED_VALUE" if "UNRECOGNIZED" in (ns.names | idents("shouty", "java", owner)) else "UNRECOGNIZED" -%}
-{% set members = (ns.names + [unknown | lower]) | idents("shouty", "java", owner) -%}
+{% set members = ns.names | idents("shouty", "java", owner) -%}
 {% set values = ns.values -%}
 {% set integer = true -%}
 {% include "types/open_enum.java.jinja" %}

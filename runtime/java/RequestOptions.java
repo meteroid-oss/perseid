@@ -5,6 +5,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Settings of one call, over the client's: extra headers, a timeout, a number of retries and an
@@ -70,35 +71,35 @@ public final class RequestOptions {
      *
      * @return the headers
      */
-    public Map<String, String> getHeaders() {
+    public Map<String, String> headers() {
         return headers;
     }
 
     /**
      * Timeout of each attempt.
      *
-     * @return the timeout, or null for the client's
+     * @return the timeout, empty for the client's
      */
-    public Duration getTimeout() {
-        return timeout;
+    public Optional<Duration> timeout() {
+        return Optional.ofNullable(timeout);
     }
 
     /**
      * Retries after the first attempt.
      *
-     * @return the number of retries, or null for the client's schedule
+     * @return the number of retries, empty for the client's schedule
      */
-    public Integer getMaxRetries() {
-        return maxRetries;
+    public Optional<Integer> maxRetries() {
+        return Optional.ofNullable(maxRetries);
     }
 
     /**
      * Idempotency key.
      *
-     * @return the key, or null to generate one for POST requests
+     * @return the key, empty to generate one for POST requests
      */
-    public String getIdempotencyKey() {
-        return idempotencyKey;
+    public Optional<String> idempotencyKey() {
+        return Optional.ofNullable(idempotencyKey);
     }
 
     @Override

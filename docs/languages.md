@@ -169,12 +169,16 @@ for; `doc.go`, `errors.go` and `version.go` are yours.
 
 Final classes with fluent accessors, OkHttp and Jackson underneath, for Java 11 and later. Models
 are immutable: `Widget.builder()...build()` throws on a missing required property and
-`toBuilder()` changes a copy. Required properties are read directly, the others as `Optional`s;
+`toBuilder()` changes a copy. Required properties are read directly, the others as `Optional`s
+(only a getter type: fields are nullable, or an internal `JsonField` for optional nullable ones);
 for optional nullable ones, `x(null)` on the builder sends `null` while leaving `x` unset leaves it
-out. Properties the SDK does not know are kept in `additionalProperties()` and sent back.
+out, and both survive a JSON round trip. Properties the SDK does not know are kept in
+`additionalProperties()` and sent back.
 
 `new Client(options)` or `Client.fromEnv()` builds an `AutoCloseable` client from immutable
-`ClientOptions.builder()` settings. Required path, query and header parameters are method
+`ClientOptions.builder()` settings. The base URL comes from the options, else
+`<ENV_PREFIX>_BASE_URL`, else `Client.DEFAULT_BASE_URL` when the spec has a server; without one,
+constructing the client throws an `IllegalStateException` naming both settings. Required path, query and header parameters are method
 arguments; optional ones go in an immutable `...Options.builder()`, and unions of scalars such as
 `string | string[]` are typed (`Ids.ofList(...)`). Every method has an overload taking a
 `RequestOptions` (headers, timeout, max retries, idempotency key) last. `client.async()` has the
@@ -191,14 +195,17 @@ responses (`statusCode()`, `headers()`, `body()`, `requestId()`), with a subclas
 `ApiTimeoutException` when no response came, and `InvalidDataException` for a response that is not
 what the API describes, such as a required property left out (thrown by its getter).
 `error(Type.class)` parses the body as the schema the operation declares, and `error()` falls back
-to a `JsonNode`. `exceptions/ApiException.java` is yours: SDKs scaffolded by an earlier perseid must update it
-to the constructor taking the status, headers, body and parsed error. Enums are classes with a
-constant per value: an unknown value is kept and sent back unchanged, `isKnown()` tells it apart
-and `known()` returns an enum to `switch` on. Unions of a primitive and an object are typed
+to a `JsonNode`. `exceptions/ApiException.java` is scaffolded, and yours afterwards. Enums are
+classes with a constant per value: an unknown value is kept and sent back unchanged, `isKnown()`
+tells it apart, `value()` returns an enum to `switch` on (`_UNKNOWN` for unknown values), `known()`
+an enum of the known values only (throwing `InvalidDataException` on others) and `asString()` (or
+`asLong()`) the raw value. Unions of a primitive and an object are typed
 (`Charge.ChargeCustomer.ofString("cus_1")`, `id()` for expandable objects); unions of objects keep
 unmatched objects as `Unrecognized`, and `decodeAs(Customer.class)` reads a value as another
-variant. Tagged unions have `isCircle()`/`asCircle()` per variant besides their subclasses. An
-operation that may answer a bodiless 2xx returns an `Optional`. The HTTP plumbing lives in an
+variant. Tagged unions have `isCircle()`/`asCircle()` per variant besides their subclasses. Both
+kinds take a `Visitor<R>` in `accept(visitor)`, with a `visitX` method per variant and a
+`visitUnknown` that throws `InvalidDataException` unless overridden. An operation that may answer a
+bodiless 2xx returns an `Optional`. The HTTP plumbing lives in an
 `internal` package.
 
 ## C#

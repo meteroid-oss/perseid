@@ -427,10 +427,8 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
             if (streaming) {
                 request.header("Accept", "text/event-stream");
             }
-            options.getHeaders().forEach(request::header);
-            if (options.getIdempotencyKey() != null) {
-                request.header("idempotency-key", options.getIdempotencyKey());
-            }
+            options.headers().forEach(request::header);
+            options.idempotencyKey().ifPresent(key -> request.header("idempotency-key", key));
             String idempotencyKey = request.build().header("idempotency-key");
             if ((idempotencyKey == null || idempotencyKey.isEmpty()) && verb.equals("POST")) {
                 request.header("idempotency-key", "auto_" + UUID.randomUUID());
@@ -442,13 +440,11 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         }
 
         private OkHttpClient http(boolean streaming) {
-            if (!streaming && options.getTimeout() == null) {
+            if (!streaming && options.timeout().isEmpty()) {
                 return client;
             }
             OkHttpClient.Builder builder = client.newBuilder();
-            if (options.getTimeout() != null) {
-                withTimeout(builder, options.getTimeout());
-            }
+            options.timeout().ifPresent(timeout -> withTimeout(builder, timeout));
             if (streaming) {
                 builder.readTimeout(Duration.ZERO).callTimeout(Duration.ZERO);
             }
@@ -456,7 +452,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         }
 
         private int retries() {
-            return options.getMaxRetries() != null ? options.getMaxRetries() : retrySchedule.size();
+            return options.maxRetries().orElse(retrySchedule.size());
         }
     }
 

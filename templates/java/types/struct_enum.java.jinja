@@ -1,6 +1,9 @@
 {% import "types/macros.java.jinja" as m -%}
 {% set type_name = type.name | to_upper_camel_case -%}
 {{- m.check_name(type_name) -}}
+{% if type_name == "Visitor" -%}
+{{ panic("java codegen: union `Visitor` would clash with its own `Visitor` interface, rename it in the spec") }}
+{%- endif -%}
 {% set owner = "schema `" ~ type.name ~ "`" -%}
 {% set disc = type.discriminator_field -%}
 {% set disc_getter = disc | ident("camel", "java") -%}
@@ -16,10 +19,20 @@
     "JsonIgnoreProperties", "JsonInclude", "JsonProperty", "JsonSubTypes", "JsonTypeInfo",
     "JsonTypeName", "JsonUnwrapped", "JsonProcessingException", "JsonValue", "TypeReference",
     "DeserializationContext", "JsonNode", "JsonDeserialize", "IOException", "Builder", "Content",
-    "Collections", "Unions"] -%}
+    "Collections", "Unions", "JsonField", "Visitor"] -%}
 {% set ns.classes = ns.classes + [cls ~ "Variant" if shadowed else cls] -%}
 {% endfor -%}
 {% set classes = ns.classes -%}
+{#- What `Visitor` receives per variant: the model a `$ref` variant wraps, else the variant. -#}
+{% set ns.visited = [] -%}
+{% for variant in type.variants -%}
+{% set data_ty = variant.schema_ref | to_upper_camel_case if variant.type == "ref" and variant.schema_ref is defined else "" -%}
+{% if data_ty and (data_ty in classes or data_ty == type_name or data_ty in ["Builder", "Visitor"]) -%}
+{% set data_ty = sdk.java_package ~ ".models." ~ data_ty -%}
+{% endif -%}
+{% set ns.visited = ns.visited + [[data_ty or classes[loop.index0], "data" if data_ty else "this"]] -%}
+{% endfor -%}
+{% set visited = ns.visited -%}
 {% set vars = m.member_names(type.fields, owner) | split(" ") | reject("equalto", "") | list -%}
 {% set pascals = m.field_idents(type.fields, "pascal", owner) | split(" ") | reject("equalto", "") | list -%}
 {% set adjacent = type.repr == "adjacently_tagged" -%}
@@ -49,6 +62,7 @@ import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import java.io.IOException;
+import {{ sdk.java_internal_package }}.JsonField;
 import {{ sdk.java_internal_package }}.Unions;
 import {{ sdk.java_internal_package }}.Utils;
 import java.math.BigDecimal;
@@ -115,7 +129,7 @@ public abstract class {{ type_name }} {
      */
     public {{ type_name }} with{{ pascals[loop.index0] }}({{ ty }} {{ vars[loop.index0] }}) {
         {{ type_name }} copy = Unions.convert(this, {{ type_name }}.class);
-        copy.{{ vars[loop.index0] }} = {% if m.kind(field) == "tri" %}Optional.ofNullable({{ vars[loop.index0] }}){% else %}{{ vars[loop.index0] }}{% endif %};
+        copy.{{ vars[loop.index0] }} = {% if m.kind(field) == "tri" %}JsonField.ofNullable({{ vars[loop.index0] }}){% else %}{{ vars[loop.index0] }}{% endif %};
         return copy;
     }
     {%- endfor %}
@@ -159,6 +173,43 @@ public abstract class {{ type_name }} {
     {%- endif %}
     {%- endfor %}
 
+    /**
+     * Calls the method of {@code visitor} for this variant.
+     *
+     * @param <R> the result type
+     * @param visitor the visitor
+     * @return the result of the visitor
+     */
+    public abstract <R> R accept(Visitor<R> visitor);
+
+    /**
+     * A function of each variant, called by {@link #accept}.
+     *
+     * @param <R> the result type
+     */
+    public interface Visitor<R> {
+        {% for variant in type.variants -%}
+        /**
+         * Visits the {@code {{ m.html(variant.name) }}} variant.
+         *
+         * @param value the variant
+         * @return the result
+         */
+        R visit{{ classes[loop.index0] }}({{ visited[loop.index0][0] }} value);
+
+        {% endfor -%}
+        /**
+         * Visits a variant this version of the SDK does not know.
+         *
+         * @param value the variant, with its properties
+         * @return the result
+         * @throws {{ sdk.java_package }}.exceptions.InvalidDataException unless overridden
+         */
+        default R visitUnknown({{ classes | last }} value) {
+            throw new {{ sdk.java_package }}.exceptions.InvalidDataException("unknown {{ type_name }} variant: " + value.{{ disc_getter }}());
+        }
+    }
+
     {% if shared -%}
     {{ m.value_methods(type_name, vars) }}
     {% endif %}
@@ -171,13 +222,19 @@ public abstract class {{ type_name }} {
     {% for variant in type.variants -%}
     {% set cls = classes[loop.index0] -%}
     {% set content = type.content_field if adjacent else none -%}
+    {% set accept -%}
+        @Override
+        public <R> R accept(Visitor<R> visitor) {
+            return visitor.visit{{ cls }}({{ visited[loop.index0][1] }});
+        }
+    {%- endset %}
 
     /** The {@code {{ m.html(variant.name) }}} variant. */
     @JsonTypeName({{ variant.name | tojson }})
     public static final class {{ cls }} extends {{ type_name }} {
     {% if variant.type == "ref" and variant.schema_ref is defined -%}
         {% set data_ty = variant.schema_ref | to_upper_camel_case -%}
-        {% if data_ty in classes or data_ty == type_name or data_ty == "Builder" -%}
+        {% if data_ty in classes or data_ty == type_name or data_ty in ["Builder", "Visitor"] -%}
             {% set data_ty = sdk.java_package ~ ".models." ~ data_ty -%}
         {% endif -%}
         {% if content -%}
@@ -225,6 +282,8 @@ public abstract class {{ type_name }} {
         }
 
         {{ m.value_methods(cls, ["data"], base=shared) }}
+
+        {{ accept }}
     {% elif variant.type == "struct" and variant.fields is defined and variant.fields | length > 0 -%}
         {% set variant_owner = owner ~ ", variant `" ~ variant.name ~ "`" -%}
         {% set fvars = m.member_names(variant.fields, variant_owner) | split(" ") | reject("equalto", "") | list -%}
@@ -297,6 +356,8 @@ public abstract class {{ type_name }} {
         public String {{ disc_getter }}() {
             return {{ variant.name | tojson }};
         }
+
+        {{ accept }}
     {% else -%}
         /** The variant, which has no other property. */
         public {{ cls }}() {}
@@ -306,6 +367,8 @@ public abstract class {{ type_name }} {
         public String {{ disc_getter }}() {
             return {{ variant.name | tojson }};
         }
+
+        {{ accept }}
 
         {{ m.value_methods(cls, [], base=shared) }}
     {% endif -%}
@@ -325,6 +388,11 @@ public abstract class {{ type_name }} {
         @JsonProperty({{ disc | tojson }})
         public String {{ disc_getter }}() {
             return discriminator;
+        }
+
+        @Override
+        public <R> R accept(Visitor<R> visitor) {
+            return visitor.visitUnknown(this);
         }
 
         /**

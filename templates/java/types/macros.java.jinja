@@ -14,7 +14,7 @@
 {%- elif ty.is_list() -%}List<{{ java_type(ty.inner_type(), union_cls) }}>
 {%- elif ty.is_set() -%}Set<{{ java_type(ty.inner_type(), union_cls) }}>
 {%- elif ty.is_map() -%}Map<String,{{ java_type(ty.value_type(), union_cls) }}>
-{%- elif ty.is_schema_ref() and ty.to_java() == "Builder" -%}{{ sdk.java_package }}.models.Builder
+{%- elif ty.is_schema_ref() and ty.to_java() in ["Builder", "Visitor"] -%}{{ sdk.java_package }}.models.{{ ty.to_java() }}
 {%- else -%}{{ ty.to_java() }}
 {%- endif -%}
 {%- endmacro %}
@@ -101,23 +101,24 @@
 {% macro copied(field, expr, how) -%}
 {%- set c = collection(field) -%}
 {%- if not c -%}{{ expr }}
-{%- elif kind(field) == "tri" -%}{{ expr }} == null ? null : {{ expr }}.map(Utils::{{ how }}{{ c }})
+{%- elif kind(field) == "tri" -%}{{ expr }}.map(Utils::{{ how }}{{ c }})
 {%- else -%}Utils.{{ how }}{{ c }}({{ expr }})
 {%- endif -%}
 {%- endmacro %}
 
-{#- ` = <default>` for a field with a discriminator default, else empty. -#}
+{#- ` = <initial value>` for a field with a discriminator default or held in a `JsonField`. -#}
 {% macro initializer(field, ty, default) -%}
 {%- if default is not none -%}
 {%- set value = default | tojson if ty == "String" else ty ~ ".of(" ~ (default | tojson) ~ ")" -%}
-{{ " = " ~ ("Optional.of(" ~ value ~ ")" if kind(field) == "tri" else value) }}
+{{ " = " ~ ("JsonField.ofNullable(" ~ value ~ ")" if kind(field) == "tri" else value) }}
+{%- elif kind(field) == "tri" %} = JsonField.missing()
 {%- endif -%}
 {%- endmacro %}
 
 {#- The Java type a field of kind `k` is stored as. -#}
 {% macro stored_type(field, union_cls) -%}
 {%- set ty = java_type(field.type, union_cls) -%}
-{{ "Optional<" ~ ty ~ ">" if kind(field) == "tri" else ty }}
+{{ "JsonField<" ~ ty ~ ">" if kind(field) == "tri" else ty }}
 {%- endmacro %}
 
 {#- Declaration of `field`, named `var`, in a model. -#}
@@ -129,6 +130,7 @@ private {{ ty }} {{ var }};
 {% else -%}
 @JsonProperty({{ field.name | tojson }})
 {% if kind(field) == "nullable" %}@JsonInclude(JsonInclude.Include.ALWAYS)
+{% elif kind(field) == "tri" %}@JsonInclude(JsonInclude.Include.NON_EMPTY)
 {% endif -%}
 private {{ stored_type(field, union_cls) }} {{ var }}{{ initializer(field, ty, default) }};
 {% endif -%}
@@ -163,7 +165,7 @@ private {{ stored_type(field, union_cls) }} {{ var }}{{ initializer(field, ty, d
 }
 {% elif k == "tri" -%}
 {{ field_doc(field, "@return the value, empty when unset or null") }}public Optional<{{ ty }}> {{ var }}() {
-    return Utils.optional({{ var }});
+    return {{ var }}.asOptional();
 }
 {% else -%}
 {{ field_doc(field, "@return the value, empty when " ~ ("null" if k == "nullable" else "unset")) }}public Optional<{{ ty }}> {{ var }}() {
@@ -180,20 +182,28 @@ private {{ stored_type(field, union_cls) }} {{ var }}{{ initializer(field, ty, d
 {% set value = "Utils.mutable" ~ c ~ "(" ~ var ~ ")" if c else var -%}
 {% set param = "@param " ~ var ~ " the value" ~ (", null to send an explicit {@code null}" if k == "tri" else "") -%}
 {{ field_doc(field, param ~ "\n@return this builder") }}public {{ builder }} {{ var }}({{ ty }} {{ var }}) {
-    this.{{ var }} = {{ "Optional.ofNullable(" ~ value ~ ")" if k == "tri" else value }};
+    this.{{ var }} = {{ "JsonField.ofNullable(" ~ value ~ ")" if k == "tri" else value }};
     return this;
 }
 {% if c %}
 {% set item_ty = java_type(field.type.value_type() if c == "Map" else field.type.inner_type(), union_cls) -%}
 {% set empty = "new LinkedHashMap<>()" if c == "Map" else ("new LinkedHashSet<>()" if c == "Set" else "new ArrayList<>()") -%}
-{% set current = "this." ~ var ~ (".get()" if k == "tri" else "") -%}
 {% set tags = ("@param key the key\n" if c == "Map" else "") ~ "@param item the item\n@return this builder" -%}
 {% set summary = ("Puts an entry in" if c == "Map" else "Adds an item to") ~ " {@code " ~ html(field.name) ~ "}." -%}
 {{ field_doc(field, tags, summary) }}public {{ builder }} {{ "put" if c == "Map" else "add" }}{{ pascal }}Item({% if c == "Map" %}String key, {% endif %}{{ item_ty }} item) {
-    if (this.{{ var }} == null{% if k == "tri" %} || this.{{ var }}.isEmpty(){% endif %}) {
-        this.{{ var }} = {{ "Optional.of(" ~ empty ~ ")" if k == "tri" else empty }};
+    {% if k == "tri" -%}
+    {{ ty }} items = this.{{ var }}.orNull();
+    if (items == null) {
+        items = {{ empty }};
+        this.{{ var }} = JsonField.ofNullable(items);
     }
-    {{ current }}.{{ "put(key, item)" if c == "Map" else "add(item)" }};
+    items.{{ "put(key, item)" if c == "Map" else "add(item)" }};
+    {% else -%}
+    if (this.{{ var }} == null) {
+        this.{{ var }} = {{ empty }};
+    }
+    this.{{ var }}.{{ "put(key, item)" if c == "Map" else "add(item)" }};
+    {% endif -%}
     return this;
 }
 {% endif -%}
@@ -407,7 +417,7 @@ public String toString() {
 {% if name in ["Object", "String", "Boolean", "Short", "Integer", "Long", "Float", "Double", "Void",
     "Override", "Deprecated", "List", "Map", "Set", "Optional", "Objects", "ArrayList", "HashMap",
     "LinkedHashSet", "LinkedHashMap", "BigDecimal", "OffsetDateTime", "URI", "Utils", "Collections",
-    "JsonNode", "JsonAnyGetter", "JsonAnySetter"] -%}
+    "JsonNode", "JsonAnyGetter", "JsonAnySetter", "JsonField"] -%}
 {{ panic("java codegen: schema `" ~ name ~ "` would shadow java's own `" ~ name ~ "`, rename it in the spec") }}
 {%- endif %}
 {%- endmacro %}
@@ -437,7 +447,7 @@ public String toString() {
 {% set ns = namespace(types=[]) -%}
 {% for v in variants -%}
 {% set t = v.type.to_java() -%}
-{% set ns.types = ns.types + [sdk.java_package ~ ".models." ~ t if t in shadowed + ["Empty", "Deserializer"] else t] -%}
+{% set ns.types = ns.types + [sdk.java_package ~ ".models." ~ t if t in shadowed + ["Empty", "Deserializer", "Visitor", "Unrecognized"] else t] -%}
 {% endfor -%}
 {% set checks = {
     "string": "node.isTextual()",
@@ -449,7 +459,8 @@ public String toString() {
 } -%}
 /**
  * One of {% for v in variants %}{% if not loop.first %}{{ ", " if not loop.last else " or " }}{% endif %}{% if v.empty %}{@code ""}{% elif v.type.is_schema_ref() %}{@link {{ ns.types[loop.index0] }}}{% else %}a JSON {{ v.json_type }}{% endif %}{% endfor %}, told apart
- * by JSON type: {@code of...} builds one, {@code is...} and {@code as...} read it.
+ * by JSON type: {@code of...} builds one, {@code is...} and {@code as...} read it, and so does
+ * {@link #accept} with a {@link Visitor}.
 {%- if objects %}
  *
 {%- if ty.union_mode() == "rules" %}
@@ -478,6 +489,53 @@ public abstract static class {{ cls }} {
      */
     @JsonValue
     public abstract Object getValue();
+
+    /**
+     * Calls the method of {@code visitor} for this variant.
+     *
+     * @param <R> the result type
+     * @param visitor the visitor
+     * @return the result of the visitor
+     */
+    public abstract <R> R accept(Visitor<R> visitor);
+
+    /**
+     * A function of each variant, called by {@link #accept}.
+     *
+     * @param <R> the result type
+     */
+    public interface Visitor<R> {
+        {% for v in variants -%}
+        {% if v.empty -%}
+        /**
+         * Visits the empty string.
+         *
+         * @return the result
+         */
+        R visitEmpty();
+        {% else -%}
+        /**
+         * Visits the {@code {{ v.name }}} variant.
+         *
+         * @param value the value
+         * @return the result
+         */
+        R visit{{ pascals[loop.index0] }}({{ ns.types[loop.index0] }} value);
+        {% endif %}
+        {% endfor -%}
+        {% if objects -%}
+        /**
+         * Visits a value no variant matches.
+         *
+         * @param json the value, as received
+         * @return the result
+         * @throws {{ sdk.java_package }}.exceptions.InvalidDataException unless overridden
+         */
+        default R visitUnknown(JsonNode json) {
+            throw new {{ sdk.java_package }}.exceptions.InvalidDataException("unknown {{ cls }}: " + json);
+        }
+        {% endif -%}
+    }
     {% for v in variants -%}
     {% set p = pascals[loop.index0] -%}
     {% set t = ns.types[loop.index0] -%}
@@ -596,6 +654,11 @@ public abstract static class {{ cls }} {
         }
 
         @Override
+        public <R> R accept(Visitor<R> visitor) {
+            return visitor.visitUnknown(value);
+        }
+
+        @Override
         public boolean equals(Object o) {
             return o instanceof Unrecognized && value.equals(((Unrecognized) o).value);
         }
@@ -629,6 +692,11 @@ public abstract static class {{ cls }} {
         }
 
         @Override
+        public <R> R accept(Visitor<R> visitor) {
+            return visitor.visitEmpty();
+        }
+
+        @Override
         public boolean equals(Object o) {
             return o instanceof Empty;
         }
@@ -657,6 +725,11 @@ public abstract static class {{ cls }} {
         @JsonValue
         public {{ t }} getValue() {
             return value;
+        }
+
+        @Override
+        public <R> R accept(Visitor<R> visitor) {
+            return visitor.visit{{ p }}(value);
         }
 
         @Override
