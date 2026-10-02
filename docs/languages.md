@@ -1,8 +1,10 @@
 # Languages
 
 Every SDK retries connection errors, timeouts, 408, 429 and 5xx responses with jittered backoff,
-honoring `Retry-After`, but only when the method is idempotent or the request carries an
-`Idempotency-Key` (POST gets one automatically). Enum values and union variants newer than the SDK
+but only when the method is idempotent or the request carries an `Idempotency-Key` (POST gets one
+automatically). A `retry-after-ms` or `Retry-After` of at most 60 seconds sets the wait instead;
+a longer one falls back to the backoff. `max_retries` (2 by default) can be set per client and per
+call. Enum values and union variants newer than the SDK
 are kept rather than rejected. Requests time out after `timeout` seconds (60 by default).
 
 API errors carry the status, the response headers (for request ids) and the raw body. They are
