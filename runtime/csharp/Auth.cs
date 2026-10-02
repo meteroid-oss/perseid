@@ -53,7 +53,7 @@ internal sealed record OAuthUse(string Scheme, string Token);
 
 /// <summary>OAuth2 client credentials: an access token per security scheme, fetched on first use and
 /// kept until it is about to expire. Concurrent callers share one token request.</summary>
-internal sealed class OAuthClient(string clientId, string clientSecret, bool inBody)
+internal sealed class OAuthClient(string clientId, string clientSecret, bool inBody) : IDisposable
 {
     /// <summary>Tokens are renewed this long before they expire, or at half their life when shorter.</summary>
     private const long MarginMs = 60_000;
@@ -122,6 +122,9 @@ internal sealed class OAuthClient(string clientId, string clientSecret, bool inB
             }
         }
     }
+
+    /// <summary>Releases the gate that serializes token requests.</summary>
+    public void Dispose() => _gate.Dispose();
 }
 
 /// <summary>The API's security schemes, and the requirement of operations declaring none: the first

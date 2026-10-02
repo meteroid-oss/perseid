@@ -503,7 +503,11 @@ internal sealed class ApiTransport : IDisposable
         };
     }
 
-    public void Dispose() => _pipeline.Dispose();
+    public void Dispose()
+    {
+        _pipeline.Dispose();
+        _credentials.OAuth?.Dispose();
+    }
 
     /// <summary>Ends the middleware chain with an <see cref="HttpClient"/> or a caller's handler.</summary>
     private sealed class Forwarder(HttpMessageInvoker inner, bool owned) : HttpMessageHandler
