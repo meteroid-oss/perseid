@@ -17,6 +17,9 @@ new Acme("sk_live_...");                                          // unchanged
 new Acme(null, { tokenProvider: () => oauth.accessToken() });     // OAuth2, refreshed by you
 ```
 
+Without a token, clients read `ACME_API_KEY`, and `ACME_BASE_URL` overrides the base URL. The
+prefix is the `name` in SCREAMING_SNAKE_CASE, or `env_prefix` under `[context]`.
+
 A spec without `securitySchemes` keeps sending `Authorization: Bearer <token>`. There is no
 built-in OAuth2 token exchange yet: bring a token provider.
 

@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use heck::{ToKebabCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -673,6 +673,7 @@ impl Config {
             "default_base_url": pick(&target.base_url, &self.base_url, "http://localhost"),
             "user_agent_prefix": pick(&target.user_agent, &self.user_agent, &kebab),
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
+            "env_prefix": self.name.to_shouty_snake_case(),
             "webhooks": target.webhooks.or(self.webhooks).unwrap_or(false),
             "int64": match target.int64.unwrap_or_default() {
                 Int64::Number => "number",
@@ -1281,6 +1282,14 @@ mod tests {
         ));
         let error = load("name = \"A\"\nsdks = [\"go\"]\ninternal = true\nonly = [\"a\"]\n");
         assert!(format!("{:#}", error.err().unwrap()).contains("`internal` can't add any"));
+    }
+
+    #[test]
+    fn env_prefix_is_the_shouty_name_unless_the_context_sets_it() {
+        let toml = "name = \"Real World\"\nsdks = [\"go\"]\n";
+        assert_eq!(context(toml, "go")["env_prefix"], "REAL_WORLD");
+        let toml = format!("{toml}[context]\nenv_prefix = \"RW\"\n");
+        assert_eq!(context(&toml, "go")["env_prefix"], "RW");
     }
 
     #[test]
