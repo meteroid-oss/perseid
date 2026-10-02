@@ -13,6 +13,7 @@ mod postprocessing;
 pub mod pr;
 mod prompt;
 mod reserved;
+pub mod samples;
 pub mod scaffold;
 pub mod sizing;
 pub mod spec;

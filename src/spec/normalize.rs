@@ -416,9 +416,13 @@ fn normalize_operation(
 
 /// Renames the schemas whose type name is not usable in the SDK: `Upload` becoming `UploadModel`
 /// when the SDK has its own, `3DModel` becoming `N3dModel` as identifiers cannot start with a digit.
-pub(super) fn rename_reserved_schemas(doc: &mut Value, reserved: &BTreeSet<String>) {
+/// Returns the renames made, by schema name.
+pub(super) fn rename_reserved_schemas(
+    doc: &mut Value,
+    reserved: &BTreeSet<String>,
+) -> BTreeMap<String, String> {
     let Some(Value::Object(schemas)) = doc.pointer("/components/schemas") else {
-        return;
+        return BTreeMap::new();
     };
     let mut taken: BTreeSet<String> = schemas.keys().map(|n| n.to_upper_camel_case()).collect();
     let mut renames = BTreeMap::new();
@@ -437,7 +441,7 @@ pub(super) fn rename_reserved_schemas(doc: &mut Value, reserved: &BTreeSet<Strin
         renames.insert(name.clone(), candidate);
     }
     if renames.is_empty() {
-        return;
+        return renames;
     }
     if let Some(Value::Object(schemas)) = doc.pointer_mut("/components/schemas") {
         let renamed = std::mem::take(schemas)
@@ -447,6 +451,7 @@ pub(super) fn rename_reserved_schemas(doc: &mut Value, reserved: &BTreeSet<Strin
         *schemas = renamed;
     }
     rename_references(doc, &renames);
+    renames
 }
 
 fn rename_references(value: &mut Value, renames: &BTreeMap<String, String>) {

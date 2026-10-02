@@ -2464,3 +2464,159 @@ fn nullable_items_values_and_optional_responses_are_typed_in_every_language() {
         }
     }
 }
+
+fn run_samples(dir: &Path, extra: &[&str]) -> serde_json::Value {
+    let mut args = vec!["samples", "--out", "samples.json"];
+    args.extend_from_slice(extra);
+    let (ok, out) = perseid(dir, &args);
+    assert!(ok, "{out}");
+    serde_json::from_str(&fs::read_to_string(dir.join("samples.json")).unwrap()).unwrap()
+}
+
+fn sample<'a>(model: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+    model["samples"]
+        .as_array()?
+        .iter()
+        .find(|s| s["name"] == name)
+        .map(|s| &s["json"])
+}
+
+fn contains_null(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::Array(items) => items.iter().any(contains_null),
+        serde_json::Value::Object(map) => map.values().any(contains_null),
+        _ => false,
+    }
+}
+
+#[test]
+fn samples_cover_every_model_of_the_torture_fixture() {
+    let dir = project_from("torture.yaml", &["rust", "typescript", "go"]);
+    let samples = run_samples(dir.path(), &[]);
+    let (ok, model) = perseid(dir.path(), &["inspect"]);
+    assert!(ok, "{model}");
+    let model: serde_json::Value = serde_json::from_str(&model).unwrap();
+    let types = model["types"].as_object().unwrap();
+    assert!(!types.is_empty());
+    for name in types.keys() {
+        let entry = &samples[name];
+        assert!(entry.is_object(), "no samples of `{name}`");
+        assert!(
+            ["struct", "enum", "union", "alias"].contains(&entry["kind"].as_str().unwrap()),
+            "{name}: {entry}"
+        );
+        assert!(entry["type_name"].is_string(), "{name}");
+        for language in ["rust", "typescript", "go"] {
+            assert!(entry["names"][language].is_string(), "{name} in {language}");
+        }
+        assert!(sample(entry, "full").is_some(), "{name} has no full sample");
+        assert!(
+            sample(entry, "minimal").is_some(),
+            "{name} has no minimal sample"
+        );
+    }
+    assert_eq!(samples.as_object().unwrap().len(), types.len());
+}
+
+#[test]
+fn samples_tag_every_variant_of_a_union_with_its_discriminator() {
+    let dir = project_from("torture.yaml", &["rust"]);
+    let samples = run_samples(dir.path(), &[]);
+    for (name, tag) in [("Shape", "type"), ("Pet", "pet_type")] {
+        let union = &samples[name];
+        assert_eq!(union["kind"], "union", "{name}");
+        let variants: Vec<&serde_json::Value> = union["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["name"].as_str().unwrap().starts_with("variant_"))
+            .collect();
+        assert_eq!(variants.len(), 2, "{name}: {union}");
+        for variant in variants {
+            let expected = variant["name"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches("variant_");
+            assert_eq!(variant["json"][tag], expected, "{name}: {variant}");
+        }
+    }
+    let shape = &samples["Shape"];
+    assert_eq!(sample(shape, "variant_circle").unwrap()["type"], "circle");
+    assert_eq!(sample(shape, "variant_square").unwrap()["type"], "square");
+}
+
+#[test]
+fn samples_set_nullable_values_to_null_and_leave_optional_ones_out_of_minimal() {
+    let dir = project_from("torture.yaml", &["rust"]);
+    let samples = run_samples(dir.path(), &[]);
+    let mut with_nulls = 0;
+    for (name, entry) in samples.as_object().unwrap() {
+        if let Some(nulls) = sample(entry, "nulls") {
+            with_nulls += 1;
+            assert!(contains_null(nulls), "{name}: {nulls}");
+        }
+        for s in entry["samples"].as_array().unwrap() {
+            let sample_name = s["name"].as_str().unwrap();
+            if sample_name == "full" || sample_name == "minimal" {
+                continue;
+            }
+            assert!(
+                sample_name.starts_with("variant_")
+                    || sample_name.starts_with("value_")
+                    || sample_name.starts_with("full_pick_")
+                    || sample_name.starts_with("nulls"),
+                "{name}: unexpected sample `{sample_name}`"
+            );
+        }
+    }
+    assert!(with_nulls > 0, "no model has a nulls sample");
+    // Every sample is valid JSON of the model: objects carry their required properties, so
+    // `minimal` is never larger than `full`.
+    for (name, entry) in samples.as_object().unwrap() {
+        let (full, minimal) = (
+            sample(entry, "full").unwrap(),
+            sample(entry, "minimal").unwrap(),
+        );
+        if let (Some(full), Some(minimal)) = (full.as_object(), minimal.as_object()) {
+            assert!(
+                minimal.len() <= full.len(),
+                "{name}: {minimal:?} vs {full:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn samples_are_deterministic_and_need_no_project_file() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        "tests/fixtures/torture.yaml",
+        dir.path().join("openapi.yaml"),
+    )
+    .unwrap();
+    let first = run_samples(dir.path(), &["--spec", "openapi.yaml"]);
+    let text = fs::read_to_string(dir.path().join("samples.json")).unwrap();
+    let second = run_samples(dir.path(), &["--spec", "openapi.yaml"]);
+    assert_eq!(first, second);
+    assert_eq!(
+        text,
+        fs::read_to_string(dir.path().join("samples.json")).unwrap()
+    );
+    for language in ["rust", "typescript", "python", "go", "java", "csharp"] {
+        assert!(first["Shape"]["names"][language].is_string(), "{language}");
+    }
+    let (ok, out) = perseid(dir.path(), &["samples", "--out", "x.json"]);
+    assert!(!ok, "without a spec or a project file: {out}");
+}
+
+#[test]
+fn samples_command_is_hidden_from_help() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ok, out) = perseid(dir.path(), &["--help"]);
+    assert!(ok, "{out}");
+    assert!(
+        !out.lines().any(|l| l.trim_start().starts_with("samples")),
+        "{out}"
+    );
+}

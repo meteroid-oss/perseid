@@ -93,6 +93,14 @@ pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
 }
 
 pub(crate) fn api(spec: &str, filters: &Filters) -> Result<Api> {
+    Ok(api_with_renames(spec, filters)?.0)
+}
+
+/// The API model, and the schemas renamed for `filters.reserved` (spec name to model name).
+pub(crate) fn api_with_renames(
+    spec: &str,
+    filters: &Filters,
+) -> Result<(Api, BTreeMap<String, String>)> {
     let mut doc: Value = serde_json::from_str(spec).context("the spec is not valid JSON")?;
     if doc["openapi"]
         .as_str()
@@ -102,7 +110,7 @@ pub(crate) fn api(spec: &str, filters: &Filters) -> Result<Api> {
     }
     upgrade::boolean_schemas(&mut doc);
     normalize::normalize(&mut doc)?;
-    normalize::rename_reserved_schemas(&mut doc, &filters.reserved);
+    let renames = normalize::rename_reserved_schemas(&mut doc, &filters.reserved);
     let raw = doc;
     // `OpenApi` borrows its version string, so it cannot deserialize from a `Value`.
     let doc = serde_json::to_string(&raw)?;
@@ -111,13 +119,14 @@ pub(crate) fn api(spec: &str, filters: &Filters) -> Result<Api> {
     let webhooks = webhooks(&spec);
     // A spec of only webhooks and components still yields models, with a client without resources.
     let paths = spec.paths.take().unwrap_or_default();
-    Api::new(
+    let api = Api::new(
         paths,
         &mut spec.components.take().unwrap_or_default(),
         &webhooks,
         &raw,
         filters,
-    )
+    )?;
+    Ok((api, renames))
 }
 
 fn webhooks(spec: &OpenApi) -> Vec<String> {

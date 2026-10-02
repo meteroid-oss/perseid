@@ -195,6 +195,18 @@ enum Command {
     /// Print the JSON Schema of perseid.toml.
     #[command(hide = true)]
     Schema,
+    /// Write schema-derived sample JSON of every model, with the type name each language
+    /// generates, for round-trip tests of the SDKs.
+    #[command(hide = true)]
+    Samples {
+        /// OpenAPI document to read, path or URL, over `spec` of perseid.toml (which is then
+        /// optional).
+        #[arg(long)]
+        spec: Option<String>,
+        /// The JSON file to write.
+        #[arg(long)]
+        out: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -420,6 +432,34 @@ fn run(cli: Cli) -> Result<ExitCode> {
             );
         }
         Command::Schema => print!("{}", config::json_schema()),
+        Command::Samples { spec, out } => {
+            let samples = match Config::load(&config_path) {
+                Ok((config, root)) => {
+                    let location = spec.unwrap_or_else(|| config.spec.clone());
+                    let text = generate::load_spec(&config, &root, Some(&location))?;
+                    let targets: Vec<_> = config
+                        .sdks(&[])?
+                        .iter()
+                        .map(|sdk| (sdk.language, config.filters_for(sdk)))
+                        .collect();
+                    perseid::samples::run(&text, &config.filters(), &targets)?
+                }
+                Err(error) => {
+                    let Some(location) = spec else {
+                        return Err(error);
+                    };
+                    let (text, base, targets) = perseid::samples::without_config(&location, &cwd)?;
+                    perseid::samples::run(&text, &base, &targets)?
+                }
+            };
+            std::fs::write(
+                cwd.join(&out),
+                serde_json::to_string_pretty(&samples)? + "\n",
+            )
+            .with_context(|| format!("writing {}", out.display()))?;
+            let models = samples.as_object().map_or(0, |m| m.len());
+            println!("wrote the samples of {models} models to {}", out.display());
+        }
         Command::Tools { command } => tools_command(&config_path, &cwd, command)?,
         Command::Inspect { language, spec } => {
             let (config, root) = Config::load(&config_path)?;
