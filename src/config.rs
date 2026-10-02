@@ -899,6 +899,7 @@ fn reserved_type_names(language: &str, client: &str) -> BTreeSet<String> {
         // Go declares everything in one directory, where file names count too.
         "go" => &[
             "ApiError",
+            "AutoPager",
             "BasicAuth",
             "Client",
             "Collections",
@@ -910,7 +911,6 @@ fn reserved_type_names(language: &str, client: &str) -> BTreeSet<String> {
             "Nullable",
             "Options",
             "Page",
-            "Pager",
             "Request",
             "RequestAuth",
             "RequestError",
