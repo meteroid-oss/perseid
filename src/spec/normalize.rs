@@ -1442,7 +1442,18 @@ impl Promoter {
 fn discriminator_values<'a>(
     variant: &'a Value,
     property: &str,
-    resolve: impl Fn(&str) -> Option<&'a Value>,
+    resolve: impl Fn(&str) -> Option<&'a Value> + Copy,
+) -> Vec<String> {
+    discriminator_values_at(variant, property, resolve, 8)
+}
+
+/// [discriminator_values], following `$ref` parts of `allOf` (a refined variant) at most `depth`
+/// levels deep.
+fn discriminator_values_at<'a>(
+    variant: &'a Value,
+    property: &str,
+    resolve: impl Fn(&str) -> Option<&'a Value> + Copy,
+    depth: usize,
 ) -> Vec<String> {
     let own = variant.get("properties").and_then(|p| p.get(property));
     let parts = variant.get("allOf").and_then(Value::as_array);
@@ -1450,7 +1461,8 @@ fn discriminator_values<'a>(
         .into_iter()
         .flatten()
         .filter_map(|p| p.get("properties")?.get(property));
-    own.into_iter()
+    let values = own
+        .into_iter()
         .chain(inherited)
         .filter_map(|schema| match schema.get("$ref").and_then(Value::as_str) {
             Some(target) => resolve(target),
@@ -1465,6 +1477,18 @@ fn discriminator_values<'a>(
                 .collect(),
             _ => vec![],
         })
+        .find(|values| !values.is_empty());
+    if let Some(values) = values {
+        return values;
+    }
+    if depth == 0 {
+        return vec![];
+    }
+    parts
+        .into_iter()
+        .flatten()
+        .filter_map(|p| resolve(p.get("$ref")?.as_str()?))
+        .map(|base| discriminator_values_at(base, property, resolve, depth - 1))
         .find(|values| !values.is_empty())
         .unwrap_or_default()
 }
@@ -2190,6 +2214,25 @@ mod tests {
                 "queued": "#/components/schemas/RunQueuedVariant",
                 "in_progress": "#/components/schemas/RunQueuedVariant"
             })
+        );
+    }
+
+    #[test]
+    fn refined_variants_are_mapped_from_the_discriminator_enum_of_their_base() {
+        let doc = normalized(json!({ "components": { "schemas": {
+            "Grader": {
+                "oneOf": [{ "$ref": "#/components/schemas/EvalStringCheck" }],
+                "discriminator": { "propertyName": "type" }
+            },
+            "StringCheck": { "properties": { "type": { "enum": ["string_check"] } } },
+            "EvalStringCheck": { "allOf": [
+                { "$ref": "#/components/schemas/StringCheck" },
+                { "type": "object", "description": "Refined." }
+            ] }
+        } } }));
+        assert_eq!(
+            doc["components"]["schemas"]["Grader"]["discriminator"]["mapping"],
+            json!({ "string_check": "#/components/schemas/EvalStringCheck" })
         );
     }
 
