@@ -26,25 +26,10 @@
 {% endfor -%}
 {% endfor -%}
 {% endfor -%}
-// this file is @generated
-#pragma warning disable CS0612, CS0618 // generated code may use deprecated API
-#pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
-{% if bodies.aliases -%}
-using System;
-{% endif -%}
-using System.Collections.Generic;
-{% if bodies.aliases -%}
-using System.Text.Json;
-{% endif -%}
-using System.Text.Json.Nodes;
-using System.Text.Json.Serialization;
-
-namespace {{ sdk.package_name }}.Models;
-
-/// <summary>
-/// Source-generated JSON metadata for every model: trimming and native AOT safe. Pass
-/// <c>{{ sdk.client_name }}JsonContext.Default.Options</c> to <c>JsonSerializer</c> to (de)serialize models yourself.
-/// </summary>
+{#- The attributes and declaration of the context, rendered first: its usings depend on the types it registers. -#}
+{% set generic = namespace(types=[]) -%}
+{% set expandables = namespace(list=[]) -%}
+{% set context_class -%}
 [JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 {#- Always registered: a context without any `JsonSerializable` gets no generated members and fails to compile. #}
 [JsonSerializable(typeof(JsonNode))]
@@ -64,7 +49,6 @@ namespace {{ sdk.package_name }}.Models;
 {% endif -%}
 {% endif -%}
 {% endfor -%}
-{% set generic = namespace(types=[]) -%}
 {#- `List<X>` and `X?` would take the context names of models named `ListX` and `NullableX`. -#}
 {% set names = namespace(models=[], structs=[]) -%}
 {% for _, type in api.types | items if type.kind not in ["string_alias", "alias"] -%}
@@ -82,7 +66,6 @@ namespace {{ sdk.package_name }}.Models;
 [JsonSerializable(typeof({{ name[8:] }}?), TypeInfoPropertyName = "Json{{ name }}")]
 {% endif -%}
 {% endfor -%}
-{% set expandables = namespace(list=[]) -%}
 {% set taken = api.types | list | map("to_upper_camel_case") | list -%}
 {% for _, type in api.types | items if type.kind in ["struct", "struct_enum"] -%}
 {% set type_name = type.name | to_upper_camel_case -%}
@@ -173,6 +156,27 @@ namespace {{ sdk.package_name }}.Models;
 {% endfor -%}
 {% endfor -%}
 public sealed partial class {{ sdk.client_name }}JsonContext : JsonSerializerContext { }
+{%- endset -%}
+// this file is @generated
+#pragma warning disable CS0612, CS0618 // generated code may use deprecated API
+#pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
+{% if bodies.aliases or "DateTimeOffset" in context_class -%}
+using System;
+{% endif -%}
+using System.Collections.Generic;
+{% if bodies.aliases -%}
+using System.Text.Json;
+{% endif -%}
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+
+namespace {{ sdk.package_name }}.Models;
+
+/// <summary>
+/// Source-generated JSON metadata for every model: trimming and native AOT safe. Pass
+/// <c>{{ sdk.client_name }}JsonContext.Default.Options</c> to <c>JsonSerializer</c> to (de)serialize models yourself.
+/// </summary>
+{{ context_class }}
 {%- for union, cases in expandables.list %}
 
 public abstract partial record {{ union }}
