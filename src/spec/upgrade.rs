@@ -100,7 +100,7 @@ fn walk_slots(value: &mut Value) {
 /// Keys of a schema holding named schemas (or, for `responses`, named responses) rather than
 /// being a schema themselves, so that a property called `enum` or a response `default` is not
 /// mistaken for a keyword.
-const NAME_MAPS: [&str; 10] = [
+pub(super) const NAME_MAPS: [&str; 10] = [
     "properties",
     "patternProperties",
     "$defs",
@@ -113,7 +113,7 @@ const NAME_MAPS: [&str; 10] = [
     "content",
 ];
 /// Keys holding values of the API rather than schemas.
-const LITERALS: [&str; 5] = ["example", "examples", "default", "enum", "const"];
+pub(super) const LITERALS: [&str; 5] = ["example", "examples", "default", "enum", "const"];
 
 /// Calls `visit` on every JSON object of the document that can be a schema, children first.
 pub(super) fn each_schema(doc: &mut Value, visit: &mut dyn FnMut(&mut Map<String, Value>)) {
@@ -376,7 +376,8 @@ fn boolean_schema(value: &mut Value, at: &str) {
     }
 }
 
-fn walk(value: &mut Value) {
+/// Upgrades the schemas below `value`, a 3.0 document or a part of one.
+pub(super) fn walk(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, child) in map.iter_mut() {
@@ -403,7 +404,8 @@ fn walk(value: &mut Value) {
     }
 }
 
-fn schema(value: &mut Value) {
+/// Upgrades `value`, a 3.0 schema, with the schemas it contains.
+pub(super) fn schema(value: &mut Value) {
     let Value::Object(map) = value else { return };
     for key in SCHEMA_MAPS {
         for s in map

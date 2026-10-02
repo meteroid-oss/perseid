@@ -1,5 +1,7 @@
 //! Bundles `$ref`s to other documents into the main one: each referenced schema is hoisted into
 //! `components.schemas` under a name that collides with none, and the reference points to it.
+//! Other referenced objects (path items, responses, parameters, ...) are inlined where they are
+//! referenced.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -12,8 +14,10 @@ use serde_json::{Map, Value};
 use super::{is_url, load, upgrade};
 
 /// Hoists every schema the document references from another file or URL, resolved from `location`.
-pub(super) fn bundle(doc: &mut Value, location: &str, root: &Path) -> Result<()> {
-    if !has_external(doc) {
+/// `from_3_0` tells that the main document was OpenAPI 3.0, so that the schemas of plain files it
+/// references are upgraded as its own were.
+pub(super) fn bundle(doc: &mut Value, location: &str, root: &Path, from_3_0: bool) -> Result<()> {
+    if !has_external(doc, false) {
         return Ok(());
     }
     let taken = doc
@@ -21,14 +25,44 @@ pub(super) fn bundle(doc: &mut Value, location: &str, root: &Path) -> Result<()>
         .and_then(Value::as_object)
         .map(|schemas| schemas.keys().cloned().collect())
         .unwrap_or_default();
+    let main = normalize(location);
     let mut bundler = Bundler {
         root,
+        main: main.clone(),
+        from_3_0,
         docs: BTreeMap::new(),
         names: BTreeMap::new(),
         taken,
         schemas: Map::new(),
+        inlining: Vec::new(),
     };
-    bundler.rewrite(doc, &normalize(location), true)?;
+    // A component that is only a reference to another file (a split layout) takes the referenced
+    // schema under its own name, which other references to the same schema reuse.
+    let mut aliases = Vec::new();
+    for (name, schema) in doc
+        .pointer("/components/schemas")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+    {
+        let Some(Value::String(reference)) = schema.get("$ref") else {
+            continue;
+        };
+        if schema.as_object().is_some_and(|s| s.len() > 1) || reference.starts_with('#') {
+            continue;
+        }
+        let key = bundler.locate(reference, &main);
+        if key.0 != main && !bundler.names.contains_key(&key) {
+            bundler.names.insert(key.clone(), name.clone());
+            aliases.push((name.clone(), key));
+        }
+    }
+    for (name, (location, fragment)) in aliases {
+        let mut target = bundler.target(&location, &fragment, true)?;
+        bundler.rewrite(&mut target, &location, false, true)?;
+        doc["components"]["schemas"][&name] = target;
+    }
+    bundler.rewrite(doc, &main, true, false)?;
     if bundler.schemas.is_empty() {
         return Ok(());
     }
@@ -51,58 +85,111 @@ pub(super) fn bundle(doc: &mut Value, location: &str, root: &Path) -> Result<()>
     Ok(())
 }
 
-fn skipped(key: &str) -> bool {
-    key.starts_with("x-") || key.starts_with("example")
+/// Keys whose values are examples, defaults or extensions rather than parts of the API, so a
+/// `$ref` in them is not followed. Keys of a map of names (`names`) are never skipped: a property
+/// can be called `example`.
+fn skipped(key: &str, names: bool) -> bool {
+    !names && (key.starts_with("x-") || upgrade::LITERALS.contains(&key))
 }
 
-fn has_external(value: &Value) -> bool {
+/// Whether the children of `key` are named entries (properties, responses, media types, ...).
+fn names_below(key: &str, names: bool) -> bool {
+    !names && upgrade::NAME_MAPS.contains(&key)
+}
+
+fn has_external(value: &Value, names: bool) -> bool {
     match value {
         Value::Object(map) => map.iter().any(|(key, child)| {
-            if key == "$ref" {
+            if key == "$ref" && !names {
                 child.as_str().is_some_and(|r| !r.starts_with('#'))
             } else {
-                !skipped(key) && has_external(child)
+                !skipped(key, names) && has_external(child, names_below(key, names))
             }
         }),
-        Value::Array(items) => items.iter().any(has_external),
+        Value::Array(items) => items.iter().any(|i| has_external(i, false)),
         _ => false,
     }
 }
 
 struct Bundler<'a> {
     root: &'a Path,
-    /// Loaded documents by location.
-    docs: BTreeMap<String, Value>,
+    /// Location of the main document.
+    main: String,
+    from_3_0: bool,
+    /// Loaded documents by location, and whether each is an OpenAPI document (already upgraded).
+    docs: BTreeMap<String, (Value, bool)>,
     /// Hoisted component name by (location, fragment).
     names: BTreeMap<(String, String), String>,
     taken: BTreeSet<String>,
     schemas: Map<String, Value>,
+    /// The (location, fragment) being inlined, to reject an object that contains itself.
+    inlining: Vec<(String, String)>,
 }
 
 impl Bundler<'_> {
     /// Points the references in `value`, which lives in the document at `current`, at components
-    /// of the main document. Local references of the main document stay as they are.
-    fn rewrite(&mut self, value: &mut Value, current: &str, main: bool) -> Result<()> {
+    /// of the main document. Local references of the main document stay as they are. `schema`
+    /// tells whether `value` is a schema: a reference elsewhere (to a path item, a response, ...)
+    /// is replaced by the object it points to.
+    fn rewrite(
+        &mut self,
+        value: &mut Value,
+        current: &str,
+        main: bool,
+        schema: bool,
+    ) -> Result<()> {
+        self.walk(value, current, main, schema, false)
+    }
+
+    fn walk(
+        &mut self,
+        value: &mut Value,
+        current: &str,
+        main: bool,
+        schema: bool,
+        names: bool,
+    ) -> Result<()> {
         match value {
             Value::Object(map) => {
-                if let Some(Value::String(reference)) = map.get("$ref")
+                if !names
+                    && let Some(Value::String(reference)) = map.get("$ref")
                     && !(main && reference.starts_with('#'))
                 {
-                    let name = self.hoist(&reference.clone(), current)?;
-                    map.insert(
-                        "$ref".into(),
-                        Value::String(format!("#/components/schemas/{name}")),
-                    );
+                    let reference = reference.clone();
+                    if schema {
+                        let target = self.hoist(&reference, current)?;
+                        map.insert("$ref".into(), Value::String(target));
+                    } else {
+                        match self.inline(&reference, current)? {
+                            Ok(Value::Object(mut target)) => {
+                                // Siblings of the reference (a `summary`, a `description`) win.
+                                map.remove("$ref");
+                                target.extend(std::mem::take(map));
+                                *map = target;
+                                return Ok(());
+                            }
+                            Ok(target) => {
+                                *value = target;
+                                return Ok(());
+                            }
+                            Err(local) => {
+                                map.insert("$ref".into(), Value::String(local));
+                            }
+                        }
+                    }
                 }
                 for (key, child) in map.iter_mut() {
-                    if key != "$ref" && !skipped(key) {
-                        self.rewrite(child, current, main)?;
+                    if names {
+                        self.walk(child, current, main, schema, false)?;
+                    } else if key != "$ref" && !skipped(key, false) {
+                        let schema = schema || key == "schema" || key == "schemas";
+                        self.walk(child, current, main, schema, names_below(key, false))?;
                     }
                 }
             }
             Value::Array(items) => {
                 for item in items {
-                    self.rewrite(item, current, main)?;
+                    self.walk(item, current, main, schema, false)?;
                 }
             }
             _ => {}
@@ -110,17 +197,77 @@ impl Bundler<'_> {
         Ok(())
     }
 
-    /// Adds what `reference` points to, with what it references in turn, to the hoisted schemas.
-    fn hoist(&mut self, reference: &str, current: &str) -> Result<String> {
+    /// The (location, fragment) `reference`, seen from the document at `current`, points to.
+    fn locate(&self, reference: &str, current: &str) -> (String, String) {
         let (file, fragment) = reference.split_once('#').unwrap_or((reference, ""));
         let location = if file.is_empty() {
             current.to_owned()
         } else {
             join(current, file)
         };
-        let key = (location.clone(), fragment.to_owned());
+        (location, fragment.to_owned())
+    }
+
+    /// What `fragment` of the document at `location` holds, upgraded from 3.0 when the main
+    /// document was 3.0 and the document is a plain file of schemas or objects.
+    fn target(&mut self, location: &str, fragment: &str, schema: bool) -> Result<Value> {
+        let reference = format!("{location}#{fragment}");
+        if !self.docs.contains_key(location) {
+            let mut other = load(location, self.root).with_context(|| {
+                format!(
+                    "resolving external reference `{reference}` (to avoid it, bundle the spec \
+                     first, for example with `redocly bundle`)"
+                )
+            })?;
+            let openapi = other.get("openapi").is_some() || other.get("swagger").is_some();
+            if openapi {
+                upgrade::to_3_1(&mut other).with_context(|| location.to_owned())?;
+            }
+            self.docs.insert(location.to_owned(), (other, openapi));
+        }
+        let (doc, openapi) = &self.docs[location];
+        let mut target = doc
+            .pointer(fragment)
+            .cloned()
+            .with_context(|| format!("unresolved external reference `{reference}`"))?;
+        if self.from_3_0 && !openapi {
+            if schema {
+                upgrade::schema(&mut target);
+            } else {
+                upgrade::walk(&mut target);
+            }
+        }
+        Ok(target)
+    }
+
+    /// The object `reference` points to, with its own references rewritten, or the local
+    /// reference to use when it points into the main document.
+    fn inline(&mut self, reference: &str, current: &str) -> Result<Result<Value, String>> {
+        let (location, fragment) = self.locate(reference, current);
+        if location == self.main {
+            return Ok(Err(format!("#{fragment}")));
+        }
+        let key = (location.clone(), fragment.clone());
+        if self.inlining.contains(&key) {
+            bail!("external reference `{reference}` contains itself");
+        }
+        let mut target = self.target(&location, &fragment, false)?;
+        self.inlining.push(key);
+        self.rewrite(&mut target, &location, false, false)?;
+        self.inlining.pop();
+        Ok(Ok(target))
+    }
+
+    /// Adds the schema `reference` points to, with what it references in turn, to the hoisted
+    /// schemas, and returns the local reference to it.
+    fn hoist(&mut self, reference: &str, current: &str) -> Result<String> {
+        let (location, fragment) = self.locate(reference, current);
+        if location == self.main {
+            return Ok(format!("#{fragment}"));
+        }
+        let key = (location.clone(), fragment.clone());
         if let Some(name) = self.names.get(&key) {
-            return Ok(name.clone());
+            return Ok(format!("#/components/schemas/{name}"));
         }
         if fragment.starts_with("/components/") && !fragment.starts_with("/components/schemas/") {
             bail!(
@@ -128,27 +275,12 @@ impl Bundler<'_> {
                  bundle the spec first (for example with `redocly bundle`)"
             );
         }
-        if !self.docs.contains_key(&location) {
-            let mut other = load(&location, self.root).with_context(|| {
-                format!(
-                    "resolving external reference `{reference}` (to avoid it, bundle the spec \
-                     first, for example with `redocly bundle`)"
-                )
-            })?;
-            if other.get("openapi").is_some() || other.get("swagger").is_some() {
-                upgrade::to_3_1(&mut other).with_context(|| location.clone())?;
-            }
-            self.docs.insert(location.clone(), other);
-        }
-        let mut target = self.docs[&location]
-            .pointer(fragment)
-            .cloned()
-            .with_context(|| format!("unresolved external reference `{reference}`"))?;
-        let name = self.name(&location, fragment);
+        let mut target = self.target(&location, &fragment, true)?;
+        let name = self.name(&location, &fragment);
         self.names.insert(key, name.clone());
-        self.rewrite(&mut target, &location, false)?;
+        self.rewrite(&mut target, &location, false, true)?;
         self.schemas.insert(name.clone(), target);
-        Ok(name)
+        Ok(format!("#/components/schemas/{name}"))
     }
 
     fn name(&mut self, location: &str, fragment: &str) -> String {
@@ -293,7 +425,7 @@ mod tests {
                     "$ref": "sub/other.json#/components/schemas/Ext" } } } } } } } },
             "components": { "schemas": { "Inner": { "type": "boolean" } } }
         });
-        bundle(&mut doc, "spec.json", dir.path()).unwrap();
+        bundle(&mut doc, "spec.json", dir.path(), false).unwrap();
         let schema =
             &doc["paths"]["/x"]["get"]["responses"]["200"]["content"]["application/json"]["schema"];
         assert_eq!(schema["$ref"], "#/components/schemas/Ext");
@@ -311,6 +443,122 @@ mod tests {
         assert_eq!(schemas["Shared"], json!({ "type": "integer" }));
     }
 
+    fn write(dir: &Path, path: &str, value: &Value) {
+        let path = dir.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, value.to_string()).unwrap();
+    }
+
+    #[test]
+    fn referenced_path_items_and_responses_are_inlined() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "paths/pets.json",
+            &json!({ "get": { "responses": {
+                "200": { "description": "ok", "content": { "application/json": {
+                    "schema": { "$ref": "../schemas/Pet.json" } } } },
+                "404": { "$ref": "../responses/NotFound.json" }
+            } } }),
+        );
+        write(
+            dir.path(),
+            "responses/NotFound.json",
+            &json!({ "description": "not found", "content": { "application/json": {
+                "schema": { "$ref": "#/Body" } } }, "Body": { "type": "string" } }),
+        );
+        write(dir.path(), "schemas/Pet.json", &json!({ "type": "object" }));
+        let mut doc = json!({ "paths": {
+            "/pets": { "$ref": "paths/pets.json", "summary": "Pets" }
+        } });
+        bundle(&mut doc, "spec.json", dir.path(), false).unwrap();
+        let item = &doc["paths"]["/pets"];
+        assert_eq!(item["summary"], "Pets");
+        assert!(item.get("$ref").is_none(), "{item}");
+        let responses = &item["get"]["responses"];
+        assert_eq!(
+            responses["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/Pet"
+        );
+        assert_eq!(responses["404"]["description"], "not found");
+        assert_eq!(
+            responses["404"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/Body"
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["Body"],
+            json!({ "type": "string" })
+        );
+    }
+
+    #[test]
+    fn plain_schema_files_of_a_3_0_spec_are_upgraded() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "Nul.json",
+            &json!({ "type": "string", "nullable": true }),
+        );
+        let mut doc = json!({ "components": { "schemas": { "Thing": { "properties": {
+            "n": { "$ref": "Nul.json" } } } } } });
+        bundle(&mut doc, "spec.json", dir.path(), true).unwrap();
+        assert_eq!(
+            doc["components"]["schemas"]["Nul"],
+            json!({ "type": ["string", "null"] })
+        );
+    }
+
+    #[test]
+    fn properties_named_like_skipped_keywords_are_followed() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "Ex.json", &json!({ "type": "string" }));
+        let mut doc = json!({ "components": { "schemas": { "Thing": { "properties": {
+            "exampleValue": { "$ref": "Ex.json" },
+            "example": { "$ref": "Ex.json" }
+        }, "example": { "$ref": "nope.json" } } } } });
+        bundle(&mut doc, "spec.json", dir.path(), false).unwrap();
+        let properties = &doc["components"]["schemas"]["Thing"]["properties"];
+        assert_eq!(
+            properties["exampleValue"]["$ref"],
+            "#/components/schemas/Ex"
+        );
+        assert_eq!(properties["example"]["$ref"], "#/components/schemas/Ex");
+    }
+
+    #[test]
+    fn split_components_keep_their_names_and_back_references_reach_the_main_document() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "schemas/Pet.json",
+            &json!({ "type": "object", "properties": {
+                "lastError": { "$ref": "../openapi.json#/components/schemas/Error" } } }),
+        );
+        let mut doc = json!({
+            "paths": { "/pets": { "get": { "responses": { "200": { "description": "ok",
+                "content": { "application/json": { "schema": {
+                    "$ref": "schemas/Pet.json" } } } } } } } },
+            "components": { "schemas": {
+                "Pet": { "$ref": "./schemas/Pet.json" },
+                "Error": { "type": "object" }
+            } }
+        });
+        bundle(&mut doc, "openapi.json", dir.path(), false).unwrap();
+        let schemas = doc["components"]["schemas"].as_object().unwrap();
+        let mut names = schemas.keys().collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, ["Error", "Pet"], "{schemas:?}");
+        assert_eq!(
+            schemas["Pet"]["properties"]["lastError"]["$ref"],
+            "#/components/schemas/Error"
+        );
+        assert_eq!(
+            doc["paths"]["/pets"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+                ["$ref"],
+            "#/components/schemas/Pet"
+        );
+    }
+
     #[test]
     fn missing_files_name_the_reference_and_suggest_bundling() {
         let dir = tempfile::tempdir().unwrap();
@@ -318,7 +566,7 @@ mod tests {
             "application/json": { "schema": { "$ref": "nope.yaml#/X" } } } } } } } } });
         let error = format!(
             "{:#}",
-            bundle(&mut doc, "spec.json", dir.path()).unwrap_err()
+            bundle(&mut doc, "spec.json", dir.path(), false).unwrap_err()
         );
         assert!(
             error.contains("nope.yaml#/X") && error.contains("redocly bundle"),

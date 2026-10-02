@@ -90,8 +90,11 @@ fn is_url(location: &str) -> bool {
 /// References to other files are bundled into its components.
 pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
     let mut value = load(location, root)?;
+    let from_3_0 = value["openapi"]
+        .as_str()
+        .is_some_and(|v| v.starts_with("3.0"));
     upgrade::to_3_1(&mut value).with_context(|| location.to_owned())?;
-    external::bundle(&mut value, location, root)?;
+    external::bundle(&mut value, location, root, from_3_0)?;
     Ok(serde_json::to_string(&value)?)
 }
 
