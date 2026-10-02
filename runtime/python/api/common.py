@@ -171,7 +171,9 @@ class EncodedPathParam(str):
 
 
 def _quote_unreserved(text: str) -> str:
-    return urllib.parse.quote(text, safe="")
+    quoted = urllib.parse.quote(text, safe="")
+    # A `.` or `..` segment would be resolved away by the URL, leaving the resource path.
+    return quoted.replace(".", "%2E") if quoted in (".", "..") else quoted
 
 
 def _path_text(value: t.Any) -> str:
@@ -458,7 +460,7 @@ class ApiBase:
                 **{
                     key: value
                     if isinstance(value, EncodedPathParam)
-                    else urllib.parse.quote(str(value), safe="")
+                    else _quote_unreserved(str(value))
                     for key, value in spec.path_params.items()
                 }
             )

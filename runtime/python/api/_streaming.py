@@ -112,7 +112,9 @@ class _Parser:
             if not self._data:
                 return None
             data, self._data = self._data[:-1], ""
-            return SseEvent(event, data, self.id, self.retry)
+            # The reconnection delay applies to the event it arrives with only.
+            retry, self.retry = self.retry, None
+            return SseEvent(event, data, self.id, retry)
         if line.startswith(":"):
             return None
         name, _, value = line.partition(":")
