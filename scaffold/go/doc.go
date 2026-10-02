@@ -18,7 +18,8 @@
 // [*APIError]: errors.Is matches it against status sentinels such as
 // [ErrNotFound], and its Body holds the decoded error body.
 //
-// List operations return a [Page], with the way to the next one, and have a
-// ...AutoPaging twin returning an [AutoPager] over every item. Event streams
-// are a [Stream] of decoded events, or an [EventStream] of raw ones.
+// List operations return a [Page], with its items, the whole response in Body
+// and the way to the next page, and have a ...AutoPaging twin returning an
+// [AutoPager] over every item. Event streams are a [Stream] of decoded events,
+// or an [EventStream] of raw ones.
 package @@PACKAGE_NAME@@

@@ -143,9 +143,10 @@ ErrNotFound)` (and `ErrUnauthorized`, `ErrRateLimited`, `ErrServer`...) tests th
 JSON), `ErrorBody[T](err)` decodes it as any schema and `APIError.Detail()` as the one most
 operations share.
 
-List operations return a `*Page[T]` with `Items`, `HasNextPage()` and `NextPage(ctx)`, and their
-`ListAutoPaging` twin an `*AutoPager[T]` over every item (`Next`/`Current`/`Err`, or
-`range pager.All()`), as in openai-go.
+List operations return a page, `*CustomersListPage` (an alias of `*Page[Customer, *CustomerList]`)
+with `Items`, `Body` (the whole typed response, for totals), `HasNextPage()` and `NextPage(ctx)`,
+and their `ListAutoPaging` twin an `*AutoPager[Customer]` over every item
+(`Next`/`Current`/`Err`, or `range pager.All()`), as in openai-go.
 Event streams with a schema are a `*Stream[T]` of decoded events ending at `[DONE]` (`Event()`
 gives the raw `SSEEvent`), others an `*EventStream`; lines are capped at 1 MiB.
 
