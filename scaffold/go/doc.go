@@ -6,6 +6,10 @@
 //
 //	client := @@PACKAGE_NAME@@.New("", nil) // reads @@ENV_PREFIX@@_API_KEY
 //
+// @@ENV_PREFIX@@_BASE_URL, or Options.ServerURL, overrides the API's default
+// server. When the API declares none, calls fail with a [*RequestError] until
+// one of them is set.
+//
 // Optional request fields and query parameters are pointers, see [Ptr]: a nil
 // pointer means "not sent". Required fields and parameters are plain values.
 // Models keep the properties this SDK version does not know in ExtraFields.
@@ -14,7 +18,7 @@
 // [*APIError]: errors.Is matches it against status sentinels such as
 // [ErrNotFound], and its Body holds the decoded error body.
 //
-// List operations have a ...Page method returning a [Page], and a ...Iter
-// method returning a [Pager] over every item. Event streams are a [Stream] of
-// decoded events, or an [EventStream] of raw ones.
+// List operations return a [Page], with the way to the next one, and have a
+// ...AutoPaging twin returning an [AutoPager] over every item. Event streams
+// are a [Stream] of decoded events, or an [EventStream] of raw ones.
 package @@PACKAGE_NAME@@

@@ -7,8 +7,8 @@ import (
 	"iter"
 )
 
-// Page is one page of a paginated list operation: its items, and the way to
-// the page after it.
+// Page is one page of a paginated list operation, as its List method returns
+// it: its items, and the way to the page after it.
 //
 //	for page != nil {
 //		for _, item := range page.Items {
@@ -39,10 +39,10 @@ func (p *Page[T]) NextPage(ctx context.Context) (*Page[T], error) {
 	return p.next(ctx)
 }
 
-// Pager iterates over every item of a paginated list operation, fetching each
-// page once the previous one is consumed: loop on Next, then check Err. With
-// Go 1.23 or later, range over [Pager.All] instead.
-type Pager[T any] struct {
+// AutoPager iterates over every item of a paginated list operation, as its
+// ListAutoPaging method returns it, fetching each page once the previous one
+// is consumed: loop on Next, then check Err, or range over [AutoPager.All].
+type AutoPager[T any] struct {
 	ctx     context.Context
 	first   func(ctx context.Context) (*Page[T], error)
 	page    *Page[T]
@@ -51,13 +51,13 @@ type Pager[T any] struct {
 	err     error
 }
 
-func newPager[T any](ctx context.Context, first func(ctx context.Context) (*Page[T], error)) *Pager[T] {
-	return &Pager[T]{ctx: ctx, first: first}
+func newAutoPager[T any](ctx context.Context, first func(ctx context.Context) (*Page[T], error)) *AutoPager[T] {
+	return &AutoPager[T]{ctx: ctx, first: first}
 }
 
 // Next advances to the next item. It returns false once every item has been
 // read or when a request failed, see Err.
-func (p *Pager[T]) Next() bool {
+func (p *AutoPager[T]) Next() bool {
 	for p.err == nil {
 		switch {
 		case p.first != nil:
@@ -80,17 +80,17 @@ func (p *Pager[T]) Next() bool {
 }
 
 // Current returns the item Next advanced to.
-func (p *Pager[T]) Current() T { return p.current }
+func (p *AutoPager[T]) Current() T { return p.current }
 
 // Page returns the page holding the current item, nil before the first call
 // to Next.
-func (p *Pager[T]) Page() *Page[T] { return p.page }
+func (p *AutoPager[T]) Page() *Page[T] { return p.page }
 
 // Err returns the error that stopped the iteration, if any.
-func (p *Pager[T]) Err() error { return p.err }
+func (p *AutoPager[T]) Err() error { return p.err }
 
 // All yields every item, then the error that stopped the iteration, if any.
-func (p *Pager[T]) All() iter.Seq2[T, error] {
+func (p *AutoPager[T]) All() iter.Seq2[T, error] {
 	return func(yield func(T, error) bool) {
 		for p.Next() {
 			if !yield(p.current, nil) {

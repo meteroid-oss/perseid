@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func ids[T any](t *testing.T, pager *Pager[T], id func(T) string) []string {
+func ids[T any](t *testing.T, pager *AutoPager[T], id func(T) string) []string {
 	t.Helper()
 	var out []string
 	pager.All()(func(item T, err error) bool {
@@ -47,17 +47,17 @@ func TestSmoke(t *testing.T) {
 	expect(t, status(client.Account().RetrieveHealth(ctx)), "||")
 	expect(t, status(client.Account().RetrieveMachine(ctx)), "Bearer tok||")
 	widget := func(w Widget) string { return w.ID }
-	expect(t, ids(t, client.Widgets().ListIter(ctx, nil), widget), []string{"w1", "w2", "w3"})
-	events := client.Widgets().ListEventsIter(ctx, "w1", "created", nil)
+	expect(t, ids(t, client.Widgets().ListAutoPaging(ctx, nil), widget), []string{"w1", "w2", "w3"})
+	events := client.Widgets().ListEventsAutoPaging(ctx, "w1", "created", nil)
 	expect(t, ids(t, events, func(e Event) string { return e.ID }), []string{"e1", "e2", "e3"})
-	gadgets := client.Gadgets().ListIter(ctx, nil)
+	gadgets := client.Gadgets().ListAutoPaging(ctx, nil)
 	var gadgetIds []string
 	for gadgets.Next() {
 		gadgetIds = append(gadgetIds, gadgets.Current().ID)
 	}
 	expect(t, gadgets.Err(), nil)
 	expect(t, gadgetIds, []string{"g1", "g2", "g3"})
-	expect(t, ids(t, client.Records().ListIter(ctx, nil), func(r Entry) string { return r.ID }), []string{"r1", "r2", "r3"})
+	expect(t, ids(t, client.Records().ListAutoPaging(ctx, nil), func(r Entry) string { return r.ID }), []string{"r1", "r2", "r3"})
 
 	_, err := New("", &Options{ServerURL: url}).Widgets().List(ctx, nil)
 	expect(t, errors.Is(err, ErrUnauthorized) && !errors.Is(err, ErrNotFound), true)
@@ -72,8 +72,8 @@ func TestSmoke(t *testing.T) {
 	provided := New("", &Options{ServerURL: url, TokenProvider: func(context.Context) (string, error) { return "fresh", nil }})
 	expect(t, status(provided.Account().RetrieveMachine(ctx)), "Bearer fresh||")
 	keyed := New("", &Options{ServerURL: url, APIKeys: map[string]string{"api_key": "k"}})
-	expect(t, ids(t, keyed.Widgets().ListIter(ctx, nil), widget), []string{"w1", "w2", "w3"})
-	failing := New("", &Options{ServerURL: url}).Widgets().ListIter(ctx, nil)
+	expect(t, ids(t, keyed.Widgets().ListAutoPaging(ctx, nil), widget), []string{"w1", "w2", "w3"})
+	failing := New("", &Options{ServerURL: url}).Widgets().ListAutoPaging(ctx, nil)
 	expect(t, failing.Next(), false)
 	if failing.Err() == nil {
 		t.Fatal("expected an authentication error")
@@ -86,7 +86,7 @@ func TestSmokeParity(t *testing.T) {
 	client := New("tok", &Options{ServerURL: url})
 
 	var resp *http.Response
-	page, err := client.Widgets().ListPage(ctx, nil, WithResponseInto(&resp))
+	page, err := client.Widgets().List(ctx, nil, WithResponseInto(&resp))
 	if err != nil {
 		t.Fatal(err)
 	}

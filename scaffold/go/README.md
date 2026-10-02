@@ -25,7 +25,9 @@ properties this SDK version does not know in `ExtraFields`, and send them back.
 
 `New("", nil)` reads the token from `@@ENV_PREFIX@@_API_KEY`, and `@@ENV_PREFIX@@_BASE_URL`
 overrides the default server. Explicit arguments win:
-`@@PACKAGE_NAME@@.New(token, &@@PACKAGE_NAME@@.Options{ServerURL: "https://..."})`.
+`@@PACKAGE_NAME@@.New(token, &@@PACKAGE_NAME@@.Options{ServerURL: "https://..."})`. When the API
+declares no server, `@@PACKAGE_NAME@@.DefaultServerURL` is empty and every call fails with a
+`*RequestError` naming both settings until one of them is set.
 
 ### Errors
 
@@ -46,23 +48,25 @@ case errors.As(err, &apiErr):
 
 ### Pagination
 
-List operations have a `...Iter` method iterating over every item, and a `...Page` method
-returning one page:
+A list method returns its first `*Page[T]`, and its `...AutoPaging` twin an `*AutoPager[T]`
+over every item, fetching further pages on demand:
 
 ```go
-for item, err := range client.Things().ListIter(ctx, nil).All() {
+for item, err := range client.Things().ListAutoPaging(ctx, nil).All() {
 	if err != nil {
 		return err
 	}
 	// ...
 }
 
-page, err := client.Things().ListPage(ctx, nil)
+page, err := client.Things().List(ctx, nil)
 for page != nil && err == nil {
 	// page.Items, page.HasNextPage()
 	page, err = page.NextPage(ctx)
 }
 ```
+
+Without `range`, loop on the pager's `Next()`, read `Current()`, then check `Err()`.
 
 ### Streaming
 
@@ -95,7 +99,7 @@ log.Print(resp.Header.Get("X-Request-Id"))
 Connection errors, timeouts, 408, 429 and 5xx responses are retried twice with jittered backoff,
 honoring `Retry-After` and `retry-after-ms`, when the request is idempotent or carries an
 `Idempotency-Key` (POST requests get one). Each attempt times out after `DefaultTimeout`.
-`Options` sets them for the client, and request options for one call:
+`Options` sets them for the client (`MaxRetries`, `Timeout`), and request options for one call:
 `@@PACKAGE_NAME@@.WithMaxRetries(0)`, `@@PACKAGE_NAME@@.WithTimeout(time.Minute)`,
 `@@PACKAGE_NAME@@.WithIdempotencyKey(key)`, `@@PACKAGE_NAME@@.WithHeader(name, value)`.
 `Options.Logger` logs every attempt at debug level.

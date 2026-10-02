@@ -29,11 +29,6 @@ type SSEEvent struct {
 	Retry time.Duration
 }
 
-// SseEvent is the former name of [SSEEvent].
-//
-// Deprecated: use SSEEvent.
-type SseEvent = SSEEvent
-
 // maxEventLine caps the length of one line of an event stream.
 const maxEventLine = 1 << 20
 

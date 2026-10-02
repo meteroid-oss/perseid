@@ -129,9 +129,12 @@ operation may also answer a bodiless 2xx returns nil for it, scalars as a pointe
 initialisms the Go way (`CustomerID`, `APIKey`), and the package of a multi-word name is one word
 (`realworld`). `allOf` parts are inlined into flat structs, and every struct keeps the properties
 it does not know in `ExtraFields`, sent back when encoding. Nullable optional PATCH fields are
-`*Nullable[T]`: `NewNullable(v)` sets one and `ExplicitNull[T]()` clears it (`Set` and `Null`
-remain as deprecated aliases); `IsNull()` is true only for an explicit null, not for `nil`. `DefaultTimeout` is
-`timeout` from perseid.toml, and `Options.Logger` (a `*slog.Logger`) logs every attempt.
+`*Nullable[T]`: `NewNullable(v)` sets one and `ExplicitNull[T]()` clears it; `IsNull()` is true
+only for an explicit null, not for `nil`. `DefaultTimeout` is `timeout` from perseid.toml,
+`Options.MaxRetries` the client-wide `max_retries`, and `Options.Logger` (a `*slog.Logger`) logs
+every attempt. `Options.ServerURL`, else `<ENV_PREFIX>_BASE_URL`, else `DefaultServerURL` is the
+server; when the spec and perseid.toml give none, `DefaultServerURL` is empty and every call
+fails with a `*RequestError` naming both.
 
 Every error is an `SDKError`: `*APIError` for a non-2xx response, `*TimeoutError`,
 `*TransportError` when no response came, `*DecodeError` and `*RequestError`. `errors.Is(err,
@@ -140,8 +143,9 @@ ErrNotFound)` (and `ErrUnauthorized`, `ErrRateLimited`, `ErrServer`...) tests th
 JSON), `ErrorBody[T](err)` decodes it as any schema and `APIError.Detail()` as the one most
 operations share.
 
-List operations have `ListPage`, a `*Page[T]` with `Items`, `HasNextPage()` and `NextPage(ctx)`,
-and `ListIter`, a `*Pager[T]` over every item (`Next`/`Current`/`Err`, or `range pager.All()`).
+List operations return a `*Page[T]` with `Items`, `HasNextPage()` and `NextPage(ctx)`, and their
+`ListAutoPaging` twin an `*AutoPager[T]` over every item (`Next`/`Current`/`Err`, or
+`range pager.All()`), as in openai-go.
 Event streams with a schema are a `*Stream[T]` of decoded events ending at `[DONE]` (`Event()`
 gives the raw `SSEEvent`), others an `*EventStream`; lines are capped at 1 MiB.
 

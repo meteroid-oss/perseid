@@ -13,13 +13,15 @@ import (
 
 const (
 	// DefaultServerURL is the @@CLIENT_NAME@@ API endpoint used when neither
-	// Options.ServerURL nor the @@ENV_PREFIX@@_BASE_URL environment variable is set.
+	// Options.ServerURL nor the @@ENV_PREFIX@@_BASE_URL environment variable is
+	// set. Empty when the API declares no server: calls then fail with a
+	// [*RequestError] until one of them is set.
 	DefaultServerURL = "@@DEFAULT_BASE_URL@@"
 
-	// DefaultNumRetries is how many times a request is retried when it fails
+	// DefaultMaxRetries is how many times a request is retried when it fails
 	// transiently: connection errors, timeouts, 408, 429 and 5xx responses, as
 	// long as the request is idempotent or carries an Idempotency-Key.
-	DefaultNumRetries = 2
+	DefaultMaxRetries = 2
 
 	// APIKeyEnv names the environment variable [New] reads the API token from
 	// when it is given an empty one.
@@ -49,14 +51,14 @@ type Options struct {
 	// been read. Zero selects DefaultTimeout; a negative value disables it.
 	Timeout time.Duration
 
-	// NumRetries is the number of retries attempted on transient failures,
+	// MaxRetries is the number of retries attempted on transient failures,
 	// waiting 500ms, 1s, 2s... (up to 8s) minus a random jitter, or the
 	// server's Retry-After when it is under a minute. Zero selects
-	// DefaultNumRetries and a negative value disables retries.
-	NumRetries int
+	// DefaultMaxRetries and a negative value disables retries.
+	MaxRetries int
 
 	// RetrySchedule is the delay to wait before each retry, and takes
-	// precedence over NumRetries. Set it to an empty (non-nil) slice to disable
+	// precedence over MaxRetries. Set it to an empty (non-nil) slice to disable
 	// retries entirely.
 	RetrySchedule []time.Duration
 
@@ -65,11 +67,6 @@ type Options struct {
 
 	// Logger receives a debug record for every attempt and response.
 	Logger *slog.Logger
-
-	// Debug logs every attempt and response to stderr when Logger is nil.
-	//
-	// Deprecated: set Logger, e.g. to a [slog.Logger] at debug level.
-	Debug bool
 
 	// TokenProvider is called before each request for a fresh bearer token,
 	// e.g. an OAuth2 access token. It takes precedence over the client token.
@@ -120,9 +117,6 @@ func newConfig(token string, options *Options) *config {
 		apiKeys:       opts.APIKeys,
 	}
 
-	if cfg.logger == nil && opts.Debug {
-		cfg.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	}
 	serverURL := opts.ServerURL
 	if serverURL == "" {
 		serverURL = os.Getenv(BaseURLEnv)
@@ -147,12 +141,12 @@ func newConfig(token string, options *Options) *config {
 	switch {
 	case opts.RetrySchedule != nil:
 		cfg.retrySchedule = append([]time.Duration(nil), opts.RetrySchedule...)
-	case opts.NumRetries > 0:
-		cfg.retrySchedule, cfg.jitter = exponentialBackoff(opts.NumRetries), true
-	case opts.NumRetries < 0:
+	case opts.MaxRetries > 0:
+		cfg.retrySchedule, cfg.jitter = exponentialBackoff(opts.MaxRetries), true
+	case opts.MaxRetries < 0:
 		cfg.retrySchedule = nil
 	default:
-		cfg.retrySchedule, cfg.jitter = exponentialBackoff(DefaultNumRetries), true
+		cfg.retrySchedule, cfg.jitter = exponentialBackoff(DefaultMaxRetries), true
 	}
 
 	return cfg

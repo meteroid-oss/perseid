@@ -51,9 +51,10 @@ type Client struct {
 // New builds a Client authenticated with the given API token, or with the
 // {{ sdk.env_prefix }}_API_KEY environment variable when token is empty.
 //
-// Pass nil options to use the defaults: {{ sdk.env_prefix }}_BASE_URL or
-// {{ sdk.default_base_url }} as the server, a {{ sdk.timeout | default(60) }} second timeout per attempt and
-// two retries on transient failures.
+// Pass nil options to use the defaults: {{ sdk.env_prefix }}_BASE_URL{% if sdk.default_base_url %} or
+// {{ sdk.default_base_url }}{% endif %} as the server, a {{ sdk.timeout | default(60) }} second timeout per attempt and
+// two retries on transient failures.{% if not sdk.default_base_url %} The API declares no server: without
+// Options.ServerURL or {{ sdk.env_prefix }}_BASE_URL, every call fails with a [*RequestError].{% endif %}
 func New(token string, options *Options) *Client {
 	return &Client{cfg: newConfig(token, options)}
 }

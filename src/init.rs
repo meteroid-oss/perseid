@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Result, bail, ensure};
-use heck::{ToKebabCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToShoutySnakeCase, ToUpperCamelCase};
 use serde_json::{Value, json};
 
 use crate::{
@@ -114,7 +114,8 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     let base_url = init.base_url.clone().or_else(|| server_url(&doc));
     if base_url.is_none() && readable {
         println!(
-            "! the spec has no absolute server URL: the SDKs default to http://localhost until you set `base_url`"
+            "! the spec has no absolute server URL: until you set `base_url`, clients need one passed in or from {}_BASE_URL",
+            name.to_shouty_snake_case()
         );
     }
     let quote = |v: &str| toml::Value::String(v.to_owned()).to_string();

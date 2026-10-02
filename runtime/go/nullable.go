@@ -40,24 +40,9 @@ func ExplicitNull[T any]() *Nullable[T] {
 }
 
 // IsNull reports whether the value is an explicit null. It is false for an
-// absent (nil) value, which earlier versions reported as null: test n == nil
-// for absence.
+// absent (nil) value: test n == nil for absence.
 func (n *Nullable[T]) IsNull() bool {
 	return n != nil && n.null
-}
-
-// Set builds a Nullable holding value.
-//
-// Deprecated: use NewNullable.
-func Set[T any](value T) *Nullable[T] {
-	return NewNullable(value)
-}
-
-// Null builds a Nullable that serializes as an explicit JSON null.
-//
-// Deprecated: use ExplicitNull.
-func Null[T any]() *Nullable[T] {
-	return ExplicitNull[T]()
 }
 
 // Get returns the wrapped value and whether one is present. It reports false
