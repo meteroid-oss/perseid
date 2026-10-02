@@ -86,7 +86,9 @@ export class Stream<T> implements AsyncIterable<T> {
         }
       }
     } finally {
-      await reader.cancel().catch(() => undefined);
+      // Not awaited: cancelling one branch of a teed body (a cloned response) only settles
+      // once every branch is cancelled, which would hang the loop on its way out.
+      reader.cancel().catch(() => undefined);
     }
   }
 }
@@ -101,7 +103,7 @@ export class EventStream extends Stream<SseEvent> {
 
 class SseParser {
   public id?: string;
-  private retry?: number;
+  private retry: number | undefined;
   private line = "";
   private data = "";
   private event = "";
