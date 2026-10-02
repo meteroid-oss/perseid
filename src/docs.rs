@@ -221,9 +221,13 @@ mod tests {
         assert!(petstore["list"].is_null() && petstore["stream"].is_null());
 
         let features = examples_of("tests/fixtures/features.yaml");
-        assert_eq!(summary(&features["call"]), "account.check_health");
-        assert_eq!(summary(&features["list"]), "gadgets.list");
-        assert_eq!(features["list"]["item"], "Gadget");
+        assert_eq!(
+            summary(&features["call"]),
+            "encoding.retrieve_scenario_path"
+        );
+        assert_eq!(features["call"]["path_args"][0]["value"], "segment");
+        assert_eq!(summary(&features["list"]), "errors.list_scenarios_pages");
+        assert_eq!(features["list"]["item"], "Widget");
         let stream = &features["stream"];
         assert_eq!(summary(stream), "streaming.create_completion_stream");
         assert_eq!(stream["body"]["schema"], "CompletionRequest");

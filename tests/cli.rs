@@ -2374,19 +2374,35 @@ fn api_md_lists_every_operation_and_readmes_call_real_ones() {
             "csharp",
             "client.Pets.RetrieveAsync(\"pet_id\")",
         ),
-        ("features.yaml", "rust", "client.gadgets().list_iter(None)"),
-        ("features.yaml", "typescript", "client.gadgets.list()"),
-        ("features.yaml", "python", "client.gadgets.list()"),
+        (
+            "features.yaml",
+            "rust",
+            "client.errors().list_scenarios_pages_iter(None)",
+        ),
+        (
+            "features.yaml",
+            "typescript",
+            "client.errors.listScenariosPages()",
+        ),
+        (
+            "features.yaml",
+            "python",
+            "client.errors.list_scenarios_pages()",
+        ),
         (
             "features.yaml",
             "go",
-            "client.Gadgets().ListAutoPaging(ctx, nil)",
+            "client.ErrorsAPI().ListScenariosPagesAutoPaging(ctx, nil)",
         ),
-        ("features.yaml", "java", "client.gadgets().listIter()"),
+        (
+            "features.yaml",
+            "java",
+            "client.errors().listScenariosPagesIter()",
+        ),
         (
             "features.yaml",
             "csharp",
-            "client.Gadgets.ListAutoPagingAsync()",
+            "client.Errors.ListScenariosPagesAutoPagingAsync()",
         ),
         (
             "features.yaml",
@@ -2609,12 +2625,12 @@ fn nullable_items_values_and_optional_responses_are_typed_in_every_language() {
                 "Vec<Option<String>>",
                 "HashMap<String, Option<String>>",
                 "Option<crate::models::Holder>",
-                "execute_optional",
+                "json_or_none(",
             ],
         ),
         (
             "typescript",
-            &["(string | null)[]", "sendOptional(", "| null>"],
+            &["(string | null)[]", "sendOptional(", "| undefined>"],
         ),
         (
             "python",
@@ -2627,16 +2643,16 @@ fn nullable_items_values_and_optional_responses_are_typed_in_every_language() {
         ),
         (
             "go",
-            &["[]*string", "map[string]*string", "executeOptional"],
+            &["[]*string", "map[string]*string", "(*Holder, error)"],
         ),
-        ("java", &["@javax.annotation.Nullable public Holder "]),
+        ("java", &["Optional<Holder>"]),
         (
             "csharp",
             &[
                 "List<string?>",
                 "Dictionary<string, string?>",
                 "Task<Holder?>",
-                "SendOptionalJsonAsync",
+                "SendJsonOrDefaultAsync<Holder, Holder?>",
             ],
         ),
     ];
@@ -2710,7 +2726,7 @@ fn any_json_body_and_multipart_file_lists_are_generated_in_every_language() {
         ),
         (
             "python",
-            &["dict[str, V]", "t.List[FileInput]", "\"image/png\""],
+            &["dict[str, V]", "list[FileInput]", "\"image/png\""],
         ),
         (
             "go",
@@ -2722,7 +2738,7 @@ fn any_json_body_and_multipart_file_lists_are_generated_in_every_language() {
                 "Map<String,V>",
                 "List<Upload>",
                 "\"image/png\"",
-                "sendText()",
+                "returningText()",
             ],
         ),
         (
@@ -2838,7 +2854,7 @@ paths:
                 "AddDelimitedQuery(\"ids\"",
                 "AddJsonQuery(\"filter\"",
                 "SetJsonHeader(\"X-Filter\"",
-                "ApiRequest.EncodePathParam(\"tags\"",
+                "ApiRequest.EncodePathParam(\"color\"",
             ],
         ),
     ];
@@ -2923,30 +2939,16 @@ components:
                 ": std::collections::HashMap<String, i64>,",
             ],
         ),
-        (
-            "typescript",
-            &[
-                "additionalProperties?: { [key: string]: number }",
-                "omitKeys(json, [\"name\"])",
-            ],
-        ),
-        (
-            "python",
-            &[
-                "_ADDITIONAL_PROPERTIES",
-                "additional_properties: dict[str, int]",
-            ],
-        ),
-        (
-            "go",
-            &[
-                "AdditionalProperties map[string]int64",
-                "unmarshalAdditionalProperties(",
-            ],
-        ),
+        ("typescript", &["...extraProperties(json, [\"name\"])"]),
+        ("python", &["_EXTRA_FIELDS: t.ClassVar[dict[str, int]]"]),
+        ("go", &["ExtraFields map[string]int64", "typedExtraFields("]),
         (
             "java",
-            &["@JsonAnyGetter", "@JsonAnySetter", "Map<String,Long>"],
+            &[
+                "@JsonAnyGetter",
+                "@JsonAnySetter",
+                "Map<String, Long> typedAdditionalProperties()",
+            ],
         ),
         (
             "csharp",
