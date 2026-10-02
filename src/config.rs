@@ -194,7 +194,6 @@ pub struct Target {
     pub module: Option<String>,
     pub exports: Vec<String>,
     pub int64: Option<Int64>,
-    pub flat_unions: bool,
 }
 
 /// A language table: the settings every SDK takes, then the language's own.
@@ -264,10 +263,7 @@ language!(TypeScript, "npm package name: the kebab-case `name` by default." {
     /// Type of int64 values.
     int64: Option<Int64>,
 });
-language!(Python, "Python package name: the snake_case `name` by default." {
-    /// Types a union as `Circle | Square` instead of a wrapper model.
-    flat_unions: bool,
-});
+language!(Python, "Python package name: the snake_case `name` by default." {});
 language!(Go, "Go package name: the snake_case `name` by default." {
     /// Module path: that of the repository and folder the SDK lives in by default.
     module: Option<String>,
@@ -696,9 +692,6 @@ impl Config {
             "authors": self.package.authors,
         });
         let map = context.as_object_mut().unwrap();
-        if language == "python" {
-            map.insert("flat_unions".into(), target.flat_unions.into());
-        }
         if language == "java" {
             map.insert(
                 "java_internal_package".into(),
@@ -757,7 +750,10 @@ const OUTDATED: [(&str, &str); 22] = [
     ("repository", "moved to the [metadata] table"),
     ("authors", "moved to the [metadata] table"),
     ("int64", "is only supported in [typescript]"),
-    ("flat_unions", "is only supported in [python]"),
+    (
+        "flat_unions",
+        "was removed: Python unions are the union of their variant models whenever they can be",
+    ),
 ];
 
 fn removed_keys(table: &toml::Table) -> Result<()> {
@@ -768,10 +764,8 @@ fn removed_keys(table: &toml::Table) -> Result<()> {
     );
     for (language, table) in tables {
         for (key, why) in OUTDATED {
-            let own = matches!(
-                (language, key),
-                ("typescript", "int64") | ("python", "flat_unions")
-            ) || !language.is_empty() && (why == CONNECT || key == "package");
+            let own = matches!((language, key), ("typescript", "int64"))
+                || !language.is_empty() && (why == CONNECT || key == "package");
             if table.contains_key(key) && !own {
                 let at = match language {
                     "" => String::new(),
@@ -1273,8 +1267,8 @@ mod tests {
         );
         assert!(error("include = \"public-and-internal\"").contains("`internal = true`"));
         assert!(error("[rust]\nversion = \"1.0.0\"").starts_with("[rust] `version` was removed"));
-        assert!(error("[go]\nflat_unions = true").contains("only supported in [python]"));
-        let own = "[python]\nflat_unions = true\n[typescript]\nint64 = \"bigint\"\n";
+        assert!(error("[python]\nflat_unions = true").contains("`flat_unions` was removed"));
+        let own = "[typescript]\nint64 = \"bigint\"\n";
         assert!(removed_keys(&own.parse().unwrap()).is_ok());
     }
 
@@ -1337,9 +1331,8 @@ mod tests {
 
     #[test]
     fn language_keys_belong_to_their_table() {
-        let toml = "name = \"A\"\nsdks = [\"typescript\", \"python\"]\n[python]\nflat_unions = true\n\
-                    [typescript]\nint64 = \"bigint\"\n";
-        assert_eq!(context(toml, "python")["flat_unions"], true);
+        let toml =
+            "name = \"A\"\nsdks = [\"typescript\", \"python\"]\n[typescript]\nint64 = \"bigint\"\n";
         assert_eq!(context(toml, "typescript")["int64"], "bigint");
         assert!(
             load("name = \"A\"\nsdks = [\"typescript\"]\n[typescript]\nint64 = \"long\"\n")

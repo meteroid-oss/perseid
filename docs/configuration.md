@@ -49,8 +49,6 @@ tagline = "widgets as a service"
 [typescript]                        # overrides of a listed SDK
 package = "@acme/sdk"
 int64 = "bigint"
-[python]
-flat_unions = true
 [go]
 repo = "acme/acme-golang"           # its own repository name, over the top-level `repo`
 ```
@@ -145,7 +143,6 @@ And their own keys:
 |---|---|---|
 | `[typescript]` | `exports` | Modules re-exported from the entry point |
 | `[typescript]` | `int64` | TypeScript type of int64 values: `"number"` (default, exact up to 2^53), `"bigint"` or `"string"` |
-| `[python]` | `flat_unions` | `true` types discriminated unions as `Circle \| Square` instead of a wrapper model |
 | `[go]` | `module` | Module path, `github.com/{repo}/{path}` of the repository the SDK lives in by default (the `origin` remote, or `[metadata] repository`, for an SDK without `repo`); without either, `generate` warns and falls back to the kebab-case `name` |
 
 ## Renamed and removed keys
@@ -162,7 +159,7 @@ A key of an earlier version fails with what to write instead:
 | `include = "public-and-internal"` | `internal = true` |
 | `include = "only-internal"` | `only = [...]` listing them |
 | `version`, at the top or in a language table | the SDK's own manifest, bumped by release-please |
-| `[python.context] flat_unions = true` | `[python] flat_unions = true` |
+| `[python] flat_unions` | nothing: Python unions are the union of their variant models whenever they can be |
 
 ## Method names
 
