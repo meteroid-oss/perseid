@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Features;
 using Features.Models;
 
@@ -204,4 +206,496 @@ Equal(
     "42:image/png:png",
     (await client.Wire.UpdateImageAsync("42", Encoding.UTF8.GetBytes("png"))).Status
 );
+await Scenarios.RunAsync(serverUrl);
 Console.WriteLine("csharp smoke test passed");
+
+/// <summary>The scenarios of tests/features/SCENARIOS.md, against the strict mock server.</summary>
+internal static class Scenarios
+{
+    private static readonly HttpClient s_http = new();
+    private static int s_count;
+
+    public static async Task RunAsync(string url)
+    {
+        using var client = Make(url);
+        await ItemsAsync(client);
+        await ContentAsync(client);
+        await EncodingAsync(client, url);
+        await CookiesAsync(client, url);
+        await RetriesAsync(client, url);
+        await ErrorsAsync(url);
+        await StreamingAsync(client, url);
+        await CancellationAsync(client, url);
+    }
+
+    /// <summary>A client of the mock server with the token <c>tok</c>.</summary>
+    private static FeaturesClient Make(string url, Capture? capture = null)
+    {
+        var options = new FeaturesClientOptions { BaseUrl = url };
+        if (capture is not null)
+        {
+            options.Handlers.Add(capture);
+        }
+        return new FeaturesClient("tok", options);
+    }
+
+    /// <summary>An <c>X-Scenario-Id</c> unique to one test case.</summary>
+    private static string ScenarioId(string name) =>
+        $"csharp-{name}-{Interlocked.Increment(ref s_count)}";
+
+    /// <summary>What the mock server saw for a scenario id: its attempts and idempotency keys.</summary>
+    private static async Task<(int Attempts, string[] Keys)> State(string url, string id)
+    {
+        using var reply = await s_http.GetAsync($"{url}/__server/attempts/{Uri.EscapeDataString(id)}");
+        using var document = JsonDocument.Parse(await reply.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        return (
+            root.GetProperty("attempts").GetInt32(),
+            root.GetProperty("keys").EnumerateArray().Select(key => key.GetString()!).ToArray()
+        );
+    }
+
+    private static string Show(object? value) => value?.ToString() ?? "null";
+
+    private static void Check(bool condition, string what)
+    {
+        if (!condition)
+        {
+            throw new Exception($"failed: {what}");
+        }
+    }
+
+    private static void Equal<T>(T expected, T actual)
+    {
+        if (!EqualityComparer<T>.Default.Equals(expected, actual))
+        {
+            throw new Exception($"expected {Show(expected)}, got {Show(actual)}");
+        }
+    }
+
+    private static void Same<T>(IEnumerable<T> expected, IEnumerable<T> actual)
+    {
+        var want = expected.ToList();
+        var got = actual.ToList();
+        if (!want.SequenceEqual(got))
+        {
+            throw new Exception(
+                $"expected [{string.Join(", ", want.Select(x => Show(x)))}], got [{string.Join(", ", got.Select(x => Show(x)))}]"
+            );
+        }
+    }
+
+    private static void IsNull(object? value, string what)
+    {
+        if (value is not null)
+        {
+            throw new Exception($"{what}: expected null, got {Show(value)}");
+        }
+    }
+
+    /// <summary>The exception <paramref name="call"/> throws, which must be a <typeparamref name="T"/>.</summary>
+    private static async Task<T> Throws<T>(Func<Task> call)
+        where T : Exception
+    {
+        try
+        {
+            await call();
+        }
+        catch (T e)
+        {
+            return e;
+        }
+        throw new Exception($"expected {typeof(T).Name}, but the call succeeded");
+    }
+
+    /// <summary>The model of an error body, which the operation declares.</summary>
+    private static Error Declared(ApiException error) =>
+        error.Error as Error ?? throw new Exception($"the error body is not an Error: {error.Body}");
+
+    /// <summary>Keeps the headers of every HTTP attempt that goes through the client.</summary>
+    private sealed class Capture : DelegatingHandler
+    {
+        public List<Dictionary<string, string>> Headers { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var seen = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var header in request.Headers)
+            {
+                seen[header.Key] = string.Join(",", header.Value);
+            }
+            Headers.Add(seen);
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
+
+    private static async Task ItemsAsync(FeaturesClient client)
+    {
+        var item = await client.Items.RetrieveAsync("i1");
+        Equal("i1", item.Id);
+        Equal("first", item.Name);
+        Equal("hi", item.Note);
+
+        // The unset note is omitted from the body: the server requires exactly {"name":"renamed"}.
+        var patched = await client.Items.UpdateAsync("i1", new ItemPatch { Name = "renamed" });
+        Equal("renamed", patched.Name);
+        IsNull(patched.Note, "the note of the patched item");
+
+        // 204 without a body or a content type.
+        await client.Items.DeleteAsync("i1");
+        var raw = await client.Items.WithRawResponse.DeleteAsync("i1");
+        Equal(204, (int)raw.StatusCode);
+    }
+
+    private static async Task ContentAsync(FeaturesClient client)
+    {
+        var content = client.Content;
+        IsNull(await content.RetrieveScenariosNullableBodyAsync(), "a null body");
+        Equal("hello text\n", await content.RetrieveScenariosTextAsync());
+        Equal("id,name\n1,alpha\n2,\"be,ta\"\n", await content.RetrieveScenariosCsvAsync());
+
+        var blob = await content.DownloadBlobAsync();
+        Equal(256, blob.Length);
+        Same(Enumerable.Range(0, 256).Select(i => (byte)i), blob);
+        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }
+            .Concat(Enumerable.Repeat(new byte[] { 0x00, 0x01, 0xFE, 0xFF }, 4).SelectMany(part => part))
+            .ToArray();
+        var image = await content.DownloadImageAsync();
+        Equal(24, image.Length);
+        Same(png, image);
+
+        var malformed = await Throws<ApiDecodeException>(() => content.RetrieveScenariosMalformedAsync());
+        Check(malformed.InnerException is JsonException, "a malformed body keeps the JSON error");
+        Exception asException = malformed;
+        Check(asException is FeaturesException and not ApiException, "a decode error is no API error");
+        await Throws<ApiDecodeException>(() => content.RetrieveScenariosEmptyBodyAsync());
+
+        var extras = await content.ListScenariosExtraFieldsAsync();
+        Equal("ok", extras.Status);
+        var unknown = extras.AdditionalProperties!;
+        Equal(3, unknown.Count);
+        Equal(1, unknown["extra"].GetInt32());
+        Check(
+            JsonNode.DeepEquals(
+                JsonNode.Parse(unknown["nested"].GetRawText()),
+                JsonNode.Parse("""{"a":[1,2,{"b":null}]}""")
+            ),
+            "the nested unknown field is kept"
+        );
+        Check(
+            JsonNode.DeepEquals(JsonNode.Parse(unknown["list"].GetRawText()), JsonNode.Parse("""[1,"x"]""")),
+            "the list unknown field is kept"
+        );
+
+        var nulls = await content.ListScenariosNullsAsync();
+        IsNull(nulls.Name, "name");
+        Same<string?>(new string?[] { "a", null, "b" }, nulls.Tags);
+        Equal(2, nulls.Counts.Count);
+        Equal<long?>(1, nulls.Counts["x"]);
+        IsNull(nulls.Counts["y"], "counts.y");
+        IsNull(nulls.Note, "note");
+
+        // The name is an explicit null and is sent; the note is unset and omitted.
+        var sent = new NullBag
+        {
+            Name = null,
+            Tags = new List<string?> { "a", null },
+            Counts = new Dictionary<string, long?> { ["x"] = null, ["y"] = 2 },
+        };
+        var wire = JsonSerializer.Serialize(sent, FeaturesJsonContext.Default.NullBag);
+        Check(
+            JsonNode.DeepEquals(
+                JsonNode.Parse(wire),
+                JsonNode.Parse("""{"name":null,"tags":["a",null],"counts":{"x":null,"y":2}}""")
+            ),
+            $"the null bag is sent as {wire}"
+        );
+        var echoed = await content.CreateScenariosNullAsync(sent);
+        IsNull(echoed.Name, "echoed name");
+        Same<string?>(new string?[] { "a", null }, echoed.Tags);
+        IsNull(echoed.Counts["x"], "echoed counts.x");
+        Equal<long?>(2, echoed.Counts["y"]);
+        IsNull(echoed.Note, "echoed note");
+
+        var bag = await content.RetrieveScenariosBagAsync();
+        Equal("b1", bag.Id);
+        var extra = bag.AdditionalProperties!;
+        Equal(2, extra.Count);
+        Equal(1, extra["a"].GetInt32());
+        Equal(2, extra["b"].GetInt32());
+
+        var labels = await content.ListScenariosLabelsAsync();
+        Equal(2, labels.Count);
+        Equal("v", labels["k"]);
+        Equal("y", labels["z"]);
+
+        var known = await content.RetrieveScenariosEnumAsync(new() { Mode = "known" });
+        Equal("red", known.Kind.Value);
+        Check(known.Kind.IsKnown, "red is a known kind");
+        Same(new[] { "green", "blue" }, known.Kinds!.Select(kind => kind.Value));
+        var other = await content.RetrieveScenariosEnumAsync(new() { Mode = "unknown" });
+        Equal("magenta", other.Kind.Value);
+        Check(!other.Kind.IsKnown, "magenta is not a known kind");
+        var kinds = other.Kinds!;
+        Same(new[] { "red", "magenta" }, kinds.Select(kind => kind.Value));
+        Check(kinds[0].IsKnown && !kinds[1].IsKnown, "the known kinds of a list stay known");
+    }
+
+    private static async Task EncodingAsync(FeaturesClient client, string url)
+    {
+        var encoding = client.EncodingApi;
+
+        var big = await encoding.ScenariosBigintAsync(
+            new BigBox { Value = 9007199254740993L, Min = long.MinValue }
+        );
+        Equal(9007199254740993L, big.Value);
+        Equal(long.MinValue, big.Min);
+
+        var hello = new byte[] { 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0xFB, 0xFF, 0xFE };
+        var sentBlob = new Blob { Data = Convert.ToBase64String(hello) };
+        Equal("aGVsbG/7//4=", sentBlob.Data);
+        Same(hello, Convert.FromBase64String((await encoding.CreateScenariosByteAsync(sentBlob)).Data));
+        Same(hello, Convert.FromBase64String((await encoding.ListScenariosBytesAsync()).Data));
+
+        var instant = new DateTimeOffset(2024, 1, 2, 3, 4, 5, 250, TimeSpan.Zero);
+        var spellings = new[]
+        {
+            instant,
+            instant.ToOffset(TimeSpan.FromHours(2)),
+            instant.ToOffset(new TimeSpan(-5, -30, 0)),
+        };
+        foreach (var at in spellings)
+        {
+            var queried = await encoding.RetrieveScenariosDatetimeAsync(new() { Since = at, Day = "2024-01-02" });
+            Equal(instant, queried.At);
+            Equal("2024-01-02", queried.Day);
+            var posted = await encoding.ScenariosDatetimeAsync(new DateBox { At = at, Day = "2024-01-02" });
+            Equal(instant, posted.At);
+            Equal("2024-01-02", posted.Day);
+        }
+
+        foreach (
+            var value in new[]
+            {
+                "plain",
+                "sp ace",
+                "sl/ash",
+                "q?mark",
+                "per%cent",
+                "ha#sh",
+                "lit%25eral",
+                "a+b",
+                "h\u00e9llo w\u00f6rld \u2713",
+            }
+        )
+        {
+            Equal(value, (await encoding.RetrieveScenarioPathAsync(value)).Status);
+        }
+        foreach (
+            var value in new[] { "plain", "sp ace", "a&b=c+d", "100%", "slash/qm?", "h\u00e9llo w\u00f6rld \u2713" }
+        )
+        {
+            Equal(value, (await encoding.RetrieveScenariosQueryAsync(new() { Q = value })).Status);
+        }
+        Equal(
+            "b,a,c",
+            (await encoding.RetrieveScenariosMultiAsync(new() { Ids = ["b", "a", "c"], Flag = true })).Status
+        );
+
+        // The first call carries no trace header, and neither call carries credentials.
+        var capture = new Capture();
+        using var traced = Make(url, capture);
+        Equal("acme|", (await traced.EncodingApi.ListScenariosHeadersAsync(new() { XTenant = "acme" })).Status);
+        Equal(
+            "acme|t1",
+            (await traced.EncodingApi.ListScenariosHeadersAsync(new() { XTenant = "acme", XTraceId = "t1" })).Status
+        );
+        Equal(2, capture.Headers.Count);
+        Equal("acme", capture.Headers[0]["X-Tenant"]);
+        Check(!capture.Headers[0].ContainsKey("X-Trace-Id"), "the unset trace header is not sent");
+        Equal("t1", capture.Headers[1]["X-Trace-Id"]);
+        Check(!capture.Headers[0].ContainsKey("Authorization"), "no credentials without security");
+    }
+
+    private static async Task CookiesAsync(FeaturesClient client, string url)
+    {
+        Equal("abc123", (await client.Cookies.RetrieveScenariosCookieAsync(new() { SessionId = "abc123" })).Status);
+
+        // The API key cookie replaces the token of the client.
+        var capture = new Capture();
+        var options = new FeaturesClientOptions { BaseUrl = url, ApiKeys = new() { ApiKeyCookie = "ck1" } };
+        options.Handlers.Add(capture);
+        using var keyed = new FeaturesClient(null, options);
+        Equal("ck1", (await keyed.Cookies.RetrieveScenariosCookieAuthAsync()).Status);
+        Equal("auth_token=ck1", capture.Headers[0]["Cookie"]);
+        Check(!capture.Headers[0].ContainsKey("Authorization"), "the cookie key is no bearer token");
+
+        using var anonymous = new FeaturesClient(null, new() { BaseUrl = url });
+        await Throws<UnauthorizedException>(() => anonymous.Cookies.RetrieveScenariosCookieAuthAsync());
+    }
+
+    private static async Task RetriesAsync(FeaturesClient client, string url)
+    {
+        // Retry-After in seconds.
+        var flaky = ScenarioId("flaky");
+        var clock = Stopwatch.StartNew();
+        Equal("attempt=2", (await client.Retries.RetrieveScenariosFlakyAsync(new() { XScenarioId = flaky })).Status);
+        Check(clock.Elapsed >= TimeSpan.FromSeconds(0.9), $"Retry-After: 1 is waited for, took {clock.Elapsed}");
+        Check(clock.Elapsed < TimeSpan.FromSeconds(10), $"only Retry-After is waited for, took {clock.Elapsed}");
+        Equal(2, (await State(url, flaky)).Attempts);
+
+        // Without retries.
+        var once = ScenarioId("flaky-once");
+        var unavailable = await Throws<ServerErrorException>(
+            () =>
+                client.Retries.RetrieveScenariosFlakyAsync(
+                    new() { XScenarioId = once },
+                    new RequestOptions { MaxRetries = 0 }
+                )
+        );
+        Equal(503, (int)unavailable.StatusCode);
+        Equal("unavailable", ((JsonElement)unavailable.Error!).GetProperty("error").GetString());
+        Equal("req_mock", unavailable.RequestId);
+        Equal(1, (await State(url, once)).Attempts);
+
+        // Retry-After as an HTTP date, one or two seconds from now.
+        var limited = ScenarioId("rate-limited");
+        clock.Restart();
+        Equal(
+            "attempt=2",
+            (await client.Retries.RetrieveScenariosRateLimitedAsync(new() { XScenarioId = limited })).Status
+        );
+        Check(clock.Elapsed >= TimeSpan.FromSeconds(0.5), $"the HTTP date is waited for, took {clock.Elapsed}");
+        Check(clock.Elapsed < TimeSpan.FromSeconds(10), $"only the HTTP date is waited for, took {clock.Elapsed}");
+        Equal(2, (await State(url, limited)).Attempts);
+
+        // Retries are exhausted.
+        var down = ScenarioId("unavailable");
+        var exhausted = await Throws<ServerErrorException>(
+            () =>
+                client.Retries.RetrieveScenariosUnavailableAsync(
+                    new() { XScenarioId = down },
+                    new RequestOptions { MaxRetries = 2 }
+                )
+        );
+        Equal(503, (int)exhausted.StatusCode);
+        Equal(3, (await State(url, down)).Attempts);
+
+        // The idempotency key survives the retry.
+        var idempotent = ScenarioId("idempotent");
+        var created = await client.Retries.ScenariosIdempotentAsync(
+            new Payment { Amount = 5 },
+            new() { XScenarioId = idempotent, IdempotencyKey = "idem-1" },
+            new RequestOptions { MaxRetries = 2 }
+        );
+        Equal("attempts=2;key=idem-1", created.Status);
+        var state = await State(url, idempotent);
+        Equal(2, state.Attempts);
+        Same(new[] { "idem-1", "idem-1" }, state.Keys);
+    }
+
+    private static async Task ErrorsAsync(string url)
+    {
+        var expected = new (int Code, Type Kind)[]
+        {
+            (400, typeof(BadRequestException)),
+            (401, typeof(UnauthorizedException)),
+            (403, typeof(ForbiddenException)),
+            (404, typeof(NotFoundException)),
+            (409, typeof(ConflictException)),
+            (422, typeof(UnprocessableEntityException)),
+        };
+        foreach (var (code, kind) in expected)
+        {
+            var capture = new Capture();
+            using var counted = Make(url, capture);
+            var error = await Throws<ApiException>(() => counted.Errors.RetrieveScenarioStatusAsync($"{code}"));
+            Equal(kind, error.GetType());
+            Equal(code, (int)error.StatusCode);
+            var body = Declared(error);
+            Equal($"status {code}", body.ErrorValue);
+            Equal<int?>(code, body.Code);
+            Equal("req_mock", error.RequestId);
+            Equal(1, capture.Headers.Count);
+        }
+
+        // An error from a later page is not swallowed, and the iteration does not loop.
+        var pages = new Capture();
+        using var paged = Make(url, pages);
+        var seen = new List<string>();
+        var gone = await Throws<ConflictException>(async () =>
+        {
+            await foreach (var widget in paged.Errors.ListScenariosPagesAutoPagingAsync())
+            {
+                seen.Add(widget.Id);
+            }
+        });
+        Same(new[] { "p1", "p2" }, seen);
+        Equal(409, (int)gone.StatusCode);
+        var page = Declared(gone);
+        Equal("page_gone", page.ErrorValue);
+        Equal<int?>(409, page.Code);
+        Equal(2, pages.Headers.Count);
+
+        // An error from the first page is raised by the first fetch.
+        using var anonymous = new FeaturesClient(null, new() { BaseUrl = url });
+        var first = await Throws<UnauthorizedException>(async () =>
+        {
+            await foreach (var widget in anonymous.Widgets.ListAutoPagingAsync())
+            {
+                seen.Add(widget.Id);
+            }
+        });
+        Equal("req_mock", first.RequestId);
+        await Throws<UnauthorizedException>(() => anonymous.Widgets.ListAutoPagingAsync().GetFirstPageAsync());
+        await Throws<UnauthorizedException>(() => anonymous.Widgets.ListAsync());
+        Equal(2, seen.Count);
+    }
+
+    private static async Task StreamingAsync(FeaturesClient client, string url)
+    {
+        var events = new List<SseEvent>();
+        await using (var stream = await client.Streaming.RetrieveScenariosSseAsync())
+        {
+            await foreach (var sse in stream)
+            {
+                events.Add(sse);
+            }
+            Equal("7", stream.LastEventId);
+        }
+        // The comment line yields no event; the id persists, the retry applies to its own event.
+        Equal(4, events.Count);
+        Equal(new SseEvent("message", "first"), events[0]);
+        Equal(new SseEvent("tick", "line1\nline2", "7"), events[1]);
+        Equal(new SseEvent("message", "{\"n\": 3}", "7", 2500), events[2]);
+        Equal(new SseEvent("message", "tail", "7"), events[3]);
+
+        var capture = new Capture();
+        using var counted = Make(url, capture);
+        var denied = await Throws<ForbiddenException>(() => counted.Streaming.RetrieveScenariosSseErrorAsync());
+        Equal(403, (int)denied.StatusCode);
+        var body = Declared(denied);
+        Equal("forbidden", body.ErrorValue);
+        Equal<int?>(403, body.Code);
+        Equal(1, capture.Headers.Count);
+    }
+
+    /// <summary>Cancelling a call that waits to retry stops it: the server sees one attempt only.</summary>
+    private static async Task CancellationAsync(FeaturesClient client, string url)
+    {
+        var id = ScenarioId("cancel");
+        using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(400));
+        await Throws<OperationCanceledException>(
+            () =>
+                client.Retries.RetrieveScenariosRateLimitedAsync(
+                    new() { XScenarioId = id },
+                    cancellationToken: cancel.Token
+                )
+        );
+        await Task.Delay(TimeSpan.FromSeconds(2.2));
+        Equal(1, (await State(url, id)).Attempts);
+    }
+}
