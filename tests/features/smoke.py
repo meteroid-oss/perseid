@@ -10,7 +10,7 @@ from features import (
     FeaturesError,
     NotFoundError,
 )
-from features.api import FeaturesOptions, StreamingCreateFileBody, Upload
+from features.api import FeaturesOptions, StreamingUploadFileBody, Upload
 from features.models import (
     Charge,
     ChargeItemsItem,
@@ -32,7 +32,7 @@ def ids(items):
 
 
 client = Features("tok", base_url=URL)
-assert client.account.retrieve_health().status == "||"
+assert client.account.check_health().status == "||"
 assert client.account.retrieve_machine().status == "Bearer tok||"
 assert ids(client.widgets.list()) == ["w1", "w2", "w3"]
 assert ids(client.widgets.list_events("w1", kind="created")) == ["e1", "e2", "e3"]
@@ -52,7 +52,7 @@ assert page.items[0].to_dict() == {"id": "w1", "name": "w1", "color": "red"}
 raw = client.with_raw_response.widgets.list()
 assert raw.status_code == 200 and raw.request_id == "req_mock", raw.headers
 assert ids(raw.parse().items) == ["w1", "w2"]
-assert client.account.with_raw_response.retrieve_health().headers["x-request-id"] == "req_mock"
+assert client.account.with_raw_response.check_health().headers["x-request-id"] == "req_mock"
 
 os.environ["FEATURES_API_KEY"] = "env-tok"
 os.environ["FEATURES_BASE_URL"] = URL
@@ -60,7 +60,7 @@ assert Features().account.retrieve_machine().status == "Bearer env-tok||"
 del os.environ["FEATURES_API_KEY"], os.environ["FEATURES_BASE_URL"]
 
 basic = Features(base_url=URL, basic_auth=("u", "p"))
-assert basic.account.session().status == "Basic dTpw||"
+assert basic.account.create_session().status == "Basic dTpw||"
 keyed = Features(base_url=URL, api_keys={"api_key": "k"})
 assert ids(keyed.widgets.list()) == ["w1", "w2", "w3"]
 provided = Features(base_url=URL, token_provider=lambda: "fresh")
@@ -78,12 +78,12 @@ except AuthenticationError as error:
         "req_mock",
     ), error
 try:
-    client.with_options(base_url=URL + "/v0").account.retrieve_health()
+    client.with_options(base_url=URL + "/v0").account.check_health()
     raise AssertionError("expected a 404")
 except NotFoundError as error:
     assert error.body == {"error": "/v0/health"}, error.body
 try:
-    Features("tok", base_url="http://127.0.0.1:9", max_retries=0).account.retrieve_health()
+    Features("tok", base_url="http://127.0.0.1:9", max_retries=0).account.check_health()
     raise AssertionError("expected a connection error")
 except APIConnectionError as error:
     assert isinstance(error, FeaturesError)
@@ -103,19 +103,19 @@ assert [(e.event, e.data, e.id, e.retry) for e in events] == [
     ("message", "line1\nline2", "1", None),
     ("message", '{"n": 3}', "3", 1500),
 ], events
-body = StreamingCreateFileBody(
+body = StreamingUploadFileBody(
     file=Upload(b"hello", "a.txt", "text/plain"),
     name="doc",
     count=2,
     meta=Health(status="ok"),
     tags=["a", "b"],
 )
-assert client.streaming.create_file(body).status == (
+assert client.streaming.upload_file(body).status == (
     'count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status": "ok"}'
     ";name=::doc;tags=::a;tags=::b"
 )
-assert client.streaming.update_file_content("f1", b"raw").status == "application/octet-stream:raw"
-assert client.streaming.update_file_content("f1", io.BytesIO(b"io")).status == "application/octet-stream:io"
+assert client.streaming.upload_content("f1", b"raw").status == "application/octet-stream:raw"
+assert client.streaming.upload_content("f1", io.BytesIO(b"io")).status == "application/octet-stream:io"
 
 searched = client.wire.search(
     filter=Filter(status="open", amount=FilterAmount(gte=5)),
@@ -167,7 +167,7 @@ async def main():
         assert [e.data for e in events] == ["async", "line1\nline2", '{"n": 3}']
         stream = await client.streaming.create_completion_stream(CompletionRequest(prompt="xyz"))
         assert [c.delta async for c in stream] == ["x", "y", "z"]
-        assert (await client.streaming.update_file_content("f1", b"a")).status.endswith(":a")
+        assert (await client.streaming.upload_content("f1", b"a")).status.endswith(":a")
     async with AsyncFeatures(base_url=URL, token_provider=fresh) as client:
         assert (await client.account.retrieve_machine()).status == "Bearer async-fresh||"
 

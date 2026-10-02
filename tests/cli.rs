@@ -462,7 +462,7 @@ fn csharp_generates_streaming_auth_and_pagination() {
         "{streaming}"
     );
     assert!(
-        streaming.contains("public sealed class StreamingCreateFileBody"),
+        streaming.contains("public sealed class StreamingUploadFileBody"),
         "{streaming}"
     );
     assert!(streaming.contains("Upload body,"), "{streaming}");
@@ -1840,6 +1840,8 @@ fn init_names_methods_after_their_resource_path() {
         ("PostChargesChargeCapture", "capture"),
         ("GetChargesChargeRefunds", "refunds"),
         ("PutCustomer", "update"),
+        ("loginUser", "login"),
+        ("markdown/render-raw", "render_raw"),
     ] {
         let op = operation(&model, id);
         assert_eq!(op["name"], name, "{id}");

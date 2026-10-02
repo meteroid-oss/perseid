@@ -67,7 +67,7 @@ public class Smoke {
     }
 
     static void run(Features client) throws Exception {
-        expect(client.account().retrieveHealth().status(), "||");
+        expect(client.account().checkHealth().status(), "||");
         expect(client.account().retrieveMachine().status(), "Bearer tok||");
         expect(ids(client.widgets().listIter(), Widget::id), List.of("w1", "w2", "w3"));
         expect(ids(client.widgets().listEventsIter("w1", "created"), Event::id), List.of("e1", "e2", "e3"));
@@ -104,7 +104,7 @@ public class Smoke {
         expect(client.async().widgets().listIter().toList().get().stream().map(Widget::id).collect(Collectors.toList()), List.of("w1", "w2", "w3"));
         AsyncPage<Event> events = client.async().widgets().listEventsIter("w1", "created").firstPage().get();
         expect(events.nextPage().get().items().get(0).id(), "e3");
-        expect(client.async().withRawResponse().account().retrieveHealth().get().requestId().orElseThrow(), "req_mock");
+        expect(client.async().withRawResponse().account().checkHealth().get().requestId().orElseThrow(), "req_mock");
         try {
             new Features(null, options().build()).async().widgets().list().join();
             throw new AssertionError("expected an authentication error");
@@ -112,7 +112,7 @@ public class Smoke {
             expect(((AuthenticationException) expected.getCause()).statusCode(), 401);
         }
 
-        expect(new Features(null, options().basicAuth("u", "p").build()).account().session().status(), "Basic dTpw||");
+        expect(new Features(null, options().basicAuth("u", "p").build()).account().createSession().status(), "Basic dTpw||");
         expect(new Features(null, options().tokenProvider(() -> "fresh").build()).account().retrieveMachine().status(), "Bearer fresh||");
         expect(ids(new Features(null, options().putApiKey("api_key", "k").build()).widgets().listIter(), Widget::id), List.of("w1", "w2", "w3"));
         try {
@@ -147,7 +147,7 @@ public class Smoke {
             expect(chunks.stream().map(c -> c.additionalProperties().get("index").asInt()).collect(Collectors.toList()), List.of(0, 1));
         }
 
-        Streaming.CreateFileBody body = Streaming.CreateFileBody.builder()
+        Streaming.UploadFileBody body = Streaming.UploadFileBody.builder()
                 .file(Upload.of(bytes("hello")).withFilename("a.txt").withContentType("text/plain"))
                 .name("doc")
                 .count(2)
@@ -155,11 +155,11 @@ public class Smoke {
                 .tags(List.of("a", "b"))
                 .build();
         expect(
-                client.streaming().createFile(body).status(),
+                client.streaming().uploadFile(body).status(),
                 "count=::2;file=a.txt:text/plain:hello;meta=:application/json:{\"status\":\"ok\"};name=::doc;tags=::a;tags=::b");
-        expect(client.streaming().updateFileContent("f1", Upload.of(bytes("raw"))).status(), "application/octet-stream:raw");
+        expect(client.streaming().uploadContent("f1", Upload.of(bytes("raw"))).status(), "application/octet-stream:raw");
         Upload streamed = Upload.of(new ByteArrayInputStream(bytes("streamed")), -1);
-        expect(client.streaming().updateFileContent("f1", streamed).status(), "application/octet-stream:streamed");
+        expect(client.streaming().uploadContent("f1", streamed).status(), "application/octet-stream:streamed");
 
         WireSearchOptions search = WireSearchOptions.builder()
                 .filter(Filter.builder().status("open").amount(FilterAmount.builder().gte(5L).build()).build())

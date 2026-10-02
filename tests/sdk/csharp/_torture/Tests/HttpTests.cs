@@ -344,7 +344,7 @@ public class HttpTests
             new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent([1, 2, 3]) }
         );
         using var _ = client;
-        Assert.Equal([1, 2, 3], await client.Things.RetrievePdfAsync("t1"));
+        Assert.Equal([1, 2, 3], await client.Things.DownloadAsync("t1"));
     }
 
     [Fact]
