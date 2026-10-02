@@ -34,7 +34,8 @@
     else "json" %}
 {%- set accessor = (v.name | to_rust_variant) if class == (v.name | to_rust_variant) ~ "Value" else class %}
 {#- The shape `UnionRules.Is` checks: the JSON type, then `[]` for each level of arrays whose items are known. -#}
-{%- set sh = namespace(base=v.json_type, depth=0, it=v.items if v.items is defined else none) %}
+{%- set first_items = v.items if v.items is defined else none %}
+{%- set sh = namespace(base=v.json_type, depth=0, it=first_items) %}
 {%- for _ in range(6) %}
 {%- if sh.it %}{% set sh.depth = sh.depth + 1 %}{% set sh.base = sh.it.json_type %}{% set sh.it = sh.it.items if sh.it.items is defined else none %}{% endif %}
 {%- endfor %}
