@@ -1,0 +1,630 @@
+openapi: 3.1.0
+info:
+  title: Types
+  version: 1.0.0
+  description: "Schema shapes the generator has to model: unions, enums, recursion, nullability and composition."
+servers:
+  - url: https://api.example.com
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Holder'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Holder'}
+  /enums:
+    post:
+      operationId: echo_enums
+      tags: [echo]
+      parameters:
+        - {name: e, in: query, schema: {$ref: '#/components/schemas/Collide'}}
+        - {name: n, in: query, schema: {$ref: '#/components/schemas/IntEnum'}}
+        - {name: b, in: query, schema: {$ref: '#/components/schemas/BoolEnum'}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Enums'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Enums'}
+  /unions:
+    post:
+      operationId: echo_unions
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Unions'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Unions'}
+  /recursion:
+    post:
+      operationId: echo_recursion
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Recursion'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Recursion'}
+  /pets:
+    post:
+      operationId: create_pet
+      tags: [pets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Pet'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Pet'}
+    get:
+      operationId: list_pets
+      tags: [pets]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {type: array, items: {$ref: '#/components/schemas/Pet'}}
+components:
+  schemas:
+    # Type arrays, constants, empty and boolean schemas.
+    MultiType: {type: [string, integer, 'null']}
+    StrOrNum: {type: [string, number]}
+    BoolOrStr: {type: [boolean, string]}
+    ConstStr: {const: fixed}
+    ConstInt: {type: integer, const: 7}
+    EmptySchema: {}
+    NotString: {not: {type: string}}
+    Anything: true
+    OnlyNull: {anyOf: [{type: 'null'}]}
+    NullType: {type: 'null'}
+    ArrayNoItems: {type: array}
+    ObjNoType:
+      properties:
+        a: {type: string}
+    TupleLike:
+      type: array
+      prefixItems:
+        - {type: string}
+        - {type: integer}
+    # Objects.
+    Closed:
+      type: object
+      additionalProperties: false
+      required: [a]
+      properties:
+        a: {type: string}
+    PropsAndMap:
+      type: object
+      properties:
+        a: {type: string}
+      additionalProperties: {type: integer}
+    PropsAndAny:
+      type: object
+      properties:
+        a: {type: string}
+      additionalProperties: true
+    PatternProps:
+      type: object
+      patternProperties:
+        '^x-': {type: string}
+      additionalProperties: false
+    PatternAndProps:
+      type: object
+      properties:
+        id: {type: string}
+      patternProperties:
+        '^meta_': {type: integer}
+    ReadOnlyRequired:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string, readOnly: true}
+        name: {type: string}
+        pw: {type: string, writeOnly: true}
+    Formats:
+      type: object
+      required: [i64, dec, byt, bin]
+      properties:
+        i64: {type: integer, format: int64}
+        u32: {type: integer, format: uint32}
+        i8: {type: integer, format: int8}
+        u8: {type: integer, format: uint8}
+        i16: {type: integer, format: int16}
+        dec: {type: string, format: decimal}
+        dec_num: {type: number, format: decimal}
+        byt: {type: string, format: byte}
+        bin: {type: string, format: binary}
+        b64: {type: string, contentEncoding: base64}
+        dur: {type: string, format: duration}
+        tm: {type: string, format: time}
+        dt: {type: string, format: date-time}
+        d: {type: string, format: date}
+        uid: {type: string, format: uuid}
+        ip: {type: string, format: ipv4}
+        unknown_fmt: {type: string, format: foo-bar}
+        int_no_fmt: {type: integer}
+        num_float: {type: number, format: float}
+    # Nesting of arrays, maps and nullable values.
+    MapOfArraysOfUnions:
+      type: object
+      additionalProperties:
+        type: array
+        items:
+          oneOf:
+            - {type: string}
+            - {type: integer}
+            - {$ref: '#/components/schemas/Closed'}
+    MapOfArraysOfNullable:
+      type: object
+      additionalProperties:
+        type: array
+        items: {type: [string, 'null']}
+    NestedNullableArrays:
+      type: array
+      items:
+        type: [array, 'null']
+        items:
+          type: [string, 'null']
+    ArrayOfArrays:
+      type: array
+      items:
+        type: array
+        items: {$ref: '#/components/schemas/A1'}
+    Nullables:
+      type: object
+      properties:
+        tags: {type: array, items: {type: [string, 'null']}}
+        labels: {type: object, additionalProperties: {type: [string, 'null']}}
+        refs: {type: array, items: {oneOf: [{$ref: '#/components/schemas/A1'}, {type: 'null'}]}}
+        by_name: {type: object, additionalProperties: {oneOf: [{$ref: '#/components/schemas/A1'}, {type: 'null'}]}}
+        arr: {type: [array, 'null'], items: {type: integer}}
+        map: {type: [object, 'null'], additionalProperties: {type: string}}
+        obj: {type: [object, 'null'], properties: {z: {type: string}}}
+        ref: {oneOf: [{$ref: '#/components/schemas/A1'}, {type: 'null'}]}
+        any_ref: {anyOf: [{$ref: '#/components/schemas/A1'}, {type: 'null'}]}
+        str: {anyOf: [{type: string}, {type: 'null'}]}
+        maps: {type: array, items: {type: object, additionalProperties: {type: [string, 'null']}}}
+    Booleans:
+      type: object
+      properties:
+        anything: true
+        list: {type: array, items: true}
+        nothing: false
+        by_name: {type: object, additionalProperties: true}
+        ref: {$ref: '#/components/schemas/Anything'}
+    # Composition.
+    A1:
+      type: object
+      required: [x]
+      properties:
+        x: {type: string}
+    A2:
+      type: object
+      required: [x]
+      properties:
+        x: {type: integer}
+    ConflictingAllOf:
+      allOf:
+        - {$ref: '#/components/schemas/A1'}
+        - {$ref: '#/components/schemas/A2'}
+    Owner:
+      type: object
+      properties:
+        id: {type: string}
+    Child:
+      allOf:
+        - $ref: '#/components/schemas/Owner'
+        - type: object
+          properties:
+            owner: {type: string}
+    ClosedAllOf:
+      allOf:
+        - $ref: '#/components/schemas/Owner'
+        - type: object
+          additionalProperties: false
+          properties: {zip: {type: string}}
+    EitherRequired:
+      type: object
+      properties:
+        email: {type: string}
+        phone: {type: string}
+      oneOf:
+        - required: [email]
+        - required: [phone]
+    AnyRequired:
+      type: object
+      properties:
+        a: {type: string}
+        b: {type: string}
+      anyOf:
+        - required: [a]
+        - required: [b]
+    # Unions: plain, tagged, inferred, adjacent and nested in composition.
+    OneOfAB:
+      oneOf:
+        - {$ref: '#/components/schemas/A1'}
+        - {type: object, required: [y], properties: {y: {type: boolean}}}
+    AllOfOneOf:
+      allOf:
+        - {$ref: '#/components/schemas/OneOfAB'}
+        - {type: object, properties: {extra: {type: string}}}
+    Prims:
+      oneOf:
+        - {type: string}
+        - {type: integer}
+        - {type: boolean}
+        - {type: number}
+    IntOrFloat:
+      oneOf:
+        - {type: integer}
+        - {type: number}
+    BadMapping:
+      oneOf:
+        - {$ref: '#/components/schemas/A1'}
+        - {$ref: '#/components/schemas/A2'}
+      discriminator:
+        propertyName: kind
+        mapping:
+          one: '#/components/schemas/A1'
+          two: '#/components/schemas/A2'
+    Circle:
+      type: object
+      required: [type, radius]
+      properties:
+        type: {type: string, enum: [circle]}
+        radius: {type: number}
+    Square:
+      type: object
+      required: [type, side]
+      properties:
+        type: {type: string, enum: [square]}
+        side: {type: number}
+    Shape:
+      oneOf:
+        - $ref: '#/components/schemas/Circle'
+        - $ref: '#/components/schemas/Square'
+      discriminator:
+        propertyName: type
+        mapping:
+          circle: '#/components/schemas/Circle'
+          square: '#/components/schemas/Square'
+    ShapeWithExtra:
+      allOf:
+        - $ref: '#/components/schemas/Shape'
+        - type: object
+          properties:
+            label: {type: string}
+    ShapeOrText:
+      oneOf:
+        - $ref: '#/components/schemas/Circle'
+        - type: string
+      discriminator:
+        propertyName: type
+        mapping:
+          circle: '#/components/schemas/Circle'
+    Created:
+      type: object
+      required: [event, id]
+      properties:
+        event: {const: created}
+        id: {type: string}
+    Deleted:
+      type: object
+      required: [event, reason]
+      properties:
+        event: {const: deleted}
+        reason: {type: [string, 'null']}
+    InferredEvent:
+      oneOf:
+        - $ref: '#/components/schemas/Created'
+        - $ref: '#/components/schemas/Deleted'
+    InlineInferredEvent:
+      oneOf:
+        - type: object
+          required: [kind, id]
+          properties:
+            kind: {const: opened}
+            id: {type: string}
+        - type: object
+          required: [kind, reason]
+          properties:
+            kind: {const: closed}
+            reason: {type: string}
+    AdjacentEvent:
+      type: object
+      required: [kind]
+      properties:
+        kind: {type: string}
+        at: {type: string, format: date-time}
+      oneOf:
+        - type: object
+          required: [kind, data]
+          properties:
+            kind: {type: string, enum: [created]}
+            data: {$ref: '#/components/schemas/Created'}
+        - type: object
+          required: [kind, data]
+          properties:
+            kind: {type: string, enum: [renamed]}
+            data:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string}
+        - type: object
+          required: [kind]
+          properties:
+            kind: {type: string, enum: [ping]}
+    Pet:
+      type: object
+      required: [petType, name]
+      properties:
+        petType: {type: string}
+        name: {type: string}
+      discriminator:
+        propertyName: petType
+        mapping:
+          cat: '#/components/schemas/Cat'
+          dog: '#/components/schemas/Dog'
+    Cat:
+      allOf:
+        - $ref: '#/components/schemas/Pet'
+        - type: object
+          properties:
+            huntingSkill: {type: string}
+    Dog:
+      allOf:
+        - $ref: '#/components/schemas/Pet'
+        - type: object
+          required: [packSize]
+          properties:
+            packSize: {type: integer}
+    # Recursion.
+    Tree:
+      type: array
+      items: {$ref: '#/components/schemas/Tree'}
+    JsonValue:
+      oneOf:
+        - {type: string}
+        - {type: number}
+        - {type: boolean}
+        - {type: object, additionalProperties: {$ref: '#/components/schemas/JsonValue'}}
+        - {type: array, items: {$ref: '#/components/schemas/JsonValue'}}
+    RecUnion:
+      oneOf:
+        - {type: string}
+        - {type: array, items: {$ref: '#/components/schemas/RecUnion'}}
+    RecMap:
+      type: object
+      additionalProperties: {$ref: '#/components/schemas/RecMap'}
+    TreeNode:
+      type: object
+      required: [value, children]
+      properties:
+        value: {type: string}
+        children:
+          type: array
+          items: {$ref: '#/components/schemas/TreeNode'}
+        parent:
+          oneOf:
+            - $ref: '#/components/schemas/TreeNode'
+            - type: 'null'
+        next: {$ref: '#/components/schemas/TreeNode'}
+    Parent:
+      type: object
+      properties:
+        children:
+          type: array
+          items: {$ref: '#/components/schemas/Kid'}
+    Kid:
+      allOf:
+        - {$ref: '#/components/schemas/Parent'}
+        - type: object
+          properties:
+            parent: {$ref: '#/components/schemas/Parent'}
+    Ping:
+      type: object
+      properties:
+        pong: {$ref: '#/components/schemas/Pong'}
+    Pong:
+      type: object
+      properties:
+        ping: {$ref: '#/components/schemas/Ping'}
+        pings:
+          type: array
+          items: {$ref: '#/components/schemas/Ping'}
+    Recursion:
+      type: object
+      properties:
+        tree: {$ref: '#/components/schemas/Tree'}
+        json: {$ref: '#/components/schemas/JsonValue'}
+        union: {$ref: '#/components/schemas/RecUnion'}
+        map: {$ref: '#/components/schemas/RecMap'}
+        node: {$ref: '#/components/schemas/TreeNode'}
+        kid: {$ref: '#/components/schemas/Kid'}
+        ping: {$ref: '#/components/schemas/Ping'}
+    # Enums.
+    Collide:
+      type: string
+      enum: [a-b, a_b, A_B, aB, a b, A-B]
+    Symbols:
+      type: string
+      enum: ['-', '+', '*', '/', '1', '2.5', '!', '?', '#', '@', '$', '']
+    IntEnum:
+      type: integer
+      enum: [-1, 0, 1, 2, 100]
+    NegativeEnum:
+      type: integer
+      enum: [-10, -5, 5]
+    NamedIntEnum:
+      type: integer
+      enum: [1, 2, 3]
+      x-enumNames: [One, Two, Three]
+    VarnamesMismatch:
+      type: integer
+      enum: [1, 2, 3]
+      x-enum-varnames: [One, Two]
+    NamedStrEnum:
+      type: string
+      enum: [a, b]
+      x-enumNames: [Alpha, Beta]
+    Int64Enum:
+      type: integer
+      format: int64
+      enum: [9007199254740993, 1]
+    NumEnum:
+      type: number
+      enum: [1.5, 2.5, -0.5]
+    BoolEnum:
+      type: boolean
+      enum: [true, false]
+    OnlyFalse:
+      type: boolean
+      enum: [false]
+    NullableEnum:
+      type: [string, 'null']
+      enum: [a, b, null]
+    MixedEnum:
+      enum: [a, 1, true]
+    UntypedEnum:
+      enum: [red, green]
+    EnumWithDefault:
+      type: string
+      enum: [one, two]
+      default: two
+    SingleEnum:
+      type: string
+      enum: [only]
+    DupEnum:
+      type: string
+      enum: [same, same]
+    CaseEnum:
+      type: string
+      enum: [Active, active, ACTIVE]
+    KeywordEnum:
+      type: string
+      enum: [None, True, False, self, class, def, return, null, nil, undefined, true, false, string, int, Default, type, enum, values, valueOf, name, ordinal, toString, value]
+    Enums:
+      type: object
+      properties:
+        collide: {$ref: '#/components/schemas/Collide'}
+        symbols: {$ref: '#/components/schemas/Symbols'}
+        ints: {$ref: '#/components/schemas/IntEnum'}
+        negative: {$ref: '#/components/schemas/NegativeEnum'}
+        named_int: {$ref: '#/components/schemas/NamedIntEnum'}
+        varnames: {$ref: '#/components/schemas/VarnamesMismatch'}
+        named_str: {$ref: '#/components/schemas/NamedStrEnum'}
+        i64: {$ref: '#/components/schemas/Int64Enum'}
+        nums: {$ref: '#/components/schemas/NumEnum'}
+        bools: {$ref: '#/components/schemas/BoolEnum'}
+        only_false: {$ref: '#/components/schemas/OnlyFalse'}
+        nullable_enum: {$ref: '#/components/schemas/NullableEnum'}
+        mixed: {$ref: '#/components/schemas/MixedEnum'}
+        untyped: {$ref: '#/components/schemas/UntypedEnum'}
+        with_default: {$ref: '#/components/schemas/EnumWithDefault'}
+        single: {$ref: '#/components/schemas/SingleEnum'}
+        dup: {$ref: '#/components/schemas/DupEnum'}
+        case: {$ref: '#/components/schemas/CaseEnum'}
+        keyword: {$ref: '#/components/schemas/KeywordEnum'}
+        inline_ints: {type: integer, enum: [3, 4]}
+        inline_negative: {type: integer, enum: [-2, -1]}
+        inline_arr: {type: array, items: {type: string, enum: [p, q]}}
+        inline_map: {type: object, additionalProperties: {type: string, enum: [m, n]}}
+        req_default:
+          type: string
+          enum: [x, y]
+          default: x
+    Unions:
+      type: object
+      properties:
+        one_of_ab: {$ref: '#/components/schemas/OneOfAB'}
+        all_of_one_of: {$ref: '#/components/schemas/AllOfOneOf'}
+        prims: {$ref: '#/components/schemas/Prims'}
+        int_or_float: {$ref: '#/components/schemas/IntOrFloat'}
+        bad_mapping: {$ref: '#/components/schemas/BadMapping'}
+        shape: {$ref: '#/components/schemas/Shape'}
+        shape_with_extra: {$ref: '#/components/schemas/ShapeWithExtra'}
+        shape_or_text: {$ref: '#/components/schemas/ShapeOrText'}
+        inferred: {$ref: '#/components/schemas/InferredEvent'}
+        inline_inferred: {$ref: '#/components/schemas/InlineInferredEvent'}
+        adjacent: {$ref: '#/components/schemas/AdjacentEvent'}
+        pet: {$ref: '#/components/schemas/Pet'}
+        cat: {$ref: '#/components/schemas/Cat'}
+        dog: {$ref: '#/components/schemas/Dog'}
+        either: {$ref: '#/components/schemas/EitherRequired'}
+        any_required: {$ref: '#/components/schemas/AnyRequired'}
+        pets:
+          type: array
+          items: {$ref: '#/components/schemas/Pet'}
+        pets_by_name:
+          type: object
+          additionalProperties: {$ref: '#/components/schemas/Pet'}
+        inline_union:
+          oneOf:
+            - {$ref: '#/components/schemas/Cat'}
+            - {$ref: '#/components/schemas/Dog'}
+    Holder:
+      type: object
+      properties:
+        multi: {$ref: '#/components/schemas/MultiType'}
+        str_or_num: {$ref: '#/components/schemas/StrOrNum'}
+        bool_or_str: {$ref: '#/components/schemas/BoolOrStr'}
+        const_str: {$ref: '#/components/schemas/ConstStr'}
+        const_int: {$ref: '#/components/schemas/ConstInt'}
+        empty: {$ref: '#/components/schemas/EmptySchema'}
+        not_string: {$ref: '#/components/schemas/NotString'}
+        anything: {$ref: '#/components/schemas/Anything'}
+        only_null: {$ref: '#/components/schemas/OnlyNull'}
+        null_type: {$ref: '#/components/schemas/NullType'}
+        arr_no_items: {$ref: '#/components/schemas/ArrayNoItems'}
+        obj_no_type: {$ref: '#/components/schemas/ObjNoType'}
+        tuple: {$ref: '#/components/schemas/TupleLike'}
+        closed: {$ref: '#/components/schemas/Closed'}
+        props_and_map: {$ref: '#/components/schemas/PropsAndMap'}
+        props_and_any: {$ref: '#/components/schemas/PropsAndAny'}
+        pattern_props: {$ref: '#/components/schemas/PatternProps'}
+        pattern_and_props: {$ref: '#/components/schemas/PatternAndProps'}
+        read_only_required: {$ref: '#/components/schemas/ReadOnlyRequired'}
+        formats: {$ref: '#/components/schemas/Formats'}
+        map_of_arrays_of_unions: {$ref: '#/components/schemas/MapOfArraysOfUnions'}
+        map_of_arrays_of_nullable: {$ref: '#/components/schemas/MapOfArraysOfNullable'}
+        nested_nullable_arrays: {$ref: '#/components/schemas/NestedNullableArrays'}
+        array_of_arrays: {$ref: '#/components/schemas/ArrayOfArrays'}
+        nullables: {$ref: '#/components/schemas/Nullables'}
+        booleans: {$ref: '#/components/schemas/Booleans'}
+        conflicting_all_of: {$ref: '#/components/schemas/ConflictingAllOf'}
+        child: {$ref: '#/components/schemas/Child'}
+        closed_all_of: {$ref: '#/components/schemas/ClosedAllOf'}
+        inline_multi: {type: [boolean, string]}
+        inline_const: {const: 3}
+        deep: {type: array, items: {type: array, items: {type: array, items: {$ref: '#/components/schemas/A1'}}}}

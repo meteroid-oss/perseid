@@ -1,0 +1,51 @@
+openapi: 3.0.3
+info:
+  title: Legacy
+  version: 1.0.0
+  description: OpenAPI 3.0 only constructs, with servers variables and nullable keywords.
+servers:
+  - url: '{scheme}://{region}.api.example.com/{basePath}'
+    variables:
+      scheme: {default: https, enum: [https, http]}
+      region: {default: eu}
+      basePath: {default: v1}
+paths:
+  /things/{thingId}:
+    parameters:
+      - {name: thingId, in: path, required: true, schema: {type: string}}
+    post:
+      operationId: post_thing
+      tags: [things]
+      parameters:
+        - {name: q, in: query, schema: {type: string, nullable: true}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Thing'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Thing'}
+components:
+  schemas:
+    Thing:
+      type: object
+      required: [name, maybe]
+      properties:
+        name: {type: string}
+        maybe: {type: string, nullable: true}
+        legacy_nullable: {type: string, x-nullable: true}
+        maybe_ref:
+          nullable: true
+          allOf: [{$ref: '#/components/schemas/Bounded'}]
+        maybe_enum: {type: string, nullable: true, enum: [a, b, null]}
+        bounded_min: {type: integer, minimum: 0, exclusiveMinimum: true}
+        bounded_max: {type: number, maximum: 10, exclusiveMaximum: true}
+        bounded_both: {type: integer, minimum: 1, exclusiveMinimum: false, maximum: 9, exclusiveMaximum: false}
+    Bounded:
+      type: object
+      properties:
+        n: {type: integer, minimum: 1, exclusiveMinimum: true}

@@ -1,0 +1,87 @@
+openapi: 3.1.0
+info:
+  title: Edge Security
+  version: 1.0.0
+  description: Security schemes in every shape, with no global requirement and only per-operation ones.
+servers:
+  - url: https://api.example.com
+paths:
+  /oidc:
+    get:
+      operationId: oidc_op
+      tags: [auth]
+      security:
+        - oidc: []
+      responses: {'204': {description: ok}}
+  /cookie:
+    get:
+      operationId: cookie_op
+      tags: [auth]
+      security:
+        - sessionCookie: []
+      responses: {'204': {description: ok}}
+  /digest:
+    get:
+      operationId: digest_op
+      tags: [auth]
+      security:
+        - digestAuth: []
+      responses: {'204': {description: ok}}
+  /either:
+    get:
+      operationId: either_op
+      tags: [auth]
+      security:
+        - bearer: []
+        - header_key: []
+        - {}
+      responses: {'204': {description: ok}}
+  /both:
+    get:
+      operationId: both_op
+      tags: [auth]
+      security:
+        - basic: []
+          header_key: []
+      responses: {'204': {description: ok}}
+  /oauth:
+    get:
+      operationId: oauth_op
+      tags: [auth]
+      security:
+        - oauth: [read]
+      responses: {'204': {description: ok}}
+  /public:
+    get:
+      operationId: public_op
+      tags: [auth]
+      responses: {'204': {description: ok}}
+components:
+  securitySchemes:
+    oidc:
+      type: openIdConnect
+      openIdConnectUrl: https://auth.example.com/.well-known/openid-configuration
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+    digestAuth:
+      type: http
+      scheme: digest
+    bearer:
+      type: http
+      scheme: bearer
+    basic:
+      type: http
+      scheme: basic
+    header_key:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+    oauth:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/token
+          scopes:
+            read: Read access

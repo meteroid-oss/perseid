@@ -1,0 +1,771 @@
+openapi: 3.1.0
+info:
+  title: Edge Operations
+  version: 1.0.0
+  description: Operations, parameters, request bodies and responses in every shape the generator has to name and type.
+servers:
+  - url: https://api.example.com
+tags:
+  - name: items
+paths:
+  # Names and tags.
+  /no-op-id:
+    get:
+      tags: [misc]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /no-tags:
+    get:
+      operationId: untagged_op
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /multi-tag:
+    get:
+      operationId: multi_tag
+      tags: [alpha, beta]
+      responses: {'204': {description: ok}}
+  /tagcase1:
+    get:
+      operationId: tagcase1
+      tags: [User]
+      responses: {'204': {description: ok}}
+  /tagcase2:
+    post:
+      operationId: tagcase2
+      tags: [user]
+      responses: {'204': {description: ok}}
+  /tagcase3:
+    put:
+      operationId: tagcase3
+      tags: [user-admin]
+      responses: {'204': {description: ok}}
+  /tagcase4:
+    delete:
+      operationId: tagcase4
+      tags: [user_admin]
+      responses: {'204': {description: ok}}
+  /admin/users:
+    get:
+      operationId: admin_users
+      tags: [admin/users]
+      responses: {'204': {description: ok}}
+  /admin.things:
+    get:
+      operationId: admin_things
+      tags: [admin.things]
+      responses: {'204': {description: ok}}
+  /a/{id}:
+    get:
+      operationId: getThing
+      tags: [collide]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: ok}}
+  /b/{id}:
+    get:
+      operationId: get_thing
+      # `getThing` would also become `get_thing`: perseid asks to rename one of them.
+      x-perseid-name: get_other_thing
+      tags: [collide]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: ok}}
+  /named:
+    get:
+      operationId: first_named
+      x-perseid-name: custom_name
+      tags: [collide]
+      responses: {'204': {description: ok}}
+  /odd-op-ids:
+    get:
+      operationId: 'items/list.all now'
+      tags: [Odd Tag Name]
+      responses: {'204': {description: ok}}
+    post:
+      operationId: delete
+      tags: [class]
+      responses: {'204': {description: ok}}
+    put:
+      operationId: new
+      tags: [class]
+      responses: {'204': {description: ok}}
+    patch:
+      operationId: import
+      tags: [class]
+      responses: {'204': {description: ok}}
+    delete:
+      operationId: 2fa_disable
+      tags: [Item]
+      responses: {'204': {description: ok}}
+  /things/str:
+    post:
+      operationId: things_str
+      tags: [things]
+      parameters: [{name: q, in: query, schema: {type: string}}]
+      responses: {'204': {description: ok}}
+  /things/other:
+    post:
+      operationId: things_other
+      tags: [things]
+      parameters: [{name: q, in: query, schema: {type: string}}]
+      responses: {'204': {description: ok}}
+  /trailing/:
+    get:
+      operationId: trailing_slash
+      tags: [methods]
+      responses: {'204': {description: ok}}
+  # Methods and flags.
+  /methods:
+    head:
+      operationId: head_op
+      tags: [methods]
+      responses: {'200': {description: ok}}
+    options:
+      operationId: options_op
+      tags: [methods]
+      responses: {'204': {description: ok}}
+    trace:
+      operationId: trace_op
+      tags: [methods]
+      responses: {'204': {description: ok}}
+  /get-body:
+    get:
+      operationId: get_with_body
+      tags: [methods]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}
+      responses: {'204': {description: ok}}
+  /internal:
+    get:
+      operationId: internal_op
+      tags: [flags]
+      x-internal: true
+      responses: {'204': {description: ok}}
+  /deprecated:
+    get:
+      operationId: deprecated_op
+      tags: [flags]
+      deprecated: true
+      summary: Deprecated operation
+      responses: {'204': {description: ok}}
+  /no-pagination:
+    get:
+      operationId: not_paginated
+      tags: [flags]
+      x-pagination: false
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/Item'}}
+                  next_cursor: {type: [string, 'null']}
+  /paginated:
+    get:
+      operationId: paginated
+      tags: [flags]
+      x-pagination:
+        cursor: cursor
+        next_cursor: next_cursor
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/Item'}}
+                  next_cursor: {type: [string, 'null']}
+  /other-server:
+    get:
+      operationId: other_server
+      tags: [flags]
+      servers:
+        - url: https://{region}.files.example.com/{version}
+          variables:
+            region: {default: eu, enum: [eu, us]}
+            version: {default: v2}
+      responses: {'204': {description: ok}}
+  # Parameters.
+  /items/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string}}
+      - {name: shared_q, in: query, schema: {type: string}}
+    put:
+      operationId: put_item
+      tags: [items]
+      parameters:
+        - {name: shared_q, in: query, schema: {type: integer}, description: overrides the path-level parameter}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Item'}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /x/{self}:
+    get:
+      operationId: path_param_self
+      tags: [params]
+      parameters: [{name: self, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: ok}}
+  /same-name:
+    get:
+      operationId: query_and_header
+      tags: [params]
+      parameters:
+        - {name: v, in: query, schema: {type: string}}
+        - {name: v, in: header, schema: {type: string}}
+        - {name: v, in: cookie, schema: {type: string}}
+      responses: {'204': {description: ok}}
+  /same-name/{id}:
+    get:
+      operationId: path_and_query
+      tags: [params]
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {name: id, in: query, schema: {type: string}}
+      responses: {'204': {description: ok}}
+  /cookies:
+    get:
+      operationId: cookie_param
+      tags: [params]
+      parameters:
+        - {name: sid, in: cookie, schema: {type: string}}
+        - {name: theme, in: cookie, required: true, schema: {type: string}}
+      responses: {'204': {description: ok}}
+  /reserved-params/{self}:
+    post:
+      operationId: reserved_params
+      tags: [params]
+      parameters:
+        - {name: self, in: path, required: true, schema: {type: string}}
+        - {name: options, in: query, schema: {type: string}}
+        - {name: body, in: query, schema: {type: string}}
+        - {name: params, in: query, schema: {type: string}}
+        - {name: request, in: query, schema: {type: string}}
+        - {name: headers, in: query, schema: {type: string}}
+        - {name: signal, in: query, schema: {type: string}}
+        - {name: timeout, in: query, schema: {type: string}}
+        - {name: client, in: query, schema: {type: string}}
+        - {name: ctx, in: query, schema: {type: string}}
+        - {name: opts, in: query, schema: {type: string}}
+        - {name: query, in: query, schema: {type: string}}
+        - {name: path, in: query, schema: {type: string}}
+        - {name: url, in: query, schema: {type: string}}
+        - {name: method, in: query, schema: {type: string}}
+        - {name: response, in: query, schema: {type: string}}
+        - {name: err, in: query, schema: {type: string}}
+        - {name: error, in: query, schema: {type: string}}
+        - {name: result, in: query, schema: {type: string}}
+        - {name: req, in: query, schema: {type: string}}
+        - {name: resp, in: query, schema: {type: string}}
+        - {name: res, in: query, schema: {type: string}}
+        - {name: type, in: query, schema: {type: string}}
+        - {name: class, in: query, schema: {type: string}}
+        - {name: default, in: query, schema: {type: string}}
+        - {name: async, in: query, schema: {type: string}}
+        - {name: page.size, in: query, schema: {type: integer}}
+        - {name: 'filter[status]', in: query, schema: {type: string}}
+        - {name: X-Rate-Limit, in: header, schema: {type: integer}}
+        - {name: session_id, in: cookie, schema: {type: string}}
+        - {name: kind, in: query, schema: {$ref: '#/components/schemas/Kind'}}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                self: {type: string}
+                options: {type: string}
+                kind: {type: string}
+      responses:
+        '204': {description: ok}
+  /header-names/{name}.{ext}:
+    get:
+      operationId: header_names
+      tags: [params]
+      parameters:
+        - {name: name, in: path, required: true, schema: {type: string}}
+        - {name: ext, in: path, required: true, schema: {type: string}}
+        - {name: Content-Type, in: header, schema: {type: string}}
+        - {name: Authorization, in: header, schema: {type: string}}
+        - {name: Accept, in: header, schema: {type: string}}
+      responses: {'204': {description: ok}}
+  /int-path/{n}/{k}:
+    get:
+      operationId: int_path
+      tags: [params]
+      parameters:
+        - {name: n, in: path, required: true, schema: {type: integer, format: int64}}
+        - {name: k, in: path, required: true, schema: {$ref: '#/components/schemas/Kind'}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: string}}}}
+  /styles/{label}/{matrix}:
+    get:
+      operationId: path_styles
+      tags: [params]
+      parameters:
+        - {name: label, in: path, required: true, style: label, schema: {type: string}}
+        - {name: matrix, in: path, required: true, style: matrix, schema: {type: array, items: {type: string}}}
+        - {name: pipes, in: query, style: pipeDelimited, explode: false, schema: {type: array, items: {type: string}}}
+        - {name: spaces, in: query, style: spaceDelimited, explode: false, schema: {type: array, items: {type: integer}}}
+        - {name: csv, in: query, style: form, explode: false, schema: {type: array, items: {type: string}}}
+        - {name: exploded, in: query, style: form, explode: true, schema: {type: array, items: {type: string}}}
+        - {name: deep, in: query, style: deepObject, explode: true, schema: {type: object, properties: {a: {type: string}, b: {type: integer}}}}
+        - {name: simple, in: header, style: simple, explode: true, schema: {type: array, items: {type: string}}}
+      responses: {'204': {description: ok}}
+  /content-params/{p}:
+    get:
+      operationId: content_params
+      tags: [params]
+      parameters:
+        - name: p
+          in: path
+          required: true
+          content: {application/json: {schema: {type: object, properties: {a: {type: string}}}}}
+        - name: filter
+          in: query
+          content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}
+        - name: h
+          in: header
+          content: {application/json: {schema: {type: array, items: {type: integer}}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: string}}}}
+  /param-types/{kind}:
+    get:
+      operationId: param_types
+      tags: [params]
+      parameters:
+        - {name: kind, in: path, required: true, schema: {$ref: '#/components/schemas/Kind'}}
+        - {name: limit, in: query, required: true, schema: {type: integer, default: 10}}
+        - {name: kinds, in: header, schema: {type: array, items: {$ref: '#/components/schemas/Kind'}}}
+        - {name: when, in: query, schema: {type: string, format: date-time}}
+        - {name: uid, in: query, schema: {type: string, format: uuid}}
+        - {name: amount, in: query, schema: {type: string, format: decimal}}
+        - {name: nullable_q, in: query, schema: {type: [string, 'null']}}
+        - {name: bool_h, in: header, required: true, schema: {type: boolean}}
+        - {name: obj, in: query, schema: {$ref: '#/components/schemas/Item'}}
+        - {name: map_q, in: query, style: form, explode: true, schema: {type: object, additionalProperties: {type: integer}}}
+        - {name: union_q, in: query, schema: {oneOf: [{type: integer}, {$ref: '#/components/schemas/Kind'}]}}
+        - {name: byte_q, in: query, schema: {type: string, format: byte}}
+        - {name: date_h, in: header, schema: {type: string, format: date}}
+      responses: {'204': {description: ok}}
+  # Request bodies.
+  /bodies/optional:
+    post:
+      operationId: optional_body
+      tags: [bodies]
+      requestBody:
+        required: false
+        content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}
+      responses: {'204': {description: ok}}
+  /bodies/multi-media:
+    post:
+      operationId: multi_media
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Item'}
+          application/x-www-form-urlencoded:
+            schema: {$ref: '#/components/schemas/Item'}
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/Item'}
+      responses: {'204': {description: ok}}
+  /bodies/text:
+    post:
+      operationId: text_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          text/plain:
+            schema: {type: string}
+      responses:
+        '200': {description: ok, content: {text/plain: {schema: {type: string}}}}
+  /bodies/any-media:
+    post:
+      operationId: any_media_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          '*/*':
+            schema: {type: string, format: binary}
+      responses: {'204': {description: ok}}
+  /bodies/octet-and-json:
+    post:
+      operationId: octet_and_json_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: {type: string, format: binary}
+          application/json:
+            schema: {$ref: '#/components/schemas/Item'}
+      responses: {'204': {description: ok}}
+  /bodies/octet-and-image:
+    post:
+      operationId: octet_and_image_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: {}
+          image/png: {}
+      responses: {'204': {description: ok}}
+  /bodies/json-no-schema:
+    post:
+      operationId: json_no_schema_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          application/json: {}
+      responses: {'204': {description: ok}}
+  /bodies/empty-form:
+    post:
+      operationId: empty_form_body
+      tags: [bodies]
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema: {type: object}
+      responses: {'204': {description: ok}}
+  /bodies/form-encoding:
+    post:
+      operationId: form_encoding
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                ids: {type: array, items: {type: string}}
+                csv: {type: array, items: {type: integer}}
+                filter: {type: object, properties: {a: {type: string}}}
+                name: {type: string}
+            encoding:
+              ids: {style: form}
+              csv: {style: form, explode: false}
+              filter: {style: deepObject, explode: true}
+      responses: {'204': {description: ok}}
+  /bodies/multipart:
+    post:
+      operationId: multipart_files
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+                files: {type: array, items: {type: string, format: binary}}
+                meta: {type: object, additionalProperties: {type: string}}
+                maybe_file: {type: [string, 'null'], format: binary}
+                kind: {$ref: '#/components/schemas/Kind'}
+            encoding:
+              file: {contentType: image/png}
+      responses: {'204': {description: ok}}
+  /bodies/int:
+    post:
+      operationId: int_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: integer}}}
+      responses: {'204': {description: ok}}
+  /bodies/str:
+    post:
+      operationId: str_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: string}}}
+      responses: {'204': {description: ok}}
+  /bodies/map:
+    post:
+      operationId: map_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: {type: integer}}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: object, additionalProperties: {$ref: '#/components/schemas/Item'}}}}}
+  /bodies/union:
+    post:
+      operationId: union_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {oneOf: [{$ref: '#/components/schemas/Item'}, {$ref: '#/components/schemas/Other'}]}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {anyOf: [{type: string}, {type: integer}]}}}}
+  /bodies/nullable:
+    post:
+      operationId: nullable_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: [object, 'null'], properties: {a: {type: string}}}}}
+      responses: {'204': {description: ok}}
+  /bodies/nullable-ref:
+    post:
+      operationId: nullable_ref_body
+      tags: [bodies]
+      requestBody:
+        content: {application/json: {schema: {oneOf: [{$ref: '#/components/schemas/Item'}, {type: 'null'}]}}}
+      responses: {'204': {description: ok}}
+  /bodies/arr-arr:
+    post:
+      operationId: arr_arr_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: array, items: {type: array, items: {type: integer}}}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: array, items: {$ref: '#/components/schemas/Item'}}}}}}
+  /bodies/empty-obj:
+    post:
+      operationId: empty_obj_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object}}}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {}}}}
+  /bodies/inline:
+    post:
+      operationId: inline_body
+      tags: [bodies]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: {type: string}
+                nested:
+                  type: object
+                  properties:
+                    value: {type: integer}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: {type: boolean}
+  # Responses.
+  /responses/xml:
+    get:
+      operationId: get_xml
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/xml: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /responses/png:
+    get:
+      operationId: get_png
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {image/png: {schema: {type: string, format: binary}}}}
+  /responses/star:
+    get:
+      operationId: get_star
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {'*/*': {schema: {type: string}}}}
+  /responses/no-schema:
+    get:
+      operationId: json_no_schema
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {}}}
+  /responses/only-default:
+    get:
+      operationId: only_default
+      tags: [responses]
+      responses:
+        default: {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /responses/only-4xx:
+    get:
+      operationId: only_4xx
+      tags: [responses]
+      responses:
+        '404': {description: not found, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+  /responses/range-2xx:
+    get:
+      operationId: range_2xx
+      tags: [responses]
+      responses:
+        2XX: {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+        5XX: {description: server error, content: {application/json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+  /responses/errors:
+    get:
+      operationId: typed_errors
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+        '400': {description: bad request, content: {application/json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+        4XX: {description: client error, content: {application/problem+json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+        '500': {description: server error, content: {text/plain: {schema: {type: string}}}}
+        default: {description: unexpected, content: {application/json: {schema: {$ref: '#/components/schemas/Problem'}}}}
+  /responses/two-success:
+    post:
+      operationId: two_success
+      tags: [responses]
+      responses:
+        '201': {description: created, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+        '202': {description: accepted, content: {application/json: {schema: {$ref: '#/components/schemas/Other'}}}}
+  /responses/ok-or-empty:
+    post:
+      operationId: ok_or_empty
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Item'}}}}
+        '204': {description: no content}
+  /responses/json-and-text:
+    get:
+      operationId: json_and_text
+      tags: [responses]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/Item'}}
+            text/plain: {schema: {type: string}}
+  /responses/headers:
+    get:
+      operationId: response_headers
+      tags: [responses]
+      responses:
+        '200':
+          description: ok
+          headers:
+            X-Total: {schema: {type: integer}}
+            X-Next: {$ref: '#/components/headers/Next'}
+          content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Item'}}}}
+  /responses/int:
+    get:
+      operationId: int_response
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: integer}}}}
+  /responses/bool:
+    get:
+      operationId: bool_response
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: boolean}}}}
+  /responses/nullable:
+    get:
+      operationId: nullable_response
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {oneOf: [{$ref: '#/components/schemas/Item'}, {type: 'null'}]}}}}
+  /responses/map:
+    get:
+      operationId: map_response
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: object, additionalProperties: {$ref: '#/components/schemas/Item'}}}}}
+  /responses/array-of-arrays:
+    get:
+      operationId: array_of_arrays_response
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: array, items: {$ref: '#/components/schemas/Item'}}}}}}
+  /responses/union:
+    get:
+      operationId: union_response
+      tags: [responses]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {oneOf: [{$ref: '#/components/schemas/Item'}, {$ref: '#/components/schemas/Other'}]}}}}
+  /responses/ref:
+    post:
+      operationId: referenced_parts
+      tags: [responses]
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+      requestBody:
+        $ref: '#/components/requestBodies/ItemBody'
+      responses:
+        '200':
+          $ref: '#/components/responses/ItemResponse'
+        '400':
+          $ref: '#/components/responses/Failure'
+webhooks:
+  itemCreated:
+    post:
+      operationId: item_created
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Item'}
+      responses: {'200': {description: ok}}
+  other:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Other'}
+      responses: {'200': {description: ok}}
+components:
+  headers:
+    Next: {schema: {type: string}}
+  parameters:
+    Limit: {name: limit, in: query, schema: {type: integer}}
+  requestBodies:
+    ItemBody:
+      required: true
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Item'}
+  responses:
+    ItemResponse:
+      description: ok
+      headers:
+        X-Id: {schema: {type: string}}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Item'}
+    Failure:
+      description: failure
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Problem'}
+  schemas:
+    Kind: {type: string, enum: [a, b]}
+    Item:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+        n: {type: integer}
+    Other:
+      type: object
+      properties:
+        z: {type: string}
+    Problem:
+      type: object
+      properties:
+        detail: {type: string}

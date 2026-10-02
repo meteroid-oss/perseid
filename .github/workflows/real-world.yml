@@ -1,8 +1,10 @@
 name: Real-world specs
-# Generates and compiles SDKs from large published specs, off the pull request path: they
-# change without notice and take a while to build.
+# Generates and compiles SDKs from large published specs. Pull requests only run it when the
+# generator, templates or runtimes change: the specs change without notice and take a while to build.
 on:
   workflow_dispatch:
+  pull_request:
+    paths: [src/**, templates/**, runtime/**, Cargo.lock, .github/workflows/real-world.yml]
   schedule:
     - cron: '23 4 * * 1'
 permissions:

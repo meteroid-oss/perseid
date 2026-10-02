@@ -1,0 +1,503 @@
+openapi: 3.1.0
+info:
+  title: Client
+  version: 1.0.0
+  description: Schema and property names that collide with runtime types, builtins and keywords of the generated SDKs.
+servers:
+  - url: https://api.example.com
+paths:
+  /echo:
+    post:
+      operationId: echo
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Holder'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Holder'}
+  /props:
+    post:
+      operationId: echo_props
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Props'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Props'}
+  /spelling:
+    post:
+      operationId: echo_spelling
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Spelling'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Spelling'}
+  /inline-collisions:
+    post:
+      operationId: create_pet
+      tags: [pets]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                n: {type: integer}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Pet'}
+  /bases:
+    post:
+      operationId: echo_pet_base
+      tags: [echo]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PetBase'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PetBase'}
+components:
+  schemas:
+    Annotated: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Any: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ApiBase: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ApiError: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ApiException: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ApiTimeoutError: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Array: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Arrays: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Base64: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    BaseModel: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    BigInteger: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Boolean: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Box: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Builder: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    BuiltinNames: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Byte: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Character: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Class: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Client: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Codec: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Collection: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Collections: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    CompletableFuture: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Config: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Configuration: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Consumer: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Context: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Credentials: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Date: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Default: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Deprecated: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Deserialize: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Deserializer: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Discriminator: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Duration: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Echo: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Entry: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Error: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ErrorBody: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ErrorStatus: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    EventStream: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Exception: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Field: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Function: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    FunctionalInterface: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Headers: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    HttpClient: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    HttpMethod: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Instant: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Integer: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Iterable: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Iterator: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Json: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    JsonCreator: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    JsonInclude: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    JsonNode: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    JsonProperty: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    JsonValue: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    List: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Literal: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    LocalDate: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Long: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Map: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Math: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Middleware: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ModelParseError: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Multipart: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Next: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    None: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    NotFoundError: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    'Null': {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Nullable: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Number: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Object: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ObjectMapper: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ObjectUnion: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Option: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Optional: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Override: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Page: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Pagination: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Paginator: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Promise: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Ptr: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Record: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Request: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    RequestOptions: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Response: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Result: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Runnable: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    SecurityScheme: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Self: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Serialize: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Serializer: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Set: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Short: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    SseEvent: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    StrEnum: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Stream: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    String: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Supplier: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    SuppressWarnings: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    System: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    TaggedUnionModel: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Thread: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Time: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    TokenProvider: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Type: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    TypeReference: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    UUID: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Union: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    UnionRules: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Unit: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    UnknownVariant: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Unset: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Upload: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Uri: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Url: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Utils: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Value: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Vec: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    Void: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    WithHeader: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    ZonedDateTime: {type: object, required: [v], properties: {v: {type: string}, when: {type: string, format: date-time}, m: {type: object, additionalProperties: {type: integer}}}}
+    IntEnum: {type: integer, enum: [1, 2]}
+    StrEnumValues: {type: string, enum: [a, b]}
+    # Names that are not identifiers. Schemas or properties that only differ by case or
+    # separators (`Uuid` next to `UUID`) are rejected by design, see tests/cli.rs.
+    foo_bar: {type: object, properties: {a: {type: string}}}
+    1Thing: {type: object, properties: {v: {type: string}}}
+    3DModel: {type: object, properties: {v: {type: string}}}
+    com.example.Thing: {type: object, properties: {v: {type: string}}}
+    Thing.V2: {type: object, properties: {v: {type: string}}}
+    _private: {type: object, properties: {v: {type: string}}}
+    lower: {type: object, properties: {v: {type: string}}}
+    HTTPServer: {type: object, properties: {v: {type: string}}}
+    a/b: {type: object, properties: {v: {type: string}}}
+    Holder:
+      type: object
+      properties:
+        s1: {$ref: '#/components/schemas/Annotated'}
+        s2: {$ref: '#/components/schemas/Any'}
+        s3: {$ref: '#/components/schemas/ApiBase'}
+        s4: {$ref: '#/components/schemas/ApiError'}
+        s5: {$ref: '#/components/schemas/ApiException'}
+        s6: {$ref: '#/components/schemas/ApiTimeoutError'}
+        s7: {$ref: '#/components/schemas/Array'}
+        s8: {$ref: '#/components/schemas/Arrays'}
+        s9: {$ref: '#/components/schemas/Base64'}
+        s10: {$ref: '#/components/schemas/BaseModel'}
+        s11: {$ref: '#/components/schemas/BigInteger'}
+        s12: {$ref: '#/components/schemas/Boolean'}
+        s13: {$ref: '#/components/schemas/Box'}
+        s14: {$ref: '#/components/schemas/Builder'}
+        s15: {$ref: '#/components/schemas/BuiltinNames'}
+        s16: {$ref: '#/components/schemas/Byte'}
+        s17: {$ref: '#/components/schemas/Character'}
+        s18: {$ref: '#/components/schemas/Class'}
+        s19: {$ref: '#/components/schemas/Client'}
+        s20: {$ref: '#/components/schemas/Codec'}
+        s21: {$ref: '#/components/schemas/Collection'}
+        s22: {$ref: '#/components/schemas/Collections'}
+        s23: {$ref: '#/components/schemas/CompletableFuture'}
+        s24: {$ref: '#/components/schemas/Config'}
+        s25: {$ref: '#/components/schemas/Configuration'}
+        s26: {$ref: '#/components/schemas/Consumer'}
+        s27: {$ref: '#/components/schemas/Context'}
+        s28: {$ref: '#/components/schemas/Credentials'}
+        s29: {$ref: '#/components/schemas/Date'}
+        s30: {$ref: '#/components/schemas/Default'}
+        s31: {$ref: '#/components/schemas/Deprecated'}
+        s32: {$ref: '#/components/schemas/Deserialize'}
+        s33: {$ref: '#/components/schemas/Deserializer'}
+        s34: {$ref: '#/components/schemas/Discriminator'}
+        s35: {$ref: '#/components/schemas/Duration'}
+        s36: {$ref: '#/components/schemas/Echo'}
+        s37: {$ref: '#/components/schemas/Entry'}
+        s38: {$ref: '#/components/schemas/Error'}
+        s39: {$ref: '#/components/schemas/ErrorBody'}
+        s40: {$ref: '#/components/schemas/ErrorStatus'}
+        s41: {$ref: '#/components/schemas/EventStream'}
+        s42: {$ref: '#/components/schemas/Exception'}
+        s43: {$ref: '#/components/schemas/Field'}
+        s44: {$ref: '#/components/schemas/Function'}
+        s45: {$ref: '#/components/schemas/FunctionalInterface'}
+        s46: {$ref: '#/components/schemas/Headers'}
+        s47: {$ref: '#/components/schemas/HttpClient'}
+        s48: {$ref: '#/components/schemas/HttpMethod'}
+        s49: {$ref: '#/components/schemas/Instant'}
+        s50: {$ref: '#/components/schemas/Integer'}
+        s51: {$ref: '#/components/schemas/Iterable'}
+        s52: {$ref: '#/components/schemas/Iterator'}
+        s53: {$ref: '#/components/schemas/Json'}
+        s54: {$ref: '#/components/schemas/JsonCreator'}
+        s55: {$ref: '#/components/schemas/JsonInclude'}
+        s56: {$ref: '#/components/schemas/JsonNode'}
+        s57: {$ref: '#/components/schemas/JsonProperty'}
+        s58: {$ref: '#/components/schemas/JsonValue'}
+        s59: {$ref: '#/components/schemas/List'}
+        s60: {$ref: '#/components/schemas/Literal'}
+        s61: {$ref: '#/components/schemas/LocalDate'}
+        s62: {$ref: '#/components/schemas/Long'}
+        s63: {$ref: '#/components/schemas/Map'}
+        s64: {$ref: '#/components/schemas/Math'}
+        s65: {$ref: '#/components/schemas/Middleware'}
+        s66: {$ref: '#/components/schemas/ModelParseError'}
+        s67: {$ref: '#/components/schemas/Multipart'}
+        s68: {$ref: '#/components/schemas/Next'}
+        s69: {$ref: '#/components/schemas/None'}
+        s70: {$ref: '#/components/schemas/NotFoundError'}
+        s71: {$ref: '#/components/schemas/Null'}
+        s72: {$ref: '#/components/schemas/Nullable'}
+        s73: {$ref: '#/components/schemas/Number'}
+        s74: {$ref: '#/components/schemas/Object'}
+        s75: {$ref: '#/components/schemas/ObjectMapper'}
+        s76: {$ref: '#/components/schemas/ObjectUnion'}
+        s77: {$ref: '#/components/schemas/Option'}
+        s78: {$ref: '#/components/schemas/Optional'}
+        s79: {$ref: '#/components/schemas/Override'}
+        s80: {$ref: '#/components/schemas/Page'}
+        s81: {$ref: '#/components/schemas/Pagination'}
+        s82: {$ref: '#/components/schemas/Paginator'}
+        s83: {$ref: '#/components/schemas/Promise'}
+        s84: {$ref: '#/components/schemas/Ptr'}
+        s85: {$ref: '#/components/schemas/Record'}
+        s86: {$ref: '#/components/schemas/Request'}
+        s87: {$ref: '#/components/schemas/RequestOptions'}
+        s88: {$ref: '#/components/schemas/Response'}
+        s89: {$ref: '#/components/schemas/Result'}
+        s90: {$ref: '#/components/schemas/Runnable'}
+        s91: {$ref: '#/components/schemas/SecurityScheme'}
+        s92: {$ref: '#/components/schemas/Self'}
+        s93: {$ref: '#/components/schemas/Serialize'}
+        s94: {$ref: '#/components/schemas/Serializer'}
+        s95: {$ref: '#/components/schemas/Set'}
+        s96: {$ref: '#/components/schemas/Short'}
+        s97: {$ref: '#/components/schemas/SseEvent'}
+        s98: {$ref: '#/components/schemas/StrEnum'}
+        s99: {$ref: '#/components/schemas/Stream'}
+        s100: {$ref: '#/components/schemas/String'}
+        s101: {$ref: '#/components/schemas/Supplier'}
+        s102: {$ref: '#/components/schemas/SuppressWarnings'}
+        s103: {$ref: '#/components/schemas/System'}
+        s104: {$ref: '#/components/schemas/TaggedUnionModel'}
+        s105: {$ref: '#/components/schemas/Thread'}
+        s106: {$ref: '#/components/schemas/Time'}
+        s107: {$ref: '#/components/schemas/TokenProvider'}
+        s108: {$ref: '#/components/schemas/Type'}
+        s109: {$ref: '#/components/schemas/TypeReference'}
+        s110: {$ref: '#/components/schemas/UUID'}
+        s111: {$ref: '#/components/schemas/Union'}
+        s112: {$ref: '#/components/schemas/UnionRules'}
+        s113: {$ref: '#/components/schemas/Unit'}
+        s114: {$ref: '#/components/schemas/UnknownVariant'}
+        s115: {$ref: '#/components/schemas/Unset'}
+        s116: {$ref: '#/components/schemas/Upload'}
+        s117: {$ref: '#/components/schemas/Uri'}
+        s118: {$ref: '#/components/schemas/Url'}
+        s119: {$ref: '#/components/schemas/Utils'}
+        s121: {$ref: '#/components/schemas/Value'}
+        s122: {$ref: '#/components/schemas/Vec'}
+        s123: {$ref: '#/components/schemas/Void'}
+        s124: {$ref: '#/components/schemas/WithHeader'}
+        s125: {$ref: '#/components/schemas/ZonedDateTime'}
+        int_enum: {$ref: '#/components/schemas/IntEnum'}
+        str_enum: {$ref: '#/components/schemas/StrEnumValues'}
+        foo_bar: {$ref: '#/components/schemas/foo_bar'}
+        digit: {$ref: '#/components/schemas/1Thing'}
+        digit_model: {$ref: '#/components/schemas/3DModel'}
+        dotted: {$ref: '#/components/schemas/com.example.Thing'}
+        dotted_version: {$ref: '#/components/schemas/Thing.V2'}
+        private: {$ref: '#/components/schemas/_private'}
+        lower: {$ref: '#/components/schemas/lower'}
+        acronym: {$ref: '#/components/schemas/HTTPServer'}
+        # JSON pointer escapes: `~1` is `/`.
+        escaped: {$ref: '#/components/schemas/a~1b'}
+        escaped_property: {$ref: '#/components/schemas/a~1b/properties/v'}
+        child: {$ref: '#/components/schemas/Child'}
+    Props:
+      type: object
+      required: [foo_bar, ID]
+      properties:
+        foo_bar: {type: string}
+        ID: {type: string}
+        Props: {type: string}
+        _: {type: string}
+        __init__: {type: string}
+        '@type': {type: string}
+        x-custom: {type: string}
+        '': {type: string}
+        '123': {type: string}
+        a.b: {type: string}
+        to_json: {type: string}
+        to_dict: {type: string}
+        from_dict: {type: string}
+        model_config: {type: string}
+        model_dump: {type: string}
+        validate: {type: string}
+        schema: {type: string}
+        fields: {type: string}
+        copy: {type: string}
+        json: {type: string}
+        dict: {type: string}
+        hashCode: {type: string}
+        equals: {type: string}
+        toString: {type: string}
+        getClass: {type: string}
+        builder: {type: string}
+        build: {type: string}
+        constructor: {type: string}
+        prototype: {type: string}
+        __proto__: {type: string}
+        String: {type: string}
+        Object: {type: string}
+        int: {type: string}
+        str: {type: string}
+        zname: {type: string}
+        list: {type: string}
+        bool: {type: string}
+        float: {type: string}
+        bytes: {type: string}
+        Optional: {type: string}
+        Any: {type: string}
+        datetime: {type: string}
+        enum: {type: string}
+        struct: {type: string}
+        impl: {type: string}
+        match: {type: string}
+        mod: {type: string}
+        ref: {type: string}
+        mut: {type: string}
+        crate: {type: string}
+        super: {type: string}
+        self: {type: string}
+        loop: {type: string}
+        go: {type: string}
+        chan: {type: string}
+        range: {type: string}
+        map: {type: string}
+        var: {type: string}
+        let: {type: string}
+        const: {type: string}
+        new: {type: string}
+        delete: {type: string}
+        void: {type: string}
+        yield: {type: string}
+        await: {type: string}
+        lambda: {type: string}
+        global: {type: string}
+        nonlocal: {type: string}
+        None: {type: string}
+        True: {type: string}
+        False: {type: string}
+        abstract: {type: string}
+        final: {type: string}
+        static: {type: string}
+        synchronized: {type: string}
+        throws: {type: string}
+        transient: {type: string}
+        volatile: {type: string}
+        native: {type: string}
+        record: {type: string}
+        sealed: {type: string}
+        _leading: {type: string}
+        trailing_: {type: string}
+        UPPER: {type: string}
+        mixed_Case-thing.x: {type: string}
+    # Names Go cannot put in a struct tag as they are, and unicode ones.
+    Spelling:
+      type: object
+      properties:
+        'say"hi': {type: string}
+        'back\\slash': {type: string}
+        'back`tick': {type: string}
+        "apos'd": {type: string}
+        "tab\there": {type: string}
+        名前: {type: string}
+        Ünïcode: {type: string}
+        'with space': {type: string}
+        'dollar$sign': {type: string}
+        'percent%': {type: string}
+        'brace{x}': {type: string}
+        '${interp}': {type: string}
+        '{{jinja}}': {type: string}
+    # A schema named after an inline schema the operation would generate.
+    CreatePetRequest: {type: object, required: [zzz], properties: {zzz: {type: boolean}}}
+    PetsCreateRequest: {type: object, required: [zzz], properties: {zzz: {type: boolean}}}
+    PetOwner: {type: object, required: [x], properties: {x: {type: boolean}}}
+    Pet:
+      type: object
+      properties:
+        owner:
+          type: object
+          properties:
+            name: {type: string}
+        other: {$ref: '#/components/schemas/PetOwner'}
+        a: {$ref: '#/components/schemas/CreatePetRequest'}
+        b: {$ref: '#/components/schemas/PetsCreateRequest'}
+    # A property named like the schema holding it, and like another property of a parent.
+    Owner: {type: object, properties: {id: {type: string}}}
+    Child:
+      allOf:
+        - $ref: '#/components/schemas/Owner'
+        - type: object
+          properties:
+            owner: {type: string}
+    PetBase:
+      type: object
+      required: [petType]
+      properties: {petType: {type: string}}
+      discriminator: {propertyName: petType, mapping: {cat: '#/components/schemas/PetCat'}}
+    PetCat:
+      allOf:
+        - $ref: '#/components/schemas/PetBase'
+        - {type: object, properties: {meow: {type: boolean}}}
