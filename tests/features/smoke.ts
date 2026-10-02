@@ -377,8 +377,8 @@ async function main() {
     uploaded.status,
     'count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status":"ok"};name=::doc;tags=::a;tags=::b'
   );
-  const content = await client.streaming.uploadContent("f1", new Blob(["raw bytes"]));
-  assert.equal(content.status, "application/octet-stream:raw bytes");
+  const rawUpload = await client.streaming.uploadContent("f1", new Blob(["raw bytes"]));
+  assert.equal(rawUpload.status, "application/octet-stream:raw bytes");
   const streamed = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(new TextEncoder().encode("streamed"));
