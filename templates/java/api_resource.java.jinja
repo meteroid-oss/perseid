@@ -15,6 +15,18 @@
 {% set UPLOAD = root ~ "streaming.Upload" if "Upload" in models else "Upload" -%}
 {% set MULTIPART = root ~ "streaming.Multipart" if "Multipart" in models else "Multipart" -%}
 {% set http_client_type = sdk.client_name ~ "HttpClient" -%}
+{#- The unions of request and response bodies, declared once in the blocking class: their name and type. -#}
+{% set bu = namespace(names=[], decls=[]) -%}
+{% for op in resource.operations -%}
+    {% if op.request_body_union is defined and op.request_body_json_type is defined and op.request_body_union not in bu.names -%}
+        {% set bu.names = bu.names + [op.request_body_union] -%}
+        {% set bu.decls = bu.decls + [[op.request_body_json_type, op.request_body_union]] -%}
+    {% endif -%}
+    {% if op.response_body_union is defined and op.response_body_json_type is defined and op.response_body_union not in bu.names -%}
+        {% set bu.names = bu.names + [op.response_body_union] -%}
+        {% set bu.decls = bu.decls + [[op.response_body_json_type, op.response_body_union]] -%}
+    {% endif -%}
+{% endfor -%}
 {#- Everything both resource classes need of each operation. -#}
 {% set ops = namespace(list=[]) -%}
 {% for op in resource.operations -%}
@@ -39,7 +51,7 @@
         {% set res_type = "String" -%}
         {% set returns = "returningText()" -%}
     {% elif op.response_body_json_type is defined -%}
-        {% set res_type = op.response_body_json_type.to_java() -%}
+        {% set res_type = m.java_type(op.response_body_json_type, resource_type_name ~ "." ~ op.response_body_union) if op.response_body_union is defined else op.response_body_json_type.to_java() -%}
         {% set returns = "returning(new TypeReference<" ~ res_type ~ ">() {})" -%}
     {% elif op.response_body_schema_name is defined -%}
         {% set res_item = op.response_body_schema_name | to_upper_camel_case -%}
@@ -71,7 +83,7 @@
             {% set body_var = "body" -%}
         {% endif -%}
     {% elif op.request_body_json_type is defined -%}
-        {% set body_type = op.request_body_json_type.to_java() -%}
+        {% set body_type = m.java_type(op.request_body_json_type, resource_type_name ~ "." ~ op.request_body_union) if op.request_body_union is defined else op.request_body_json_type.to_java() -%}
     {% elif op.request_body_kind == "binary" -%}
         {% set body_type = UPLOAD -%}
     {% elif op.request_body_kind == "multipart" -%}
@@ -414,6 +426,13 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import com.fasterxml.jackson.core.type.TypeReference;
+{% if bu.decls -%}
+import com.fasterxml.jackson.annotation.JsonValue;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import java.io.IOException;
+{% endif -%}
 import okhttp3.Headers;
 import okhttp3.HttpUrl;
 {% for c in referenced_components -%}
@@ -548,6 +567,10 @@ public final class {{ resource_type_name }} {
             }
         }
     }
+{% endfor %}
+
+{% for d in bu.decls %}
+    {{ m.union_class(d[0], d[1], bu.names) | indent(4) }}
 {% endfor %}
 
 {% for o in ops.list -%}
@@ -718,7 +741,7 @@ public final class {{ resource_type_name }} {
             {% set chain = chain + [".body(" ~ (body_var ~ " == null ? null : " if op.request_body_optional else "") ~ body_expr ~ ")"] -%}
         {% elif o.has_body and op.request_body_is_form -%}
             {% set chain = chain + [".form(" ~ body_var ~ ", List.of(" ~ (op.form_deep_object | default([]) | map("tojson") | join(", ")) ~ "), List.of(" ~ (op.form_unexploded | default([]) | map("tojson") | join(", ")) ~ "))"] -%}
-        {% elif o.has_body and op.stream_property is defined -%}
+        {% elif o.has_body and op.stream_property is defined and op.request_body_union is not defined -%}
             {% set setter = op.stream_property | ident("camel", "java") -%}
             {% set streamed = body_var ~ ".toBuilder()." ~ setter ~ "(true).build()" -%}
             {% set only_stream = "java.util.Map.of(" ~ (op.stream_property | tojson) ~ ", true)" -%}

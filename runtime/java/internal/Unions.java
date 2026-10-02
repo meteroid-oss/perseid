@@ -95,4 +95,41 @@ public final class Unions {
         }
         return best;
     }
+
+    /**
+     * The indexes of the candidates, as their required then known properties, whose required
+     * properties the JSON object {@code node} all has, best match first: the one knowing the most
+     * of its properties, the first one on ties. Decoding tries them in this order.
+     *
+     * @param node the JSON object
+     * @param candidates per variant, its required then known properties
+     * @return the indexes of the variants that fit, best first
+     */
+    public static int[] rank(JsonNode node, String[][]... candidates) {
+        int[] order = new int[candidates.length];
+        int[] scores = new int[candidates.length];
+        int count = 0;
+        for (int i = 0; i < candidates.length; i++) {
+            boolean fits = true;
+            for (String property : candidates[i][0]) {
+                fits &= node.has(property);
+            }
+            if (!fits) {
+                continue;
+            }
+            int score = 0;
+            for (String property : candidates[i][1]) {
+                score += node.has(property) ? 1 : 0;
+            }
+            int at = count++;
+            while (at > 0 && scores[at - 1] < score) {
+                order[at] = order[at - 1];
+                scores[at] = scores[at - 1];
+                at--;
+            }
+            order[at] = i;
+            scores[at] = score;
+        }
+        return java.util.Arrays.copyOf(order, count);
+    }
 }

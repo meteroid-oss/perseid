@@ -445,7 +445,22 @@ public String toString() {
 }
 {%- endmacro %}
 
-{#- The `cls` class of the union in `ty`: one subclass per variant, told apart by JSON type. -#}
+{#- Java condition: whether the JSON node `expr` has the JSON type `json_type` and, for an array, is
+    empty or starts with an element of the shape `items` (the first element tells arrays apart). -#}
+{% macro shape(json_type, items, expr) -%}
+{%- if json_type == "array" and items is defined and items -%}
+{{ expr }}.isArray() && ({{ expr }}.size() == 0 || {{ shape(items.json_type, items["items"], expr ~ ".get(0)") }})
+{%- elif json_type == "string" -%}{{ expr }}.isTextual()
+{%- elif json_type == "integer" -%}{{ expr }}.isIntegralNumber()
+{%- elif json_type == "number" -%}{{ expr }}.isNumber()
+{%- elif json_type == "boolean" -%}{{ expr }}.isBoolean()
+{%- elif json_type == "array" -%}{{ expr }}.isArray()
+{%- else -%}{{ expr }}.isObject()
+{%- endif -%}
+{%- endmacro %}
+
+{#- The `cls` class of the union in `ty`: one subclass per variant, told apart by JSON type, or
+    by trying them in order when some share a JSON type. -#}
 {% macro union_class(ty, cls, shadowed=[]) -%}
 {% if ty.is_list() or ty.is_set() or ty.is_nullable() -%}
 {{ union_class(ty.inner_type(), cls, shadowed) }}
@@ -463,26 +478,20 @@ public String toString() {
 {% set short.list = short.list + [rest] -%}
 {% endfor -%}
 {% set pascals = short.list if short.list | unique | list | length == full | length else full -%}
-{% set pascal_of = namespace(list=[]) -%}
-{% for v in variants -%}
-{% set pascal_of.list = pascal_of.list + [{"name": v.name, "pascal": pascals[loop.index0]}] -%}
-{% endfor -%}
 {% set ns = namespace(types=[]) -%}
 {% for v in variants -%}
 {% set t = v.type.to_java() -%}
 {% set ns.types = ns.types + [sdk.java_package ~ ".models." ~ t if t in shadowed + ["Empty", "Deserializer", "Visitor", "Unrecognized"] else t] -%}
 {% endfor -%}
-{% set checks = {
-    "string": "node.isTextual()",
-    "integer": "node.isIntegralNumber()",
-    "number": "node.isNumber()",
-    "boolean": "node.isBoolean()",
-    "array": "node.isArray()",
-    "object": "node.isObject()",
-} -%}
+{% set pascal_of = namespace(list=[]) -%}
+{% for v in variants -%}
+{% set pascal_of.list = pascal_of.list + [{"name": v.name, "pascal": pascals[loop.index0], "type": ns.types[loop.index0]}] -%}
+{% endfor -%}
+{% set try_mode = ty.union_decode() == "try" -%}
+{% set lenient = objects or try_mode -%}
 /**
  * One of {% for v in variants %}{% if not loop.first %}{{ ", " if not loop.last else " or " }}{% endif %}{% if v.empty %}{@code ""}{% elif v.type.is_schema_ref() %}{@link {{ ns.types[loop.index0] }}}{% else %}a JSON {{ v.json_type }}{% endif %}{% endfor %}, told apart
- * by JSON type: {@code of...} builds one, {@code is...} and {@code as...} read it, and so does
+ * by {% if try_mode %}trying them in order, the first one that decodes the value{% else %}JSON type{% endif %}: {@code of...} builds one, {@code is...} and {@code as...} read it, and so does
  * {@link #accept} with a {@link Visitor}.
 {%- if objects %}
  *
@@ -546,7 +555,7 @@ public abstract static class {{ cls }} {
         R visit{{ pascals[loop.index0] }}({{ ns.types[loop.index0] }} value);
         {% endif %}
         {% endfor -%}
-        {% if objects -%}
+        {% if lenient -%}
         /**
          * Visits a value no variant matches.
          *
@@ -640,7 +649,7 @@ public abstract static class {{ cls }} {
         return null;
     }
     {% endif %}
-    {% if objects %}
+    {% if lenient %}
 
     /**
      * Whether no variant matched the value, kept as received.
@@ -788,38 +797,47 @@ public abstract static class {{ cls }} {
                 {% if ty.union_mode() == "rules" -%}
                 {% for v in candidates -%}
                 if ({% for c in v.when %}{{ sdk.java_internal_package }}.Unions.has(node, {{ c.property | tojson }}, {{ (c.value | tojson | tojson) if c.value is defined else "null" }}){% if not loop.last %} && {% endif %}{% else %}true{% endfor %}) {
-                    return objectVariant(node, ctxt, {{ v.name | tojson }});
+                    {{ cls }} picked = objectVariant(node, ctxt, {{ v.name | tojson }});
+                    if (picked != null) {
+                        return picked;
+                    }
                 }
                 {% endfor -%}
-                return new Unrecognized(node);
                 {% else -%}
-                switch ({{ sdk.java_internal_package }}.Unions.bestMatch(node{% for v in candidates %},
+                String[] names = { {% for v in candidates %}{{ v.name | tojson }}{% if not loop.last %}, {% endif %}{% endfor %} };
+                for (int i : {{ sdk.java_internal_package }}.Unions.rank(node{% for v in candidates %},
                         new String[][] { { {% for p in v.required %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %} }, { {% for p in v.properties %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %} } }{% endfor %})) {
-                    {% for v in candidates -%}
-                    case {{ loop.index0 }}:
-                        return objectVariant(node, ctxt, {{ v.name | tojson }});
-                    {% endfor -%}
-                    default:
-                        return new Unrecognized(node);
+                    {{ cls }} picked = objectVariant(node, ctxt, names[i]);
+                    if (picked != null) {
+                        return picked;
+                    }
                 }
                 {% endif -%}
+                return new Unrecognized(node);
             }
             {% endif -%}
-            {% for v in variants -%}
-            {% set p = pascals[loop.index0] -%}
+            {% for v in ty.try_variants() -%}
+            {% set info = pascal_of.list | selectattr("name", "equalto", v.name) | first -%}
             {% if objects and v.json_type == "object" -%}
             {% elif v.empty -%}
             if (node.isTextual() && node.textValue().isEmpty()) {
                 return Empty.INSTANCE;
             }
+            {% elif try_mode -%}
+            if ({{ shape(v.json_type or "object", v["items"], "node") }}) {
+                try {
+                    return new Of{{ info.pascal }}(read(node, ctxt, new TypeReference<{{ info.type }}>() {}));
+                } catch (IOException | RuntimeException e) {
+                    // the next variant that fits
+                }
+            }
             {% else -%}
-            {% set json_type = v.json_type or "object" -%}
-            if ({{ checks[json_type] }}) {
-                return new Of{{ p }}(read(node, ctxt, new TypeReference<{{ ns.types[loop.index0] }}>() {}));
+            if ({{ shape(v.json_type or "object", none, "node") }}) {
+                return new Of{{ info.pascal }}(read(node, ctxt, new TypeReference<{{ info.type }}>() {}));
             }
             {% endif -%}
             {% endfor -%}
-            return {{ "new Unrecognized(node)" if objects else "null" }};
+            return {{ "new Unrecognized(node)" if lenient else "null" }};
         }
         {% if objects %}
 
@@ -833,10 +851,10 @@ public abstract static class {{ cls }} {
                     {% endif -%}
                     {% endfor -%}
                     default:
-                        return new Unrecognized(node);
+                        return null;
                 }
-            } catch (IOException e) {
-                return new Unrecognized(node);
+            } catch (IOException | RuntimeException e) {
+                return null;
             }
         }
         {% endif %}

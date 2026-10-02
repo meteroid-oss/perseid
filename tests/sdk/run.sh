@@ -111,7 +111,7 @@ test { useJUnitPlatform(); testLogging { events "passed", "skipped", "failed"; e
 GRADLE
       gradle test --no-daemon
     }
-    rm -rf _torture _samples _oauth && gradle_test
+    rm -rf _torture _samples _oauth _unions && gradle_test
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
     # Without servers, the client has no default base URL.
     sed -i '/^servers:/,/^paths:/{/^paths:/!d}' "$work/torture/openapi.yaml"
@@ -139,7 +139,13 @@ GRADLE
     (mkdir "$work/oauth" && cd "$work/oauth" \
       && perseid init --sdks java --spec "$here/../fixtures/oauth.yaml" > /dev/null \
       && perseid generate java > /dev/null \
-      && cp -r "$here/java/_oauth/." java/ && cd java && gradle_test) ;;
+      && cp -r "$here/java/_oauth/." java/ && cd java && gradle_test)
+    # The decoding of unions sharing a JSON type, best-match unions, union bodies and open enums
+    # run on the SDK of tests/fixtures/edge-unions.yaml.
+    (mkdir "$work/unions" && cd "$work/unions" \
+      && perseid init --sdks java --spec "$here/../fixtures/edge-unions.yaml" > /dev/null \
+      && perseid generate java > /dev/null \
+      && cp -r "$here/java/_unions/." java/ && cd java && gradle_test) ;;
   csharp)
     rm -rf _torture _samples _oauth && dotnet test Tests
     # Generates the SDK of one fixture, writes the samples of its models (`perseid samples`) and runs
