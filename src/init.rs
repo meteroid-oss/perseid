@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Result, bail, ensure};
-use heck::{ToKebabCase, ToUpperCamelCase};
+use heck::ToKebabCase;
 use serde_json::{Value, json};
 
 use crate::{
@@ -87,8 +87,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
                 .or_else(|| Some(root.file_name()?.to_string_lossy().into_owned()))
                 .unwrap_or_default();
             name_from_title(&json!({ "info": { "title": fallback } }))
-        })
-        .to_upper_camel_case();
+        });
     let name = match (&init.name, interactive) {
         (Some(name), _) => name.clone(),
         (None, true) => {
@@ -559,23 +558,7 @@ fn web_url(remote: &str) -> Option<String> {
 }
 
 fn name_from_title(doc: &Value) -> String {
-    let title = doc["info"]["title"].as_str().unwrap_or("Client");
-    let words: Vec<_> = title
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|w| {
-            !w.is_empty()
-                && ![
-                    "api", "rest", "openapi", "service", "sdk", "sdks", "clients",
-                ]
-                .contains(&w.to_lowercase().as_str())
-        })
-        .collect();
-    match words.join(" ").to_upper_camel_case() {
-        name if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) => {
-            "Client".into()
-        }
-        name => name,
-    }
+    crate::client_name::from_title(doc["info"]["title"].as_str().unwrap_or("Client"))
 }
 
 #[cfg(test)]

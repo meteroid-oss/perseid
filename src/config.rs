@@ -371,7 +371,9 @@ fn client_name<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Erro
     match camel.starts_with(|c: char| c.is_ascii_alphabetic())
         && camel.chars().all(|c| c.is_ascii_alphanumeric())
     {
-        true => Ok(camel),
+        true => crate::client_name::check(&camel)
+            .map(|()| camel)
+            .map_err(serde::de::Error::custom),
         false => Err(serde::de::Error::custom(format!(
             "`name = {name:?}` must start with a letter and hold ASCII letters, digits, spaces, `-` or `_`"
         ))),
