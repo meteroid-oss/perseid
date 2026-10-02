@@ -277,6 +277,16 @@ internal sealed class ApiRequest(HttpMethod method, string path, string operatio
 
     public Uri BuildUri(string baseUrl, IEnumerable<KeyValuePair<string, string>> extraQuery)
     {
+        // `Uri` resolves dot segments away, which would leave the path of the operation.
+        foreach (var segment in Path.Split('?')[0].Split('/'))
+        {
+            if (segment is "." or "..")
+            {
+                throw new @@CLIENT_NAME@@Exception(
+                    $"the request path {Path} holds the dot segment `{segment}`, which cannot be sent as is"
+                );
+            }
+        }
         var url = new StringBuilder(baseUrl.TrimEnd('/')).Append(Path);
         var first = !Path.Contains('?');
         foreach (var (name, value) in _query.Concat(extraQuery))
