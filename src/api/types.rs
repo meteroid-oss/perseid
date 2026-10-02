@@ -706,20 +706,35 @@ pub(crate) fn inline_aliases(types: &mut Types, resources: &mut Resources) -> an
                 StructEnumRepr::AdjacentlyTagged { variants, .. }
                 | StructEnumRepr::InternallyTagged { variants },
             ..
-        } = &ty.data
+        } = &mut ty.data
         {
-            for variant in variants {
-                if let EnumVariantType::Ref {
+            // A variant that is an alias stands for the schema the alias leads to; one that
+            // leads to no schema has nothing to decode into.
+            variants.retain_mut(|variant| {
+                let EnumVariantType::Ref {
                     schema_ref: Some(name),
                     ..
-                } = &variant.content
-                {
-                    ensure!(
-                        !aliases.contains_key(name),
-                        "alias schema `{name}` cannot be a union variant"
-                    );
+                } = &mut variant.content
+                else {
+                    return true;
+                };
+                let Some(target) = aliases.get(name.as_str()) else {
+                    return true;
+                };
+                match target {
+                    FieldType::SchemaRef { name: target, .. } => {
+                        *name = target.clone();
+                        true
+                    }
+                    _ => {
+                        tracing::warn!(
+                            "alias schema `{name}` is not an object, so the union variant `{}` is dropped",
+                            variant.name
+                        );
+                        false
+                    }
                 }
-            }
+            });
         }
     }
     for resource in resources.values_mut() {
@@ -1049,6 +1064,48 @@ pub(crate) struct Type {
     pub data: TypeData,
 }
 
+/// Whether a `oneOf`/`anyOf` part only states which properties are required, which constrains
+/// values without adding a type.
+fn is_required_only(part: &Schema) -> bool {
+    let Schema::Object(obj) = part else {
+        return false;
+    };
+    let Some(object) = &obj.object else {
+        return false;
+    };
+    let mut bare = obj.clone();
+    bare.metadata = None;
+    bare.object = None;
+    bare.extensions.clear();
+    bare == SchemaObject::default()
+        && !object.required.is_empty()
+        && object.properties.is_empty()
+        && object.additional_properties.is_none()
+        && object.pattern_properties.is_empty()
+}
+
+/// Removes the `oneOf`/`anyOf` of an object whose parts only add `required`: the properties
+/// stay optional and the object stays a struct.
+fn drop_required_only_alternatives(s: &mut SchemaObject) {
+    if s.object.as_ref().is_none_or(|o| o.properties.is_empty()) {
+        return;
+    }
+    let Some(sub) = s.subschemas.as_mut() else {
+        return;
+    };
+    for parts in [&mut sub.one_of, &mut sub.any_of] {
+        if parts
+            .as_ref()
+            .is_some_and(|p| !p.is_empty() && p.iter().all(is_required_only))
+        {
+            *parts = None;
+        }
+    }
+    if **sub == SubschemaValidation::default() {
+        s.subschemas = None;
+    }
+}
+
 fn has_open_additional_properties(obj: &ObjectValidation) -> bool {
     obj.additional_properties
         .as_deref()
@@ -1056,7 +1113,8 @@ fn has_open_additional_properties(obj: &ObjectValidation) -> bool {
 }
 
 impl Type {
-    pub(crate) fn from_schema(name: String, s: SchemaObject) -> anyhow::Result<Self> {
+    pub(crate) fn from_schema(name: String, mut s: SchemaObject) -> anyhow::Result<Self> {
+        drop_required_only_alternatives(&mut s);
         let metadata = s.metadata.clone().unwrap_or_default();
         let ty = |data| Self {
             name: name.clone(),
@@ -1773,7 +1831,7 @@ impl Field {
     pub(crate) fn from_schema(name: String, s: Schema, required: bool) -> anyhow::Result<Self> {
         let _span = tracing::warn_span!("field", name = %name).entered();
         let obj = match s {
-            Schema::Bool(_) => bail!("unsupported bool schema"),
+            Schema::Bool(_) => SchemaObject::default(),
             Schema::Object(o) => o,
         };
         let example = obj.extensions.get("example").cloned();
@@ -1795,7 +1853,14 @@ impl Field {
             .unwrap_or(false);
 
         // Handle OpenAPI 3.1 oneOf nullable pattern: oneOf: [{type: null}, {actual type}]
-        let (field_type, is_oneof_nullable) = FieldType::from_schema_object_with_nullable(obj)?;
+        // A field no SDK can model only loses its own type, not its parent's.
+        let (field_type, is_oneof_nullable) =
+            FieldType::from_schema_object_with_nullable(obj).unwrap_or_else(|e| {
+                tracing::warn!(
+                    "field `{name}` is not supported ({e:#}), so it is typed as an untyped JSON value"
+                );
+                (FieldType::JsonObject, false)
+            });
         nullable = nullable || is_oneof_nullable;
 
         Ok(Self {
@@ -3039,6 +3104,58 @@ mod tests {
             panic!("{ty} is not a struct");
         };
         &fields.iter().find(|f| f.name == field).unwrap().r#type
+    }
+
+    #[test]
+    fn required_only_alternatives_leave_a_struct() {
+        let types = types_from(json!({
+            "Ref": {
+                "type": "object",
+                "properties": {"url": {"type": "string"}, "id": {"type": "string"}},
+                "anyOf": [{"required": ["url"]}, {"required": ["id"]}],
+            },
+        }));
+        let TypeData::Struct { fields, .. } = &types["Ref"].data else {
+            panic!("Ref is not a struct");
+        };
+        assert_eq!(fields.len(), 2);
+    }
+
+    #[test]
+    fn an_unsupported_field_is_untyped_but_its_parent_stays_typed() {
+        let types = types_from(json!({
+            "Holder": {
+                "type": "object",
+                "properties": {
+                    "bad": {"type": "string", "enum": ["a", 1]},
+                    "ok": {"type": "string"},
+                },
+            },
+        }));
+        assert_eq!(field_type(&types, "Holder", "ok"), &FieldType::String);
+        assert_eq!(field_type(&types, "Holder", "bad"), &FieldType::JsonObject);
+    }
+
+    #[test]
+    fn alias_variants_resolve_to_their_target_schema() {
+        let mut types = types_from(json!({
+            "Shape": {
+                "oneOf": [{"$ref": "#/components/schemas/Check"}],
+                "discriminator": {"propertyName": "type"},
+            },
+            "Check": {"$ref": "#/components/schemas/Base"},
+            "Base": {"type": "object", "properties": {"type": {"type": "string"}}},
+        }));
+        let mut resources = Resources::new();
+        super::inline_aliases(&mut types, &mut resources).unwrap();
+        let TypeData::StructEnum {
+            repr: StructEnumRepr::InternallyTagged { variants },
+            ..
+        } = &types["Shape"].data
+        else {
+            panic!("Shape is not a tagged union");
+        };
+        assert_eq!(variants.len(), 1);
     }
 
     #[test]
