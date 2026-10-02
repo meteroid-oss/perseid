@@ -161,6 +161,30 @@ internal static class Json
         element.Deserialize(TypeInfo<T>(options))
         ?? throw new JsonException($"{typeof(T).Name} cannot be null");
 
+    /// <summary>Reads <paramref name="element"/> as <typeparamref name="T"/>, false when it does not fit.</summary>
+    public static bool TryDeserialize<T>(
+        JsonElement element,
+        JsonSerializerOptions options,
+        out T value
+    )
+    {
+        try
+        {
+            var read = element.Deserialize(TypeInfo<T>(options));
+            if (read is not null)
+            {
+                value = read;
+                return true;
+            }
+        }
+        catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException)
+        {
+            // Not this variant: the caller tries the next one.
+        }
+        value = default!;
+        return false;
+    }
+
     public static string? Tag(JsonElement element, string name) =>
         element.ValueKind == JsonValueKind.Object
         && element.TryGetProperty(name, out var tag)

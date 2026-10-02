@@ -1,9 +1,41 @@
 {% import "macros.cs.jinja" as m -%}
 {% set _ = set_summary_filename(sdk.client_name ~ "JsonContext.cs") -%}
+{#- Every resource, its subresources included. -#}
+{% set all = namespace(resources=[]) -%}
+{% for r1 in api.resources -%}
+{% set all.resources = all.resources + [r1] -%}
+{% for _, r2 in r1.subresources | items -%}
+{% set all.resources = all.resources + [r2] -%}
+{% for _, r3 in r2.subresources | items -%}
+{% set all.resources = all.resources + [r3] -%}
+{% for _, r4 in r3.subresources | items -%}
+{% set all.resources = all.resources + [r4] -%}
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
+{#- The unions of JSON bodies that name a schema alias, declared here with the models; the others are declared with their resource. -#}
+{% set bodies = namespace(names=[], aliases=[]) -%}
+{% for resource in all.resources -%}
+{% for op in resource.operations -%}
+{% for union, ty in [(op.request_body_union | default(""), op.request_body_json_type | default(none)), (op.response_body_union | default(""), op.response_body_json_type | default(none))] -%}
+{% if union and ty is not none and union in api.types and (union | to_upper_camel_case) not in bodies.names -%}
+{% set bodies.names = bodies.names + [union | to_upper_camel_case] -%}
+{% set bodies.aliases = bodies.aliases + [{"name": union, "union_name": union | to_upper_camel_case, "type": ty, "required": true, "nullable": false}] -%}
+{% endif -%}
+{% endfor -%}
+{% endfor -%}
+{% endfor -%}
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // generated code may use deprecated API
 #pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
+{% if bodies.aliases -%}
+using System;
+{% endif -%}
 using System.Collections.Generic;
+{% if bodies.aliases -%}
+using System.Text.Json;
+{% endif -%}
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
@@ -92,9 +124,10 @@ namespace {{ sdk.package_name }}.Models;
 {% endfor -%}
 {% endfor -%}
 {% endfor -%}
-{% for resource in api.resources -%}
+{% set registered = namespace(unions=[]) -%}
+{% for resource in all.resources -%}
 {% for op in resource.operations -%}
-{% set op_types = namespace(list=[m.body_type(op), m.response_type(op)]) -%}
+{% set op_types = namespace(list=[m.body_type(op, api.types), m.response_type(op, api.types)]) -%}
 {% for field in op.multipart_fields if not field.is_file -%}
 {% set op_types.list = op_types.list + [field.type.to_csharp()] -%}
 {% endfor -%}
@@ -106,6 +139,23 @@ namespace {{ sdk.package_name }}.Models;
 {% endfor -%}
 {% for name, ps in op.path_styles | default({}) | items if ps.type is defined -%}
 {% set op_types.list = op_types.list + [ps.type.to_csharp()] -%}
+{% endfor -%}
+{% for union, body in [(op.request_body_union | default(""), op.request_body_json_type | default(none)), (op.response_body_union | default(""), op.response_body_json_type | default(none))] -%}
+{% if union and body is not none and (union | to_upper_camel_case) not in registered.unions -%}
+{% set registered.unions = registered.unions + [union | to_upper_camel_case] -%}
+{% if union in api.types -%}
+[JsonSerializable(typeof({{ m.model(union) }}), TypeInfoPropertyName = "{{ union | to_upper_camel_case }}")]
+{% else -%}
+[JsonSerializable(typeof(global::{{ sdk.package_name }}.{{ union | to_upper_camel_case }}), TypeInfoPropertyName = "{{ union | to_upper_camel_case }}")]
+{% endif -%}
+{% set t = namespace(ty=body) -%}
+{% for _ in range(8) -%}
+{% if t.ty.is_list() or t.ty.is_set() or t.ty.is_nullable() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
+{% endfor -%}
+{% for v in t.ty.union_variants() if "<" in v.type.to_csharp() -%}
+{% set op_types.list = op_types.list + [v.type.to_csharp()] -%}
+{% endfor -%}
+{% endif -%}
 {% endfor -%}
 {% for p in op.query_params if p.typed_union is defined -%}
 {% set union = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Options" ~ (p.ident | to_rust_variant) -%}
@@ -137,4 +187,4 @@ public abstract partial record {{ union }}
         };
 }
 {%- endfor %}
-
+{%- with fields = bodies.aliases, union_owner = "", type_names = {} %}{% include "types/unions.cs.jinja" %}{% endwith %}

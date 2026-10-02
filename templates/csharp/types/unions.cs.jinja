@@ -1,13 +1,13 @@
 {#- The typed unions of `fields`, named after `union_owner`. #}
 {%- set models = "global::" ~ sdk.package_name ~ ".Models." %}
 {%- for field in fields %}
-{%- set name = m.union_class(field, union_owner, type_names) %}
+{%- set name = field.union_name if field.union_name is defined else m.union_class(field, union_owner, type_names) %}
 {%- if name %}
 {%- set t = namespace(ty=field.type) %}
 {%- for _ in range(8) %}
 {%- if t.ty.is_list() or t.ty.is_set() or t.ty.is_nullable() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif %}
 {%- endfor %}
-{%- set variants = namespace(list=[]) %}
+{%- set variants = namespace(list=[], seen=[]) %}
 {%- set objects = t.ty.union_mode() != "json" %}
 {%- for v in t.ty.union_variants() %}
 {%- set class = m.union_variant_class(v, name) %}
@@ -20,6 +20,10 @@
 {%- set ty = ty | replace(leaf.ty.to_csharp(), models ~ leaf.ty.to_csharp()) %}
 {%- endif %}
 {%- set ty = ty | replace("List<", "global::System.Collections.Generic.List<") | replace("Dictionary<", "global::System.Collections.Generic.Dictionary<") %}
+{#- Two variants of one C# type (`string` and an alias of it) cannot both be a variant: the first stays. -#}
+{%- set key = "empty" if v.empty else ty %}
+{%- if key not in variants.seen %}
+{%- set variants.seen = variants.seen + [key] %}
 {%- set kind = "empty" if v.empty
     else "string" if ty == "string"
     else "bool" if ty == "bool"
@@ -29,7 +33,13 @@
     else "node" if ty == "JsonNode"
     else "json" %}
 {%- set accessor = (v.name | to_rust_variant) if class == (v.name | to_rust_variant) ~ "Value" else class %}
-{%- set variants.list = variants.list + [{"class": class, "accessor": accessor, "type": ty, "kind": kind, "json_type": v.json_type, "doc": v.type.to_csharp() if not v.empty else "\"\"", "name": v.name}] %}
+{#- The shape `UnionRules.Is` checks: the JSON type, then `[]` for each level of arrays whose items are known. -#}
+{%- set sh = namespace(base=v.json_type, depth=0, it=v.items if v.items is defined else none) %}
+{%- for _ in range(6) %}
+{%- if sh.it %}{% set sh.depth = sh.depth + 1 %}{% set sh.base = sh.it.json_type %}{% set sh.it = sh.it.items if sh.it.items is defined else none %}{% endif %}
+{%- endfor %}
+{%- set variants.list = variants.list + [{"class": class, "accessor": accessor, "type": ty, "kind": kind, "json_type": v.json_type, "shape": sh.base ~ ("[]" * sh.depth), "doc": v.type.to_csharp() if not v.empty else "\"\"", "name": v.name}] %}
+{%- endif %}
 {%- endfor %}
 
 /// <summary>
@@ -38,13 +48,18 @@
 /// <remarks>
 /// Match on the nested variant records, or assign a variant's value directly. <see cref="Unrecognized"/>
 /// holds any other JSON value, as sent by a newer API version.
+{%- if t.ty.union_decode() == "try" %}
+/// Some variants share a JSON type: a value is read as the first variant it fits, the more specific ones first.
+{%- endif %}
 {%- if objects %}
 {%- if t.ty.union_mode() == "rules" %}
 /// An object is the first variant whose conditions it meets:
 /// <list type="bullet">
 {%- for o in t.ty.object_variants() %}
-{%- set c = (variants.list | selectattr("name", "equalto", o.name) | first).class %}
-/// <item><see cref="{{ c }}"/>: {% for w in o.when %}{% if not loop.first %} and {% endif %}<c>{{ w.property }}</c> {% if w.value is defined %}is <c>{{ w.value | tojson | replace("&", "&amp;") | replace("<", "&lt;") }}</c>{% else %}is present{% endif %}{% else %}any object{% endfor %}</item>
+{%- set c = (variants.list | selectattr("name", "equalto", o.name) | first) %}
+{%- if c %}
+/// <item><see cref="{{ c.class }}"/>: {% for w in o.when %}{% if not loop.first %} and {% endif %}<c>{{ w.property }}</c> {% if w.value is defined %}is <c>{{ w.value | tojson | replace("&", "&amp;") | replace("<", "&lt;") }}</c>{% else %}is present{% endif %}{% else %}any object{% endfor %}</item>
+{%- endif %}
 {%- endfor %}
 /// </list>
 {%- else %}
@@ -123,77 +138,125 @@ internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
     {
         using var document = JsonDocument.ParseValue(ref reader);
         var root = document.RootElement;
-        try
-        {
-            switch (root.ValueKind)
-            {
 {%- if objects %}
-                case JsonValueKind.Object:
-{%- set candidates = t.ty.object_variants() %}
+{%- set candidates = namespace(list=[]) %}
+{%- for o in t.ty.object_variants() %}
+{%- set v = variants.list | selectattr("name", "equalto", o.name) | first %}
+{%- if v %}{% set candidates.list = candidates.list + [{"v": v, "o": o}] %}{% endif %}
+{%- endfor %}
+{%- if candidates.list %}
+        if (root.ValueKind == JsonValueKind.Object)
+        {
 {%- if t.ty.union_mode() == "rules" %}
-{%- for o in candidates %}
-{%- set v = variants.list | selectattr("name", "equalto", o.name) | first %}
+{%- set open = namespace(done=false) %}
+{%- for c in candidates.list %}
+{%- if not open.done %}
+{%- set v = c.v %}
+{%- set o = c.o %}
+{%- if v.kind == "node" %}
+{%- set ret = "return new " ~ name ~ "." ~ v.class ~ "(JsonNode.Parse(root.GetRawText())!);" %}
+{%- else %}
+{%- set ret = "return new " ~ name ~ "." ~ v.class ~ "(object" ~ loop.index0 ~ ");" %}
+{%- endif %}
 {%- if o.when %}
-                    if ({% for w in o.when %}global::{{ sdk.package_name }}.UnionRules.Has(root, {{ w.property | tojson }}, {{ (w.value | tojson | tojson) if w.value is defined else "null" }}){% if not loop.last %} && {% endif %}{% endfor %})
-                    {
-                        {{ m.wrap("return new " ~ name ~ "." ~ v.class, ["Json.Deserialize<" ~ v.type ~ ">(root, options)"], 24, ";") }}
-                    }
+{%- set conditions = namespace(list=[]) %}
+{%- for w in o.when %}{% set conditions.list = conditions.list + ["global::" ~ sdk.package_name ~ ".UnionRules.Has(root, " ~ (w.property | tojson) ~ ", " ~ ((w.value | tojson | tojson) if w.value is defined else "null") ~ ")"] %}{% endfor %}
+{%- if v.kind != "node" %}{% set conditions.list = conditions.list + ["Json.TryDeserialize<" ~ v.type ~ ">(root, options, out var object" ~ loop.index0 ~ ")"] %}{% endif %}
+            if ({{ conditions.list | join(" && ") }})
+            {
+                {{ ret }}
+            }
+{%- elif v.kind == "node" %}
+            {{ ret }}
+{%- set open.done = true %}
 {%- else %}
-                    {{ m.wrap("return new " ~ name ~ "." ~ v.class, ["Json.Deserialize<" ~ v.type ~ ">(root, options)"], 20, ";") }}
+            if (Json.TryDeserialize<{{ v.type }}>(root, options, out var object{{ loop.index0 }}))
+            {
+                {{ ret }}
+            }
+{%- endif %}
 {%- endif %}
 {%- endfor %}
-{%- if candidates[-1].when %}
-                    break;
-{%- endif %}
 {%- else %}
-                    switch (global::{{ sdk.package_name }}.UnionRules.BestMatch(root{% for o in candidates %}, [[{% for p in o.required %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}], [{% for p in o.properties %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]]{% endfor %}))
-                    {
-{%- for o in candidates %}
-{%- set v = variants.list | selectattr("name", "equalto", o.name) | first %}
-                        case {{ loop.index0 }}:
-                            {{ m.wrap("return new " ~ name ~ "." ~ v.class, ["Json.Deserialize<" ~ v.type ~ ">(root, options)"], 28, ";") }}
+            foreach (var index in global::{{ sdk.package_name }}.UnionRules.Rank(root{% for c in candidates.list %}, [[{% for p in c.o.required %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}], [{% for p in c.o.properties %}{{ p | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]]{% endfor %}))
+            {
+                switch (index)
+                {
+{%- for c in candidates.list %}
+                    case {{ loop.index0 }}:
+{%- if c.v.kind == "node" %}
+                        return new {{ name }}.{{ c.v.class }}(JsonNode.Parse(root.GetRawText())!);
+{%- else %}
+                        if (Json.TryDeserialize<{{ c.v.type }}>(root, options, out var object{{ loop.index0 }}))
+                        {
+                            return new {{ name }}.{{ c.v.class }}(object{{ loop.index0 }});
+                        }
+                        break;
+{%- endif %}
 {%- endfor %}
-                    }
-                    break;
+                }
+            }
+{%- endif %}
+        }
 {%- endif %}
 {%- endif %}
-{%- for v in variants.list if not (objects and v.json_type == "object") %}
+{%- set tried = namespace(done=false) %}
+{%- for tv in t.ty.try_variants() if not (objects and tv.json_type == "object") %}
+{%- set v = variants.list | selectattr("name", "equalto", tv.name) | first %}
+{%- if v and not tried.done %}
 {%- set create = "new " ~ name ~ "." ~ v.class %}
+{%- set n = loop.index0 %}
 {%- if v.kind == "empty" %}
-                case JsonValueKind.String when root.ValueEquals(""):
-                    return {{ create }}();
+        if (root.ValueKind == JsonValueKind.String && root.ValueEquals(""))
+        {
+            return {{ create }}();
+        }
 {%- elif v.kind == "string" %}
-                case JsonValueKind.String:
-                    return {{ create }}(root.GetString()!);
+        if (root.ValueKind == JsonValueKind.String)
+        {
+            return {{ create }}(root.GetString()!);
+        }
+{%- set tried.done = true %}
 {%- elif v.kind == "date_time" %}
-                case JsonValueKind.String when root.TryGetDateTimeOffset(out var dateTime):
-                    return {{ create }}(dateTime);
+        if (root.ValueKind == JsonValueKind.String && root.TryGetDateTimeOffset(out var dateTime{{ n }}))
+        {
+            return {{ create }}(dateTime{{ n }});
+        }
 {%- elif v.kind == "decimal" %}
-                case JsonValueKind.String
-                    when decimal.TryParse(root.GetString(), global::System.Globalization.NumberStyles.Float, global::System.Globalization.CultureInfo.InvariantCulture, out var number):
-                    return {{ create }}(number);
+        if (
+            root.ValueKind == JsonValueKind.String
+            && decimal.TryParse(root.GetString(), global::System.Globalization.NumberStyles.Float, global::System.Globalization.CultureInfo.InvariantCulture, out var decimal{{ n }})
+        )
+        {
+            return {{ create }}(decimal{{ n }});
+        }
 {%- elif v.kind == "bool" %}
-                case JsonValueKind.True or JsonValueKind.False:
-                    return {{ create }}(root.GetBoolean());
+        if (root.ValueKind is JsonValueKind.True or JsonValueKind.False)
+        {
+            return {{ create }}(root.GetBoolean());
+        }
 {%- elif v.kind == "number" %}
 {%- set getter = {"short": "Int16", "int": "Int32", "long": "Int64", "ushort": "UInt16", "ulong": "UInt64", "float": "Single", "double": "Double"}[v.type] %}
-                case JsonValueKind.Number when root.TryGet{{ getter }}(out var number):
-                    return {{ create }}(number);
+        if (root.ValueKind == JsonValueKind.Number && root.TryGet{{ getter }}(out var number{{ n }}))
+        {
+            return {{ create }}(number{{ n }});
+        }
 {%- elif v.kind == "node" %}
-                case JsonValueKind.Object:
-                    return {{ create }}(JsonNode.Parse(root.GetRawText())!);
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            return {{ create }}(JsonNode.Parse(root.GetRawText())!);
+        }
 {%- else %}
-{%- set kinds = {"string": "String", "integer": "Number", "number": "Number", "boolean": "True or JsonValueKind.False", "array": "Array", "object": "Object"} %}
-                case JsonValueKind.{{ kinds[v.json_type] }}:
-                    {{ m.wrap("return " ~ create, ["Json.Deserialize<" ~ v.type ~ ">(root, options)"], 20, ";") }}
+        if (
+            global::{{ sdk.package_name }}.UnionRules.Is(root, {{ v.shape | tojson }})
+            && Json.TryDeserialize<{{ v.type }}>(root, options, out var value{{ n }})
+        )
+        {
+            return {{ create }}(value{{ n }});
+        }
+{%- endif %}
 {%- endif %}
 {%- endfor %}
-            }
-        }
-        catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException)
-        {
-            return new {{ name }}.Unrecognized(root.Clone());
-        }
         return new {{ name }}.Unrecognized(root.Clone());
     }
 

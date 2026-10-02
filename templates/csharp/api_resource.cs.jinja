@@ -7,11 +7,11 @@
 {% set context = sdk.client_name ~ "JsonContext.Default" -%}
 {#- What each operation takes and returns, shared by the interfaces and classes below. -#}
 {% macro facts(f, op) -%}
-{% set f.body_type = m.body_type(op) -%}
+{% set f.body_type = m.body_type(op, types) -%}
 {% if op.request_body_kind == "binary" %}{% set f.body_type = "Upload" %}{% elif op.request_body_kind == "multipart" %}{% set f.body_type = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Body" %}{% endif -%}
 {% set f.body = m.param(op.request_body_schema_name | default("body")) -%}
 {% if f.body in ["options", "requestOptions", "cancellationToken", "request", "form"] or f.body in (op.path_params | map("to_lower_camel_case") | list) %}{% set f.body = "body" %}{% endif -%}
-{% set f.response_type = m.response_type(op) -%}
+{% set f.response_type = m.response_type(op, types) -%}
 {% if op.response_is_event_stream and op.event_schema_name is defined %}{% set f.value = "EventStream<" ~ m.model(op.event_schema_name) ~ ">" -%}
 {% elif op.response_is_event_stream %}{% set f.value = "EventStream" -%}
 {% elif op.response_is_binary %}{% set f.value = "byte[]" -%}
@@ -99,19 +99,35 @@ requestOptions{% if cancellation %}, cancellationToken{% endif %}
 {%- endif -%}
 {%- endmacro -%}
 {% macro pager_type(op) -%}
-AsyncPager<{{ m.response_type(op) }}, {{ m.model(op.pagination.item_schema) }}>
+AsyncPager<{{ m.response_type(op, types) }}, {{ m.model(op.pagination.item_schema) }}>
 {%- endmacro -%}
 {#- The C# expression of the JSON `path` from `root`, typed `owner`, null-safe past its first step. -#}
 {% macro path_expr(root, path, owner) -%}
 {{ root }}{% for segment in path %}{% if not loop.first %}?{% endif %}.{{ m.member(segment, owner if loop.first else "") }}{% endfor %}
 {%- endmacro -%}
+{#- The unions of inline JSON bodies, declared after the classes: a named alias is declared with the models. -#}
+{% set bu = namespace(names=[], fields=[]) -%}
+{% for op in resource.operations -%}
+{% for union, ty in [(op.request_body_union | default(""), op.request_body_json_type | default(none)), (op.response_body_union | default(""), op.response_body_json_type | default(none))] -%}
+{% if union and ty is not none and union not in types and (union | to_upper_camel_case) not in bu.names -%}
+{% set bu.names = bu.names + [union | to_upper_camel_case] -%}
+{% set bu.fields = bu.fields + [{"name": union, "union_name": union | to_upper_camel_case, "type": ty, "required": true, "nullable": false}] -%}
+{% endif -%}
+{% endfor -%}
+{% endfor -%}
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // generated code may use deprecated API
 #pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+{%- if bu.fields %}
+using System.Text.Json;
+{%- endif %}
 using System.Text.Json.Nodes;
+{%- if bu.fields %}
+using System.Text.Json.Serialization;
+{%- endif %}
 using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
@@ -237,11 +253,11 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
     {
 {{- checks(op, f) }}
 {%- if pg.style == "cursor" %}
-        return Paging.Cursor<{{ m.response_type(op) }}, {{ m.model(pg.item_schema) }}>(
+        return Paging.Cursor<{{ m.response_type(op, types) }}, {{ m.model(pg.item_schema) }}>(
             options{% if not f.required_options %}?{% endif %}.{{ property }},
             (cursor, ct) => {{ method_name }}({% for p in op.path_params %}{{ m.param(p) }}, {% endfor %}{% if f.takes_body %}{{ f.body }}, {% endif %}{{ first }} with { {{ property }} = cursor }, requestOptions, ct),
 {%- else %}
-        return Paging.Numbered<{{ m.response_type(op) }}, {{ m.model(pg.item_schema) }}>(
+        return Paging.Numbered<{{ m.response_type(op, types) }}, {{ m.model(pg.item_schema) }}>(
             options{% if not f.required_options %}?{% endif %}.{{ property }} ?? {{ pg.first_page if pg.style == "page" else 0 }},
             {{ pg.first_page }},
             pages: {{ "true" if pg.style == "page" else "false" }},
@@ -477,4 +493,4 @@ public sealed class {{ class_name }}
 {%- endfor %}
 }
 {%- endfor %}
-
+{%- with fields = bu.fields, union_owner = resource_type_name, type_names = {} %}{% include "types/unions.cs.jinja" %}{% endwith %}

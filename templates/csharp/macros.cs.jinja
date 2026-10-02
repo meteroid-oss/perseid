@@ -108,19 +108,31 @@
 {%- endmacro %}
 
 
+{# The class of the union named `name` by an operation body: a model of `types` when it is a named
+   alias (declared with the models), else declared with the resource. -#}
+{% macro union_ref(name, types) -%}
+{% if name in types %}{{ model(name) }}{% else %}{{ name | to_upper_camel_case }}{% endif %}
+{%- endmacro %}
+
+{# The C# type of a JSON body of the type `ty`, its union (named `union`, if any) typed. A union is a
+   reference type: `typeof` cannot take a nullable one, so it is never written with `?`. -#}
+{% macro json_body_type(ty, union, types) -%}
+{% if union %}{{ ty.to_csharp() | replace("JsonNode", union_ref(union, types)) | trim("?") }}{% else %}{{ ty.to_csharp() }}{% endif %}
+{%- endmacro %}
+
 {# The C# type of an operation's JSON request body, empty without one. -#}
-{% macro body_type(op) -%}
+{% macro body_type(op, types={}) -%}
 {% if op.request_body_schema_name is defined -%}
 {% if op.request_body_is_list %}List<{% endif %}{{ model(op.request_body_schema_name) }}{% if op.request_body_is_list %}>{% endif %}
 {%- elif op.request_body_json_type is defined -%}
-{{ op.request_body_json_type.to_csharp() }}
+{{ json_body_type(op.request_body_json_type, op.request_body_union | default(""), types) }}
 {%- endif %}
 {%- endmacro %}
 
 {# The C# type of an operation's JSON response, empty without one. -#}
-{% macro response_type(op) -%}
+{% macro response_type(op, types={}) -%}
 {% if op.response_body_json_type is defined -%}
-{{ op.response_body_json_type.to_csharp() }}
+{{ json_body_type(op.response_body_json_type, op.response_body_union | default(""), types) }}
 {%- elif op.response_body_schema_name is defined -%}
 {% if op.response_body_is_list %}List<{% endif %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %}>{% endif %}
 {%- endif %}

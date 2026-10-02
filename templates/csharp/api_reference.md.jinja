@@ -10,7 +10,7 @@
     {%- set args = namespace(list=[]) -%}
     {%- set styles = op.path_styles | default({}) -%}
     {%- for p in op.path_params %}{% set args.list = args.list + [(styles[p].type.to_csharp() if p in styles and styles[p].type is defined else "string") ~ " " ~ m.param(p)] %}{% endfor -%}
-    {%- set body_type = m.body_type(op) | replace("Models.", "") -%}
+    {%- set body_type = m.body_type(op, api.types) | replace("Models.", "") -%}
     {%- if op.request_body_kind == "binary" %}{% set body_type = "Upload" %}{% elif op.request_body_kind == "multipart" %}{% set body_type = prefix ~ "Body" %}{% endif -%}
     {%- if body_type -%}
         {%- set body = m.param(op.request_body_schema_name | default("body")) -%}
@@ -27,7 +27,7 @@
     {%- elif op.response_is_binary %}byte[]
     {%- elif op.response_is_text %}string
     {%- else -%}
-        {%- set body = m.response_type(op) | replace("Models.", "") -%}
+        {%- set body = m.response_type(op, api.types) | replace("Models.", "") -%}
         {{ body ~ ("?" if body and op.response_may_be_empty | default(false) and op.pagination is not defined) }}
     {%- endif -%}
 {%- endmacro -%}
@@ -36,7 +36,7 @@
     {%- elif op.response_is_binary %}bytes
     {%- elif op.response_is_text %}text
     {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
-    {%- elif op.response_body_json_type is defined %}`{{ op.response_body_json_type.to_csharp() }}`
+    {%- elif op.response_body_json_type is defined %}`{{ m.response_type(op, api.types) | replace("Models.", "") }}`
     {%- else %}nothing{% endif -%}
 {%- endmacro -%}
 {% macro table(resource) -%}

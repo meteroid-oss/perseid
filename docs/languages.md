@@ -264,11 +264,14 @@ also constants in `Status.Values` to `switch` on `status.Value`; a string (or `n
 converts to any value. Nullable optional PATCH
 fields are `MaybeUnset<T>`: assign `null` to send `null`, leave them unset to omit them. Dates are
 `DateTimeOffset`s, so fractions of a second beyond 100 nanoseconds are rounded. A union is an
-abstract record with a nested record per variant (`StringValue`, `ListValue`... for JSON types),
-implicit conversions and `AsX` accessors (and `Id` for expandable objects); other JSON, and objects
-no variant matches, are kept in `Unrecognized`, and `DecodeAs(context.Customer)` reads a union of
-objects as another variant. Query parameters that are unions of scalars and lists are typed the
-same way.
+abstract record with a nested record per variant (`StringValue`, `ArrayOfIntegers`,
+`ArrayOfIntegerArrays`... for JSON types), implicit conversions and `AsX` accessors (and `Id` for
+expandable objects); other JSON, and objects no variant matches, are kept in `Unrecognized`, and
+`DecodeAs(context.Customer)` reads a union of objects as another variant. Variants sharing a JSON
+type are tried in turn (an array is told apart by its first item, a `date-time` falls back to a
+plain string), and objects no property tells apart go to their best match. Query parameters and
+request and response bodies that are unions are typed the same way (an inline body union is
+`CreateTranscriptionResponse`, named after the operation).
 
 `ListAutoPagingAsync()` returns an `AsyncPager` to `await foreach` over every item, whose
 `AsPagesAsync()` and `GetFirstPageAsync()` give `Page`s with `Items`, `Response`, `HasNextPage` and

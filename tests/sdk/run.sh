@@ -147,7 +147,7 @@ GRADLE
       && perseid generate java > /dev/null \
       && cp -r "$here/java/_unions/." java/ && cd java && gradle_test) ;;
   csharp)
-    rm -rf _torture _samples _oauth && dotnet test Tests
+    rm -rf _torture _samples _oauth _unions && dotnet test Tests
     # Generates the SDK of one fixture, writes the samples of its models (`perseid samples`) and runs
     # `dotnet test` on it: every test of tests/sdk/csharp/_torture for the torture fixture, only the
     # sample round trips for the others.
@@ -198,5 +198,11 @@ CSPROJ
     (mkdir "$work/oauth" && cd "$work/oauth" \
       && perseid init --sdks csharp --spec "$here/../fixtures/oauth.yaml" > /dev/null \
       && perseid generate csharp > /dev/null \
-      && cp -r "$here/csharp/_oauth/." csharp/ && cd csharp && dotnet test Tests) ;;
+      && cp -r "$here/csharp/_oauth/." csharp/ && cd csharp && dotnet test Tests)
+    # The decoding of unions sharing a JSON type, best-match unions, union bodies and open enums
+    # run on the SDK of tests/fixtures/edge-unions.yaml.
+    (mkdir "$work/unions" && cd "$work/unions" \
+      && perseid init --sdks csharp --spec "$here/../fixtures/edge-unions.yaml" > /dev/null \
+      && perseid generate csharp > /dev/null \
+      && cp -r "$here/csharp/_unions/." csharp/ && cd csharp && dotnet test Tests) ;;
 esac
