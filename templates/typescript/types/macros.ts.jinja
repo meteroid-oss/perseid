@@ -157,7 +157,12 @@
 {%- endmacro %}
 
 {% macro field_from_json(json, field) -%}
+    {#- `json["__proto__"]` reads the prototype when the JSON has no such own property. -#}
+    {%- if field.name == "__proto__" -%}
+    {%- set expr %}(Object.prototype.hasOwnProperty.call({{ json }}, "__proto__") ? {{ json }}["__proto__"] : undefined){% endset -%}
+    {%- else -%}
     {%- set expr %}{{ json }}[{{ field.name | tojson }}]{% endset -%}
+    {%- endif -%}
     {{ guarded(expr, field, from_json(expr, field.type), false) }}
 {%- endmacro %}
 
@@ -174,9 +179,10 @@
     {%- endfor %}
 {%- endmacro %}
 
+{#- A `__proto__` key is computed: written plainly, it would set the object's prototype. -#}
 {% macro serialize_fields(fields, value, defaults={}) -%}
     {%- for field in fields if not field.flatten %}
-    {{ field.name | tojson }}: {{ field_to_json(value, field) }}{% if field.name in defaults %} ?? {{ defaults[field.name] | tojson }}{% endif %},
+    {% if field.name == "__proto__" %}["__proto__"]{% else %}{{ field.name | tojson }}{% endif %}: {{ field_to_json(value, field) }}{% if field.name in defaults %} ?? {{ defaults[field.name] | tojson }}{% endif %},
     {%- endfor %}
 {%- endmacro %}
 
