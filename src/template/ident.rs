@@ -24,16 +24,17 @@ const PYTHON: &[&str] = &[
     "I", "O", "l",
 ];
 /// Python names that, as a class member or parameter, shadow a name the generated annotations use
-/// (`str`, `datetime`, `t`), or are `self` and `cls`.
+/// (`str`, `datetime`, `t`), or are `self` and `cls`. Builtins the generated class bodies never
+/// reference (`type`, `object`, `set`) stay usable: they are common JSON member names.
 const PYTHON_SHADOWING: &[&str] = &[
-    "self", "cls", "str", "bool", "int", "float", "bytes", "set", "tuple", "object", "type",
-    "datetime", "t",
+    "self", "cls", "str", "bool", "int", "float", "bytes", "datetime", "t",
 ];
-/// Python names only model fields must avoid: the builtin generics a method may keep (`list`
+/// Python names only model fields must avoid: the builtin generics a model body uses (`list`
 /// operations are annotated `t.List`), and the members `BaseModel` defines.
 const PYTHON_FIELD: &[&str] = &[
     "list",
     "dict",
+    "tuple",
     "to_dict",
     "to_json",
     "from_dict",
@@ -328,6 +329,9 @@ mod tests {
         assert_eq!(field("to_dict"), "to_dict_");
         assert_eq!(field("toJson"), "to_json_");
         assert_eq!(field("name"), "name");
+        assert_eq!(field("type"), "type");
+        assert_eq!(field("object"), "object");
+        assert_eq!(field("tuple"), "tuple_");
     }
 
     #[test]
