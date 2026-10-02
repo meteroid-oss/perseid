@@ -19,7 +19,8 @@ client = @@CLIENT_NAME@@(api_key="your-api-key")
 ```
 
 Without `api_key`, the client reads `@@ENV_PREFIX@@_API_KEY`, and `@@ENV_PREFIX@@_BASE_URL`
-overrides the default base URL. The constructor also takes `base_url`, `timeout`,
+overrides the default base URL (required, or `base_url=`, when the API has none). Every argument
+is a keyword argument. The constructor also takes `base_url`, `timeout`,
 `max_retries`, `default_headers`, `http_client` (an `httpx.Client` of yours), `middleware`, and
 the credentials the API accepts (`token_provider`, `basic_auth`, `api_keys`). Close the client,
 or use it as a context manager, to release its connections.
@@ -33,16 +34,32 @@ async with Async@@CLIENT_NAME@@() as client:
     ...
 ```
 
-Every method also takes `extra_headers=` and `timeout=` for that request only; these
-headers, like `default_headers`, win over the client's credentials.
+## Requests
+
+The fields of a JSON or form request body are keyword arguments, next to the query and header
+parameters; path parameters come first:
+
+```python
+client.items.update("item_id", name="new name", status="active", description=None)
+```
+
+An optional argument left out is not sent; `None` sends `null` where the API accepts it. An enum
+argument takes the enum or its value as a string. Other bodies (lists, unions, files) are one
+`body` argument.
+
+Every method also takes, for that request only, `extra_headers=`, `extra_query=`, `extra_body=`
+(merged into the body), `timeout=` and `max_retries=`. These headers, like `default_headers`, win
+over the client's credentials.
 
 ## Models
 
-Models are keyword-only dataclasses with `from_dict`/`to_dict`. An optional field that
-accepts `null` defaults to `UNSET` (from `@@PACKAGE_NAME@@.models`): it is left out of
-the request, while `None` sends `null`. A field holding a string or an object, such as an
-expandable id, is typed `str | Model`. A union variant fills in its own tag: pass
-`content=` alone and the discriminator follows.
+Models are keyword-only dataclasses with `from_dict`/`to_dict`. In models requests send, an
+optional field that accepts `null` defaults to `UNSET` (from `@@PACKAGE_NAME@@.models`): it is
+left out of the request, while `None` sends `null`; in response models it is simply `None` when
+absent. A field holding a string or an object, such as an expandable id, is typed `str | Model`.
+A discriminated union is the union of its variant models (`Circle | Square | UnknownVariant`),
+decoded into the variant the tag names; when its variants share fields, it is a model holding the
+discriminator and the variant, and passing `content=` alone fills in the tag.
 
 Properties the API added after this SDK was generated are kept in `extra_fields` (and read
 as attributes at runtime), and sent back when the model is serialized. A property named
@@ -76,7 +93,7 @@ event, the stream yields models, until a `[DONE]` event; `stream.last_event` is 
 event (`event`, `data`, `id`) of the latest one:
 
 ```python
-with client.items.create_stream(request) as stream:
+with client.items.create_stream(prompt="Hello") as stream:
     for chunk in stream:
         print(chunk)
 ```
@@ -126,8 +143,8 @@ and requests with an `Idempotency-Key` header, which every POST gets. Requests t
 
 ```python
 client = @@CLIENT_NAME@@(max_retries=5, timeout=20.0)
-client.with_options(max_retries=0).items.list()  # for one call
-client.items.list(timeout=5.0)
+client.with_options(max_retries=0).items.list()
+client.items.list(timeout=5.0, max_retries=0)  # for one call
 ```
 
 ## Middleware
