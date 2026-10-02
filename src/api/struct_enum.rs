@@ -67,15 +67,24 @@ impl TypeData {
             }
         }
 
+        let discriminator_field = discriminator_field
+            .inner()
+            .context("a `oneOf` without variants")?;
+        let content_field = content_field
+            .inner()
+            .context("no `oneOf` variant carries content")?;
+        // The shared properties may declare the discriminator and the content again: the
+        // variants already carry them.
+        let fields = fields
+            .iter()
+            .filter(|f| f.name != discriminator_field && f.name != content_field)
+            .cloned()
+            .collect();
         Ok(Self::StructEnum {
-            discriminator_field: discriminator_field
-                .inner()
-                .context("a `oneOf` without variants")?,
-            fields: fields.to_vec(),
+            discriminator_field,
+            fields,
             repr: StructEnumRepr::AdjacentlyTagged {
-                content_field: content_field
-                    .inner()
-                    .context("no `oneOf` variant carries content")?,
+                content_field,
                 variants,
             },
         })

@@ -2986,3 +2986,46 @@ fn samples_command_is_hidden_from_help() {
         "{out}"
     );
 }
+
+#[test]
+fn adjacent_unions_repeating_the_discriminator_generate() {
+    let dir = project_from("petstore.yaml", &["python"]);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Adjacent, version: "1.0.0" }
+servers: [{ url: "https://x.example.com" }]
+paths:
+  /events:
+    get:
+      operationId: get_event
+      tags: [x]
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Event" }
+components:
+  schemas:
+    Event:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string }
+        at: { type: string }
+      oneOf:
+        - type: object
+          required: [kind, data]
+          properties:
+            kind: { type: string, enum: [created] }
+            data: { type: object, properties: { id: { type: string } } }
+        - type: object
+          required: [kind]
+          properties:
+            kind: { type: string, enum: [ping] }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(generated_text(dir.path(), "python").contains("class Event"));
+}
