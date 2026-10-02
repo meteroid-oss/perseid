@@ -495,9 +495,8 @@ with your SDK's own formatter configuration.
   configured languages need: no JVM, Node or Python setup.
 - `csharpier` installs as a .NET tool.
 
-## perseid's own releases
+## The perseid npm package
 
-`release-please.yml` dispatches `release.yml`, which publishes the binaries to GitHub and
-ghcr.io, and the `perseid` npm package with trusted publishing. The npm package holds no binary:
-on first run it downloads the release archive for its version, checks it against the published
-checksums, and caches it.
+`npx perseid` runs the `perseid` npm package, which holds no binary. On first run it downloads
+the release archive for its version from GitHub, checks it against the checksums the package
+ships, and caches it. `PERSEID_CACHE` sets the cache directory.
