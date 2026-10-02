@@ -1629,7 +1629,7 @@ fn torture_fixture_generates_every_language() {
         "{reactions}"
     );
     assert!(read("typescript/src/api/widgets.ts").contains("Promise<Widget[]>"));
-    assert!(read("python/torture/api/widgets.py").contains("-> t.List[Widget]:"));
+    assert!(read("python/torture/api/widgets.py").contains("-> builtins.list[Widget]:"));
     let tree = read("python/torture/models/tree_node.py");
     assert!(!tree.contains("import TreeNode"), "{tree}");
     assert!(read("python/torture/api/class_.py").contains("class Class(ApiBaseSync)"));
