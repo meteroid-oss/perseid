@@ -60,10 +60,11 @@
 {%- endif %}
 {%- endmacro %}
 
-{# A PascalCase member name, which C# forbids to equal its enclosing type's. -#}
+{# A PascalCase member name, which C# forbids to equal its enclosing type's or to redeclare a
+   member every record inherits or synthesizes. -#}
 {% macro member(name, owner) -%}
 {% set id = name | to_rust_variant -%}
-{% if id == owner %}{{ id }}Value{% else %}{{ id }}{% endif %}
+{% if id == owner or id in ["Equals", "GetHashCode", "ToString", "GetType", "MemberwiseClone", "ReferenceEquals", "Finalize", "EqualityContract", "PrintMembers", "Deconstruct"] %}{{ id }}Value{% else %}{{ id }}{% endif %}
 {%- endmacro %}
 
 {# The class of a resource: `ActivityApi` for both `activity` and a renamed `activity_api`. -#}
