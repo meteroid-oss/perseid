@@ -2,14 +2,14 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Unions;
-using Unions.Models;
+using UnionsSdk;
+using UnionsSdk.Models;
 
 /// <summary>Decoding and encoding of unions sharing a JSON type, best-match object unions, union bodies
 /// and open enums, on the SDK generated from tests/fixtures/edge-unions.yaml.</summary>
 public class UnionsTests
 {
-    private static readonly UnionsJsonContext Context = UnionsJsonContext.Default;
+    private static readonly UnionsSdkJsonContext Context = UnionsSdkJsonContext.Default;
 
     private const string Completed =
         """{"id":"c","model":"alpha-1","created_at":"2024-01-02T03:04:05Z","choices":[]""";
@@ -50,10 +50,10 @@ public class UnionsTests
         private static HttpResponseMessage Respond(string text) =>
             new(HttpStatusCode.OK) { Content = new StringContent(text, Encoding.UTF8, "application/json") };
     }
-    private static UnionsClient Client(Server server) =>
+    private static UnionsSdkClient Client(Server server) =>
         new(
             null,
-            new UnionsClientOptions
+            new UnionsSdkClientOptions
             {
                 BaseUrl = "https://unions.test/v1",
                 ClientId = "id",
@@ -90,8 +90,9 @@ public class UnionsTests
     {
         var prompt = Assert.IsType<CompletionPrompt.Unrecognized>(Decode(",\"prompt\":[true]").Prompt);
         Assert.Equal("[true]", prompt.Raw.GetRawText());
+        // System.Text.Json writes the UTC offset of a DateTimeOffset as +00:00, not Z.
         AssertJson(
-            Completed + ",\"prompt\":[true]}",
+            Completed.Replace("05Z", "05+00:00", StringComparison.Ordinal) + ",\"prompt\":[true]}",
             JsonSerializer.Serialize(Decode(",\"prompt\":[true]"), Context.Completion)
         );
     }
