@@ -215,12 +215,6 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
 {% endif -%}
         );
     }
-
-    /// <summary>The former name of <see cref="{{ op.name | to_upper_camel_case }}AutoPagingAsync"/>.</summary>
-{{- param_docs(op, f) }}
-    [Obsolete("Use {{ op.name | to_upper_camel_case }}AutoPagingAsync.")]
-    public IAsyncEnumerable<{{ m.model(pg.item_schema) }}> {{ op.name | to_upper_camel_case }}IterAsync({{ params(op, f) }}) =>
-        {{ op.name | to_upper_camel_case }}AutoPagingAsync({{ args(op, f, cancellation=false) }}).Iterate(cancellationToken);
 {% endif -%}
 {% set api_operation_extra %}extensions/{{ resource.name | to_snake_case }}_{{ op.name | to_snake_case }}.cs{% endset %}
 {% include api_operation_extra ignore missing %}

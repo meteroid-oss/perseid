@@ -89,8 +89,8 @@ public class RoundTripTests
         Assert.False(thing.Priority!.Value.IsKnown);
         Assert.Equal(99, thing.Priority.Value.Value);
         Assert.True(Kind.Beta2.IsKnown);
-        Assert.Equal(Kind.Beta2, Kind.FromValue("beta-2"));
-        Assert.Equal(Priority.Negative, Priority.FromValue(-1));
+        Assert.Equal(Kind.Beta2, new Kind("beta-2"));
+        Assert.Equal(Priority.Negative, new Priority(-1));
         Assert.Contains("\"kind\":\"brand-new\"", JsonSerializer.Serialize(thing, Context.Thing));
     }
 
@@ -105,7 +105,7 @@ public class RoundTripTests
                 _ => "other",
             };
         Assert.Equal("second", Describe(Kind.Beta2));
-        Assert.Equal("other", Describe(Kind.FromValue("brand-new")));
+        Assert.Equal("other", Describe("brand-new"));
         Assert.Equal(Priority.Values.Negative, Priority.Negative.Value);
     }
 

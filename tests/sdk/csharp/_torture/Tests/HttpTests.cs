@@ -366,7 +366,6 @@ public class HttpTests
         Assert.Equal(["empty"], invalid.GetError<ValidationError>()!.Fields!["name"]);
         Assert.Equal(["empty"], Assert.IsType<ValidationError>(invalid.Error).Fields!["name"]);
         Assert.Same(invalid.Error, invalid.Error);
-        Assert.Equal("req_1", invalid.GetRequestId());
         Assert.Equal("req_1", invalid.RequestId);
         var missing = await Assert.ThrowsAsync<NotFoundException>(() => client.Things.RetrieveAsync("t1"));
         Assert.IsAssignableFrom<TortureException>(missing);

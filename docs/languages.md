@@ -220,12 +220,11 @@ same way.
 
 `ListAutoPagingAsync()` returns an `AsyncPager` to `await foreach` over every item, whose
 `AsPagesAsync()` and `GetFirstPageAsync()` give `Page`s with `Items`, `Response`, `HasNextPage` and
-`GetNextPageAsync()` (`ListIterAsync()` is its deprecated name). Event streams whose events the
+`GetNextPageAsync()`. Event streams whose events the
 spec types are `EventStream<T>`s of models, ending at `[DONE]`, with `LastEvent` for the raw event.
 
 Everything the SDK throws derives from `AcmeException`: `ApiException` subclasses by status
 (`NotFoundException`, `RateLimitException`, `ServerErrorException`...),
 `ApiConnectionException` and its `ApiTimeoutException`, and `ApiDecodeException`. An
 `ApiException` has the `Body` (truncated in the message), `Error`, the body parsed as the schema
-the operation declares for its status (else a `JsonElement`), `GetError<T>()` and `RequestId`
-(`GetDeclaredError()` and `GetRequestId()` in projects scaffolded by earlier versions).
+the operation declares for its status (else a `JsonElement`), `GetError<T>()` and `RequestId`.

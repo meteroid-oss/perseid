@@ -88,16 +88,6 @@ public sealed class AsyncPager<TResponse, TItem> : IAsyncEnumerable<TItem>
             }
         }
     }
-
-    internal async IAsyncEnumerable<TItem> Iterate(
-        [EnumeratorCancellation] CancellationToken cancellationToken
-    )
-    {
-        await foreach (var item in this.WithCancellation(cancellationToken).ConfigureAwait(false))
-        {
-            yield return item;
-        }
-    }
 }
 
 /// <summary>Builds the pagers of list operations from typed accessors of their responses.</summary>

@@ -1,5 +1,7 @@
+using System;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.Json.Serialization.Metadata;
 
 namespace @@PACKAGE_NAME@@;
 
@@ -10,6 +12,7 @@ namespace @@PACKAGE_NAME@@;
 public class ApiException : @@CLIENT_NAME@@Exception
 {
     private const int MaxBodyInMessage = 500;
+    private readonly Lazy<object?> _error;
 
     /// <summary>Creates the exception of an error response.</summary>
     /// <param name="statusCode">The status code.</param>
@@ -24,6 +27,7 @@ public class ApiException : @@CLIENT_NAME@@Exception
         StatusCode = statusCode;
         Body = body;
         Headers = headers;
+        _error = new(() => ApiExceptionExtensions.DecodeError(Body, ErrorType));
     }
 
     /// <summary>The status code.</summary>
@@ -40,10 +44,13 @@ public class ApiException : @@CLIENT_NAME@@Exception
     /// <see cref="System.Text.Json.JsonElement"/>; <c>null</c> when it is not JSON. Match it with
     /// <c>is</c>, or read it as a given model with <c>GetError&lt;T&gt;()</c>.
     /// </summary>
-    public object? Error => this.GetDeclaredError();
+    public object? Error => _error.Value;
 
     /// <summary>The <c>x-request-id</c> (or <c>request-id</c>) header, to quote to support.</summary>
-    public string? RequestId => this.GetRequestId();
+    public string? RequestId => ApiExceptionExtensions.RequestId(Headers);
+
+    /// <summary>The error schema the operation declares for this status, set by the SDK.</summary>
+    internal JsonTypeInfo? ErrorType { get; set; }
 
     /// <summary>Called by the SDK for every error response: return a subclass to map specific errors.
     /// A plain <see cref="ApiException"/> becomes the status class, such as <see cref="NotFoundException"/>.</summary>

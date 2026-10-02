@@ -20,7 +20,7 @@ public readonly partial record struct {{ type_name }}(long Value) : IIntegerEnum
 {
 {% for varname, value in type.variants -%}
 {% set name = m.member(varname, type_name) -%}
-{% if name in ["Value", values_class, "FromValue", "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
+{% if name in ["Value", values_class, "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
     /// <summary><c>{{ value }}</c></summary>
     public static {{ type_name }} {{ name }} { get; } = new({{ value }});
 {% endfor %}
@@ -32,16 +32,13 @@ public readonly partial record struct {{ type_name }}(long Value) : IIntegerEnum
     {
 {% for varname, value in type.variants -%}
 {% set name = m.member(varname, type_name) -%}
-{% if name in ["Value", values_class, "FromValue", "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
+{% if name in ["Value", values_class, "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
         /// <summary><c>{{ value }}</c></summary>
         public const long {{ name }} = {{ value }};
 {% endfor -%}
     }
 
-    /// <summary>The value <paramref name="value"/>, known or not.</summary>
-    /// <param name="value">The JSON value.</param>
-    /// <returns>The enum value.</returns>
-    public static {{ type_name }} FromValue(long value) => new(value);
+    static {{ type_name }} IIntegerEnum<{{ type_name }}>.FromValue(long value) => new(value);
 
     /// <summary>The value <paramref name="value"/>, known or not.</summary>
     /// <param name="value">The JSON value.</param>

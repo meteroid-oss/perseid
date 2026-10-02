@@ -35,10 +35,6 @@ public sealed partial class @@CLIENT_NAME@@ClientOptions
     /// requests get one). Ignored when <see cref="RetrySchedule"/> is set.</summary>
     public int MaxRetries { get; set; } = 2;
 
-    /// <summary>The former name of <see cref="MaxRetries"/>.</summary>
-    [Obsolete("Use MaxRetries.")]
-    public int NumRetries { get => MaxRetries; set => MaxRetries = value; }
-
     /// <summary>The exact delay before each retry, its length the number of retries. An empty list
     /// disables retries.</summary>
     public IReadOnlyList<TimeSpan>? RetrySchedule { get; set; }
