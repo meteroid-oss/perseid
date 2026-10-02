@@ -1,285 +1,658 @@
 # Languages
 
-Every SDK retries connection errors, timeouts, 408, 429 and 5xx responses with jittered backoff,
-but only when the method is idempotent or the request carries an `Idempotency-Key` (POST gets one
-automatically). A `retry-after-ms` or `Retry-After` of at most 60 seconds sets the wait instead;
-a longer one falls back to the backoff. `max_retries` (2 by default) can be set per client and per
-call. Enum values and union variants newer than the SDK
-are kept rather than rejected. Requests time out after `timeout` seconds (60 by default).
+Examples use an API named `Acme` with a `customers` resource. Names follow the `name` of
+`perseid.toml`: the client is `Acme`, the environment variables start with `ACME_`.
 
-API errors carry the status, the response headers (for request ids) and the raw body. They are
-also typed by status (not found, rate limited, 5xx...), and the body decodes into the error schema
-the operation declares for that status (exact status, then `4XX`, then `default`), else the
-API-wide error schema when [one is inferred](configuration.md#spec-support).
+## What every SDK does
 
-Values told apart by their JSON type, such as Stripe's expandable `string | Customer` or
-`ChargeShipping | ""`, are typed rather than untyped JSON. So are unions of several object types
-without a discriminator (`string | Customer | DeletedCustomer`), told apart by their properties,
-else by their best match (`untagged_unions = "json"` leaves the latter untyped); see
-[unions of objects](configuration.md#unions-of-objects). An object no variant matches is kept as
-received, and each SDK reads a value as another variant than the one picked.
+| Behavior | |
+|---|---|
+| Retries | Connection errors, timeouts, 408, 429 and 5xx, retried twice by default with jittered exponential backoff |
+| Safe retries only | Idempotent methods, or requests with an `Idempotency-Key`. Every POST gets one automatically |
+| `Retry-After` | `retry-after-ms` and `Retry-After` set the wait when at most 60 seconds, else the backoff applies |
+| Timeout | Per attempt, `timeout` of `perseid.toml` (60 seconds by default), settable per client and per call |
+| Environment | `ACME_API_KEY` for the token, `ACME_BASE_URL` for the base URL, `ACME_CLIENT_ID` and `ACME_CLIENT_SECRET` for OAuth2 client credentials |
+| No base URL | When neither the spec, `base_url` nor the caller gives one, creating the client (or the first call in Go) fails, naming both settings |
+| Errors | One base error type, API errors typed by status, the body decoded into the error schema of that status, then `4XX`, then `default`, then the API-wide error schema |
+| Unknown values | Enum values and union variants the SDK does not know are kept and sent back unchanged |
+| Unknown properties | Kept on the model and sent back when it is serialized |
+| Per-call options | Headers, timeout, max retries and idempotency key |
+| `api.md` | Every method by resource, in the language's syntax, with its HTTP method, path and models. Regenerated with the code |
+| `README.md` | Written on the first generation, with examples calling the API's own operations. Yours afterwards |
 
-Every SDK has an `api.md` at its root, regenerated with the code: each method by resource as the
-language calls it (`client.customers.list(...)`, `client.Customers().List(ctx, ...)`), with its
-parameters, return type, HTTP method and path, linking the models. The README, written once and
-then yours, links it, and its examples (client, a call, pagination, streaming, errors, raw
-responses, per-call options) call the API's own operations: a retrieve, the first paginated list
-and the first stream, sections left out when the API has none.
+Generated files carry an `@generated` marker. perseid never overwrites or deletes the others.
+See [features](features.md) for auth, pagination and encoding, and
+[configuration](configuration.md#names) for how spec names become identifiers.
 
-Generated names are valid in every language whatever the spec spells: keywords are escaped,
-schemas named like runtime types get a `Model` suffix, and clashing enum values or parameters get
-a suffix ([names](configuration.md#names)). Models keep what the spec leaves open
-(`additionalProperties`, unknown properties) and every nullable value, item and response body.
-Go types adjacently tagged unions too, and declares the inline object variants of tagged unions
-as structs of their own (`ContentPartTextVariant`), as openai-go does.
+## At a glance
+
+| | Requires | Client | Base error | Paginated list | Raw response |
+|---|---|---|---|---|---|
+| Rust | Tokio | `Acme::builder()...build()?` | `Error` | `list_iter(...)` | `.with_response()` |
+| TypeScript | Node.js 20+, Deno, Bun, browsers | `new Acme({ apiKey })` | `AcmeError` | `for await` on `list()` | `.withResponse()` |
+| Python | Python 3.10+ | `Acme(api_key=...)`, `AsyncAcme` | `AcmeError` | iterate `list()` | `client.with_raw_response` |
+| Go | Go 1.23+ | `acme.New(token, opts)` | `SDKError` | `ListAutoPaging(...)` | `WithResponseInto(&resp)` |
+| Java | Java 11+ | `new Acme(AcmeOptions...)` | `AcmeException` | `listIter()` | `client.withRawResponse()` |
+| C# | .NET 8 | `new AcmeClient(token)` | `AcmeException` | `ListAutoPagingAsync()` | `.WithRawResponse` |
 
 ## Rust
 
-Clients come from `Acme::builder()` (token, base URL, timeout, `max_retries`, headers,
-middleware, `http_client`, or `connector` for any hyper connector: custom TLS roots, client
-certificates, a proxy), `Acme::new(token)` or `Acme::from_env()`, which all return a `Result`.
-When the spec has no server, `base_url()` or `ACME_BASE_URL` is required: without either they fail
-with an `Error::Request` naming both, and they reject a base URL that is not absolute http(s).
-Methods return a `Call`, a future of the decoded body; `.with_response().await` also gives the status, headers and
-`request_id()`. `with_options(RequestOptions)` on a resource sets headers, the timeout, retries or
-the idempotency key of its calls:
-`client.items().with_options(RequestOptions::new().max_retries(0)).list(None)`. Query and header
-parameters are `#[non_exhaustive]` options structs, built with `new(required...)` then a setter per
-optional parameter; when none is required, methods take `impl Into<Option<_>>`, the struct or
-`None`. Operations that also declare a bodiless 2xx return `Option<T>`, `None` on an empty body. A query parameter that is a union of scalars or lists is an enum. Clients, resources, calls and paginators own what they need, so they move into
-`tokio::spawn`. `*_iter` methods return a `Paginator<Page, Item>`, a `futures_core::Stream` of
-items whose `pages()` and `first_page()` give `Page`s (`items()`, `has_next_page()`,
-`next_page()`, the response through `Deref`). Event streams are `Stream`s of `SseEvent`s, or of
-the model each event carries until `[DONE]`, with `last_event()` for the raw event. The `http`
-crate is re-exported as `api::http`.
+### Install
 
-Structs keep the properties they do not declare in `extra` (`extra_properties` when the schema has
-an `extra` property) and send them back; `allOf` parts are inlined into one struct. Only structs
-without required fields, or whose required fields have a default, implement `Default`. Structs no
-request sends are `#[non_exhaustive]`, so new response properties are not breaking: build them
-with `new(required...)` or `Default`, then assign fields; request structs also take struct
-literals (`Charge { capture: Some(true), ..Charge::new(100) }`). Enums and unions
-are `#[non_exhaustive]` and decode values this version does not know into an `Unknown` variant
-that serializes back unchanged. Recursive fields are boxed. Dates are `chrono` types. In PATCH
-bodies, nullable optional fields are `Option<Option<T>>`: `Some(None)` sends `null`.
+```sh
+cargo add acme
+```
 
-Unions told apart by JSON type are enums (`ChargeCustomer::String(id)`,
-`ChargeCustomer::Customer(Box<Customer>)`, with `From` impls, `as_*` accessors and `id()` for
-expandable objects), and union variant structs fill in their discriminator (`Circle::new(1.5)`).
-Unions of objects keep unmatched objects in `Unknown(Value)`, and `decode_as::<DeletedCustomer>()`
-reads the value as another variant.
+Cargo features: `rustls-tls` (default) or `native-tls`, `http1` (default), `http2`, and
+`webhooks` for the [webhook verifier](customizing.md#webhooks).
 
-`src/error.rs` is yours: the runtime builds errors with `Error::generic(Failure)` and
-`Error::from_response(status, headers, body)` only. The scaffolded one is an enum of `Api`,
-`Timeout`, `Connection`, `Decode` and `Request` errors with `source()`; `Error::api()` gives the
-response, with `kind()` (`NotFound`, `RateLimited`, `InternalServer`...), `payload()` decoding it
-as `api::ErrorBody` (the spec's common error schema) and `request_id()`. Methods list their
-documented error bodies under `# Errors`.
+### Client
+
+```rust
+let client = Acme::builder()
+    .token("sk_live_...")
+    .base_url("https://staging.acme.com")
+    .timeout(Duration::from_secs(20))
+    .max_retries(3)
+    .build()?;
+```
+
+- `Acme::new(token)` and `Acme::from_env()` are shortcuts. All three return a `Result`.
+- The builder also takes `header`, `middleware`, `http_client`, and `connector` for any hyper
+  connector (custom TLS roots, client certificates, a proxy).
+- Credentials: `token_provider`, `client_credentials(id, secret)`, `basic_auth`,
+  `api_key(scheme, key)`.
+- Building fails with `Error::Request` without a base URL, or with one that is not absolute
+  http(s).
+- Clients are cheap to clone. Clients, resources, calls and paginators own what they need, so
+  they move into `tokio::spawn`.
+
+### Calls and options
+
+```rust
+let customer = client.customers().retrieve("cus_1").await?;
+let charge = client.charges().create(Charge { capture: Some(true), ..Charge::new(100) }).await?;
+
+let options = RequestOptions::new().max_retries(0).timeout(Duration::from_secs(5));
+client.customers().with_options(options).list(None).await?;
+```
+
+- Methods take path parameters, the body, then query and header parameters as an options struct.
+- Options structs are `#[non_exhaustive]`: `new(required...)`, then a setter per optional
+  parameter. When none is required, pass the struct or `None`.
+- `with_options` on a resource sets headers, timeout, retries or idempotency key for its calls.
+- An operation that also declares a bodiless 2xx returns `Option<T>`.
+
+### Pagination
+
+```rust
+let mut customers = client.customers().list_iter(None);
+while let Some(customer) = customers.next().await {
+    let customer = customer?;
+}
+let page = client.customers().list_iter(None).first_page().await?;
+```
+
+`*_iter` methods return a `Paginator`, a `futures_core::Stream` of items. `pages()` and
+`first_page()` give `Page`s with `items()`, `has_next_page()` and `next_page()`; the response
+body is reachable through `Deref`.
+
+### Streaming
+
+Event streams are `Stream`s of the model each event carries, ending at `[DONE]`, or of raw
+`SseEvent`s. `last_event()` gives the raw event, `into_raw()` the raw stream.
+
+### Errors
+
+```rust
+match client.customers().retrieve("cus_1").await {
+    Err(Error::Api(error)) if error.kind() == ApiErrorKind::NotFound => {}
+    Err(error) => eprintln!("{error} (request {:?})", error.api().and_then(|e| e.request_id())),
+    Ok(customer) => {}
+}
+```
+
+- `Error` has `Api`, `Timeout`, `Connection`, `Decode` and `Request` variants.
+- `ApiError` has `kind()` (`NotFound`, `RateLimited`, `InternalServer`...), `request_id()`,
+  `payload()` (the API's common error schema, `api::ErrorBody`) and `json::<T>()`.
+- Methods list their documented error bodies under `# Errors`.
+
+### Raw responses
+
+`client.customers().retrieve(id).with_response().await?` returns the `status()`, `headers()`,
+`request_id()` and `into_data()`.
+
+### Models and unions
+
+- Structs keep undeclared properties in `extra` (`extra_properties` when the schema has an
+  `extra` property). `allOf` parts are inlined into one struct.
+- Structs only found in responses are `#[non_exhaustive]`: build them with `new(required...)` or
+  `Default`, then assign fields. Request structs also take struct literals.
+- `Default` is implemented when every required field has a default.
+- In PATCH bodies, nullable optional fields are `Option<Option<T>>`: `Some(None)` sends `null`.
+- Recursive fields are boxed. Dates are `chrono` types.
+- Enums and unions are `#[non_exhaustive]`, with an `Unknown` variant that serializes back
+  unchanged.
+- Unions are enums with `From` impls and `as_*` accessors: `ChargeCustomer::String(id)`,
+  `ChargeCustomer::Customer(Box<Customer>)`. Expandable fields have `id()`.
+- Union variant structs fill in their discriminator: `Circle::new(1.5)`.
+- `decode_as::<DeletedCustomer>()` reads a union of objects as another variant.
+
+### Notes
+
+- `src/error.rs` is yours. The runtime only calls `Error::generic(Failure)` and
+  `Error::from_response(status, headers, body)`.
+- The `http` crate is re-exported as `acme::api::http`.
 
 ## TypeScript
 
-The package ships ESM and CommonJS builds behind an `exports` map, and type-checks under
-`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` and `noImplicitOverride`.
-Client options are named as in Stainless SDKs: `new Acme({ apiKey, baseURL, timeout, maxRetries,
-defaultHeaders, defaultQuery, fetch })`, `timeout` in milliseconds (`Infinity` turns it off).
-`apiKey` defaults to `ACME_API_KEY` and `baseURL` to `ACME_BASE_URL`, then the configured
-`base_url`; without one, the constructor throws an `AcmeError` naming both. Every method takes a
-last `{ signal, headers, query, timeout, maxRetries, idempotencyKey }` argument and returns an
-`APIPromise`: await it for the body, or call `.withResponse()` for `{ data, response, requestId }`
-and `.asResponse()` for the unread `Response`. List methods return a `PagePromise`, iterated with
-`for await` over every item or awaited for a `Page` (`items`, `body`, `hasNextPage()`,
-`getNextPage()`, `iterPages()`). Event streams whose events have a schema are a `Stream<Model>`
-up to `[DONE]`, with the raw event as `stream.lastEvent`, and `..._stream` twins send
-`stream: true`; others are an `EventStream` of raw events.
+### Install
 
-Models convert with `XSerializer.parse(json)` / `XSerializer.serialize(value)`, keeping the
-properties the SDK does not know under their JSON names. With `int64 = "bigint"` or `"string"`,
-responses are parsed without losing digits, and `parseJson` / `stringifyJson` do the same for
-webhook payloads. Everything the SDK throws is an `<Client>Error`: `APIError` subclasses by status
-(`NotFoundError`, `RateLimitError`, `InternalServerError`...) with `status`, `headers`,
-`requestId`, `body` and `error`, the body parsed as its declared schema (typed as
-`<Client>ErrorBody`) or as JSON; `APIConnectionError` and its `APIConnectionTimeoutError`,
-`APIUserAbortError` and `APIDecodeError`. Unions of scalars and lists are typed in query, header
-and path parameters. Expandable fields are `string | Customer` (`expandableId(value)` gives the
-id either way); a union of objects parses an object with the serializer of the variant it
-matches and keeps other objects as received. The webhook verifier has no Node.js imports, so it
-runs in browsers, Workers and edge runtimes.
+```sh
+npm install acme
+```
+
+ESM and CommonJS builds behind an `exports` map. The package only needs `fetch`, and
+type-checks under `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
+
+### Client
+
+```ts
+const client = new Acme({ apiKey: "sk_live_...", timeout: 20_000, maxRetries: 5 });
+```
+
+| Option | |
+|---|---|
+| `apiKey`, `baseURL` | Default to `ACME_API_KEY` and `ACME_BASE_URL` |
+| `timeout` | Milliseconds, `Infinity` to wait forever |
+| `maxRetries`, `retryScheduleInMs` | Retry count, or explicit delays |
+| `defaultHeaders`, `defaultQuery` | Sent with every request. A `null` header removes one the SDK sets |
+| `fetch`, `middleware`, `debug` | Custom `fetch`, [middleware](customizing.md#middleware), a summary of each request on stderr |
+| `tokenProvider`, `clientId`, `clientSecret`, `oauthClientAuth`, `basicAuth`, `apiKeys` | [Credentials](features.md#authentication) |
+
+### Calls and options
+
+```ts
+const customer = await client.customers.retrieve("cus_1", { timeout: 5_000, maxRetries: 0 });
+```
+
+- The last argument of every method is `{ signal, headers, query, timeout, maxRetries, idempotencyKey }`.
+- Unions of scalars and lists are typed in query, header and path parameters.
+- `int64 = "bigint"` or `"string"` under `[typescript]` parses int64 values without losing digits.
+
+### Pagination
+
+```ts
+for await (const customer of client.customers.list({ perPage: 100 })) { ... }
+const page = await client.customers.list();
+```
+
+List methods return a `PagePromise`. A `Page` has `items`, `body`, `hasNextPage()`,
+`getNextPage()` and `iterPages()`.
+
+### Streaming
+
+```ts
+const stream = await client.completions.createStream({ prompt: "hi" });
+for await (const chunk of stream) process.stdout.write(chunk.delta);
+```
+
+- Events with a schema give a `Stream<Model>` ending at `[DONE]`, with `stream.lastEvent`.
+- Other streams are an `EventStream` of raw events.
+- Breaking out of the loop or calling `stream.close()` closes the connection.
+
+### Errors
+
+```ts
+try {
+  await client.customers.retrieve("cus_1");
+} catch (error) {
+  if (error instanceof NotFoundError) console.log(error.status, error.requestId, error.error);
+}
+```
+
+| Error | When |
+|---|---|
+| `AcmeError` | Base of everything the SDK throws |
+| `APIError` | Non-2xx: `status`, `headers`, `requestId`, `body` (raw text), `error` (parsed, typed `AcmeErrorBody`) |
+| `BadRequestError`, `AuthenticationError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError`, `UnprocessableEntityError`, `RateLimitError`, `InternalServerError` | 400, 401, 403, 404, 409, 422, 429, 5xx |
+| `APIConnectionError`, `APIConnectionTimeoutError` | No response, or none within the timeout |
+| `APIUserAbortError` | The `signal` aborted |
+| `APIDecodeError` | A 2xx body that is not valid JSON or the expected event stream |
+
+### Raw responses
+
+Methods return an `APIPromise`. `.withResponse()` gives `{ data, response, requestId }`, and
+`.asResponse()` the unread `Response`.
+
+### Models and unions
+
+- Models are plain objects with camelCase properties.
+- `CustomerSerializer.parse(json)` and `.serialize(value)` convert them, keeping unknown
+  properties under their JSON names.
+- With a non-default `int64`, `parseJson` and `stringifyJson` do the same for webhook payloads.
+- Enums are `const` objects with a union type of their values.
+- Tagged unions are unions of interfaces keyed by the discriminator.
+- Expandable fields are `string | Customer`, and `expandableId(value)` gives the id either way.
+- A union of objects parses with the serializer of the variant it matches, and keeps other
+  objects as received.
+
+### Notes
+
+- The webhook verifier has no Node.js imports: it runs in browsers, Workers and edge runtimes.
+- `exports` under `[typescript]` re-exports more modules from the entry point.
 
 ## Python
 
-Needs Python 3.10+; generated code passes `mypy --strict`, pyright and ruff. Clients take keyword
-arguments only, Stainless style: `Acme(api_key=..., base_url=..., timeout=..., max_retries=...,
-default_headers=..., http_client=...)`, and `client.with_options(max_retries=0)` changes them for
-one call. Without a server in the spec nor `base_url`, the client needs `base_url=` or
-`ACME_BASE_URL` and raises `AcmeError` naming both. `AsyncAcme` is the asyncio client.
+### Install
 
-The fields of an object request body are keyword arguments: `client.customers.create(
-currency="EUR", name="x")`. An enum argument also takes its values as literals (`Currency |
-CurrencyLiteral`); nested objects are models. An omitted optional argument is not sent; `None`
-sends `null` to a nullable field (its default is `UNSET`), and leaves out the others. Other bodies
-(lists, unions, multipart, binary), or one with a field named like a parameter, are a single `body`
-argument. A `_stream` twin sets its `stream` property, which neither twin takes. Every method also
-takes `extra_headers=`, `extra_query=`, `extra_body=` (merged into the JSON or form body),
-`timeout=` and `max_retries=`, prefixed with `request_` when a parameter has the name; these
-headers, like `default_headers`, win over the client's credentials. A method whose spec also
-declares a bodiless 2xx returns `Model | None`, `None` for an empty body.
+```sh
+pip install acme
+```
 
-Models are keyword-only dataclasses, and properties the SDK does not know are kept in
-`extra_fields` (read as attributes at runtime) and sent back. In schemas requests send, an optional
-field that accepts `null` defaults to `UNSET`, so `None` sends `null`; in schemas only responses
-carry, it is `X | None = None`. A property named after a model member (`extra_fields`,
-`to_dict`...) gets a trailing `_`, like a keyword. A discriminated union is the union of its
-variant models, `t.Annotated[Circle | Square | UnknownVariant, Discriminator(...)]`, decoding into
-the variant and writing its tag back; when variants share fields, reuse a model or have none, it
-is a model holding the discriminator and the variant (`Shape(content=Circle(radius=1))`, both tags
-filled in). Values told apart by their JSON type, such as expandable ids and query parameters
-taking a value or a list, are `str | Customer` (`expandable_id(value)` gives the id either way). A
-union of objects is annotated `t.Annotated[Customer | DeletedCustomer | UnknownVariant,
-ObjectUnion(...)]`: unmatched objects are an `UnknownVariant`, and `as_variant(value, Customer)`
-reads a value as another variant.
+Python 3.10+, `httpx` only. Generated code passes `mypy --strict`, pyright and ruff.
 
-List methods return a `SyncPage` (`items`, `body`, `has_next_page()`, `get_next_page()`,
-`iter_pages()`) whose iteration walks every item of every page; the async ones an
-`AsyncPaginator` to `await` for the page or `async for` the items. Event streams with a documented
-event schema are `Stream[Chunk]`s yielding models until `[DONE]`, with `last_event` the raw event.
-`client.with_raw_response.items.retrieve(...)` returns an `APIResponse` (`status_code`,
-`headers`, `request_id`, `parse()`).
+### Client
 
-Every error derives from `AcmeError`. API errors are `APIStatusError` subclasses by status
-(`NotFoundError`, `RateLimitError`, `InternalServerError`...) with `body`, the error response
-decoded into its schema (else its JSON), and `request_id`; the message quotes the start of the
-body, `Error code: 404 - {"error": ...}`. No response raises
-`APIConnectionError`, or its subclass `APITimeoutError`; an undecodable 2xx body
-`APIResponseValidationError`.
+```python
+client = Acme(api_key="sk_live_...", timeout=20.0, max_retries=5)
+
+async with AsyncAcme() as client:
+    customer = await client.customers.retrieve("cus_1")
+```
+
+- Arguments are keyword-only: `api_key`, `base_url`, `timeout` (seconds, `None` waits),
+  `max_retries`, `default_headers`, `http_client` (an `httpx.Client`), `middleware`.
+- Credentials: `token_provider`, `client_id`, `client_secret`, `oauth_client_auth`,
+  `basic_auth=(user, password)`, `api_keys`.
+- `AsyncAcme` is the asyncio client, with the same resources.
+- Close the client, or use it as a context manager, to release its connections.
+- `client.with_options(max_retries=0)` returns a copy with other settings.
+
+### Calls and options
+
+```python
+client.customers.create(currency="EUR", name="x")
+client.customers.retrieve("cus_1", timeout=5.0, max_retries=0)
+```
+
+- Path parameters come first. Query, header and object body fields are keyword arguments.
+- An omitted argument is not sent. `None` sends `null` to a nullable field, and is omitted
+  elsewhere.
+- Enum arguments take the enum or its literal value (`Currency | CurrencyLiteral`).
+- Lists, unions, multipart and binary bodies, or a body with a field named like a parameter,
+  are one `body` argument.
+- Every method takes `extra_headers=`, `extra_query=`, `extra_body=`, `timeout=` and
+  `max_retries=`, prefixed with `request_` when a parameter has that name.
+- These headers, like `default_headers`, win over the client's credentials.
+- An operation that also declares a bodiless 2xx returns `Model | None`.
+
+### Pagination
+
+```python
+for customer in client.customers.list(per_page=100): ...
+page = client.customers.list()          # page.items, page.body, page.has_next_page(), page.get_next_page()
+async for customer in async_client.customers.list(): ...
+```
+
+List methods return a `SyncPage`, iterated item by item; `iter_pages()` walks the pages. The
+async client returns an `AsyncPaginator`: `await` it for the first page, or `async for` the items.
+
+### Streaming
+
+```python
+with client.completions.create_stream(prompt="hi") as stream:
+    for chunk in stream:
+        print(chunk.delta)
+```
+
+Events with a documented schema yield models until `[DONE]`, with `stream.last_event` the raw
+event. Other streams yield `SseEvent`s. Multipart bodies take `Upload(content, filename,
+content_type)`.
+
+### Errors
+
+```python
+try:
+    client.customers.retrieve("cus_1")
+except NotFoundError as error:
+    print(error.status_code, error.request_id, error.body)
+except APITimeoutError: ...
+except APIConnectionError: ...
+```
+
+| Error | When |
+|---|---|
+| `AcmeError` | Base of every error |
+| `APIStatusError` | Non-2xx: `status_code`, `body` (decoded into its schema, else JSON), `request_id` |
+| `BadRequestError`, `AuthenticationError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError`, `UnprocessableEntityError`, `RateLimitError`, `InternalServerError` | Subclasses by status |
+| `APIConnectionError`, `APITimeoutError` | No response, or none within the timeout |
+| `APIResponseValidationError` | A 2xx body that does not decode |
+
+The message quotes the start of the body: `Error code: 404 - {"error": ...}`.
+
+### Raw responses
+
+`client.with_raw_response.customers.retrieve(id)` returns an `APIResponse` with `status_code`,
+`headers`, `request_id` and `parse()`.
+
+### Models and unions
+
+- Models are keyword-only dataclasses with `from_dict` and `to_dict`.
+- Unknown properties are kept in `extra_fields`, readable as attributes, and sent back.
+- In request models, an optional nullable field defaults to `UNSET`: omitted, while `None` sends
+  `null`. In response models it is `X | None = None`.
+- A property named after a model member (`extra_fields`, `to_dict`) gets a trailing `_`.
+- A discriminated union is the union of its variants:
+  `t.Annotated[Circle | Square | UnknownVariant, Discriminator(...)]`.
+- When its variants share fields or reuse a model, it is a model holding the variant:
+  `Shape(content=Circle(radius=1))`, with the tag filled in.
+- Expandable fields are `str | Customer`, and `expandable_id(value)` gives the id either way.
+- A union of objects is `t.Annotated[Customer | DeletedCustomer | UnknownVariant,
+  ObjectUnion(...)]`. `as_variant(value, Customer)` reads it as another variant.
 
 ## Go
 
-Needs Go 1.23+. Required query and header parameters are arguments, optional ones go in a
-`*...Options` struct (pointers, `nil` to omit); every method also takes trailing options for one
-call: `WithHeader`, `WithTimeout`, `WithIdempotencyKey`, `WithMaxRetries` and
-`WithResponseInto(&resp)`, which hands over the `*http.Response` (status, headers). A method whose
-operation may also answer a bodiless 2xx returns nil for it, scalars as a pointer. Names spell
-initialisms the Go way (`CustomerID`, `APIKey`), and the package of a multi-word name is one word
-(`realworld`). `allOf` parts are inlined into flat structs, and every struct keeps the properties
-it does not know in `ExtraFields`, sent back when encoding. Nullable optional PATCH fields are
-`*Nullable[T]`: `NewNullable(v)` sets one and `ExplicitNull[T]()` clears it; `IsNull()` is true
-only for an explicit null, not for `nil`. `DefaultTimeout` is `timeout` from perseid.toml,
-`Options.MaxRetries` the client-wide `max_retries`, and `Options.Logger` (a `*slog.Logger`) logs
-every attempt. `Options.ServerURL`, else `<ENV_PREFIX>_BASE_URL`, else `DefaultServerURL` is the
-server; when the spec and perseid.toml give none, `DefaultServerURL` is empty and every call
-fails with a `*RequestError` naming both.
+### Install
 
-Every error is an `SDKError`: `*APIError` for a non-2xx response, `*TimeoutError`,
-`*TransportError` when no response came, `*DecodeError` and `*RequestError`. `errors.Is(err,
-ErrNotFound)` (and `ErrUnauthorized`, `ErrRateLimited`, `ErrServer`...) tests the status,
-`APIError.Body` holds the body decoded as the error schema the operation declares (else plain
-JSON), `ErrorBody[T](err)` decodes it as any schema and `APIError.Detail()` as the one most
-operations share.
+```sh
+go get github.com/acme/acme-go
+```
 
-List operations return a page, `*CustomersListPage` (an alias of `*Page[Customer, *CustomerList]`)
-with `Items`, `Body` (the whole typed response, for totals), `HasNextPage()` and `NextPage(ctx)`,
-and their `ListAutoPaging` twin an `*AutoPager[Customer]` over every item
-(`Next`/`Current`/`Err`, or `range pager.All()`), as in openai-go.
-Event streams with a schema are a `*Stream[T]` of decoded events ending at `[DONE]` (`Event()`
-gives the raw `SSEEvent`), others an `*EventStream`; lines are capped at 1 MiB.
+Go 1.23+. The module path is set by `module` under `[go]`, else derived from the repository.
 
-A union is a struct with one `Of...` field per variant (`OfString *string`,
-`OfArrayOfIntegers []int64`, `OfCustomer *Customer`, `OfEmpty bool` for `""`) plus `New...From...`
-constructors, also for query parameters and request and response bodies; at most one field is set.
-Variants sharing a JSON type are tried in turn (an array is told apart by its first item, a
-`date-time` falls back to a plain string), and objects no property tells apart go to their best
-match. Values of another JSON type, or objects no variant matches, are kept in `Raw()`; `Kind()`
-names the variant that is set, `As...()` returns a variant or decodes it from `Raw()`, `ID()`
-returns the id of an expandable field and `As(&target)` decodes a union of objects as another
-variant. A tagged union's discriminator has its own string type (`ShapeType`, with
-`ShapeCircle`... constants), and its variants fill in their discriminator when it is left empty.
-Generated files start with the `// Code generated ... DO NOT EDIT.` line linters and editors look
-for; `doc.go`, `errors.go` and `version.go` are yours.
+### Client
+
+```go
+client := acme.New("sk_live_...", &acme.Options{ServerURL: "https://staging.acme.com"})
+```
+
+| `Options` field | |
+|---|---|
+| `ServerURL` | Else `ACME_BASE_URL`, else `DefaultServerURL` |
+| `Timeout`, `MaxRetries`, `RetrySchedule` | Defaults: `DefaultTimeout`, 2, exponential backoff |
+| `HTTPClient`, `Middleware`, `UserAgent` | Transport, [middleware](customizing.md#middleware) |
+| `Logger` | A `*slog.Logger`, logging every attempt at debug level |
+| `TokenProvider`, `ClientID`, `ClientSecret`, `OAuthClientAuth`, `BasicAuth`, `APIKeys` | [Credentials](features.md#authentication) |
+
+`New("", nil)` reads `ACME_API_KEY`. Without any server URL, every call fails with a
+`*RequestError` naming both settings.
+
+### Calls and options
+
+```go
+customer, err := client.Customers().Retrieve(ctx, "cus_1", acme.WithMaxRetries(0), acme.WithTimeout(5*time.Second))
+```
+
+- Every method takes a `context.Context` first, then required parameters.
+- Optional query and header parameters go in a `*...Options` struct of pointers
+  (`acme.Ptr(v)`), `nil` for none.
+- Per-call options: `WithHeader`, `WithTimeout`, `WithIdempotencyKey`, `WithMaxRetries`,
+  `WithResponseInto`.
+- An operation that may answer a bodiless 2xx returns nil for it, scalars as a pointer.
+
+### Pagination
+
+```go
+for customer, err := range client.Customers().ListAutoPaging(ctx, nil).All() { ... }
+page, err := client.Customers().List(ctx, nil) // page.Items, page.Body, page.HasNextPage(), page.NextPage(ctx)
+```
+
+- List methods return a page, such as `*CustomersListPage`, an alias of `*Page[Customer, *CustomerList]`.
+- `Body` is the whole typed response, for totals.
+- The `ListAutoPaging` twin returns an `*AutoPager[Customer]`: `range pager.All()`, or
+  `Next()`, `Current()` and `Err()`.
+
+### Streaming
+
+```go
+stream, err := client.Completions().CreateStream(ctx, acme.CompletionRequest{Prompt: "hi"})
+defer stream.Close()
+for chunk, err := range stream.All() { ... } // stream.Event() is the raw event
+```
+
+Events with a schema give a `*Stream[T]` ending at `[DONE]`, others an `*EventStream` of
+`SSEEvent`s. Lines are capped at 1 MiB.
+
+### Errors
+
+```go
+var apiErr *acme.APIError
+switch {
+case errors.Is(err, acme.ErrNotFound):
+case errors.As(err, &apiErr):
+	log.Printf("status %d, request %s", apiErr.StatusCode, apiErr.RequestID())
+}
+```
+
+- Every error is an `SDKError`: `*APIError`, `*TimeoutError`, `*TransportError` (no
+  response), `*DecodeError`, `*RequestError`.
+- `errors.Is` tests the status: `ErrNotFound`, `ErrUnauthorized`, `ErrRateLimited`, `ErrServer`...
+- `APIError.Body` holds the body decoded as the declared error schema, else plain JSON.
+- `ErrorBody[T](err)` decodes it as any schema, `APIError.Detail()` as the API-wide one.
+
+### Raw responses
+
+`WithResponseInto(&resp)` hands over the `*http.Response`, for its status and headers.
+
+### Models and unions
+
+- Initialisms are spelled the Go way: `CustomerID`, `APIKey`.
+- `allOf` parts are inlined into flat structs. Unknown properties are kept in `ExtraFields`.
+- Nullable optional PATCH fields are `*Nullable[T]`: `NewNullable(v)` sets one,
+  `ExplicitNull[T]()` sends `null`. `IsNull()` is true only for an explicit null.
+- A union is a struct with one `Of...` field per variant, at most one set: `OfString *string`,
+  `OfCustomer *Customer`, `OfEmpty bool` for `""`.
+- `New...From...` constructors build one. `Kind()` names the variant set, `As...()` returns it.
+- `Raw()` holds values no variant matches. `ID()` returns the id of an expandable field.
+- `As(&target)` decodes a union of objects as another variant.
+- A tagged union has a `Type` field of its own string type (`ShapeType`, with `ShapeCircle`...
+  constants), and a pointer per variant. Variants fill in an empty discriminator.
+- Inline object variants of tagged unions are structs of their own: `ContentPartTextVariant`.
+
+### Notes
+
+- The package of a multi-word name is one word: `realworld`.
+- Generated files start with `// Code generated by perseid. DO NOT EDIT.`.
+- `doc.go`, `errors.go` and `version.go` are yours. Add methods to the resource types from any
+  file of the package.
 
 ## Java
 
-Final classes with fluent accessors, OkHttp and Jackson underneath, for Java 11 and later. Models
-are immutable: `Widget.builder()...build()` throws on a missing required property and
-`toBuilder()` changes a copy. Required properties are read directly, the others as `Optional`s
-(only a getter type: fields are nullable, or an internal `JsonField` for optional nullable ones);
-for optional nullable ones, `x(null)` on the builder sends `null` while leaving `x` unset leaves it
-out, and both survive a JSON round trip. Properties the SDK does not know are kept in
-`additionalProperties()` and sent back.
+### Install
 
-`new Client(options)` or `Client.fromEnv()` builds an `AutoCloseable` client from immutable
-`ClientOptions.builder()` settings. The base URL comes from the options, else
-`<ENV_PREFIX>_BASE_URL`, else `Client.DEFAULT_BASE_URL` when the spec has a server; without one,
-constructing the client throws an `IllegalStateException` naming both settings. Required path, query and header parameters are method
-arguments; optional ones go in an immutable `...Options.builder()`, and unions of scalars such as
-`string | string[]` are typed (`Ids.ofList(...)`). Every method has an overload taking a
-`RequestOptions` (headers, timeout, max retries, idempotency key) last. `client.async()` has the
-same methods returning `CompletableFuture`s over OkHttp's async calls, and `withRawResponse()`
-returns `ApiResponse`s with the status and headers. `...Iter` methods return a `Paginator`
-(`Iterable`, `stream()`, `firstPage()`, `pages()`) of `Page`s (`items()`, `hasNextPage()`,
-`nextPage()`), or an `AsyncPaginator` (`forEach`, `toList`). Event streams are typed
-`EventStream<Chunk>`s ending at `[DONE]`, with `lastEvent()` for the raw event. Requests are
-logged through `System.Logger`.
+```kotlin
+implementation("com.acme:acme:0.1.0")
+```
 
-Every exception is unchecked and derives from `ClientException`: `ApiException` for error
-responses (`statusCode()`, `headers()`, `body()`, `requestId()`), with a subclass per common status
-(`NotFoundException`, `RateLimitException`...), `ApiConnectionException` and its
-`ApiTimeoutException` when no response came, and `InvalidDataException` for a response that is not
-what the API describes, such as a required property left out (thrown by its getter).
-`error(Type.class)` parses the body as the schema the operation declares, and `error()` falls back
-to a `JsonNode`. `exceptions/ApiException.java` is scaffolded, and yours afterwards. Enums are
-classes with a constant per value: an unknown value is kept and sent back unchanged, `isKnown()`
-tells it apart, `value()` returns an enum to `switch` on (`_UNKNOWN` for unknown values), `known()`
-an enum of the known values only (throwing `InvalidDataException` on others) and `asString()` (or
-`asLong()`) the raw value. Unions of a primitive and an object are typed
-(`Charge.ChargeCustomer.ofString("cus_1")`, `id()` for expandable objects); unions of objects keep
-unmatched objects as `Unrecognized`, and `decodeAs(Customer.class)` reads a value as another
-variant. Tagged unions have `isCircle()`/`asCircle()` per variant besides their subclasses. Both
-kinds take a `Visitor<R>` in `accept(visitor)`, with a `visitX` method per variant and a
-`visitUnknown` that throws `InvalidDataException` unless overridden. An operation that may answer a
-bodiless 2xx returns an `Optional`. The HTTP plumbing lives in an
-`internal` package.
+Java 11+, OkHttp and Jackson underneath.
+
+### Client
+
+```java
+try (Acme client = Acme.fromEnv()) { ... }
+
+Acme client = new Acme(AcmeOptions.builder()
+        .apiKey("sk_live_...")
+        .timeout(Duration.ofSeconds(20))
+        .maxRetries(3)
+        .build());
+```
+
+- `AcmeOptions` is immutable. Its builder also takes `baseUrl`, `header`, `retrySchedule`,
+  `debug`, `httpClient(OkHttpClient)` and `addInterceptor`.
+- Credentials: `tokenProvider`, `clientCredentials(id, secret)`, `clientAuthInBody`,
+  `basicAuth`, `putApiKey`.
+- The base URL defaults to `ACME_BASE_URL`, then `Acme.DEFAULT_BASE_URL`. Without either, the
+  constructor throws an `IllegalStateException`.
+- The client is `AutoCloseable`. A client given to `httpClient` is left open.
+- Requests are logged through `System.Logger` at `DEBUG`, or `INFO` with `debug(true)`.
+
+### Calls and options
+
+```java
+var customer = client.customers().retrieve("cus_1",
+        RequestOptions.builder().timeout(Duration.ofSeconds(5)).maxRetries(0).build());
+```
+
+- Required path, query and header parameters are arguments. Optional ones go in an immutable
+  `...Options.builder()`.
+- Every method has an overload taking `RequestOptions` last.
+- `client.async()` has the same methods, returning `CompletableFuture`s.
+- An operation that may answer a bodiless 2xx returns an `Optional`.
+
+### Pagination
+
+```java
+for (Customer customer : client.customers().listIter()) { ... }
+Page<Customer> page = client.customers().listIter().firstPage(); // items(), hasNextPage(), nextPage()
+```
+
+`...Iter` methods return a `Paginator`: `Iterable`, `stream()`, `firstPage()`, `pages()`. The
+async client returns an `AsyncPaginator` with `forEach` and `toList`.
+
+### Streaming
+
+```java
+try (var events = client.completions().createStream(request)) {
+    for (var chunk : events) { ... }
+}
+```
+
+Event streams are `EventStream<Chunk>`s, ending at `[DONE]`, with `lastEvent()` for the raw event.
+
+### Errors
+
+| Exception | When |
+|---|---|
+| `AcmeException` | Base of every exception, all unchecked |
+| `ApiException` | Error response: `statusCode()`, `headers()`, `body()`, `requestId()`, `error(Type.class)`, `error()` as a `JsonNode` |
+| `BadRequestException`, `AuthenticationException`, `PermissionDeniedException`, `NotFoundException`, `ConflictException`, `UnprocessableEntityException`, `RateLimitException`, `InternalServerException` | Subclasses by status |
+| `ApiConnectionException`, `ApiTimeoutException` | No response, or none within the timeout |
+| `InvalidDataException` | A response that is not what the API describes, such as a missing required property, thrown by its getter |
+
+### Raw responses
+
+`client.withRawResponse().customers().retrieve(id)` returns an `ApiResponse<Customer>` with
+`statusCode()`, `headers()`, `requestId()` and `body()`.
+
+### Models and unions
+
+- Models are immutable final classes: `Customer.builder()...build()` throws on a missing required
+  property, and `toBuilder()` changes a copy.
+- Required properties are read directly, others as `Optional`s.
+- For an optional nullable property, `x(null)` sends `null` and leaving it unset omits it.
+- Unknown properties are kept in `additionalProperties()`.
+- Enums are classes with a constant per value. `isKnown()`, `value()` (with `_UNKNOWN`) to
+  `switch` on, `known()` (throws on unknown values), and `asString()` or `asLong()`.
+- Unions have `of...` factories (`ChargeCustomer.ofString("cus_1")`), `is...()` and `as...()`
+  per variant, and `id()` for expandable objects.
+- Unmatched objects are `Unrecognized` (`isUnrecognized()`), and `decodeAs(Customer.class)` reads
+  a value as another variant.
+- `accept(Visitor<R>)` has a `visitX` per variant. `visitUnknown` throws `InvalidDataException`
+  unless overridden.
+
+### Notes
+
+- `exceptions/ApiException.java` is yours after the first generation.
+- The HTTP plumbing lives in an `internal` package.
 
 ## C#
 
-Targets .NET 8 with nullable reference types and System.Text.Json source generation (trimming and
-AOT safe); generated code builds clean with `AnalysisLevel` `latest-recommended` and documents every
-public member. `new AcmeClient()` reads `ACME_API_KEY` and `ACME_BASE_URL`, and throws an
-`AcmeException` when neither the options nor `ACME_BASE_URL` set a base URL and the spec declares
-no server (`AcmeClientOptions.DefaultBaseUrl` otherwise). Every method is async
-and takes a `RequestOptions` (`Headers`, `Timeout`, `MaxRetries`, `IdempotencyKey`) then a
-`CancellationToken`. Each resource implements an interface (`IAcmeClient.Customers` is an
-`ICustomersApi`) to mock in tests, and `client.Customers.WithRawResponse.RetrieveAsync(id)` returns
-an `ApiResponse<Customer>` with `StatusCode`, `Headers`, `RequestId` and the `Value`. An operation
-that may answer a bodiless 2xx returns a `Customer?`, `null` then. Pass your own
-`HttpClient` or an `HttpMessageHandler` in the options, or set `dependency_injection = true` under
-`[csharp.context]` for `services.AddAcmeClient(o => o.Token = ...)`, an `IHttpClientFactory` typed
-client (the scaffolded project then references `Microsoft.Extensions.Http`) whose `HttpClient` has no
-timeout of its own, leaving it to the SDK's. Each call is an
-`Activity` of the `ActivitySource` named after the package.
+### Install
 
-Models are `sealed record`s with `init` properties and read-only collections, compared by value
-(collections and JSON included); properties the SDK does not know are kept in
-`AdditionalProperties` and sent back. Unknown enum values expose `IsKnown`, and the known ones are
-also constants in `Status.Values` to `switch` on `status.Value`; a string (or `new Status("x")`)
-converts to any value. Nullable optional PATCH
-fields are `MaybeUnset<T>`: assign `null` to send `null`, leave them unset to omit them. Dates are
-`DateTimeOffset`s, so fractions of a second beyond 100 nanoseconds are rounded. A union is an
-abstract record with a nested record per variant (`StringValue`, `ArrayOfIntegers`,
-`ArrayOfIntegerArrays`... for JSON types), implicit conversions and `AsX` accessors (and `Id` for
-expandable objects); other JSON, and objects no variant matches, are kept in `Unrecognized`, and
-`DecodeAs(context.Customer)` reads a union of objects as another variant. Variants sharing a JSON
-type are tried in turn (an array is told apart by its first item, a `date-time` falls back to a
-plain string), and objects no property tells apart go to their best match. Query parameters and
-request and response bodies that are unions are typed the same way (an inline body union is
-`CreateTranscriptionResponse`, named after the operation).
+```sh
+dotnet add package Acme
+```
 
-`ListAutoPagingAsync()` returns an `AsyncPager` to `await foreach` over every item, whose
-`AsPagesAsync()` and `GetFirstPageAsync()` give `Page`s with `Items`, `Response`, `HasNextPage` and
-`GetNextPageAsync()`. Event streams whose events the spec types are `EventStream<T>`s of models,
-ending at `[DONE]`, with `LastEvent` for the raw event.
+.NET 8, nullable reference types, System.Text.Json source generation: trimming and native AOT
+safe. Builds clean with `AnalysisLevel` `latest-recommended`.
 
-Everything the SDK throws derives from `AcmeException`: `ApiException` subclasses by status
-(`NotFoundException`, `RateLimitException`, `ServerErrorException`...),
-`ApiConnectionException` and its `ApiTimeoutException`, and `ApiDecodeException`. An
-`ApiException` has the `Body` (truncated in the message), `Error`, the body parsed as the schema
-the operation declares for its status (else a `JsonElement`), `GetError<T>()` and `RequestId`.
+### Client
+
+```csharp
+using var client = new AcmeClient("sk_live_...", new AcmeClientOptions { MaxRetries = 5 });
+```
+
+- `new AcmeClient()` reads `ACME_API_KEY` and `ACME_BASE_URL`.
+- Options: `BaseUrl`, `Token`, `Timeout`, `MaxRetries`, `RetrySchedule`, `UserAgent`, `Handlers`
+  ([middleware](customizing.md#middleware)), `HttpMessageHandler`.
+- Credentials: `TokenProvider`, `ClientId`, `ClientSecret`, `OAuthClientAuthInBody`,
+  `BasicAuth`, `ApiKeys`.
+- `new AcmeClient(httpClient, token)` sends requests through your own `HttpClient`.
+- Without a base URL, the constructor throws an `AcmeException`.
+- The client is thread-safe and pools connections: create one and reuse it.
+
+### Calls and options
+
+```csharp
+await client.Customers.RetrieveAsync("cus_1",
+    requestOptions: new RequestOptions { MaxRetries = 0, Timeout = TimeSpan.FromSeconds(5) });
+```
+
+- Every method is async and takes a `RequestOptions` (`Headers`, `Timeout`, `MaxRetries`,
+  `IdempotencyKey`), then a `CancellationToken`.
+- Optional parameters go in an options object: `ListAsync(new() { PerPage = 100 })`.
+- An operation that may answer a bodiless 2xx returns `Customer?`.
+
+### Pagination
+
+```csharp
+await foreach (var customer in client.Customers.ListAutoPagingAsync(new() { PerPage = 100 })) { ... }
+var page = await client.Customers.ListAutoPagingAsync().GetFirstPageAsync();
+```
+
+`AsyncPager` gives pages through `AsPagesAsync()` and `GetFirstPageAsync()`. A `Page` has
+`Items`, `Response`, `HasNextPage` and `GetNextPageAsync()`.
+
+### Streaming
+
+```csharp
+await using var stream = await client.Completions.CreateStreamAsync(new CompletionRequest { Prompt = "hi" });
+await foreach (var chunk in stream) { ... }
+```
+
+Typed events give an `EventStream<T>` of models ending at `[DONE]`, with `LastEvent` for the raw
+event. Streams are enumerated once.
+
+### Errors
+
+| Exception | When |
+|---|---|
+| `AcmeException` | Base of everything the SDK throws |
+| `ApiException` | Error response: `StatusCode`, `Headers`, `Body` (truncated in the message), `Error`, `GetError<T>()`, `RequestId` |
+| `BadRequestException`, `UnauthorizedException`, `NotFoundException`, `RateLimitException`, `ServerErrorException`... | Subclasses by status |
+| `ApiConnectionException`, `ApiTimeoutException` | No response, or none within the timeout |
+| `ApiDecodeException` | A 2xx body the SDK cannot read |
+
+`Error` is the body parsed as the schema declared for the status, else a `JsonElement`.
+
+### Raw responses
+
+`await client.Customers.WithRawResponse.RetrieveAsync(id)` returns an `ApiResponse<Customer>`
+with `StatusCode`, `Headers`, `RequestId` and `Value`.
+
+### Models and unions
+
+- Models are `sealed record`s with `init` properties and read-only collections, compared by
+  value. Unknown properties are kept in `AdditionalProperties`.
+- Nullable optional PATCH fields are `MaybeUnset<T>`: assign `null` to send `null`, leave unset
+  to omit.
+- Dates are `DateTimeOffset`s: fractions beyond 100 nanoseconds are rounded.
+- Enums expose `IsKnown`. Known values are static properties (`Status.Active`) and constants in
+  `Status.Values`, to `switch` on `status.Value`. A string converts to any value.
+- A union is an abstract record with a nested record per variant (`StringValue`, `Customer`,
+  `ArrayOfIntegers`...), implicit conversions, `AsX` accessors and `Id` for expandable objects.
+- Unmatched values are `Unrecognized`. `DecodeAs(context.Customer)` reads a union of objects
+  as another variant.
+- Inline body unions are named after the operation: `CreateTranscriptionResponse`.
+
+### Notes
+
+- Each resource implements an interface (`IAcmeClient.Customers` is an `ICustomersApi`) to mock
+  in tests.
+- Each call is an `Activity` of the `ActivitySource` named after the package, for OpenTelemetry.
+- `dependency_injection = true` under `[csharp.context]` adds
+  `services.AddAcmeClient(o => o.Token = ...)`, an `IHttpClientFactory` typed client. Its
+  `HttpClient` leaves the timeout to the SDK.
+- `ApiException.cs` is yours after the first generation.
