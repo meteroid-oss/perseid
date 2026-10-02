@@ -30,7 +30,7 @@
 namespace {{ sdk.package_name }}.Models;
 
 {{ m.doc(type.description, remarks="Match on the nested variant records. <see cref=\"Unrecognized\"/> holds variants added to the API\nafter this SDK version, as raw JSON.") }}
-{% if type.deprecated %}[Obsolete]
+{% if type.deprecated %}[Obsolete("Deprecated by the API.")]
 {% endif -%}
 [JsonConverter(typeof({{ type_name }}Converter))]
 public abstract partial record {{ type_name }}
@@ -40,9 +40,13 @@ public abstract partial record {{ type_name }}
     /// <summary>The <c>{{ tag_json }}</c> tag of this variant.</summary>
     public abstract string {{ tag_prop }} { get; }
 {% with fields = type.fields, owner = type_name, union_owner = type_name %}{% include "types/fields.cs.jinja" %}{% endwith %}
+{% if type.fields %}{% with fields = type.fields, owner = type_name, extension = false, sealed = false %}{% include "types/members.cs.jinja" %}{% endwith %}{% endif %}
 {% for variant in type.variants -%}
 {% set class = variant_class(variant) %}
     /// <summary>The <c>{{ variant.name }}</c> variant.</summary>
+{% if (variant.type == "ref" and variant.schema_ref is defined) or (variant.type == "struct" and variant.fields | default([]) | length > 0) -%}
+    /// <param name="Value">The fields of the variant.</param>
+{% endif -%}
 {% if variant.type == "ref" and variant.schema_ref is defined -%}
     public sealed record {{ class }}({{ ref_type(variant.schema_ref) }} Value) : {{ type_name }}
 {% elif variant.type == "struct" and variant.fields | default([]) | length > 0 -%}
@@ -51,6 +55,7 @@ public abstract partial record {{ type_name }}
     public sealed record {{ class }}() : {{ type_name }}
 {% endif -%}
     {
+        /// <inheritdoc/>
         public override string {{ tag_prop }} => "{{ variant.name }}";
     }
 {% if variant.type == "struct" and variant.fields | default([]) | length > 0 %}
@@ -58,13 +63,24 @@ public abstract partial record {{ type_name }}
     public sealed partial record {{ class }}Data
     {
 {% with fields = variant.fields, owner = class ~ "Data", union_owner = type_name ~ class %}{% include "types/fields.cs.jinja" %}{% endwith %}
+{% with fields = variant.fields, owner = class ~ "Data", extension = true, sealed = true %}{% include "types/members.cs.jinja" %}{% endwith %}
     }
 {% endif -%}
 {% endfor %}
     /// <summary>A variant unknown to this SDK version, kept as the raw JSON object.</summary>
+    /// <param name="Tag">The <c>{{ tag_json }}</c> of the variant.</param>
+    /// <param name="Raw">The whole JSON object.</param>
     public sealed record Unrecognized(string Tag, JsonElement Raw) : {{ type_name }}
     {
+        /// <inheritdoc/>
         public override string {{ tag_prop }} => Tag;
+
+        /// <inheritdoc/>
+        public bool Equals(Unrecognized? other) =>
+            other is not null && base.Equals(other) && Tag == other.Tag && global::{{ sdk.package_name }}.Equality.Equal(Raw, other.Raw);
+
+        /// <inheritdoc/>
+        public override int GetHashCode() => HashCode.Combine(base.GetHashCode(), Tag);
     }
 }
 

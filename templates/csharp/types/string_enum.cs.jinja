@@ -1,6 +1,7 @@
 {% import "macros.cs.jinja" as m -%}
 {% set type_name = type.name | to_upper_camel_case -%}
 // this file is @generated
+#pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
 using System.Text.Json.Serialization;
 
 namespace {{ sdk.package_name }}.Models;
@@ -12,6 +13,7 @@ namespace {{ sdk.package_name }}.Models;
 /// One of the known values below, or any other string a newer API version sends.
 /// </summary>
 {% endif -%}
+/// <param name="Value">The JSON value.</param>
 [JsonConverter(typeof(StringEnumConverter<{{ type_name }}>))]
 public readonly partial record struct {{ type_name }}(string Value) : IStringEnum<{{ type_name }}>
 {
@@ -24,9 +26,15 @@ public readonly partial record struct {{ type_name }}(string Value) : IStringEnu
     /// <summary>Whether this SDK version knows the value.</summary>
     public bool IsKnown => Value is {% for value in type.values %}"{{ value }}"{% if not loop.last %} or {% endif %}{% endfor %};
 
+    /// <summary>The value <paramref name="value"/>, known or not.</summary>
+    /// <param name="value">The JSON value.</param>
+    /// <returns>The enum value.</returns>
     public static {{ type_name }} FromValue(string value) => new(value);
 
+    /// <summary>The value <paramref name="value"/>, known or not.</summary>
+    /// <param name="value">The JSON value.</param>
     public static implicit operator {{ type_name }}(string value) => new(value);
 
+    /// <inheritdoc/>
     public override string ToString() => Value ?? string.Empty;
 }

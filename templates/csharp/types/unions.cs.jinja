@@ -28,7 +28,8 @@
     else "number" if ty in ["short", "int", "long", "ushort", "ulong", "float", "double"]
     else "node" if ty == "JsonNode"
     else "json" -%}
-{% set variants.list = variants.list + [{"class": class, "type": ty, "kind": kind, "json_type": v.json_type, "doc": v.type.to_csharp() if not v.empty else "\"\"", "name": v.name}] -%}
+{% set accessor = (v.name | to_rust_variant) if class == (v.name | to_rust_variant) ~ "Value" else class -%}
+{% set variants.list = variants.list + [{"class": class, "accessor": accessor, "type": ty, "kind": kind, "json_type": v.json_type, "doc": v.type.to_csharp() if not v.empty else "\"\"", "name": v.name}] -%}
 {% endfor %}
 
 /// <summary>
@@ -67,16 +68,39 @@ public abstract partial record {{ name }}
     public bool IsEmpty => this is {{ v.class }};
 {% else %}
     /// <summary>A <c>{{ v.doc | replace("<", "&lt;") | replace(">", "&gt;") }}</c> value.</summary>
-    public sealed record {{ v.class }}({{ v.type }} Value) : {{ name }};
+    /// <param name="Value">The value.</param>
+{% if "<" in v.type -%}
+    public sealed record {{ v.class }}({{ v.type }} Value) : {{ name }}
+    {
+        /// <inheritdoc/>
+        public bool Equals({{ v.class }}? other) =>
+            other is not null && global::{{ sdk.package_name }}.Equality.Equal(Value, other.Value);
 
+        /// <inheritdoc/>
+        public override int GetHashCode() => global::{{ sdk.package_name }}.Equality.Hash(Value);
+    }
+{% else -%}
+    public sealed record {{ v.class }}({{ v.type }} Value) : {{ name }};
+{% endif %}
+    /// <summary>Wraps <paramref name="value"/> in <see cref="{{ v.class }}"/>.</summary>
+    /// <param name="value">The value.</param>
     public static implicit operator {{ name }}({{ v.type }} value) => new {{ v.class }}(value);
 
     /// <summary>The value if this is <see cref="{{ v.class }}"/>, else <c>null</c>.</summary>
-    public {{ v.type }}? As{{ v.class }} => this is {{ v.class }} variant ? variant.Value : default({{ v.type }}?);
+    public {{ v.type }}? As{{ v.accessor }} => this is {{ v.class }} variant ? variant.Value : default({{ v.type }}?);
 {% endif -%}
 {% endfor %}
     /// <summary>A value of none of the known variants, kept as raw JSON.</summary>
-    public sealed record Unrecognized(JsonElement Raw) : {{ name }};
+    /// <param name="Raw">The JSON value.</param>
+    public sealed record Unrecognized(JsonElement Raw) : {{ name }}
+    {
+        /// <inheritdoc/>
+        public bool Equals(Unrecognized? other) =>
+            other is not null && global::{{ sdk.package_name }}.Equality.Equal(Raw, other.Raw);
+
+        /// <inheritdoc/>
+        public override int GetHashCode() => global::{{ sdk.package_name }}.Equality.Hash(Raw);
+    }
 {% if objects %}
 
     /// <summary>The value read as another type, such as another variant than the one decoding picked.</summary>
@@ -164,7 +188,10 @@ internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
 {% endfor -%}
             }
         }
-        catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException) { }
+        catch (Exception e) when (e is JsonException or FormatException or InvalidOperationException)
+        {
+            return new {{ name }}.Unrecognized(root.Clone());
+        }
         return new {{ name }}.Unrecognized(root.Clone());
     }
 

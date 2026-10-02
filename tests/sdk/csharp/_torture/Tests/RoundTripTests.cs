@@ -116,6 +116,28 @@ public class RoundTripTests
     }
 
     [Fact]
+    public void RecordsCompareCollectionsAndUnknownPropertiesByValue()
+    {
+        var thing = JsonSerializer.Deserialize(Thing, Context.Thing)!;
+        var copy = JsonSerializer.Deserialize(Thing, Context.Thing)!;
+        Assert.NotSame(thing.Tags, copy.Tags);
+        Assert.Equal(thing, copy);
+        Assert.Equal(thing.GetHashCode(), copy.GetHashCode());
+        Assert.NotEqual(thing, copy with { Tags = ["b"] });
+        var extra = JsonSerializer.Deserialize(Thing.Replace("\"mode\"", "\"brand_new\":[1],\"mode\""), Context.Thing)!;
+        Assert.Equal(1, extra.AdditionalProperties!["brand_new"][0].GetInt32());
+        Assert.NotEqual(thing, extra);
+        Assert.Contains("\"brand_new\":[1]", JsonSerializer.Serialize(extra, Context.Thing));
+        var holder = new UnionHolder
+        {
+            Shape = new Shape.Circle(new Circle { Radius = 1 }),
+            Shapes = [],
+            InlineUnion = new List<string> { "a" },
+        };
+        Assert.Equal(holder, holder with { Shapes = [], InlineUnion = new List<string> { "a" } });
+    }
+
+    [Fact]
     public void PatchBodiesTellAbsentFromNull()
     {
         Assert.Equal("{}", JsonSerializer.Serialize(new ThingPatch(), Context.ThingPatch));
@@ -141,7 +163,7 @@ public class RoundTripTests
             """{"shape":{"type":"circle","radius":1},"shapes":[],"str_or_int":7,"inline_union":["a","b"]}""",
             Context.UnionHolder
         )!;
-        Assert.Equal(7L, Assert.IsType<UnionHolderStrOrInt.Integer>(holder.StrOrInt).Value);
+        Assert.Equal(7L, Assert.IsType<UnionHolderStrOrInt.IntegerValue>(holder.StrOrInt).Value);
         Assert.Null(holder.StrOrInt!.AsString);
         Assert.Equal(["a", "b"], holder.InlineUnion!.AsList!);
 
@@ -166,7 +188,7 @@ public class RoundTripTests
         var account = JsonSerializer.Deserialize(json, Context.ObjectUnionsAccount)!;
         var picked = account switch
         {
-            ObjectUnionsAccount.String => "string",
+            ObjectUnionsAccount.StringValue => "string",
             ObjectUnionsAccount.Account => "account",
             ObjectUnionsAccount.DeletedAccount => "deleted",
             ObjectUnionsAccount.Unrecognized => "unrecognized",
