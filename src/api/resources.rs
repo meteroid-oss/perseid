@@ -661,6 +661,7 @@ impl Operation {
                         explode,
                         deep_object,
                         structured: deep_object,
+                        typed_union: None,
                     });
                 }
                 openapi::Parameter::Path { style, .. } => {
@@ -868,6 +869,11 @@ impl Operation {
 
     /// Types the unions of its parameters and bodies as untyped JSON.
     pub(crate) fn untype_unions(&mut self) {
+        for param in &mut self.query_params {
+            if matches!(param.r#type, FieldType::Union { .. }) {
+                param.typed_union = Some(param.r#type.clone());
+            }
+        }
         let types = self
             .query_params
             .iter_mut()
@@ -881,6 +887,17 @@ impl Operation {
             .chain(self.response_body_json_type.as_mut());
         for ty in types {
             ty.untype_unions();
+        }
+    }
+
+    /// Drops the typed unions of parameters naming a schema no model is generated for.
+    pub(crate) fn forget_typed_unions_of_unknown_types(&mut self, types: &Types) {
+        for param in &mut self.query_params {
+            if let Some(ty) = &param.typed_union
+                && !ty.union_refs().iter().all(|name| types.contains_key(*name))
+            {
+                param.typed_union = None;
+            }
         }
     }
 
@@ -1378,6 +1395,13 @@ pub(crate) struct QueryParam {
     /// Sent from its JSON value: objects as `name[key]=value`, nested as deep as they go.
     #[serde(default)]
     pub(crate) structured: bool,
+    /// The union `type` was before operations untyped it, for SDKs that type such parameters.
+    #[serde(
+        default,
+        serialize_with = "serialize_optional_field_type",
+        skip_serializing_if = "Option::is_none"
+    )]
+    typed_union: Option<FieldType>,
 }
 
 fn default_explode() -> bool {
@@ -1788,5 +1812,22 @@ mod tests {
             "schema": { "type": "array", "items": { "type": "string" } } });
         let error = format!("{:#}", parameter(pipes).err().unwrap());
         assert!(error.contains("pipeDelimited"), "{error}");
+    }
+
+    #[test]
+    fn untyped_union_parameters_keep_their_union_for_sdks_that_type_it() {
+        let ids = json!({ "name": "ids", "in": "query", "schema": { "oneOf": [
+            { "type": "string" }, { "type": "array", "items": { "type": "string" } }] } });
+        let mut op = parameter(ids).unwrap();
+        op.untype_unions();
+        let param = &op.query_params[0];
+        assert_eq!(param.r#type, FieldType::JsonObject);
+        assert!(matches!(param.typed_union, Some(FieldType::Union { .. })));
+        let named = json!({ "name": "state", "in": "query", "schema": { "oneOf": [
+            { "$ref": "#/components/schemas/State" }, { "type": "integer" }] } });
+        let mut op = parameter(named).unwrap();
+        op.untype_unions();
+        op.forget_typed_unions_of_unknown_types(&Types::new());
+        assert!(op.query_params[0].typed_union.is_none());
     }
 }
