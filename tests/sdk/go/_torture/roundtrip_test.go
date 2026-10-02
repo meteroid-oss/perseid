@@ -102,6 +102,16 @@ func TestPatchBodiesTellAbsentFromNull(t *testing.T) {
 	}
 }
 
+func TestNullableStates(t *testing.T) {
+	var absent *Nullable[string]
+	if absent.IsNull() || !ExplicitNull[string]().IsNull() || NewNullable("").IsNull() {
+		t.Error("IsNull is true only for an explicit null")
+	}
+	if v, ok := Set("d").Get(); !ok || v != "d" || !Null[int]().IsNull() {
+		t.Error("deprecated Set/Null")
+	}
+}
+
 type recorded struct {
 	requests atomic.Int32
 	last     atomic.Pointer[http.Request]

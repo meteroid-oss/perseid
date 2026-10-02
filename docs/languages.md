@@ -118,7 +118,8 @@ call: `WithHeader`, `WithTimeout`, `WithIdempotencyKey`, `WithMaxRetries` and
 initialisms the Go way (`CustomerID`, `APIKey`), and the package of a multi-word name is one word
 (`realworld`). `allOf` parts are inlined into flat structs, and every struct keeps the properties
 it does not know in `ExtraFields`, sent back when encoding. Nullable optional PATCH fields are
-`*Nullable[T]`: `NewNullable(v)` sets one and `ExplicitNull[T]()` clears it. `DefaultTimeout` is
+`*Nullable[T]`: `NewNullable(v)` sets one and `ExplicitNull[T]()` clears it (`Set` and `Null`
+remain as deprecated aliases); `IsNull()` is true only for an explicit null, not for `nil`. `DefaultTimeout` is
 `timeout` from perseid.toml, and `Options.Logger` (a `*slog.Logger`) logs every attempt.
 
 Every error is an `SDKError`: `*APIError` for a non-2xx response, `*TimeoutError`,
