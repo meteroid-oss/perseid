@@ -2188,7 +2188,7 @@ fn python_types_errors_unions_and_discriminator_defaults() {
     assert!(ok, "{out}");
     let read = |path: &str| fs::read_to_string(dir.path().join(path)).unwrap();
     let circle = read("python/torture/models/circle.py");
-    assert!(circle.contains("type_: str = \"circle\""), "{circle}");
+    assert!(circle.contains("type: str = \"circle\""), "{circle}");
     let things = read("python/torture/api/things.py");
     assert!(
         things.contains("\"422\": _models.ValidationError,") && things.contains("def create("),
