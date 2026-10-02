@@ -215,9 +215,9 @@ class AsyncEventStream(_AsyncEventSource):
         await self.aclose()
 
 
-def _decode(event: SseEvent, type_: type[_T], response: httpx.Response) -> _T:
+def _decode(event: SseEvent, type_: object, response: httpx.Response) -> object:
     try:
-        return t.cast(_T, from_json_value(type_, json.loads(event.data)))
+        return t.cast(object, from_json_value(type_, json.loads(event.data)))
     except (ValueError, TypeError) as exc:
         raise APIResponseValidationError(response, f"event {event.data!r}: {exc}") from exc
 
@@ -231,7 +231,14 @@ class Stream(_EventSource, t.Generic[_T]):
     last_event: SseEvent | None = None
     """The event the latest item was decoded from."""
 
-    def __init__(self, response: httpx.Response, type_: type[_T]) -> None:
+    @t.overload
+    def __init__(self, response: httpx.Response, type_: type[_T]) -> None: ...
+
+    # A type alias, such as a union of event models, is not a class: the caller names `_T`.
+    @t.overload
+    def __init__(self: Stream[t.Any], response: httpx.Response, type_: object) -> None: ...
+
+    def __init__(self, response: httpx.Response, type_: object) -> None:
         super().__init__(response)
         self._type = type_
 
@@ -241,7 +248,7 @@ class Stream(_EventSource, t.Generic[_T]):
                 self.close()
                 return
             self.last_event = event
-            yield _decode(event, self._type, self.response)
+            yield t.cast(_T, _decode(event, self._type, self.response))
 
     def __enter__(self) -> Stream[_T]:
         return self
@@ -259,7 +266,14 @@ class AsyncStream(_AsyncEventSource, t.Generic[_T]):
     last_event: SseEvent | None = None
     """The event the latest item was decoded from."""
 
-    def __init__(self, response: httpx.Response, type_: type[_T]) -> None:
+    @t.overload
+    def __init__(self, response: httpx.Response, type_: type[_T]) -> None: ...
+
+    # A type alias, such as a union of event models, is not a class: the caller names `_T`.
+    @t.overload
+    def __init__(self: AsyncStream[t.Any], response: httpx.Response, type_: object) -> None: ...
+
+    def __init__(self, response: httpx.Response, type_: object) -> None:
         super().__init__(response)
         self._type = type_
 
@@ -269,7 +283,7 @@ class AsyncStream(_AsyncEventSource, t.Generic[_T]):
                 await self.aclose()
                 return
             self.last_event = event
-            yield _decode(event, self._type, self.response)
+            yield t.cast(_T, _decode(event, self._type, self.response))
 
     async def __aenter__(self) -> AsyncStream[_T]:
         return self
