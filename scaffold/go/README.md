@@ -1,3 +1,11 @@
+{% import "docs.jinja" as docs -%}
+{% set call = examples.call -%}
+{% set list = examples.list -%}
+{% set stream = examples.stream -%}
+{% set create = examples.create -%}
+{% set result = docs.var(call.result, "result") if call else "result" -%}
+{% macro call_of(opts="") %}{% if call %}{{ docs.call(call, opts) }}{% else %}client.SomeResource().SomeMethod(ctx{{ ", " ~ opts if opts }}){% endif %}{% endmacro -%}
+{% macro assign(ex, name) %}{% if ex and ex.result %}{{ name }}, err :={% else %}err :={% endif %}{% endmacro -%}
 # @@CLIENT_NAME@@ Go SDK
 
 @@DESCRIPTION@@
@@ -8,18 +16,33 @@ Requires Go 1.23 or later.
 go get @@GO_MODULE@@
 ```
 
+Every method of the API is listed in [api.md](api.md).
+
 ## Usage
 
 ```go
 import @@PACKAGE_NAME@@ "@@GO_MODULE@@"
 
-client := @@PACKAGE_NAME@@.New("your-api-key", nil)
+client := @@PACKAGE_NAME@@.New("your-api-key", {% if sdk.has_default_base_url %}nil{% else %}&@@PACKAGE_NAME@@.Options{ServerURL: "https://api.example.com"}{% endif %})
+
+{{ assign(call, result) }} {{ call_of() }}
+if err != nil {
+	return err
+}{% if call and call.result %}
+fmt.Println({{ result }}){% endif %}
 ```
 
 Every API area hangs off the client as an accessor method, and every method takes a
 `context.Context` first. Required parameters are arguments; optional ones go in an options struct
-whose fields are pointers (`@@PACKAGE_NAME@@.Ptr(v)`), `nil` to send none. Models keep the
-properties this SDK version does not know in `ExtraFields`, and send them back.
+whose fields are pointers (`@@PACKAGE_NAME@@.Ptr(v)`), `nil` to send none. Request bodies are
+structs of the package{% if create %}:
+
+```go
+{{ assign(create, docs.var(create.result, "result")) }} {{ docs.call(create) }}
+```
+{% else %}.
+{% endif %}
+Models keep the properties this SDK version does not know in `ExtraFields`, and send them back.
 
 ### Environment
 
@@ -37,6 +60,7 @@ a timeout is a `*TimeoutError`, a failed connection a `*TransportError`, an unde
 `*DecodeError`:
 
 ```go
+{{ assign(call, "_") }} {{ call_of() }}
 var apiErr *@@PACKAGE_NAME@@.APIError
 switch {
 case errors.Is(err, @@PACKAGE_NAME@@.ErrNotFound):
@@ -45,22 +69,22 @@ case errors.As(err, &apiErr):
 	log.Printf("status %d, request %s", apiErr.StatusCode, apiErr.RequestID())
 }
 ```
-
+{% if list %}
 ### Pagination
 
-A list method returns its first page, such as a `*ThingsListPage`, and its `...AutoPaging` twin
-an `*AutoPager[T]` over every item, fetching further pages on demand. A page holds its `Items`
-and its whole decoded response in `Body`, for totals and other fields:
+A list method returns its first page, a `*Page[T, R]` such as `*@@PACKAGE_NAME@@.{{ docs.page_type(list) }}`,
+and its `...AutoPaging` twin an `*AutoPager[T]` over every item, fetching further pages on demand.
+A page holds its `Items` and its whole decoded response in `Body`, for totals and other fields:
 
 ```go
-for item, err := range client.Things().ListAutoPaging(ctx, nil).All() {
+for {{ docs.var(list.item, "item") }}, err := range {{ docs.call(list, suffix="AutoPaging") }}.All() {
 	if err != nil {
 		return err
 	}
-	// ...
+	fmt.Println({{ docs.var(list.item, "item") }})
 }
 
-page, err := client.Things().List(ctx, nil)
+page, err := {{ docs.call(list) }}
 for page != nil && err == nil {
 	// page.Items, page.Body, page.HasNextPage()
 	page, err = page.NextPage(ctx)
@@ -68,30 +92,34 @@ for page != nil && err == nil {
 ```
 
 Without `range`, loop on the pager's `Next()`, read `Current()`, then check `Err()`.
-
+{% endif %}
+{%- if stream %}
 ### Streaming
 
 Server-sent events come as a `*Stream[T]` of decoded events, which ends at `[DONE]`, or an
 `*EventStream` of raw `SSEEvent`s:
 
 ```go
-stream, err := client.Things().CreateStream(ctx, body)
+stream, err := {{ docs.call(stream) }}
 if err != nil {
 	return err
 }
 defer stream.Close()
-for chunk, err := range stream.All() {
-	// stream.Event() is the raw event of chunk
+for event, err := range stream.All() {
+	if err != nil {
+		return err
+	}
+	fmt.Println(event){% if stream.operation.event_schema_name %} // stream.Event() is the raw event{% endif %}
 }
 ```
-
+{% endif %}
 ### Raw responses
 
 `WithResponseInto` gives the `*http.Response` of a call, for its status and headers:
 
 ```go
 var resp *http.Response
-thing, err := client.Things().Retrieve(ctx, id, @@PACKAGE_NAME@@.WithResponseInto(&resp))
+{{ assign(call, result) }} {{ call_of(sdk.package_name ~ ".WithResponseInto(&resp)") }}
 log.Print(resp.Header.Get("X-Request-Id"))
 ```
 
@@ -104,6 +132,10 @@ honoring `Retry-After` and `retry-after-ms`, when the request is idempotent or c
 `@@PACKAGE_NAME@@.WithMaxRetries(0)`, `@@PACKAGE_NAME@@.WithTimeout(time.Minute)`,
 `@@PACKAGE_NAME@@.WithIdempotencyKey(key)`, `@@PACKAGE_NAME@@.WithHeader(name, value)`.
 `Options.Logger` logs every attempt at debug level.
+
+```go
+{{ assign(call, result) }} {{ call_of(sdk.package_name ~ ".WithMaxRetries(0), " ~ sdk.package_name ~ ".WithTimeout(5*time.Second)") }}
+```
 
 - Source: @@REPOSITORY@@
 - License: @@LICENSE@@

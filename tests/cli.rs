@@ -2326,6 +2326,157 @@ fn java_enums_keep_unknown_values_and_docs_are_html() {
     assert!(api.contains("<code>created</code> &amp;"), "{api}");
 }
 
+const LANGUAGES: [&str; 6] = ["rust", "typescript", "python", "go", "java", "csharp"];
+
+/// `(METHOD, path)` of every operation `language` generates.
+fn operations(dir: &Path, language: &str) -> Vec<(String, String)> {
+    let (ok, out) = perseid(dir, &["inspect", language]);
+    assert!(ok, "{out}");
+    let api: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let mut stack: Vec<serde_json::Value> = api["resources"].as_array().unwrap().clone();
+    let mut operations = vec![];
+    while let Some(resource) = stack.pop() {
+        for op in resource["operations"].as_array().unwrap() {
+            let method = op["method"].as_str().unwrap().to_uppercase();
+            operations.push((method, op["path"].as_str().unwrap().to_owned()));
+        }
+        stack.extend(
+            resource["subresources"]
+                .as_object()
+                .unwrap()
+                .values()
+                .cloned(),
+        );
+    }
+    operations
+}
+
+#[test]
+fn api_md_lists_every_operation_and_readmes_call_real_ones() {
+    let calls = [
+        (
+            "petstore.yaml",
+            "rust",
+            "client.pets().retrieve(\"pet_id\")",
+        ),
+        (
+            "petstore.yaml",
+            "typescript",
+            "client.pets.retrieve(\"pet_id\")",
+        ),
+        (
+            "petstore.yaml",
+            "python",
+            "client.pets.retrieve(\"pet_id\")",
+        ),
+        (
+            "petstore.yaml",
+            "go",
+            "client.Pets().Retrieve(ctx, \"pet_id\")",
+        ),
+        (
+            "petstore.yaml",
+            "java",
+            "client.pets().retrieve(\"pet_id\")",
+        ),
+        (
+            "petstore.yaml",
+            "csharp",
+            "client.Pets.RetrieveAsync(\"pet_id\")",
+        ),
+        ("features.yaml", "rust", "client.gadgets().list_iter(None)"),
+        ("features.yaml", "typescript", "client.gadgets.list()"),
+        ("features.yaml", "python", "client.gadgets.list()"),
+        (
+            "features.yaml",
+            "go",
+            "client.Gadgets().ListAutoPaging(ctx, nil)",
+        ),
+        ("features.yaml", "java", "client.gadgets().listIter()"),
+        (
+            "features.yaml",
+            "csharp",
+            "client.Gadgets.ListAutoPagingAsync()",
+        ),
+        (
+            "features.yaml",
+            "rust",
+            "client.streaming().create_completion_stream(CompletionRequest::new(\"prompt\"))",
+        ),
+        (
+            "features.yaml",
+            "typescript",
+            "client.streaming.createCompletionStream({ prompt: \"prompt\" })",
+        ),
+        (
+            "features.yaml",
+            "python",
+            "client.streaming.create_completion_stream(prompt=\"prompt\")",
+        ),
+        (
+            "features.yaml",
+            "go",
+            "client.Streaming().CreateCompletionStream(ctx, features.CompletionRequest{Prompt: \"prompt\"})",
+        ),
+        (
+            "features.yaml",
+            "java",
+            "client.streaming().createCompletionStream(CompletionRequest.builder().prompt(\"prompt\").build())",
+        ),
+        (
+            "features.yaml",
+            "csharp",
+            "client.Streaming.CreateCompletionStreamAsync(new CompletionRequest { Prompt = \"prompt\" })",
+        ),
+    ];
+    for fixture in ["petstore.yaml", "features.yaml"] {
+        let dir = project_from(fixture, &LANGUAGES);
+        let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+        assert!(ok, "{out}");
+        for language in LANGUAGES {
+            let read = |path: &str| fs::read_to_string(dir.path().join(language).join(path));
+            let readme = read("README.md").unwrap();
+            for placeholder in [
+                "@@",
+                "{{",
+                "{%",
+                "someResource",
+                "some_resource",
+                "Things()",
+            ] {
+                assert!(!readme.contains(placeholder), "{placeholder} in {readme}");
+            }
+            assert!(readme.contains("[api.md](api.md)"), "{readme}");
+            for (_, _, call) in calls.iter().filter(|c| c.0 == fixture && c.1 == language) {
+                assert!(
+                    readme.contains(call),
+                    "no `{call}` in the {language} {readme}"
+                );
+            }
+            let api = read("api.md").unwrap();
+            assert!(api.starts_with("<!-- This file is @generated"), "{api}");
+            let operations = operations(dir.path(), language);
+            assert!(!operations.is_empty());
+            for (method, path) in &operations {
+                let row = format!("| `{method} {path}` |");
+                let expected = operations.iter().filter(|o| o.0 == *method && o.1 == *path);
+                assert!(
+                    api.matches(&row).count() >= expected.count(),
+                    "{language}: no row for {method} {path} in {api}"
+                );
+            }
+        }
+    }
+
+    let dir = project_from("petstore.yaml", &["go"]);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let api = dir.path().join("go/api.md");
+    fs::write(&api, fs::read_to_string(&api).unwrap() + "edited\n").unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--check", "--no-format"]);
+    assert!(!ok && out.contains("~ api.md"), "{out}");
+}
+
 #[test]
 fn csharp_types_unions_errors_and_timeout() {
     let dir = project_from("realworld.yaml", &["csharp"]);

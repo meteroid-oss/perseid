@@ -1,3 +1,10 @@
+{% import "docs.jinja" as docs -%}
+{% set call = examples.call -%}
+{% set list = examples.list -%}
+{% set stream = examples.stream -%}
+{% set result = docs.var(call.result, "result") if call else "result" -%}
+{% macro call_of(kwargs="", raw=false) %}{% if call %}{{ docs.call(call, kwargs, raw) }}{% else %}client.{{ "with_raw_response." if raw }}some_resource.some_method({{ kwargs }}){% endif %}{% endmacro -%}
+{% set with_body = examples.create -%}
 # @@CLIENT_NAME@@ Python SDK
 
 @@DESCRIPTION@@
@@ -8,14 +15,18 @@
 pip install @@PACKAGE_NAME@@
 ```
 
-Python 3.10 or newer. The SDK depends on `httpx` only and is fully typed.
+Python 3.10 or newer. The SDK depends on `httpx` only and is fully typed. Every method of the API
+is listed in [api.md](api.md).
 
 ## Usage
 
 ```python
 from @@PACKAGE_NAME@@ import @@CLIENT_NAME@@
 
-client = @@CLIENT_NAME@@(api_key="your-api-key")
+client = @@CLIENT_NAME@@(api_key="your-api-key"{% if not sdk.has_default_base_url %}, base_url="https://api.example.com"{% endif %})
+
+{% if call and call.result %}{{ result }} = {{ call_of() }}
+print({{ result }}){% else %}{{ call_of() }}{% endif %}
 ```
 
 Without `api_key`, the client reads `@@ENV_PREFIX@@_API_KEY`, and `@@ENV_PREFIX@@_BASE_URL`
@@ -31,18 +42,19 @@ or use it as a context manager, to release its connections.
 from @@PACKAGE_NAME@@ import Async@@CLIENT_NAME@@
 
 async with Async@@CLIENT_NAME@@() as client:
-    ...
+    {% if call and call.result %}{{ result }} = await {{ call_of() }}{% else %}await {{ call_of() }}{% endif %}
 ```
 
 ## Requests
 
 The fields of a JSON or form request body are keyword arguments, next to the query and header
-parameters; path parameters come first:
+parameters; path parameters come first{% if with_body %}:
 
 ```python
-client.items.update("item_id", name="new name", status="active", description=None)
+{{ docs.call(with_body) }}
 ```
-
+{% else %}.
+{% endif %}
 An optional argument left out is not sent; `None` sends `null` where the API accepts it. An enum
 argument takes the enum or its value as a string. Other bodies (lists, unions, files) are one
 `body` argument.
@@ -64,28 +76,29 @@ discriminator and the variant, and passing `content=` alone fills in the tag.
 Properties the API added after this SDK was generated are kept in `extra_fields` (and read
 as attributes at runtime), and sent back when the model is serialized. A property named
 after a model member, such as `extra_fields` or `to_dict`, gets a trailing `_`.
-
+{% if list %}
 ## Pagination
 
 List methods return their first page. Iterating it walks every item of every page,
 fetching the next ones on demand:
 
 ```python
-for item in client.items.list():
-    print(item.id)
+for {{ docs.var(list.item, "item") }} in {{ docs.call(list) }}:
+    print({{ docs.var(list.item, "item") }})
 
-page = client.items.list()
+page = {{ docs.call(list) }}
 page.items  # this page's items
 page.body  # the decoded response, with its other properties
 if page.has_next_page():
     page = page.get_next_page()
-for page in client.items.list().iter_pages():
-    ...
+for page in {{ docs.call(list) }}.iter_pages():
+    print(len(page.items))
 ```
 
-With the async client, `async for item in client.items.list()` walks the items, and
-`page = await client.items.list()` returns the first page.
-
+With the async client, `async for item in {{ docs.call(list) }}` walks the items, and
+`page = await {{ docs.call(list) }}` returns the first page.
+{% endif %}
+{%- if stream %}
 ## Streaming
 
 Server-sent events are iterated as they arrive. When the API documents the JSON of each
@@ -93,22 +106,24 @@ event, the stream yields models, until a `[DONE]` event; `stream.last_event` is 
 event (`event`, `data`, `id`) of the latest one:
 
 ```python
-with client.items.create_stream(prompt="Hello") as stream:
-    for chunk in stream:
-        print(chunk)
+with {{ docs.call(stream) }} as stream:
+    for event in stream:
+        print(event)
 ```
 
-Other streams yield `SseEvent`s. Multipart bodies take `Upload(content, filename,
-content_type)` files, and binary bodies bytes or file objects.
+Other streams yield `SseEvent`s.
+{% endif %}
+Multipart bodies take `Upload(content, filename, content_type)` files, and binary bodies bytes or
+file objects.
 
 ## Raw responses
 
 Prefix a call with `with_raw_response` for the HTTP response next to the decoded result:
 
 ```python
-response = client.with_raw_response.items.retrieve("id")
+response = {{ call_of(raw=true) }}
 print(response.status_code, response.headers, response.request_id)
-item = response.parse()
+{{ result }} = response.parse()
 ```
 
 ## Errors
@@ -123,7 +138,7 @@ schema (its JSON when the API declares none) and `request_id` the id to quote to
 from @@PACKAGE_NAME@@ import APIConnectionError, APITimeoutError, NotFoundError
 
 try:
-    ...
+    {{ call_of() }}
 except NotFoundError as error:
     print(error.status_code, error.request_id, error.body)
 except APITimeoutError:
@@ -142,9 +157,9 @@ and requests with an `Idempotency-Key` header, which every POST gets. Requests t
 @@TIMEOUT@@ seconds.
 
 ```python
-client = @@CLIENT_NAME@@(max_retries=5, timeout=20.0)
-client.with_options(max_retries=0).items.list()
-client.items.list(timeout=5.0, max_retries=0)  # for one call
+client = @@CLIENT_NAME@@({% if not sdk.has_default_base_url %}base_url="https://api.example.com", {% endif %}max_retries=5, timeout=20.0)
+client.with_options(max_retries=0).{{ call_of()[7:] }}
+{{ call_of("timeout=5.0, max_retries=0") }}  # for one call
 ```
 
 ## Middleware

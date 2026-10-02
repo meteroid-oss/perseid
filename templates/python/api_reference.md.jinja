@@ -1,0 +1,127 @@
+{% from "types/macros.py.jinja" import field_ident, field_type, param_type, py_ident, py_type -%}
+{% import "docs.jinja" as docs -%}
+{% set _ = set_summary_filename("api.md") -%}
+{% macro model(name) -%}
+    {%- if name in api.types %}[`{{ name | to_upper_camel_case }}`]({{ docs.model_path(name) }}){% else %}`{{ name | to_upper_camel_case }}`{% endif -%}
+{%- endmacro -%}
+{#- The fields of an object body the method takes as keyword arguments, as the resource
+    modules decide: none when the body is not an object or a field is named like a parameter. -#}
+{% macro flat_fields(resource, op) -%}
+    {%- set twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("stream_property", "defined") | first -%}
+    {%- set skipped = op.stream_property if op.stream_property is defined else (twin.stream_property if twin else none) -%}
+    {%- set schema = api.types[op.request_body_schema_name] if op.request_body_schema_name is defined else none -%}
+    {%- if schema and schema.kind == "struct" and not op.request_body_is_list | default(false)
+        and op.request_body_kind in ["json", "form"] and not schema.fields | selectattr("flatten") | list -%}
+        {%- set params = (op.path_params | list) + (op.query_params | map(attribute="name") | list) + (op.header_params | map(attribute="name") | list) -%}
+        {%- set taken = (params | map("ident", "snake", "python") | list) + ["self", "t"] -%}
+        {%- set out = namespace(indices=[], clash=false) -%}
+        {%- for f in schema.fields -%}
+            {%- if (f.required or not f.read_only | default(false)) and f.name != skipped -%}
+                {%- if field_ident(f) in taken %}{% set out.clash = true %}{% endif -%}
+                {%- set out.indices = out.indices + [loop.index0 | string] -%}
+            {%- endif -%}
+        {%- endfor -%}
+        {%- if not out.clash %}F {{ out.indices | join(" ") }}{% endif -%}
+    {%- endif -%}
+{%- endmacro -%}
+{% macro signature(resource, op) -%}
+    {%- set args = namespace(list=[], required=[], optional=[]) -%}
+    {%- for p in op.path_params %}{% set args.list = args.list + [py_ident(p) ~ ": str"] %}{% endfor -%}
+    {%- set flat = flat_fields(resource, op) | trim -%}
+    {%- if flat -%}
+        {%- set schema = api.types[op.request_body_schema_name] -%}
+        {%- set defaults = schema.discriminator_defaults if schema.discriminator_defaults is defined else {} -%}
+        {%- for index in flat | split(" ") | reject("equalto", "F") -%}
+            {%- set f = schema.fields[index | int] -%}
+            {%- if f.required and f.name not in defaults -%}
+                {%- set args.required = args.required + [field_ident(f) ~ ": " ~ field_type(f)] -%}
+            {%- else -%}
+                {%- set args.optional = args.optional + [field_ident(f) ~ "=..."] -%}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {%- if op.request_body_json_type is defined -%}
+            {%- set body_type = py_type(op.request_body_json_type) -%}
+        {%- elif op.request_body_schema_name is defined -%}
+            {%- set body_type = op.request_body_schema_name | to_upper_camel_case -%}
+            {%- if op.request_body_is_list %}{% set body_type = "list[" ~ body_type ~ "]" %}{% endif -%}
+        {%- elif op.request_body_kind == "binary" -%}
+            {%- set body_type = "UploadContent" -%}
+        {%- elif op.request_body_kind == "multipart" -%}
+            {%- set body_type = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Body" -%}
+        {%- else -%}
+            {%- set body_type = none -%}
+        {%- endif -%}
+        {%- if body_type -%}
+            {%- set args.list = args.list + ["body: " ~ body_type ~ (" | None = None" if op.request_body_optional else "")] -%}
+        {%- endif -%}
+    {%- endif -%}
+    {%- for p in op.query_params -%}
+        {%- if p.required %}{% set args.required = args.required + [py_ident(p.name) ~ ": " ~ param_type(p)] %}{% else %}{% set args.optional = args.optional + [py_ident(p.name) ~ "=..."] %}{% endif -%}
+    {%- endfor -%}
+    {%- for p in op.header_params -%}
+        {%- if p.required %}{% set args.required = args.required + [py_ident(p.name) ~ ": str"] %}{% else %}{% set args.optional = args.optional + [py_ident(p.name) ~ "=..."] %}{% endif -%}
+    {%- endfor -%}
+    {%- if args.required or args.optional %}{% set args.list = args.list + ["*"] + args.required + args.optional %}{% endif -%}
+    {%- if op.response_body_json_type is defined -%}
+        {%- set response = py_type(op.response_body_json_type) -%}
+    {%- elif op.response_body_schema_name is defined -%}
+        {%- set response = op.response_body_schema_name | to_upper_camel_case -%}
+        {%- if op.response_body_is_list %}{% set response = "list[" ~ response ~ "]" %}{% endif -%}
+    {%- else -%}
+        {%- set response = none -%}
+    {%- endif -%}
+    {%- if op.pagination is defined -%}
+        {%- set returned = "SyncPage[" ~ (op.pagination.item_schema | to_upper_camel_case) ~ ", " ~ response ~ "]" -%}
+    {%- elif op.response_is_event_stream -%}
+        {%- set returned = "Stream[" ~ (op.event_schema_name | to_upper_camel_case) ~ "]" if op.event_schema_name is defined else "EventStream" -%}
+    {%- elif op.response_is_binary -%}
+        {%- set returned = "bytes" -%}
+    {%- elif op.response_is_text -%}
+        {%- set returned = "str" -%}
+    {%- elif response -%}
+        {%- set returned = response ~ (" | None" if op.response_may_be_empty | default(false) else "") -%}
+    {%- else -%}
+        {%- set returned = "None" -%}
+    {%- endif -%}
+    {{ docs.resource(resource.name) }}.{{ docs.method(op) }}({{ args.list | join(", ") }}) -> {{ returned }}
+{%- endmacro -%}
+{% macro returns(op) -%}
+    {%- if op.pagination is defined %}pages of {{ model(op.pagination.item_schema) }}
+    {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
+    {%- elif op.response_is_binary %}bytes
+    {%- elif op.response_is_text %}text
+    {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
+    {%- elif op.response_body_json_type is defined %}`{{ py_type(op.response_body_json_type) | replace("|", "\\|") }}`
+    {%- else %}nothing{% endif -%}
+{%- endmacro -%}
+{% macro table(resource) -%}
+| Method | Request | Returns |
+| --- | --- | --- |
+{% for op in resource.operations -%}
+| `{{ signature(resource, op) | replace("|", "\\|") }}`{% if op.deprecated %} (deprecated){% endif %} | `{{ op.method | upper }} {{ op.path }}` | {{ returns(op) }} |
+{% endfor -%}
+{%- endmacro -%}
+<!-- This file is @generated by perseid. Do not edit. -->
+# {{ sdk.client_name }} API
+
+Every operation of the API, as a method of a `{{ sdk.client_name }}` client (`client` below), by
+resource; `Async{{ sdk.client_name }}` has the same methods, to await, and `client.with_raw_response`
+the same resources, returning the HTTP response. Every method also takes the keyword arguments
+`extra_headers`, `extra_query`, `extra_body`, `timeout` and `max_retries` for that call; `=...`
+marks optional keyword arguments. Models are in [`{{ docs.package() }}/models`]({{ docs.package() }}/models).
+{% if api.resources | length > 1 %}
+{{ docs.contents(api.resources) }}
+{% endif %}
+{%- for resource in api.resources %}
+## {{ docs.title(resource.name) }}
+
+[`{{ docs.resource(resource.name) }}`]({{ docs.resource_path(resource.name) }})
+
+{{ table(resource) -}}
+{%- for name, sub in resource.subresources | items %}
+### {{ docs.title(name) }}
+
+{{ table(sub) -}}
+{%- endfor %}
+{%- endfor %}

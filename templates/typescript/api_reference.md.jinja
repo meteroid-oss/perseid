@@ -1,0 +1,96 @@
+{% import "types/macros.ts.jinja" as m -%}
+{% import "docs.jinja" as docs -%}
+{% set _ = set_summary_filename("api.md") -%}
+{#- The type of a path or header parameter, sent as text, as the resource classes type it. -#}
+{% macro text_type(type) -%}
+    {%- if type.is_union() -%}
+        {%- for v in type.union_variants() %}{% if not loop.first %} | {% endif %}{{ text_type(v.type) }}{% endfor -%}
+    {%- elif type.is_list() or type.is_set() -%}
+        {%- set inner = text_type(type.inner_type()) -%}
+        {% if " | " in inner %}({{ inner }})[]{% else %}{{ inner }}[]{% endif %}
+    {%- elif type.is_schema_ref() or type.is_json_object() or type.is_map() -%}
+        string
+    {%- else -%}
+        {{ m.js_type(type) }}
+    {%- endif -%}
+{%- endmacro -%}
+{% macro model(name) -%}
+    {%- if name in api.types %}[`{{ name | to_upper_camel_case }}`]({{ docs.model_path(name) }}){% else %}`{{ name | to_upper_camel_case }}`{% endif -%}
+{%- endmacro -%}
+{% macro signature(resource, op) -%}
+    {%- set type_name = resource.name | to_upper_camel_case ~ (op.name | to_upper_camel_case) -%}
+    {%- set params = namespace(list=[]) -%}
+    {%- for p in op.typed_path_params %}{% set params.list = params.list + [(p.name | ident("camel", "typescript")) ~ ": " ~ text_type(p.type)] %}{% endfor -%}
+    {%- set body_arg = op.request_body_schema_name | ident("camel", "typescript") if op.request_body_schema_name is defined else "body" -%}
+    {%- if body_arg in ["request", "options", "requestOptions"] or body_arg in (op.path_params | map("ident", "camel", "typescript") | list) %}{% set body_arg = "body" %}{% endif -%}
+    {%- if op.request_body_schema_name is defined -%}
+        {%- set params.list = params.list + [body_arg ~ ": " ~ (op.request_body_schema_name | to_upper_camel_case) ~ ("[]" if op.request_body_is_list else "")] -%}
+    {%- elif op.request_body_json_type is defined -%}
+        {%- set params.list = params.list + ["body: " ~ m.js_type(op.request_body_json_type)] -%}
+    {%- elif op.request_body_kind in ["binary", "multipart"] -%}
+        {%- set body_ty = "UploadBody" if op.request_body_kind == "binary" else type_name ~ "Body" -%}
+        {%- set params.list = params.list + ["body" ~ ("?" if op.request_body_optional and not op | has_required_query_or_header_params else "") ~ ": " ~ body_ty] -%}
+    {%- endif -%}
+    {%- if op | has_query_or_header_params -%}
+        {%- set params.list = params.list + ["options" ~ ("" if op | has_required_query_or_header_params else "?") ~ ": " ~ type_name ~ "Options"] -%}
+    {%- endif -%}
+    {%- if op.pagination is defined -%}
+        {%- set returned = "PagePromise<" ~ (op.response_body_schema_name | to_upper_camel_case) ~ ", " ~ (op.pagination.item_schema | to_upper_camel_case) ~ ">" -%}
+    {%- elif op.response_is_event_stream -%}
+        {%- set returned = "APIPromise<" ~ ("Stream<" ~ (op.event_schema_name | to_upper_camel_case) ~ ">" if op.event_schema_name is defined else "EventStream") ~ ">" -%}
+    {%- elif op.response_is_binary | default(false) -%}
+        {%- set returned = "APIPromise<Uint8Array>" -%}
+    {%- elif op.response_is_text | default(false) -%}
+        {%- set returned = "APIPromise<string>" -%}
+    {%- else -%}
+        {%- if op.response_body_json_type is defined -%}
+            {%- set body = m.js_type(op.response_body_json_type) -%}
+        {%- elif op.response_body_schema_name is defined -%}
+            {%- set body = (op.response_body_schema_name | to_upper_camel_case) ~ ("[]" if op.response_body_is_list else "") -%}
+        {%- else -%}
+            {%- set body = "void" -%}
+        {%- endif -%}
+        {%- if op.response_may_be_empty | default(false) and body != "void" %}{% set body = body ~ " | undefined" %}{% endif -%}
+        {%- set returned = "APIPromise<" ~ body ~ ">" -%}
+    {%- endif -%}
+    {{ docs.resource(resource.name) }}.{{ docs.method(op) }}({{ params.list | join(", ") }}): {{ returned }}
+{%- endmacro -%}
+{% macro returns(op) -%}
+    {%- if op.pagination is defined %}pages of {{ model(op.pagination.item_schema) }}
+    {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
+    {%- elif op.response_is_binary | default(false) %}bytes
+    {%- elif op.response_is_text | default(false) %}text
+    {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
+    {%- elif op.response_body_json_type is defined %}`{{ m.js_type(op.response_body_json_type) | replace("|", "\\|") }}`
+    {%- else %}nothing{% endif -%}
+{%- endmacro -%}
+{% macro table(resource) -%}
+| Method | Request | Returns |
+| --- | --- | --- |
+{% for op in resource.operations -%}
+| `{{ signature(resource, op) | replace("|", "\\|") }}`{% if op.deprecated %} (deprecated){% endif %} | `{{ op.method | upper }} {{ op.path }}` | {{ returns(op) }} |
+{% endfor -%}
+{%- endmacro -%}
+<!-- This file is @generated by perseid. Do not edit. -->
+# {{ sdk.client_name }} API
+
+Every operation of the API, as a method of a `{{ sdk.client_name }}` client (`client` below), by
+resource. Each method also takes a last `requestOptions?: RequestOptions` argument: `headers`,
+`query`, `timeout`, `maxRetries`, `idempotencyKey` and `signal` for that call. Methods return an
+`APIPromise`, awaited for the body or asked for the response with `.withResponse()`. Models are
+in [`src/models`](src/models).
+{% if api.resources | length > 1 %}
+{{ docs.contents(api.resources) }}
+{% endif %}
+{%- for resource in api.resources %}
+## {{ docs.title(resource.name) }}
+
+[`{{ docs.resource(resource.name) }}`]({{ docs.resource_path(resource.name) }})
+
+{{ table(resource) -}}
+{%- for name, sub in resource.subresources | items %}
+### {{ docs.title(name) }}
+
+{{ table(sub) -}}
+{%- endfor %}
+{%- endfor %}

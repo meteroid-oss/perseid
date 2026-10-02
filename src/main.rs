@@ -326,7 +326,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             if !check {
                 for (sdk, dir) in sdks.iter().zip(&dirs) {
-                    files.extend(scaffold::bootstrap(&config, sdk, dir)?);
+                    files.extend(scaffold::bootstrap(&config, &root, sdk, dir, &spec)?);
                 }
                 for (repo, checkout) in checkouts.iter().filter(|_| config.release != Some(false)) {
                     let held: Vec<&config::Sdk> =

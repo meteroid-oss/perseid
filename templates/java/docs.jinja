@@ -1,0 +1,55 @@
+{#- The API as Java names it, for api.md and the README's examples. An example is a
+    `{resource, operation, path_args, body, result, item}` the README receives. -#}
+{% import "types/macros.java.jinja" as m %}
+
+{#- The heading of a resource in api.md, and links to every resource's. -#}
+{% macro title(name) %}{{ name | to_snake_case | replace("_", " ") | capitalize }}{% endmacro %}
+
+{% macro contents(resources) -%}
+    {%- for r in resources %}[{{ title(r.name) }}](#{{ r.name | to_kebab_case }}){% if not loop.last %} · {% endif %}{% endfor -%}
+{%- endmacro %}
+
+{#- The accessor of a resource on the client, as the client class names it. -#}
+{% macro accessor(name) -%}
+    {%- set a = name | ident("camel", "java") -%}
+    {{ a ~ "_" if a in ["async", "sync", "withRawResponse", "close", "fromEnv", "builder", "getClass", "hashCode", "toString", "notify", "notifyAll", "wait", "clone", "finalize", "options"] else a }}
+{%- endmacro %}
+
+{% macro resource(name) %}client.{{ accessor(name) }}(){% endmacro %}
+
+{% macro method(op) %}{{ op.name | ident("camel", "java") }}{% endmacro %}
+
+{% macro package_path() %}src/main/java/{{ sdk.java_package | replace(".", "/") }}{% endmacro %}
+
+{% macro model_path(name) %}{{ package_path() }}/models/{{ name | to_upper_camel_case }}.java{% endmacro %}
+
+{% macro resource_path(name) %}{{ package_path() }}/api/{{ name | to_upper_camel_case }}.java{% endmacro %}
+
+{#- A variable holding a value of schema `name`, `fallback` without one. -#}
+{% macro var(name, fallback) -%}
+    {%- set id = name | ident("camel", "java") if name else fallback -%}
+    {{ fallback if id in ["client", "page", "stream", "response", "error", "e"] or id is endingwith("_") else id }}
+{%- endmacro %}
+
+{% macro literal(arg) -%}
+    {{ arg.value | tojson }}{% if arg.kind == "integer" and arg.int64 %}L{% endif %}
+{%- endmacro %}
+
+{#- The `import` of the model an example's body needs, with its line break. -#}
+{% macro uses(ex) %}{% if ex.body %}import {{ sdk.java_package }}.models.{{ ex.body.schema | to_upper_camel_case }};
+{% endif %}{% endmacro %}
+
+{#- The call of an example: of its `...Iter` twin with `iter`, through `withRawResponse()`
+    with `raw`, and with `request_options` as its last argument when given. -#}
+{% macro call(ex, iter=false, raw=false, request_options="") -%}
+    {%- set out = namespace(args=[]) -%}
+    {%- for a in ex.path_args %}{% set out.args = out.args + [literal(a)] %}{% endfor -%}
+    {%- if ex.body -%}
+        {%- set names = m.member_names(ex.body.fields, "schema `" ~ ex.body.schema ~ "`") | split(" ") | reject("equalto", "") | list -%}
+        {%- set setters = namespace(text="") -%}
+        {%- for f in ex.body.fields %}{% set setters.text = setters.text ~ "." ~ names[loop.index0] ~ "(" ~ literal(f) ~ ")" %}{% endfor -%}
+        {%- set out.args = out.args + [(ex.body.schema | to_upper_camel_case) ~ ".builder()" ~ setters.text ~ ".build()"] -%}
+    {%- endif -%}
+    {%- if request_options %}{% set out.args = out.args + [request_options] %}{% endif -%}
+    client.{{ "withRawResponse()." if raw }}{{ accessor(ex.resource) }}().{{ method(ex.operation) }}{{ "Iter" if iter }}({{ out.args | join(", ") }})
+{%- endmacro %}

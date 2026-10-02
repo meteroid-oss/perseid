@@ -50,6 +50,10 @@ pub fn populate_env(
          owner: Cow<'_, str>| { ident::idents(&names, &case, language.as_deref(), &owner) },
     );
     env.add_filter("go_name", |s: Cow<'_, str>| go::initialisms(&s));
+    // The file a Go model or resource is generated into, without its `.go`.
+    env.add_filter("go_file", |s: Cow<'_, str>| {
+        crate::generator::go_file_stem(s.to_snake_case())
+    });
     // `tojson` writes `'` as `\u0027`, which Rust string literals reject.
     env.add_filter("rust_str", |s: Cow<'_, str>| format!("{s:?}"));
     env.add_filter("to_rust_variant", |s: Cow<'_, str>| {
