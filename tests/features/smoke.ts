@@ -39,7 +39,8 @@ async function main() {
   assert.deepEqual(await collect(keyed.widgets.list()), ["w1", "w2", "w3"]);
   await assert.rejects(new Features({ baseURL }).widgets.list(), (error: unknown) => {
     assert.ok(error instanceof AuthenticationError && error instanceof FeaturesError);
-    assert.deepEqual(error.error, { error: "unauthorized" });
+    assert.equal(error.error?.error, "unauthorized");
+    assert.equal(error.error?.code, undefined);
     assert.equal(error.requestId, "req_mock");
     return true;
   });
