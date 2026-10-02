@@ -155,21 +155,18 @@ pub(crate) fn request_and_response_roots(
         stack.extend(resource.subresources.values());
         for op in &resource.operations {
             requests.extend(op.request_body_schema_name.as_deref());
-            requests.extend(
-                op.request_body_json_type
-                    .iter()
-                    .filter_map(FieldType::referenced_schema),
-            );
-            requests.extend(
-                op.multipart_fields
-                    .iter()
-                    .filter_map(|f| f.field.r#type.referenced_schema()),
-            );
-            requests.extend(
-                op.query_params
-                    .iter()
-                    .filter_map(|p| p.r#type.referenced_schema()),
-            );
+            let sent = (op.request_body_json_type.iter())
+                .chain(op.multipart_fields.iter().map(|f| &f.field.r#type))
+                .chain(op.query_params.iter().map(|p| &p.r#type))
+                .chain(
+                    op.header_params
+                        .iter()
+                        .filter_map(|p| p.schema_type.as_ref()),
+                );
+            for ty in sent {
+                requests.extend(ty.referenced_schema());
+                requests.extend(ty.union_refs());
+            }
             responses.extend(op.response_body_schema_name.as_deref());
             responses.extend(
                 op.response_body_json_type
@@ -309,32 +306,6 @@ impl Resource {
         own.filter_map(|op| op.request_body_schema_name.as_deref())
             .chain(self.subresources.values().flat_map(Self::patch_bodies))
             .collect()
-    }
-
-    /// Schemas an operation sends: request bodies, multipart fields, query and header
-    /// parameters, without what they reference.
-    pub(crate) fn request_schemas(&self) -> BTreeSet<&str> {
-        let mut res: BTreeSet<&str> = self
-            .subresources
-            .values()
-            .flat_map(Self::request_schemas)
-            .collect();
-        for operation in &self.operations {
-            let params = (operation.multipart_fields.iter().map(|f| &f.field.r#type))
-                .chain(operation.query_params.iter().map(|p| &p.r#type))
-                .chain(
-                    operation
-                        .header_params
-                        .iter()
-                        .filter_map(|p| p.schema_type.as_ref()),
-                );
-            for ty in params {
-                res.extend(ty.referenced_schema());
-                res.extend(ty.union_refs());
-            }
-            res.extend(operation.request_body_schema_name.as_deref());
-        }
-        res
     }
 
     pub(crate) fn referenced_components(&self) -> BTreeSet<&str> {

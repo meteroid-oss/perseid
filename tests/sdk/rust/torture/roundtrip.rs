@@ -483,6 +483,22 @@ async fn raw_responses_and_client_headers() {
 }
 
 #[tokio::test]
+async fn header_params_win_over_client_headers() {
+    let origin = Origin::replying(vec![(200, vec![], r#"{"data":[]}"#)]);
+    let client = Torture::builder()
+        .token("token")
+        .header("x-required", "client")
+        .header("authorization", "Bearer client")
+        .middleware(origin.clone())
+        .build()
+        .unwrap();
+    client.things().list(ThingsListOptions::new("req")).await.unwrap();
+    let headers = &origin.requests()[0].1;
+    assert_eq!(headers.get_all("x-required").iter().collect::<Vec<_>>(), ["req"]);
+    assert_eq!(headers["authorization"], "Bearer client");
+}
+
+#[tokio::test]
 async fn throttled_non_idempotent_requests_are_not_retried() {
     let origin = Origin::replying(vec![(429, vec![("retry-after-ms", "0")], "slow down")]);
     let error = origin

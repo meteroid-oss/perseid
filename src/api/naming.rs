@@ -147,11 +147,9 @@ fn is_collection(resource: &Resource, op: &Operation) -> bool {
         })
 }
 
-/// `GET /customers` is `list`, `POST /customers/{id}/sources` `create_source` and
-/// `POST /invoices/{id}/finalize` `finalize`, in the resources named after their first segment.
-/// A `GET` of a singular noun with no items below it (`collection`) retrieves rather than lists.
-/// Where the path only gives a CRUD verb or a noun posted to, an operation id starting with an
-/// action (`archive_customer`) or `create` (`create_session`) names the operation instead.
+/// `GET /customers` is `list`, `POST /customers/{id}/sources` `create_source`. Where the path
+/// only gives a CRUD verb or a noun posted to, an operation id starting with an action
+/// (`archive_customer`) or `create` (`create_session`) names the operation instead.
 pub(crate) fn derive(
     resource: &str,
     id: &str,
@@ -303,8 +301,9 @@ fn is_action(verb: &str) -> bool {
 
 /// Whether a path segment names an action rather than a sub-resource.
 fn is_verb(words: &str) -> bool {
-    const CRUD: [&str; 10] = [
+    const CRUD: [&str; 11] = [
         "add", "create", "delete", "find", "get", "list", "lookup", "remove", "retrieve", "set",
+        "update",
     ];
     let verb = words.split('_').next().unwrap_or(words);
     CRUD.contains(&verb) || is_action(verb)
@@ -315,15 +314,17 @@ fn is_health(words: &str) -> bool {
 }
 
 /// snake_case keeping a single letter with the word after it: `OAuth` is `oauth`, not `o_auth`,
-/// while `IPAddress` is `ip_address`.
+/// while `IPAddress` is `ip_address` and the article in `getAThing` stays `get_a_thing`.
 pub(crate) fn snake(name: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     for word in name.split(|c: char| !c.is_alphanumeric()) {
         let mut letter: Option<String> = None;
-        for piece in word.to_snake_case().split('_').filter(|p| !p.is_empty()) {
+        let pieces = word.to_snake_case();
+        for (i, piece) in pieces.split('_').filter(|p| !p.is_empty()).enumerate() {
+            let article = i > 0 && piece == "a";
             match letter.take() {
                 Some(letter) => out.push(letter + piece),
-                None if piece.len() == 1 && piece.chars().all(char::is_alphabetic) => {
+                None if piece.len() == 1 && piece.chars().all(char::is_alphabetic) && !article => {
                     letter = Some(piece.to_owned());
                 }
                 None => out.push(piece.to_owned()),
@@ -617,6 +618,7 @@ mod tests {
         assert_eq!(snake("Plan A"), "plan_a");
         assert_eq!(snake("a-b"), "a_b");
         assert_eq!(snake("tax_ids"), "tax_ids");
+        assert_eq!(snake("getAThing"), "get_a_thing");
         assert_eq!(
             derive("oauth", "", "get", "/oauth/authorizeOAuthApp", false).unwrap(),
             "authorize_oauth_app"

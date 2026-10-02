@@ -393,8 +393,13 @@ class ApiBase:
         # `httpx` replaces the query of the URL by `params`, so a path's own query goes first.
         path, _, own_query = path.partition("?")
         params = urllib.parse.parse_qsl(own_query, keep_blank_values=True)
-        params.extend(spec.query_params or [])
-        params.extend(serialize_query_params(spec.extra_query or {}))
+        extra_query = spec.extra_query or {}
+        params.extend(
+            (key, value)
+            for key, value in spec.query_params or []
+            if key.partition("[")[0] not in extra_query
+        )
+        params.extend(serialize_query_params(extra_query))
 
         content: str | UploadContent | None = None
         json_body, form_body, multipart = _with_extra_body(spec)

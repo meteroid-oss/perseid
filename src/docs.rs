@@ -6,10 +6,8 @@ use serde_json::{Map, Value, json};
 
 use crate::api::Api;
 
-/// `{call, list, stream, create}`: a plain call (else the list), a paginated list, an event
-/// stream and a call with body fields, each `null` when no operation fits, else the `resource`
-/// name, the `operation`, its `path_args` and `body` (`{schema, fields}`, `null` without one),
-/// each argument a `{name, kind, int64, value}` literal, and the `result` and `item` schemas.
+/// `{call, list, stream, create}`: a plain call, a paginated list, an event stream and a call
+/// with body fields, each `null` when no operation fits.
 pub(crate) fn examples(api: &Api) -> Value {
     serde_json::to_value(api).map_or(Value::Null, |model| pick(&model))
 }

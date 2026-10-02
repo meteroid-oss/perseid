@@ -10,6 +10,7 @@ use serde::Deserialize;
 use crate::{
     api::{
         Api, Resource, Types,
+        resources::request_and_response_roots,
         types::{Type, TypeData},
     },
     postprocessing::Postprocessor,
@@ -317,8 +318,9 @@ fn errors_context(api: &Api) -> minijinja::Value {
 
 /// Schemas a request can carry: the ones operations send and every schema they reach.
 fn request_schemas(api: &Api) -> BTreeSet<&str> {
-    let mut stack: Vec<&str> = (api.resources.values())
-        .flat_map(Resource::request_schemas)
+    let mut stack: Vec<&str> = request_and_response_roots(&api.resources)
+        .0
+        .into_iter()
         .collect();
     let mut seen = BTreeSet::new();
     while let Some(name) = stack.pop() {

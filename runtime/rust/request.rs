@@ -462,20 +462,22 @@ impl Request {
         let auth = conf.credentials.apply(self.security, token).await?;
         self.query_params
             .extend(auth.query.into_iter().map(|(name, value)| (name.to_owned(), value)));
-        for (name, value) in auth.headers {
-            let name = HeaderName::from_bytes(name.as_bytes()).map_err(request_error)?;
-            let mut value = HeaderValue::try_from(value).map_err(request_error)?;
-            value.set_sensitive(true);
-            self.headers.insert(name, value);
-        }
         for (name, value) in &conf.headers {
             match header(name, value) {
-                Ok((name, value)) if !self.overrides.contains_key(&name) => {
+                Ok((name, value))
+                    if !self.overrides.contains_key(&name) && !self.headers.contains_key(&name) =>
+                {
                     self.overrides.append(name, value);
                 }
                 Ok(_) => {}
                 Err(error) => return Err(request_error(error)),
             }
+        }
+        for (name, value) in auth.headers {
+            let name = HeaderName::from_bytes(name.as_bytes()).map_err(request_error)?;
+            let mut value = HeaderValue::try_from(value).map_err(request_error)?;
+            value.set_sensitive(true);
+            self.headers.insert(name, value);
         }
         for name in self.overrides.keys() {
             self.headers.remove(name);

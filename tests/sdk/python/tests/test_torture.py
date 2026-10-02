@@ -445,6 +445,11 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(request.headers["x-required"], "r")
         self.assertNotIn("x-trace-id", request.headers)
 
+    def test_extra_query_replaces_a_param_of_the_method(self) -> None:
+        with client(self.respond(httpx.Response(200, json={"data": [], "total": 0}))) as api:
+            api.things.list(x_required="r", flag=False, extra_query={"flag": True})
+        self.assertEqual(self.requests[0].url.params.get_list("flag"), ["true"])
+
     def test_list_bodies_and_odd_query_names(self) -> None:
         widget = {"id": "w", "name": "n"}
         with client(self.respond(httpx.Response(200, json=[widget]))) as api:

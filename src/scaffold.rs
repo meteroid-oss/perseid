@@ -74,12 +74,12 @@ fn skeleton(config: &Config, sdk: &Sdk, dir: &Path, docs: &Docs) -> Result<Vec<(
     package_metadata(config, &mut context);
     let mut files = Vec::new();
     for (path, content) in assets::under(&format!("scaffold/{}", sdk.language)) {
-        let content = without_unset_metadata(std::str::from_utf8(content)?, &context);
-        let mut content = tokens(&content, &context)?;
+        let mut content = without_unset_metadata(std::str::from_utf8(content)?, &context);
         if path == "README.md" {
             content = readme(&content, sdk.language, &context, docs)
                 .with_context(|| format!("rendering the {} README", sdk.language))?;
         }
+        let content = tokens(&content, &context)?;
         files.push((tokens(path, &context)?, content.into_bytes()));
     }
     Ok(files)

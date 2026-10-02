@@ -196,6 +196,14 @@ describe("client", () => {
     assert.equal(calls[1].url.search, "?tenant=t2&debug=true");
   });
 
+  it("sends a default query parameter only where the method sets none", async () => {
+    const { calls, torture } = client([json({ data: [] })], {
+      defaultQuery: { flag: "true", ratio: "1", toString: "x" },
+    });
+    await torture.things.list({ xRequired: "r", flag: false }, { query: { ratio: 2 } });
+    assert.deepEqual([...calls[0].url.searchParams], [["flag", "false"], ["toString", "x"], ["ratio", "2"]]);
+  });
+
   it("retries a 429 after its Retry-After delay", async () => {
     const { calls, torture } = client([
       json({}, 429, { "retry-after": "0" }),

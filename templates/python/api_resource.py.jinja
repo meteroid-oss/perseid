@@ -267,7 +267,10 @@ class {{ class_name }}({{ base_class }}):
 {%- for f in flat_fields.list %}
 {%- set ident = field_ident(f) %}
 {%- if arg_type(f.type, enums) != py_type(f.type) %}{{ ident }}=t.cast("{{ field_type(f) }}", {{ ident }}), {% else %}{{ ident }}={{ ident }}, {% endif %}
-{%- endfor %}){% endset %}
+{%- endfor %}
+{%- set twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("stream_property", "defined") | first %}
+{%- set skipped = op.stream_property if op.stream_property is defined else (twin.stream_property if twin else none) %}
+{%- for f in types[op.request_body_schema_name].fields if f.name == skipped and f.required %}{{ field_ident(f) }}={{ "True" if op.stream_property is defined else "False" }}, {% endfor %}){% endset %}
 {%- set json_value = "to_json_value(" ~ body_value ~ ", " ~ body_type ~ ")" %}
 {%- if op.request_body_optional and op.stream_property is not defined %}{% set json_value = json_value ~ " or None" %}{% endif %}
 {%- elif body_param is not none %}

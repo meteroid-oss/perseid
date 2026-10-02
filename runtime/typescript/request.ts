@@ -319,9 +319,16 @@ export class @@CLIENT_NAME@@Request {
     stream = false
   ): Promise<Response> {
     const url = new URL(ctx.baseUrl + this.path);
-    const extra: Record<string, unknown> = { ...ctx.defaultQuery, ...options.query };
-    const query = this.queryParams.filter(([name]) => !((name.split("[")[0] ?? name) in extra));
-    for (const [name, value] of Object.entries(extra)) {
+    const baseName = (name: string) => name.split("[")[0] ?? name;
+    const overrides = options.query ?? {};
+    const query = this.queryParams.filter(([name]) => !Object.hasOwn(overrides, baseName(name)));
+    const own = new Set(query.map(([name]) => baseName(name)));
+    for (const [name, value] of Object.entries(ctx.defaultQuery ?? {})) {
+      if (!own.has(name) && !Object.hasOwn(overrides, name)) {
+        flattenParam(name, value, query);
+      }
+    }
+    for (const [name, value] of Object.entries(overrides)) {
       flattenParam(name, value, query);
     }
     for (const [name, value] of query) {
