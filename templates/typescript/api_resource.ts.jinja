@@ -333,7 +333,7 @@ import { isJsonObject } from "../json.js";
 {% if "parseDateTime(" in body -%}
 import { parseDateTime } from "../datetime.js";
 {% endif -%}
-{% set union_helpers = ["unionBestMatch", "unionHas"] | select("in", body) | list -%}
+{% set union_helpers = ["unionBestMatch", "unionHas", "unionTry"] | select("in", body) | list -%}
 {% if union_helpers -%}
 import { {{ union_helpers | join(", ") }} } from "../unions.js";
 {% endif -%}

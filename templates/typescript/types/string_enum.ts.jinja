@@ -7,7 +7,9 @@ export const {{ type_name }} = {
     {% endfor -%}
 } as const;
 
-export type {{ type_name }} = (typeof {{ type_name }})[keyof typeof {{ type_name }}];
+{#- Open: the API may send, and accept, values this SDK version does not list. `string & {}`
+    keeps the editor's completion of the known values. -#}
+export type {{ type_name }} = (typeof {{ type_name }})[keyof typeof {{ type_name }}] | (string & {});
 
 /** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {

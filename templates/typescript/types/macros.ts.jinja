@@ -104,10 +104,37 @@
     {%- endif -%}
 {%- endmacro %}
 
+{#- The wire shape of the items of a list variant, as the `UnionShape` literal. -#}
+{% macro shape(items) -%}
+    { type: "{{ items.json_type }}"{% if items["items"] is defined and items["items"] %}, items: {{ shape(items["items"]) }}{% endif %} }
+{%- endmacro %}
+
+{#- The union conversion of `expr` when variants share a JSON type: `unionTry` tries the
+    variants in order, each as its shape, rules or property sets, and conversion. -#}
+{% macro union_try(expr, type, outgoing) -%}
+    {%- macro name(p) -%}{{ p | ident("camel") if outgoing else p }}{%- endmacro -%}
+    {%- set mode = type.union_mode() -%}
+    unionTry({{ expr }}, [
+        {%- for v in type.try_variants() -%}
+        { type: "{{ v.json_type }}"
+            {%- if v["items"] is defined and v["items"] %}, items: {{ shape(v["items"]) }}{% endif -%}
+            {%- if v.empty %}, empty: true{% endif -%}
+            {%- if mode == "rules" and v.json_type == "object" and v.when %}, when: [{% for c in v.when %}[{{ name(c.property) | tojson }}{% if c.value is defined %}, {{ c.value | tojson }}{% endif %}]{% if not loop.last %}, {% endif %}{% endfor %}]{% endif -%}
+            {%- if mode == "best-match" and v.json_type == "object" %}, required: [{% for p in v.required %}{{ name(p) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}], known: [{% for p in v.properties %}{{ name(p) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif -%}
+            , parse: (part: any) => {% if variant_converted(v, outgoing) %}{{ to_json("part", v.type) if outgoing else from_json("part", v.type) }}{% else %}part{% endif %} }
+            {%- if not loop.last %}, {% endif -%}
+        {%- endfor -%}
+    ], {{ (mode | tojson) if mode in ["rules", "best-match"] else "undefined" }}, {{ "true" if outgoing else "false" }})
+{%- endmacro %}
+
 {#- The union conversion of `expr`, by JSON type, then among objects by `pick_object`. -#}
 {% macro union_json(expr, type, outgoing) -%}
+    {%- if type.union_decode() == "try" -%}
+    {{ union_try(expr, type, outgoing) }}
+    {%- else -%}
     {%- set objects = type.union_mode() != "json" -%}
     ({% if objects %}isJsonObject({{ expr }}) ? {{ pick_object(expr, type, outgoing) }} : {% endif %}{% for v in type.union_variants() if variant_converted(v, outgoing) and not (objects and v.json_type == "object") %}{{ is_variant(expr, v.json_type) }} ? {{ to_json(expr, v.type) if outgoing else from_json(expr, v.type) }} : {% endfor %}{{ expr }})
+    {%- endif -%}
 {%- endmacro %}
 
 {% macro from_json(expr, type) -%}

@@ -34,3 +34,97 @@ export function unionBestMatch(value: unknown, candidates: [string[], string[]][
   });
   return best;
 }
+
+/** @internal What a union variant looks like in JSON: its type, and that of the items of a list. */
+export interface UnionShape {
+  type: "string" | "integer" | "number" | "boolean" | "array" | "object";
+  items?: UnionShape | undefined;
+}
+
+/** @internal A variant of a union whose variants share a JSON type, and how to convert it. */
+export interface UnionCandidate extends UnionShape {
+  /** The variant `""`, which only the empty string holds. */
+  empty?: boolean | undefined;
+  /** Object variants of a `rules` union: the properties, and their value if any, to have. */
+  when?: [string, unknown?][] | undefined;
+  /** Object variants of a `best-match` union: the properties to have, and those it knows. */
+  required?: string[] | undefined;
+  known?: string[] | undefined;
+  parse: (value: any) => unknown;
+}
+
+function isShape(value: unknown, shape: UnionShape, outgoing: boolean): boolean {
+  switch (shape.type) {
+    case "string":
+      // A `Date` is sent as a string.
+      return typeof value === "string" || (outgoing && value instanceof Date);
+    case "integer":
+      return typeof value === "bigint" || (typeof value === "number" && Number.isInteger(value));
+    case "number":
+      return typeof value === "number" || typeof value === "bigint";
+    case "boolean":
+      return typeof value === "boolean";
+    case "array":
+      return (
+        Array.isArray(value) &&
+        (shape.items === undefined || value.length === 0 || isShape(value[0], shape.items, outgoing))
+      );
+    default:
+      return isJsonObject(value);
+  }
+}
+
+function matches(candidate: UnionCandidate, value: unknown, outgoing: boolean): boolean {
+  if (candidate.empty) {
+    return value === "";
+  }
+  if (!isShape(value, candidate, outgoing)) {
+    return false;
+  }
+  return (
+    candidate.when === undefined ||
+    candidate.when.every((condition) => unionHas(value, ...condition))
+  );
+}
+
+function score(candidate: UnionCandidate, object: Record<string, unknown>): number {
+  if (!(candidate.required ?? []).every((p) => p in object)) {
+    return -1;
+  }
+  return (candidate.known ?? []).filter((p) => p in object).length;
+}
+
+/**
+ * @internal The value of a union whose variants share a JSON type, converted as the first
+ * variant that fits it and converts it: `candidates` are in the order to try them. Among the
+ * objects of a `best-match` union the one with the most known properties comes first. A value
+ * no variant converts is kept as received.
+ */
+export function unionTry(
+  value: unknown,
+  candidates: UnionCandidate[],
+  mode: "rules" | "best-match" | undefined,
+  outgoing: boolean
+): any {
+  let fitting = candidates.filter((candidate) => matches(candidate, value, outgoing));
+  if (mode === "best-match" && isJsonObject(value) && fitting.length > 1) {
+    const object = value as Record<string, unknown>;
+    fitting = fitting
+      .map((candidate, index) => ({ candidate, index, score: score(candidate, object) }))
+      .filter((entry) => entry.score >= 0)
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map((entry) => entry.candidate);
+  }
+  for (const candidate of fitting) {
+    try {
+      const converted = candidate.parse(value);
+      // `parseDateTime` returns an invalid `Date` for a string that is not a date-time.
+      if (!(converted instanceof Date && Number.isNaN(converted.getTime()))) {
+        return converted;
+      }
+    } catch {
+      // Try the next variant.
+    }
+  }
+  return value;
+}
