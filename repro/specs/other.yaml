@@ -1,6 +1,0 @@
-components:
-  schemas:
-    Ext:
-      type: object
-      properties:
-        e: {type: string}
