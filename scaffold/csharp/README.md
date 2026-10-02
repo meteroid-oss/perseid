@@ -20,6 +20,8 @@ using var client = new @@CLIENT_NAME@@Client("your-api-key");
 
 `new @@CLIENT_NAME@@Client()` reads the key from `@@ENV_PREFIX@@_API_KEY`, and `@@ENV_PREFIX@@_BASE_URL`
 overrides the base URL; what you pass, in the constructor or in `@@CLIENT_NAME@@ClientOptions`, wins.
+When the API declares no default base URL, set `BaseUrl` or `@@ENV_PREFIX@@_BASE_URL`: the constructor
+throws a `@@CLIENT_NAME@@Exception` otherwise.
 Create one client and reuse it: it is thread-safe and pools connections. To send requests through
 your own `HttpClient`, pass it first: `new @@CLIENT_NAME@@Client(httpClient, "your-api-key")`.
 
@@ -66,7 +68,8 @@ await client.Pets.RetrieveAsync("1", new RequestOptions { MaxRetries = 0, Timeou
 
 ## Pagination
 
-`…AutoPagingAsync` methods fetch the pages as you go:
+`…AutoPagingAsync` methods fetch the pages as you go, item by item or, with `AsPagesAsync()`, page by
+page:
 
 ```csharp
 await foreach (var pet in client.Pets.ListAutoPagingAsync())

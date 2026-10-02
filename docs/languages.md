@@ -211,7 +211,8 @@ timeout of its own, leaving it to the SDK's. Each call is an
 Models are `sealed record`s with `init` properties and read-only collections, compared by value
 (collections and JSON included); properties the SDK does not know are kept in
 `AdditionalProperties` and sent back. Unknown enum values expose `IsKnown`, and the known ones are
-also constants in `Status.Values` to `switch` on `status.Value`. Nullable optional PATCH
+also constants in `Status.Values` to `switch` on `status.Value`; a string (or `new Status("x")`)
+converts to any value. Nullable optional PATCH
 fields are `MaybeUnset<T>`: assign `null` to send `null`, leave them unset to omit them. Dates are
 `DateTimeOffset`s, so fractions of a second beyond 100 nanoseconds are rounded. A union is an
 abstract record with a nested record per variant (`StringValue`, `ListValue`... for JSON types),
@@ -222,8 +223,8 @@ same way.
 
 `ListAutoPagingAsync()` returns an `AsyncPager` to `await foreach` over every item, whose
 `AsPagesAsync()` and `GetFirstPageAsync()` give `Page`s with `Items`, `Response`, `HasNextPage` and
-`GetNextPageAsync()`. Event streams whose events the
-spec types are `EventStream<T>`s of models, ending at `[DONE]`, with `LastEvent` for the raw event.
+`GetNextPageAsync()`. Event streams whose events the spec types are `EventStream<T>`s of models,
+ending at `[DONE]`, with `LastEvent` for the raw event.
 
 Everything the SDK throws derives from `AcmeException`: `ApiException` subclasses by status
 (`NotFoundException`, `RateLimitException`, `ServerErrorException`...),
