@@ -353,7 +353,14 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     .iter()
                     .zip(&dirs)
                     .map(|(sdk, dir)| {
-                        scope.spawn(|| generate::sdk(&config, &root, sdk, dir, &spec, &options))
+                        // Templates recurse through nested types (a union in a list in a
+                        // nullable...): large specs need more than the default 2 MiB of stack.
+                        std::thread::Builder::new()
+                            .stack_size(64 << 20)
+                            .spawn_scoped(scope, || {
+                                generate::sdk(&config, &root, sdk, dir, &spec, &options)
+                            })
+                            .expect("spawning a generation thread")
                     })
                     .collect();
                 handles
