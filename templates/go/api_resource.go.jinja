@@ -198,7 +198,11 @@ type {{ resource_type_name }} struct {
 {% set item_type = go_ident(pg.item_schema) %}
 {% set cursor = go_arg(param.name) if param.required else "params." ~ go_export(param.name) %}
 {% set pointer = not param.required %}
-{{ doc }}func (a *{{ resource_type_name }}) {{ name }}(ctx context.Context{{ sig }}{% if has_options %}, options *{{ options_type_name }}{% endif %}, opts ...RequestOption) (*Page[{{ item_type }}], error) {
+{% set page_type = (resource_type_name ~ (op.name | ident("pascal", "go")) ~ "Page") | go_name %}
+// {{ page_type }} is a page of [{{ resource_type_name }}.{{ name }}], whose Body is the whole response.
+type {{ page_type }} = Page[{{ item_type }}, {{ ret_type }}]
+
+{{ doc }}func (a *{{ resource_type_name }}) {{ name }}(ctx context.Context{{ sig }}{% if has_options %}, options *{{ options_type_name }}{% endif %}, opts ...RequestOption) (*{{ page_type }}, error) {
 {% if has_options %}	var params {{ options_type_name }}
 	if options != nil {
 		params = *options
@@ -208,14 +212,14 @@ type {{ resource_type_name }} struct {
 		return nil, err
 	}
 {% if op.response_may_be_empty | default(false) and ret_type is startingwith("*") %}	if resp == nil {
-		return &Page[{{ item_type }}]{}, nil
+		return &{{ page_type }}{}, nil
 	}
 {% endif %}{% set items_guard = go_path_guard("resp", pg.items, opt["items"], false) -%}
-{% if items_guard %}	page := &Page[{{ item_type }}]{}
+{% if items_guard %}	page := &{{ page_type }}{Body: resp}
 	if {{ items_guard }} {
 		page.Items = {{ go_path_value("resp", pg.items, opt["items"], false) }}
 	}
-{% else %}	page := &Page[{{ item_type }}]{Items: {{ go_path_value("resp", pg.items, opt["items"], false) }}}
+{% else %}	page := &{{ page_type }}{Items: {{ go_path_value("resp", pg.items, opt["items"], false) }}, Body: resp}
 {% endif %}	if len(page.Items) == 0 {
 		return page, nil
 	}
@@ -262,7 +266,7 @@ type {{ resource_type_name }} struct {
 		return page, nil
 	}
 {% endif %}	{{ cursor }} = {% if pointer %}&{% endif %}next
-{% endif %}	page.next = func(ctx context.Context) (*Page[{{ item_type }}], error) {
+{% endif %}	page.next = func(ctx context.Context) (*{{ page_type }}, error) {
 		return a.{{ name }}(ctx{{ call }}{% if has_options %}, &params{% endif %}, opts...)
 	}
 	return page, nil
@@ -273,7 +277,7 @@ type {{ resource_type_name }} struct {
 //
 // Deprecated: this operation is deprecated in the {{ sdk.client_name }} API.{% endif %}
 func (a *{{ resource_type_name }}) {{ name }}AutoPaging(ctx context.Context{{ sig }}{% if has_options %}, options *{{ options_type_name }}{% endif %}, opts ...RequestOption) *AutoPager[{{ item_type }}] {
-	return newAutoPager(ctx, func(ctx context.Context) (*Page[{{ item_type }}], error) {
+	return newAutoPager(ctx, func(ctx context.Context) (*{{ page_type }}, error) {
 		return a.{{ name }}(ctx{{ call }}{% if has_options %}, options{% endif %}, opts...)
 	})
 }

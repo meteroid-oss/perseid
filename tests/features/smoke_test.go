@@ -58,8 +58,14 @@ func TestSmoke(t *testing.T) {
 	expect(t, gadgets.Err(), nil)
 	expect(t, gadgetIds, []string{"g1", "g2", "g3"})
 	expect(t, ids(t, client.Records().ListAutoPaging(ctx, nil), func(r Entry) string { return r.ID }), []string{"r1", "r2", "r3"})
+	var records *RecordsListPage
+	records, err := client.Records().List(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, records.Body.Total, int64(3))
 
-	_, err := New("", &Options{ServerURL: url}).Widgets().List(ctx, nil)
+	_, err = New("", &Options{ServerURL: url}).Widgets().List(ctx, nil)
 	expect(t, errors.Is(err, ErrUnauthorized) && !errors.Is(err, ErrNotFound), true)
 	var sdkErr SDKError
 	var apiErr *APIError

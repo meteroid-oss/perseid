@@ -48,8 +48,9 @@ case errors.As(err, &apiErr):
 
 ### Pagination
 
-A list method returns its first `*Page[T]`, and its `...AutoPaging` twin an `*AutoPager[T]`
-over every item, fetching further pages on demand:
+A list method returns its first page, such as a `*ThingsListPage`, and its `...AutoPaging` twin
+an `*AutoPager[T]` over every item, fetching further pages on demand. A page holds its `Items`
+and its whole decoded response in `Body`, for totals and other fields:
 
 ```go
 for item, err := range client.Things().ListAutoPaging(ctx, nil).All() {
@@ -61,7 +62,7 @@ for item, err := range client.Things().ListAutoPaging(ctx, nil).All() {
 
 page, err := client.Things().List(ctx, nil)
 for page != nil && err == nil {
-	// page.Items, page.HasNextPage()
+	// page.Items, page.Body, page.HasNextPage()
 	page, err = page.NextPage(ctx)
 }
 ```
