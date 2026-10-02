@@ -12,9 +12,14 @@ import com.torture.api.ThingsListOptions;
 import com.torture.exceptions.ApiConnectionException;
 import com.torture.exceptions.ApiException;
 import com.torture.exceptions.ApiTimeoutException;
+import com.torture.exceptions.AuthenticationException;
+import com.torture.exceptions.BadRequestException;
+import com.torture.exceptions.ConflictException;
 import com.torture.exceptions.InternalServerException;
 import com.torture.exceptions.InvalidDataException;
 import com.torture.exceptions.NotFoundException;
+import com.torture.exceptions.PermissionDeniedException;
+import com.torture.exceptions.RateLimitException;
 import com.torture.exceptions.TortureException;
 import com.torture.exceptions.UnprocessableEntityException;
 import com.torture.streaming.EventStream;
@@ -27,15 +32,23 @@ import com.torture.models.ThingPatch;
 import com.torture.models.ValidationError;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.OffsetDateTime;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -47,29 +60,46 @@ class HttpTest {
                     + "\"nullable_required\":null,\"tags\":[],\"metadata\":{},\"attrs\":{}}";
 
     private HttpServer server;
-    private final List<String> requests = new ArrayList<>();
-    private final List<String> idempotencyKeys = new ArrayList<>();
-    private final List<String> traces = new ArrayList<>();
-    private final List<String> required = new ArrayList<>();
-    private final List<String> bodies = new ArrayList<>();
+    private ExecutorService executor;
+    private final List<String> requests = Collections.synchronizedList(new ArrayList<>());
+    private final List<String> idempotencyKeys = Collections.synchronizedList(new ArrayList<>());
+    private final List<String> traces = Collections.synchronizedList(new ArrayList<>());
+    private final List<String> required = Collections.synchronizedList(new ArrayList<>());
+    private final List<String> bodies = Collections.synchronizedList(new ArrayList<>());
+    private final List<String> retryCounts = Collections.synchronizedList(new ArrayList<>());
+    private final List<String> rawQueries = Collections.synchronizedList(new ArrayList<>());
+    private volatile boolean stallFirstRequest;
     private int okStatus = 200;
     private String okType = "application/json";
     private String errorBody = "{\"title\":\"no\"}";
     private String okBody = THING;
-    private final Deque<Integer> statuses = new ArrayDeque<>();
+    private final Deque<Integer> statuses = new ConcurrentLinkedDeque<>();
     private String retryAfter;
     private String retryAfterMs;
 
     @BeforeEach
     void start() throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        executor = Executors.newCachedThreadPool();
+        server.setExecutor(executor);
         server.createContext("/", exchange -> {
             requests.add(exchange.getRequestMethod() + " " + exchange.getRequestURI().getRawPath()
                     + (exchange.getRequestURI().getRawQuery() == null ? "" : "?" + exchange.getRequestURI().getRawQuery()));
             idempotencyKeys.add(exchange.getRequestHeaders().getFirst("idempotency-key"));
             traces.add(exchange.getRequestHeaders().getFirst("x-trace"));
             required.add(exchange.getRequestHeaders().getFirst("x-required"));
+            retryCounts.add(exchange.getRequestHeaders().getFirst("x-torture-retry-count"));
+            rawQueries.add(exchange.getRequestURI().getRawQuery());
             bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            if (stallFirstRequest && requests.size() == 1) {
+                try {
+                    Thread.sleep(1500);
+                } catch (InterruptedException ignored) {
+                    Thread.currentThread().interrupt();
+                }
+                exchange.close();
+                return;
+            }
             int status = statuses.isEmpty() ? 200 : statuses.poll();
             if (retryAfter != null && status != 200) {
                 exchange.getResponseHeaders().add("Retry-After", retryAfter);
@@ -93,6 +123,7 @@ class HttpTest {
     @AfterEach
     void stop() {
         server.stop(0);
+        executor.shutdownNow();
     }
 
     private String url() {
@@ -336,6 +367,188 @@ class HttpTest {
         assertTrue(error.getMessage().contains("`id`"));
         okBody = "not json";
         assertThrows(InvalidDataException.class, () -> client().things().retrieve("t"));
+    }
+
+    @Test
+    void pathParametersAreEscapedByByte() {
+        Map<String, String> escaped = new LinkedHashMap<>();
+        escaped.put("plain", "plain");
+        escaped.put("sp ace", "sp%20ace");
+        escaped.put("sl/ash", "sl%2Fash");
+        escaped.put("q?mark", "q%3Fmark");
+        escaped.put("per%cent", "per%25cent");
+        escaped.put("ha#sh", "ha%23sh");
+        escaped.put("lit%25eral", "lit%2525eral");
+        escaped.put("héllo wörld ✓", "h%C3%A9llo%20w%C3%B6rld%20%E2%9C%93");
+        escaped.put("a/../b", "a%2F..%2Fb");
+        List<String> want = new ArrayList<>();
+        for (Map.Entry<String, String> entry : escaped.entrySet()) {
+            client().things().retrieve(entry.getKey());
+            want.add("GET /v1/things/" + entry.getValue());
+        }
+        assertEquals(want, requests);
+        // Dot segments and empty values would change the path: nothing is sent for them.
+        for (String invalid : List.of("..", ".", "")) {
+            assertThrows(IllegalArgumentException.class, () -> client().things().retrieve(invalid), invalid);
+        }
+        assertEquals(want.size(), requests.size());
+    }
+
+    @Test
+    void queryValuesAreEncodedSoThatTheyDecodeToThemselves() {
+        okBody = "{\"data\":[]}";
+        List<String> values = List.of("plain", "sp ace", "a&b=c+d", "100%", "slash/qm?", "héllo wörld ✓", "x#y");
+        client().things().list("needed", ThingsListOptions.builder().ids(values).build());
+        List<String> decoded = new ArrayList<>();
+        for (String pair : rawQueries.get(0).split("&", -1)) {
+            int eq = pair.indexOf('=');
+            assertEquals("ids", URLDecoder.decode(pair.substring(0, eq), StandardCharsets.UTF_8), pair);
+            decoded.add(URLDecoder.decode(pair.substring(eq + 1), StandardCharsets.UTF_8));
+        }
+        assertEquals(values, decoded);
+    }
+
+    @Test
+    void everyErrorStatusHasItsOwnExceptionClass() {
+        Map<Integer, Class<? extends ApiException>> classes = new LinkedHashMap<>();
+        classes.put(400, BadRequestException.class);
+        classes.put(401, AuthenticationException.class);
+        classes.put(403, PermissionDeniedException.class);
+        classes.put(404, NotFoundException.class);
+        classes.put(409, ConflictException.class);
+        classes.put(418, ApiException.class);
+        classes.put(422, UnprocessableEntityException.class);
+        classes.put(429, RateLimitException.class);
+        classes.put(500, InternalServerException.class);
+        classes.put(503, InternalServerException.class);
+        RequestOptions once = RequestOptions.builder().maxRetries(0).build();
+        for (Map.Entry<Integer, Class<? extends ApiException>> entry : classes.entrySet()) {
+            statuses.add(entry.getKey());
+            ApiException error = assertThrows(ApiException.class, () -> client().things().retrieve("t", once));
+            assertEquals(entry.getValue(), error.getClass(), "status " + entry.getKey());
+            assertEquals(entry.getKey(), error.statusCode());
+            assertTrue(error.requestId().isPresent(), "the request id of status " + entry.getKey());
+            assertTrue(error instanceof TortureException);
+        }
+        assertEquals(classes.size(), requests.size());
+    }
+
+    @Test
+    void errorBodiesThatAreNotJsonOrAreEmptyAreKeptRaw() {
+        RequestOptions once = RequestOptions.builder().maxRetries(0).build();
+        statuses.add(400);
+        errorBody = "<html>nope</html>";
+        BadRequestException html = assertThrows(BadRequestException.class, () -> client().things().retrieve("t", once));
+        assertEquals("<html>nope</html>", html.body());
+        assertTrue(html.error().isEmpty());
+        assertTrue(html.getMessage().contains("400") && html.getMessage().contains("nope"), html.getMessage());
+        assertEquals("req_1", html.requestId().orElseThrow());
+
+        statuses.add(404);
+        errorBody = "";
+        NotFoundException empty = assertThrows(NotFoundException.class, () -> client().things().retrieve("t", once));
+        assertEquals("", empty.body());
+        assertTrue(empty.error().isEmpty());
+        assertEquals(404, empty.statusCode());
+        assertEquals("req_2", empty.requestId().orElseThrow());
+
+        statuses.add(500);
+        errorBody = "{\"truncated\": ";
+        InternalServerException truncated =
+                assertThrows(InternalServerException.class, () -> client().things().retrieve("t", once));
+        assertEquals("{\"truncated\": ", truncated.body());
+        assertTrue(truncated.error().isEmpty());
+
+        // A JSON body that is not an object is kept as JSON.
+        statuses.add(409);
+        errorBody = "[1,2]";
+        ConflictException list = assertThrows(ConflictException.class, () -> client().things().retrieve("t", once));
+        assertEquals(2, assertInstanceOf(JsonNode.class, list.error().orElseThrow()).size());
+    }
+
+    @Test
+    void anEmptyBodyWhereAnObjectIsRequiredIsADecodeError() {
+        okBody = "";
+        assertThrows(InvalidDataException.class, () -> client().things().retrieve("t"));
+        okBody = "{\"id\":";
+        InvalidDataException truncated = assertThrows(InvalidDataException.class, () -> client().things().retrieve("t"));
+        assertTrue(truncated.getMessage().length() > 0);
+        assertEquals(2, requests.size(), "decode errors are not retried");
+    }
+
+    @Test
+    void timedOutAttemptsAreRetried() {
+        stallFirstRequest = true;
+        TortureOptions options = TortureOptions.builder()
+                .baseUrl(url())
+                .timeout(Duration.ofMillis(300))
+                .retrySchedule(List.of(1L))
+                .build();
+        try (Torture torture = new Torture("token", options)) {
+            assertEquals("n", torture.things().retrieve("t").name());
+        }
+        assertEquals(2, requests.size());
+        assertEquals(java.util.Arrays.asList(null, "1"), retryCounts);
+    }
+
+    @Test
+    void timedOutAttemptsFailOnceTheRetriesAreSpent() {
+        slowServer();
+        TortureOptions options = TortureOptions.builder()
+                .baseUrl(url())
+                .timeout(Duration.ofMillis(200))
+                .retrySchedule(List.of(1L))
+                .build();
+        try (Torture torture = new Torture("token", options)) {
+            assertThrows(ApiTimeoutException.class, () -> torture.things().retrieve("t"));
+        }
+    }
+
+    @Test
+    void middlewareRunsInsideTheRetryLoop() {
+        AtomicInteger calls = new AtomicInteger();
+        List<Integer> statusesSeen = Collections.synchronizedList(new ArrayList<>());
+        TortureOptions options = TortureOptions.builder()
+                .baseUrl(url())
+                .retrySchedule(List.of(1L, 1L))
+                .addInterceptor(chain -> {
+                    calls.incrementAndGet();
+                    okhttp3.Response response = chain.proceed(chain.request());
+                    statusesSeen.add(response.code());
+                    return response;
+                })
+                .build();
+        statuses.add(503);
+        try (Torture torture = new Torture("token", options)) {
+            assertEquals("n", torture.things().retrieve("t").name());
+        }
+        assertEquals(2, calls.get(), "the middleware sees every attempt");
+        assertEquals(List.of(503, 200), statusesSeen);
+        assertEquals(2, requests.size());
+    }
+
+    @Test
+    void cancellingAnAsyncCallStopsItsRetries() throws Exception {
+        statuses.add(503);
+        retryAfterMs = "500";
+        CompletableFuture<Thing> call = client().async().things().retrieve("t");
+        for (int i = 0; i < 100 && requests.isEmpty(); i++) {
+            Thread.sleep(20);
+        }
+        assertEquals(1, requests.size());
+        assertTrue(call.cancel(true));
+        Thread.sleep(900);
+        assertEquals(1, requests.size(), "no attempt after the cancellation");
+        assertTrue(call.isCancelled());
+    }
+
+    @Test
+    void anAsyncCallCanBeCancelledWhileItWaitsForTheServer() throws Exception {
+        slowServer();
+        CompletableFuture<Thing> call = client().async().things().retrieve("t");
+        Thread.sleep(100);
+        assertTrue(call.cancel(true));
+        assertThrows(java.util.concurrent.CancellationException.class, call::get);
     }
 
     private void slowServer() {

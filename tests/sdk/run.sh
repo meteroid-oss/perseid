@@ -85,12 +85,30 @@ test { useJUnitPlatform(); testLogging { events "passed", "skipped", "failed"; e
 GRADLE
       gradle test --no-daemon
     }
-    rm -rf _torture && gradle_test
+    rm -rf _torture _samples && gradle_test
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
     # Without servers, the client has no default base URL.
     sed -i '/^servers:/,/^paths:/{/^paths:/!d}' "$work/torture/openapi.yaml"
-    cd "$work/torture" && perseid init --sdks java && perseid generate java
-    cp -r "$here/java/_torture/." java/ && cd java && gradle_test ;;
+    # The tests of tests/sdk/java/_torture and the sample round trips of _samples: `perseid samples`
+    # writes samples.json, which SamplesRoundTripTest decodes and encodes with the generated
+    # classes of every model.
+    (cd "$work/torture" && perseid init --sdks java && perseid generate java \
+      && perseid samples --out samples.json > /dev/null \
+      && cp -r "$here/java/_torture/." java/ && cp -r "$here/java/_samples/." java/ \
+      && cp samples.json java/ && cd java && gradle_test)
+    # Generates the SDK of one edge fixture, writes the samples of its models and runs only the
+    # sample round trips on it.
+    java_samples() (
+      dir="$work/samples/$(basename "$1" .yaml)"
+      mkdir -p "$dir" && cd "$dir"
+      perseid init --sdks java --spec "$1" > /dev/null && perseid generate java > /dev/null
+      perseid samples --out samples.json > /dev/null
+      grep -q '"type_name"' samples.json || { echo "$1 has no models"; exit 0; }
+      cp -r "$here/java/_samples/." java/ && cp samples.json java/ && cd java && gradle_test
+    )
+    for spec in "$here"/../fixtures/edge-*.yaml; do
+      java_samples "$spec"
+    done ;;
   csharp)
     rm -rf _torture && dotnet test Tests
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
