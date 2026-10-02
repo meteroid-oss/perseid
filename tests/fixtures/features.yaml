@@ -3,7 +3,13 @@ info:
   title: Features API
   version: 1.0.0
 servers:
-  - url: https://features.example.com
+  - url: https://{region}.example.com/{version}
+    variables:
+      region:
+        default: eu
+        enum: [eu, us]
+      version:
+        default: v1
 security:
   - bearer: []
   - api_key: []
@@ -264,6 +270,467 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
+  /items/{item_id}:
+    parameters:
+      - { name: item_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: get_item
+      tags: [items]
+      security: []
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Item' }
+    patch:
+      operationId: patch_item
+      tags: [items]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ItemPatch' }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Item' }
+    delete:
+      operationId: delete_item
+      tags: [items]
+      security: []
+      responses:
+        '204':
+          description: deleted, no content
+  /scenarios/nullable-body:
+    get:
+      operationId: nullable_body
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: a JSON null body
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/Item' }
+                  - { type: 'null' }
+  /scenarios/text:
+    get:
+      operationId: text_plain
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: plain text
+          content:
+            text/plain:
+              schema: { type: string }
+  /scenarios/csv:
+    get:
+      operationId: text_csv
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: csv text
+          content:
+            text/csv:
+              schema: { type: string }
+  /scenarios/blob:
+    get:
+      operationId: download_blob
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: raw bytes
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+  /scenarios/image:
+    get:
+      operationId: download_image
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: png bytes
+          content:
+            image/png:
+              schema: { type: string, format: binary }
+  /scenarios/malformed:
+    get:
+      operationId: malformed_json
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: declared JSON, actually truncated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/empty-body:
+    get:
+      operationId: empty_body
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: declared JSON, actually empty
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/extra-fields:
+    get:
+      operationId: extra_fields
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: carries fields the schema does not declare
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/nulls:
+    get:
+      operationId: get_nulls
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: nulls in nullable fields, array items and map values
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NullBag' }
+    post:
+      operationId: echo_nulls
+      tags: [content]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NullBag' }
+      responses:
+        '200':
+          description: the same bag
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NullBag' }
+  /scenarios/bag:
+    get:
+      operationId: get_bag
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: declared properties plus additionalProperties extras
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Bag' }
+  /scenarios/labels:
+    get:
+      operationId: get_labels
+      tags: [content]
+      security: []
+      responses:
+        '200':
+          description: a pure string map
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Labels' }
+  /scenarios/enum:
+    get:
+      operationId: enum_value
+      tags: [content]
+      security: []
+      parameters:
+        - { name: mode, in: query, required: true, schema: { type: string, enum: [known, unknown] } }
+      responses:
+        '200':
+          description: an enum value the schema does not list when mode is unknown
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Paint' }
+  /scenarios/bigint:
+    post:
+      operationId: big_int
+      tags: [encoding]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BigBox' }
+      responses:
+        '200':
+          description: the same integers
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BigBox' }
+  /scenarios/bytes:
+    get:
+      operationId: bytes_get
+      tags: [encoding]
+      security: []
+      responses:
+        '200':
+          description: base64 bytes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Blob' }
+    post:
+      operationId: bytes_echo
+      tags: [encoding]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Blob' }
+      responses:
+        '200':
+          description: the same bytes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Blob' }
+  /scenarios/datetime:
+    get:
+      operationId: datetime_query
+      tags: [encoding]
+      security: []
+      parameters:
+        - { name: since, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: day, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: the instant the server read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DateBox' }
+    post:
+      operationId: datetime_body
+      tags: [encoding]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DateBox' }
+      responses:
+        '200':
+          description: the instant the server read
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DateBox' }
+  /scenarios/paths/{segment}:
+    get:
+      operationId: path_segment
+      tags: [encoding]
+      security: []
+      parameters:
+        - { name: segment, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: the decoded segment
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/query:
+    get:
+      operationId: query_text
+      tags: [encoding]
+      security: []
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: the decoded query value
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/multi:
+    get:
+      operationId: query_multi
+      tags: [encoding]
+      security: []
+      parameters:
+        - { name: ids, in: query, required: true, explode: true, schema: { type: array, items: { type: string } } }
+        - { name: flag, in: query, required: true, schema: { type: boolean } }
+      responses:
+        '200':
+          description: the ids in the order they were sent
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/headers:
+    get:
+      operationId: tenant_headers
+      tags: [encoding]
+      security: []
+      parameters:
+        - { name: X-Tenant, in: header, required: true, schema: { type: string } }
+        - { name: X-Trace-Id, in: header, schema: { type: string } }
+      responses:
+        '200':
+          description: the headers as the server read them
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/cookie:
+    get:
+      operationId: cookie_session
+      tags: [cookies]
+      security: []
+      parameters:
+        - { name: session_id, in: cookie, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: the cookie value
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/cookie-auth:
+    get:
+      operationId: cookie_auth
+      tags: [cookies]
+      security:
+        - api_key_cookie: []
+      responses:
+        '200':
+          description: the auth cookie value
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/flaky:
+    get:
+      operationId: flaky_service
+      tags: [retries]
+      security: []
+      parameters:
+        - { name: X-Scenario-Id, in: header, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: succeeds on the second attempt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/rate-limited:
+    get:
+      operationId: rate_limited
+      tags: [retries]
+      security: []
+      parameters:
+        - { name: X-Scenario-Id, in: header, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: succeeds on the second attempt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/unavailable:
+    get:
+      operationId: always_unavailable
+      tags: [retries]
+      security: []
+      parameters:
+        - { name: X-Scenario-Id, in: header, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: never succeeds
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/idempotent:
+    post:
+      operationId: idempotent_create
+      tags: [retries]
+      security: []
+      parameters:
+        - { name: X-Scenario-Id, in: header, required: true, schema: { type: string } }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Payment' }
+      responses:
+        '200':
+          description: succeeds on the second attempt when the key is unchanged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /scenarios/status/{code}:
+    get:
+      operationId: status_error
+      tags: [errors]
+      security: []
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: integer, format: int32 } }
+      responses:
+        '200':
+          description: never returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        default:
+          description: the requested error status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /scenarios/pages:
+    get:
+      operationId: list_pages
+      tags: [errors]
+      security: []
+      x-pagination:
+        cursor: cursor
+        next_cursor: next_cursor
+      parameters:
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: page one; page two fails with 409
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WidgetList' }
+        default:
+          description: error
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /scenarios/sse:
+    get:
+      operationId: sse_chunked
+      tags: [streaming]
+      security: []
+      responses:
+        '200':
+          description: server-sent events split across chunks
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /scenarios/sse-error:
+    get:
+      operationId: sse_denied
+      tags: [streaming]
+      security: []
+      responses:
+        '200':
+          description: server-sent events
+          content:
+            text/event-stream:
+              schema: { type: string }
+        default:
+          description: refused before any event
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
 components:
   securitySchemes:
     bearer:
@@ -280,6 +747,10 @@ components:
       type: apiKey
       in: query
       name: api_key
+    api_key_cookie:
+      type: apiKey
+      in: cookie
+      name: auth_token
     oauth:
       type: oauth2
       flows:
@@ -387,3 +858,72 @@ components:
               properties:
                 line1: { type: string }
                 city: { type: string }
+    Item:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        note: { type: [string, 'null'] }
+    ItemPatch:
+      type: object
+      properties:
+        name: { type: string }
+        note: { type: [string, 'null'] }
+    NullBag:
+      type: object
+      required: [name, tags, counts]
+      properties:
+        name: { type: [string, 'null'] }
+        tags:
+          type: array
+          items: { type: [string, 'null'] }
+        counts:
+          type: object
+          additionalProperties: { type: [integer, 'null'] }
+        note: { type: [string, 'null'] }
+    Bag:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+      additionalProperties: { type: integer }
+    Labels:
+      type: object
+      additionalProperties: { type: string }
+    Paint:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [red, green, blue] }
+        kinds:
+          type: array
+          items: { type: string, enum: [red, green, blue] }
+    BigBox:
+      type: object
+      required: [value, min]
+      properties:
+        value: { type: integer, format: int64 }
+        min: { type: integer, format: int64 }
+    Blob:
+      type: object
+      required: [data]
+      properties:
+        data: { type: string, format: byte }
+    DateBox:
+      type: object
+      required: [at, day]
+      properties:
+        at: { type: string, format: date-time }
+        day: { type: string, format: date }
+    Payment:
+      type: object
+      required: [amount]
+      properties:
+        amount: { type: integer, format: int32 }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code: { type: integer, format: int32 }
