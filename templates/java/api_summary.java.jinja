@@ -26,15 +26,15 @@ import {{ sdk.java_package }}.api.{{ resource.name | to_upper_camel_case }}Async
 public final class {{ client }}Async implements AutoCloseable {
     private final {{ client }} sync;
     private final WithRawResponse withRawResponse;
-{% for resource in api.resources %}
+{% for resource in api.resources -%}
     private final {{ resource.name | to_upper_camel_case }}Async {{ accessors[loop.index0] }};
 {% endfor %}
 
     {{ client }}Async({{ client }} sync) {
         this.sync = sync;
-{% for resource in api.resources %}
+{% for resource in api.resources -%}
         this.{{ accessors[loop.index0] }} = new {{ resource.name | to_upper_camel_case }}Async(sync.{{ accessors[loop.index0] }}());
-{% endfor %}
+{% endfor -%}
         this.withRawResponse = new WithRawResponse();
     }
 
@@ -100,6 +100,7 @@ import {{ sdk.java_package }}.api.{{ resource.name | to_upper_camel_case }};
 import {{ sdk.java_internal_package }}.{{ client }}Auth;
 import {{ sdk.java_internal_package }}.{{ client }}HttpClient;
 import okhttp3.HttpUrl;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -134,7 +135,7 @@ public final class {{ client }} implements AutoCloseable {
     private final {{ client }}HttpClient httpClient;
     private final WithRawResponse withRawResponse;
     private final {{ client }}Async async;
-{% for resource in api.resources %}
+{% for resource in api.resources -%}
     private final {{ resource.name | to_upper_camel_case }} {{ accessors[loop.index0] }};
 {% endfor %}
 
@@ -170,7 +171,7 @@ public final class {{ client }} implements AutoCloseable {
     /**
      * A client with custom options.
      *
-     * @param options the options, with the API key and base URL unless the environment sets them
+     * @param options the options; the environment supplies the API key and base URL they leave out
      */
     public {{ client }}({{ client }}Options options) {
         this.options = options;
@@ -180,14 +181,14 @@ public final class {{ client }} implements AutoCloseable {
             throw new IllegalArgumentException("Invalid base URL: " + baseUrl);
         }
         String apiKey = options.apiKey().orElseGet(() -> env({{ client }}Options.API_KEY_ENV, null));
-        Map<String, String> defaultHeaders = new java.util.LinkedHashMap<>();
+        Map<String, String> defaultHeaders = new LinkedHashMap<>();
         defaultHeaders.put("User-Agent", "{{ sdk.user_agent_prefix }}-java/" + Version.VERSION);
         defaultHeaders.putAll(options.headers());
         {{ client }}Auth auth = new {{ client }}Auth(SECURITY_SCHEMES, {{ java_security(api.security) }}, apiKey, options);
         this.httpClient = new {{ client }}HttpClient(parsedUrl, defaultHeaders, options, auth);
-{% for resource in api.resources %}
+{% for resource in api.resources -%}
         this.{{ accessors[loop.index0] }} = new {{ resource.name | to_upper_camel_case }}(httpClient);
-{% endfor %}
+{% endfor -%}
         this.withRawResponse = new WithRawResponse();
         this.async = new {{ client }}Async(this);
     }

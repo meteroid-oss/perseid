@@ -394,6 +394,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import com.fasterxml.jackson.core.type.TypeReference;
 import okhttp3.Headers;
@@ -452,8 +453,9 @@ public final class {{ resource_type_name }} {
         {% endfor %}
 
         private {{ body_cls }}(Builder builder) {
-            {% for v in mp.vars -%}
-            this.{{ v }} = builder.{{ v }};
+            {% for field in op.multipart_fields -%}
+            {% set v = mp.vars[loop.index0] -%}
+            this.{{ v }} = {{ "Utils.copyList(builder." ~ v ~ ")" if field.type.is_list() and not field.is_file else "builder." ~ v }};
             {% endfor -%}
         }
 
@@ -471,12 +473,18 @@ public final class {{ resource_type_name }} {
 {% set text -%}
 {% if field.description is defined %}{{ m.html(field.description) }}{% else %}The {@code {{ m.html(field.name) }}} field.{% endif %}
 
-@return the value{% if not field.required %}, null when unset{% endif %}
+@return the value{% if not field.required %}, empty when unset{% endif %}
 {%- endset -%}
         {{ text | to_doc_comment(style="java") | indent(8) }}
+        {% if field.required -%}
         public {{ ty }} {{ mp.vars[loop.index0] }}() {
             return {{ mp.vars[loop.index0] }};
         }
+        {%- else -%}
+        public Optional<{{ ty }}> {{ mp.vars[loop.index0] }}() {
+            return Optional.ofNullable({{ mp.vars[loop.index0] }});
+        }
+        {%- endif %}
         {%- endfor %}
 
         /** Builds {@link {{ body_cls }}}. */
@@ -653,7 +661,7 @@ public final class {{ resource_type_name }} {
                 {%- for field in op.multipart_fields %}
                 {%- set f = fields[loop.index0] %}
                 {%- set f = f ~ "_" if f in ["builder", "toBuilder", "hashCode", "toString", "getClass", "build"] else f %}
-                    .{% if field.is_file %}file{% else %}field{% endif %}({{ field.name | tojson }}, {{ body_var }}.{{ f }}())
+                    .{% if field.is_file %}file{% else %}field{% endif %}({{ field.name | tojson }}, {{ body_var }}.{{ f }}(){% if not field.required %}.orElse(null){% endif %})
                 {%- endfor %}
                     .build()
             {%- endset -%}
