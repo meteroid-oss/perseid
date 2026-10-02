@@ -21,7 +21,7 @@ Four extension points, none of which needs a fork.
 | TypeScript | `middleware`: `(request, next) => Response` |
 | Python | `middleware=` of `Client(...)` and `AsyncClient(...)` |
 | Go | `Options.Middleware`, a `RoundTripper` wrapper |
-| Java | `getInterceptors()`, OkHttp interceptors, also added to a client given to `setHttpClient` |
+| Java | `addInterceptor`, OkHttp interceptors, also added to a client given to `httpClient` |
 | Rust | `Middleware` trait, `Client::builder().middleware(...)` |
 | C# | `Handlers`, `DelegatingHandler`s, also run in front of your own `HttpClient` |
 

@@ -1,17 +1,41 @@
 {% import "types/macros.java.jinja" as m -%}
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
 {% set class_name = resource_type_name ~ (operation.name | to_upper_camel_case) ~ "Options" -%}
-{% set params = operation.query_params + operation.header_params -%}
-{% set names = params | map(attribute="name") | list -%}
-{% set fields = names | idents("camel", "java", "operation `" ~ operation.id ~ "`") -%}
-{% set accessors = names | idents("pascal", "java", "operation `" ~ operation.id ~ "`") -%}
+{% set all_params = operation.query_params + operation.header_params -%}
+{% set accessors = all_params | map(attribute="name") | list | idents("camel", "java", "operation `" ~ operation.id ~ "`") -%}
+{% set pascals = all_params | map(attribute="name") | list | idents("pascal", "java", "operation `" ~ operation.id ~ "`") -%}
+{% set ns = namespace(params=[], fields=[], pascals=[], types=[], unions=[]) -%}
+{% for p in all_params -%}
+{% if not p.required -%}
+{% set name = accessors[loop.index0] -%}
+{% set ns.params = ns.params + [p] -%}
+{% set ns.fields = ns.fields + [name ~ "_" if name in ["builder", "toBuilder", "hashCode", "toString", "getClass", "build"] else name] -%}
+{% set ns.pascals = ns.pascals + [pascals[loop.index0]] -%}
+{% if m.typed_param_union(p) -%}
+{% set union_cls = pascals[loop.index0] ~ ("Value" if pascals[loop.index0] in ["Builder", class_name] else "") -%}
+{% set ns.types = ns.types + [union_cls] -%}
+{% set ns.unions = ns.unions + [[p.typed_union, union_cls]] -%}
+{% else -%}
+{% set ns.types = ns.types + [p.type.to_java() if loop.index0 < operation.query_params | length else "String"] -%}
+{% endif -%}
+{% endif -%}
+{% endfor -%}
+{% if ns.params -%}
 // this file is @generated
 package {{ sdk.java_package }}.api;
 
+import {{ sdk.java_internal_package }}.Utils;
+import com.fasterxml.jackson.annotation.JsonValue;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import java.io.IOException;
 import java.util.Map;
 import java.util.Set;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.net.URI;
@@ -19,33 +43,64 @@ import java.net.URI;
 import {{ sdk.java_package }}.models.{{ c | to_upper_camel_case }};
 {% endfor -%}
 
-/** Optional parameters of {@code {{ operation.name | ident("camel", "java") }}}. */
-public class {{ class_name }} {
-    {% for p in params -%}
-    private {% if loop.index0 < operation.query_params | length %}{{ p.type.to_java() }}{% else %}String{% endif %} {{ fields[loop.index0] }};
+/**
+ * Optional parameters of {@code {{ operation.name | ident("camel", "java") }}}, immutable: build them
+ * with {@link #builder()}.
+ */
+public final class {{ class_name }} {
+    {% for p in ns.params -%}
+    private final {{ ns.types[loop.index0] }} {{ ns.fields[loop.index0] }};
     {% endfor %}
 
-    {% for p in params -%}
-    {% set ty = p.type.to_java() if loop.index0 < operation.query_params | length else "String" -%}
-    {% set field = fields[loop.index0] -%}
-    {% set accessor = accessors[loop.index0] ~ ("_" if accessors[loop.index0] == "Class" else "") -%}
-    {% if p.description is defined -%}
-    {{ m.javadoc(p.description) }}
-    {% endif -%}
-    public {{ class_name }} {{ field }}({{ ty }} {{ field }}) {
-        this.{{ field }} = {{ field }};
-        return this;
+    private {{ class_name }}(Builder builder) {
+        {% for field in ns.fields -%}
+        this.{{ field }} = builder.{{ field }};
+        {% endfor -%}
     }
 
-    public {{ ty }} get{{ accessor }}() {
-        return {{ field }};
+    /**
+     * A builder of parameters.
+     *
+     * @return a new builder
+     */
+    public static Builder builder() {
+        return new Builder();
     }
 
-    public void set{{ accessor }}({{ ty }} {{ field }}) {
-        this.{{ field }} = {{ field }};
+    /**
+     * No parameters.
+     *
+     * @return empty parameters
+     */
+    public static {{ class_name }} none() {
+        return builder().build();
     }
 
-    {% endfor -%}
+    /**
+     * A builder starting from these parameters.
+     *
+     * @return a new builder
+     */
+    public Builder toBuilder() {
+        Builder builder = new Builder();
+        {% for field in ns.fields -%}
+        builder.{{ field }} = {{ field }};
+        {% endfor -%}
+        return builder;
+    }
+    {% for p in ns.params %}
+    {% set field = ns.fields[loop.index0] %}
+
+{% set text -%}
+{% if p.description is defined %}{{ m.html(p.description) }}{% else %}The {@code {{ m.html(p.name) }}} parameter.{% endif %}
+
+@return the value, empty when unset
+{%- endset -%}
+    {{ text | to_doc_comment(style="java") }}
+    public Optional<{{ ns.types[loop.index0] }}> {{ field }}() {
+        return Optional.ofNullable({{ field }});
+    }
+    {%- endfor %}
 
     @Override
     public boolean equals(Object o) {
@@ -55,25 +110,59 @@ public class {{ class_name }} {
         if (o == null || getClass() != o.getClass()) {
             return false;
         }
-        {% if params | length > 0 -%}
         {{ class_name }} that = ({{ class_name }}) o;
-        return {% for field in fields %}Objects.equals({{ field }}, that.{{ field }}){% if not loop.last %} && {% endif %}{% endfor %};
-        {% else -%}
-        return true;
-        {% endif -%}
+        return {% for field in ns.fields %}Objects.equals({{ field }}, that.{{ field }}){% if not loop.last %} && {% endif %}{% endfor %};
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash({{ fields | join(", ") }});
+        return Objects.hash({{ ns.fields | join(", ") }});
     }
 
     @Override
     public String toString() {
         return "{{ class_name }}{"
-            {% for field in fields -%}
+            {% for field in ns.fields -%}
             + "{% if not loop.first %}, {% endif %}{{ field }}=" + {{ field }}
             {% endfor -%}
             + "}";
     }
+    {% for u in ns.unions %}
+
+    {{ m.union_class(u[0], u[1]) }}
+    {%- endfor %}
+
+    /** Builds {@link {{ class_name }}}. */
+    public static final class Builder {
+        {% for p in ns.params -%}
+        private {{ ns.types[loop.index0] }} {{ ns.fields[loop.index0] }};
+        {% endfor %}
+
+        private Builder() {}
+        {% for p in ns.params %}
+        {% set field = ns.fields[loop.index0] %}
+
+{% set text -%}
+{% if p.description is defined %}{{ m.html(p.description) }}{% else %}The {@code {{ m.html(p.name) }}} parameter.{% endif %}
+
+@param {{ field }} the value, null to leave it out
+@return this builder
+{%- endset -%}
+        {{ text | to_doc_comment(style="java") }}
+        public Builder {{ field }}({{ ns.types[loop.index0] }} {{ field }}) {
+            this.{{ field }} = {{ field }};
+            return this;
+        }
+        {%- endfor %}
+
+        /**
+         * The parameters.
+         *
+         * @return immutable parameters
+         */
+        public {{ class_name }} build() {
+            return new {{ class_name }}(this);
+        }
+    }
 }
+{% endif -%}

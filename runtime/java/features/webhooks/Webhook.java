@@ -25,14 +25,28 @@ import javax.crypto.spec.SecretKeySpec;
  * }</pre>
  */
 public final class Webhook {
+    /** The prefix of secrets as dashboards show them. */
     public static final String SECRET_PREFIX = "whsec_";
+
+    /** How far from now a message timestamp may be. */
     public static final long TOLERANCE_SECONDS = 5 * 60;
 
+    /** The message id header. */
     public static final String WEBHOOK_MSG_ID_KEY = "webhook-id";
+
+    /** The signature header. */
     public static final String WEBHOOK_MSG_SIGNATURE_KEY = "webhook-signature";
+
+    /** The timestamp header. */
     public static final String WEBHOOK_MSG_TIMESTAMP_KEY = "webhook-timestamp";
+
+    /** The legacy message id header. */
     public static final String SVIX_MSG_ID_KEY = "svix-id";
+
+    /** The legacy signature header. */
     public static final String SVIX_MSG_SIGNATURE_KEY = "svix-signature";
+
+    /** The legacy timestamp header. */
     public static final String SVIX_MSG_TIMESTAMP_KEY = "svix-timestamp";
 
     private static final String[][] HEADERS = {
@@ -44,6 +58,8 @@ public final class Webhook {
     private final byte[] key;
 
     /**
+     * A verifier for the payloads signed with {@code secret}.
+     *
      * @param secret the signing secret shown in your dashboard: base64, with or without the {@code
      *     whsec_} prefix
      * @throws IllegalArgumentException if the secret is empty or not valid base64
@@ -57,7 +73,11 @@ public final class Webhook {
                                         : secret));
     }
 
-    /** @param secret the raw, already decoded signing key */
+    /**
+     * A verifier for the payloads signed with {@code secret}.
+     *
+     * @param secret the raw, already decoded signing key
+     */
     public Webhook(final byte[] secret) {
         if (secret.length == 0) {
             throw new IllegalArgumentException("Webhook secret is empty");
@@ -65,11 +85,25 @@ public final class Webhook {
         this.key = secret.clone();
     }
 
+    /**
+     * Checks the signature and that the timestamp is within five minutes of now.
+     *
+     * @param payload the raw request body, exactly as received
+     * @param headers the request headers
+     * @throws WebhookVerificationException if verification fails
+     */
     public void verify(final String payload, final HttpHeaders headers)
             throws WebhookVerificationException {
         verify(payload.getBytes(StandardCharsets.UTF_8), headers.map());
     }
 
+    /**
+     * Checks the signature and that the timestamp is within five minutes of now.
+     *
+     * @param payload the raw request body, exactly as received
+     * @param headers header names are matched case-insensitively
+     * @throws WebhookVerificationException if verification fails
+     */
     public void verify(final String payload, final Map<String, List<String>> headers)
             throws WebhookVerificationException {
         verify(payload.getBytes(StandardCharsets.UTF_8), headers);
@@ -121,7 +155,14 @@ public final class Webhook {
         throw new WebhookVerificationException("No matching signature found");
     }
 
-    /** Returns the {@code v1,<base64>} value of the {@code webhook-signature} header. */
+    /**
+     * Signs a payload, as the sender does.
+     *
+     * @param msgId the message id
+     * @param timestamp the Unix timestamp, in seconds
+     * @param payload the body
+     * @return the {@code v1,<base64>} value of the {@code webhook-signature} header
+     */
     public String sign(final String msgId, final long timestamp, final String payload) {
         byte[] signature = base64Digest(msgId, timestamp, payload.getBytes(StandardCharsets.UTF_8));
         return "v1," + new String(signature, StandardCharsets.UTF_8);

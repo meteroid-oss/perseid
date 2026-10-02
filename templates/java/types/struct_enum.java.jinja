@@ -3,7 +3,8 @@
 {{- m.check_name(type_name) -}}
 {% set owner = "schema `" ~ type.name ~ "`" -%}
 {% set disc = type.discriminator_field -%}
-{% set disc_getter = "get" ~ (disc | ident("pascal", "java")) -%}
+{% set disc_getter = disc | ident("camel", "java") -%}
+{% set disc_getter = disc_getter ~ "_" if disc_getter in ["builder", "toBuilder", "hashCode", "toString", "getClass", "toJson", "copy", "getValue"] else disc_getter -%}
 {% set ns = namespace(names=[]) -%}
 {% for variant in type.variants %}{% set ns.names = ns.names + [variant.name] %}{% endfor -%}
 {% set ns.classes = [] -%}
@@ -14,11 +15,12 @@
     "OffsetDateTime", "URI", "Visibility", "JsonAnyGetter", "JsonAnySetter", "JsonAutoDetect",
     "JsonIgnoreProperties", "JsonInclude", "JsonProperty", "JsonSubTypes", "JsonTypeInfo",
     "JsonTypeName", "JsonUnwrapped", "JsonProcessingException", "JsonValue", "TypeReference",
-    "DeserializationContext", "JsonNode", "JsonDeserialize", "IOException"] -%}
+    "DeserializationContext", "JsonNode", "JsonDeserialize", "IOException", "Builder", "Content",
+    "Collections", "Unions"] -%}
 {% set ns.classes = ns.classes + [cls ~ "Variant" if shadowed else cls] -%}
 {% endfor -%}
 {% set classes = ns.classes -%}
-{% set vars = m.field_idents(type.fields, "camel", owner) | split(" ") | reject("equalto", "") | list -%}
+{% set vars = m.member_names(type.fields, owner) | split(" ") | reject("equalto", "") | list -%}
 {% set pascals = m.field_idents(type.fields, "pascal", owner) | split(" ") | reject("equalto", "") | list -%}
 {% set adjacent = type.repr == "adjacently_tagged" -%}
 {% set ns.unions = [] -%}
@@ -47,13 +49,13 @@ import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import java.io.IOException;
+import {{ sdk.java_internal_package }}.Unions;
 import {{ sdk.java_internal_package }}.Utils;
-
 import java.math.BigDecimal;
 import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -67,7 +69,11 @@ import java.util.Set;
 
 {% endif -%}
 One of the variants below, told apart by {@code {{ disc }}}. A value this version of the SDK does not know
-parses as {@link Unrecognized}, which keeps its properties.
+parses as {@link {{ classes | last }}}, which keeps its properties.
+{%- if type.deprecated %}
+
+@deprecated the API deprecates this schema.
+{%- endif %}
 {%- endset -%}
 {{ summary | to_doc_comment(style="java") }}
 {% if type.deprecated %}@Deprecated{% endif %}
@@ -92,15 +98,33 @@ parses as {@link Unrecognized}, which keeps its properties.
         setterVisibility = Visibility.NONE)
 public abstract class {{ type_name }} {
     {% for field in type.fields -%}
-    {{ m.declaration(field, vars[loop.index0], unions[loop.index0]) | replace("private ", "protected ") }}
+    {{ m.declaration(field, vars[loop.index0], unions[loop.index0]) }}
     {% endfor %}
 
-    {% for field in type.fields -%}
-    {{ m.accessors(field, vars[loop.index0], pascals[loop.index0], type_name, unions[loop.index0]) }}
+    private {{ type_name }}() {}
+    {% for field in type.fields %}
 
-    {% endfor -%}
+    {{ m.getter(field, vars[loop.index0], unions[loop.index0]) }}
 
-    /** The discriminator value identifying this variant. */
+    {% set ty = m.java_type(field.type, unions[loop.index0]) -%}
+    /**
+     * A copy of this value with {@code {{ m.html(field.name) }}} set.
+     *
+     * @param {{ vars[loop.index0] }} the value{% if m.kind(field) == "tri" %}, null to send an explicit {@code null}{% endif %}
+     * @return the copy
+     */
+    public {{ type_name }} with{{ pascals[loop.index0] }}({{ ty }} {{ vars[loop.index0] }}) {
+        {{ type_name }} copy = Unions.convert(this, {{ type_name }}.class);
+        copy.{{ vars[loop.index0] }} = {% if m.kind(field) == "tri" %}Optional.ofNullable({{ vars[loop.index0] }}){% else %}{{ vars[loop.index0] }}{% endif %};
+        return copy;
+    }
+    {%- endfor %}
+
+    /**
+     * The discriminator value identifying this variant.
+     *
+     * @return the {@code {{ disc }}} value
+     */
     @JsonProperty({{ disc | tojson }})
     public abstract String {{ disc_getter }}();
 
@@ -122,7 +146,7 @@ public abstract class {{ type_name }} {
     public static final class {{ cls }} extends {{ type_name }} {
     {% if variant.type == "ref" and variant.schema_ref is defined -%}
         {% set data_ty = variant.schema_ref | to_upper_camel_case -%}
-        {% if data_ty in classes or data_ty == type_name -%}
+        {% if data_ty in classes or data_ty == type_name or data_ty == "Builder" -%}
             {% set data_ty = sdk.java_package ~ ".models." ~ data_ty -%}
         {% endif -%}
         {% if content -%}
@@ -133,10 +157,25 @@ public abstract class {{ type_name }} {
         {% endif -%}
         private {{ data_ty }} data;
 
-        public {{ cls }}() {}
+        private {{ cls }}() {}
 
+        /**
+         * The variant holding {@code data}.
+         *
+         * @param data the value of the variant
+         */
         public {{ cls }}({{ data_ty }} data) {
-            this.data = data;
+            this.data = Objects.requireNonNull(data, "data");
+        }
+
+        /**
+         * The variant holding {@code data}.
+         *
+         * @param data the value of the variant
+         * @return the variant
+         */
+        public static {{ cls }} of({{ data_ty }} data) {
+            return new {{ cls }}(data);
         }
 
         @Override
@@ -145,22 +184,20 @@ public abstract class {{ type_name }} {
             return {{ variant.name | tojson }};
         }
 
-        @javax.annotation.Nonnull
-        public {{ data_ty }} getData() {
+        /**
+         * The value of the variant.
+         *
+         * @return the value
+         */
+        public {{ data_ty }} data() {
             return data;
-        }
-
-        public {{ cls }} data({{ data_ty }} data) {
-            this.data = data;
-            return this;
         }
 
         {{ m.value_methods(cls, ["data"], base=shared) }}
     {% elif variant.type == "struct" and variant.fields is defined and variant.fields | length > 0 -%}
         {% set variant_owner = owner ~ ", variant `" ~ variant.name ~ "`" -%}
-        {% set fvars = m.field_idents(variant.fields, "camel", variant_owner) | split(" ") | reject("equalto", "") | list -%}
+        {% set fvars = m.member_names(variant.fields, variant_owner) | split(" ") | reject("equalto", "") | list -%}
         {% set fpascals = m.field_idents(variant.fields, "pascal", variant_owner) | split(" ") | reject("equalto", "") | list -%}
-        {% set holder = "Content" if content else cls -%}
         {% set vn = namespace(unions=[]) -%}
         {% for field in variant.fields -%}
         {% set vn.unions = vn.unions + [m.union_name(field, type_name ~ cls, fpascals[loop.index0])] -%}
@@ -168,26 +205,41 @@ public abstract class {{ type_name }} {
         {% set vunions = vn.unions -%}
         {% if content -%}
         @JsonProperty({{ content | tojson }})
-        private Content data = new Content();
+        private Content data;
 
-        public {{ cls }}() {}
+        private {{ cls }}() {}
 
+        /**
+         * The variant holding {@code data}.
+         *
+         * @param data the value of the variant
+         */
         public {{ cls }}(Content data) {
-            this.data = data;
+            this.data = Objects.requireNonNull(data, "data");
         }
 
-        @javax.annotation.Nonnull
-        public Content getData() {
+        /**
+         * The variant holding {@code data}.
+         *
+         * @param data the value of the variant
+         * @return the variant
+         */
+        public static {{ cls }} of(Content data) {
+            return new {{ cls }}(data);
+        }
+
+        /**
+         * The value of the variant, under {@code {{ m.html(content) }}}.
+         *
+         * @return the value
+         */
+        public Content data() {
             return data;
-        }
-
-        public {{ cls }} data(Content data) {
-            this.data = data;
-            return this;
         }
 
         {{ m.value_methods(cls, ["data"], base=shared) }}
 
+        /** The properties of the variant. */
         @JsonInclude(JsonInclude.Include.NON_NULL)
         @JsonIgnoreProperties(ignoreUnknown = true)
         @JsonAutoDetect(
@@ -195,24 +247,18 @@ public abstract class {{ type_name }} {
                 isGetterVisibility = Visibility.NONE,
                 setterVisibility = Visibility.NONE)
         public static final class Content {
-        {% endif -%}
-        {% for field in variant.fields -%}
-        {{ m.declaration(field, fvars[loop.index0], vunions[loop.index0]) }}
-        {% endfor %}
+            {{ m.model_members("Content", variant.fields, fvars, fpascals, vunions, {}) }}
+            {% for field in variant.fields %}{% if vunions[loop.index0] %}
 
-        {% for field in variant.fields -%}
-        {{ m.accessors(field, fvars[loop.index0], fpascals[loop.index0], holder, vunions[loop.index0]) }}
-
-        {% endfor -%}
-        {% for field in variant.fields %}{% if vunions[loop.index0] -%}
-        {{ m.union_class(field.type, vunions[loop.index0], classes + [type_name]) }}
-
-        {% endif %}{% endfor -%}
-        {% if content -%}
-            {{ m.value_methods("Content", fvars) }}
+            {{ m.union_class(field.type, vunions[loop.index0], classes + [type_name]) }}
+            {%- endif %}{% endfor %}
         }
         {% else -%}
-        {{ m.value_methods(cls, fvars, base=shared) }}
+        {{ m.model_members(cls, variant.fields, fvars, fpascals, vunions, {}) | replace("public boolean equals(Object o) {\n    if (this == o) {\n        return true;\n    }\n    if (o == null || getClass() != o.getClass()) {", "public boolean equals(Object o) {\n    if (this == o) {\n        return true;\n    }\n    if (o == null || getClass() != o.getClass()" ~ (" || !super.equals(o)" if shared else "") ~ ") {") }}
+        {% for field in variant.fields %}{% if vunions[loop.index0] %}
+
+        {{ m.union_class(field.type, vunions[loop.index0], classes + [type_name]) }}
+        {%- endif %}{% endfor %}
         {% endif %}
 
         @Override
@@ -221,6 +267,9 @@ public abstract class {{ type_name }} {
             return {{ variant.name | tojson }};
         }
     {% else -%}
+        /** The variant, which has no other property. */
+        public {{ cls }}() {}
+
         @Override
         @JsonProperty({{ disc | tojson }})
         public String {{ disc_getter }}() {
@@ -237,7 +286,9 @@ public abstract class {{ type_name }} {
         @JsonProperty({{ disc | tojson }})
         private String discriminator;
 
-        private final Map<String, Object> properties = new LinkedHashMap<>();
+        private final Map<String, JsonNode> properties = new LinkedHashMap<>();
+
+        private {{ classes | last }}() {}
 
         @Override
         @JsonProperty({{ disc | tojson }})
@@ -245,14 +296,18 @@ public abstract class {{ type_name }} {
             return discriminator;
         }
 
-        /** Every other property of the variant. */
+        /**
+         * Every other property of the variant.
+         *
+         * @return the properties by name, unmodifiable
+         */
         @JsonAnyGetter
-        public Map<String, Object> getProperties() {
-            return properties;
+        public Map<String, JsonNode> properties() {
+            return Collections.unmodifiableMap(properties);
         }
 
         @JsonAnySetter
-        void setProperty(String name, Object value) {
+        private void putProperty(String name, JsonNode value) {
             properties.put(name, value);
         }
 

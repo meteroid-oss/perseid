@@ -2268,7 +2268,8 @@ fn java_is_unchecked_and_hides_plumbing() {
         pets.contains("final RequestOptions requestOptions)"),
         "{pets}"
     );
-    assert!(read("exceptions/ApiException.java").contains("extends RuntimeException"));
+    assert!(read("exceptions/PetstoreException.java").contains("extends RuntimeException"));
+    assert!(read("exceptions/ApiException.java").contains("extends PetstoreException"));
     assert!(read("models/PetStatus.java").contains("public final class PetStatus"));
 }
 

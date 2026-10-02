@@ -6,7 +6,6 @@ package {{ sdk.java_package }}.models;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 import {{ sdk.java_internal_package }}.Utils.ToQueryParam;
-
 import java.util.Map;
 import java.util.Objects;
 
@@ -21,9 +20,14 @@ tells them apart, and {@link #known()} is an enum to switch on.
 {% if type.deprecated %}@Deprecated{% endif %}
 public final class {{ ty_name }} implements ToQueryParam {
     {% for value in values -%}
+    /** The value {@code {{ value | replace("@", "&#64;") }}}. */
     public static final {{ ty_name }} {{ members[loop.index0] }} = new {{ ty_name }}({{ value }}, {{ known_ty }}.{{ members[loop.index0] }});
     {% endfor %}
-    /** @deprecated unknown values are kept as they are: check {@link #isKnown()} instead. */
+    /**
+     * An unknown value.
+     *
+     * @deprecated unknown values are kept as they are: check {@link #isKnown()} instead.
+     */
     @Deprecated
     public static final {{ ty_name }} {{ unknown }} = new {{ ty_name }}(null, {{ known_ty }}.{{ unknown }});
 
@@ -41,25 +45,45 @@ public final class {{ ty_name }} implements ToQueryParam {
         this.known = known;
     }
 
-    /** The constant for {@code value}, or an unknown {{ ty_name }} holding it. */
+    /**
+     * The constant for {@code value}, or an unknown {{ ty_name }} holding it.
+     *
+     * @param value the value
+     * @return the constant
+     */
     @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
     public static {{ ty_name }} of({{ "long" if integer is defined else "String" }} value) {
         {{ ty_name }} constant = constants.get({% if integer is defined %}value{% else %}Objects.requireNonNull(value, "value"){% endif %});
         return constant != null ? constant : new {{ ty_name }}(value, {{ known_ty }}.{{ unknown }});
     }
 
-    /** @deprecated use {@link #of}, which keeps unknown values. */
+    /**
+     * The constant for {@code value}.
+     *
+     * @param value the value
+     * @return the constant
+     * @deprecated use {@link #of}, which keeps unknown values.
+     */
     @Deprecated
     public static {{ ty_name }} fromValue({{ "long" if integer is defined else "String" }} value) {
         return {% if integer is not defined %}value == null ? {{ unknown }} : {% endif %}of(value);
     }
 
-    /** The values this version of the SDK knows. */
+    /**
+     * The values this version of the SDK knows.
+     *
+     * @return the constants
+     */
     public static {{ ty_name }}[] values() {
         return new {{ ty_name }}[] { {{ members[:values | length] | join(", ") }} };
     }
 
-    /** The constant named {@code name}, as for an enum. */
+    /**
+     * The constant named {@code name}, as for an enum.
+     *
+     * @param name the constant name
+     * @return the constant
+     */
     public static {{ ty_name }} valueOf(String name) {
         {{ known_ty }} known = {{ known_ty }}.valueOf(name);
         for ({{ ty_name }} constant : values()) {
@@ -70,23 +94,39 @@ public final class {{ ty_name }} implements ToQueryParam {
         return {{ unknown }};
     }
 
-    /** The value as sent, which is null only for the deprecated {@code {{ unknown }}}. */
+    /**
+     * The value as sent.
+     *
+     * @return the value, null only for the deprecated {@code {{ unknown }}}
+     */
     @JsonValue
     public {{ value_ty }} getValue() {
         return value;
     }
 
-    /** Whether this version of the SDK knows the value. */
+    /**
+     * Whether this version of the SDK knows the value.
+     *
+     * @return whether it is known
+     */
     public boolean isKnown() {
         return known != {{ known_ty }}.{{ unknown }};
     }
 
-    /** The value as an enum, {@code {{ unknown }}} when unknown. */
+    /**
+     * The value as an enum.
+     *
+     * @return the enum, {@code {{ unknown }}} when unknown
+     */
     public {{ known_ty }} known() {
         return known;
     }
 
-    /** The constant's name, as for an enum. */
+    /**
+     * The constant's name, as for an enum.
+     *
+     * @return the name
+     */
     public String name() {
         return known.name();
     }
@@ -114,6 +154,7 @@ public final class {{ ty_name }} implements ToQueryParam {
     /** The values this version of the SDK knows, and {@code {{ unknown }}}. */
     public enum {{ known_ty }} {
         {% for member in members -%}
+        /** The {@code {{ member }}} constant. */
         {{ member }}{% if not loop.last %},{% endif %}
         {% endfor -%}
     }

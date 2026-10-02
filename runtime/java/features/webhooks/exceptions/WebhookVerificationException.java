@@ -5,6 +5,11 @@ package @@JAVA_PACKAGE@@.exceptions;
 public class WebhookVerificationException extends Exception {
     private static final long serialVersionUID = 1L;
 
+    /**
+     * An exception for a payload that fails verification.
+     *
+     * @param message why it fails
+     */
     public WebhookVerificationException(String message) {
         super(message);
     }

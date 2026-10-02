@@ -3,10 +3,15 @@ package @@JAVA_PACKAGE@@.exceptions;
 
 import java.io.IOException;
 
-/** The request timed out, after its retries. */
+/** The request timed out, after its retries. Catching {@link ApiConnectionException} catches it. */
 public class ApiTimeoutException extends ApiConnectionException {
     private static final long serialVersionUID = 1L;
 
+    /**
+     * An exception for a request that timed out.
+     *
+     * @param cause the timeout
+     */
     public ApiTimeoutException(IOException cause) {
         super(cause);
     }

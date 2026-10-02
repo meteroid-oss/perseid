@@ -7,19 +7,30 @@
 {{ ns.names | idents(case, "java", owner) | join(" ") }}
 {%- endmacro %}
 
-{#- A nullable field that is not required is kept as an Optional: unset is omitted, empty is
-    sent as null. -#}
-{% macro is_optional(field) -%}
-{{ "true" if field.nullable and not field.required and not field.flatten }}
-{%- endmacro %}
-
-{#- Java type of `ty`, its unions rendered as the `union_cls` class. -#}
+{#- Java type of `ty`, its unions rendered as the `union_cls` class. A model named like the
+    nested `Builder` of models is qualified. -#}
 {% macro java_type(ty, union_cls="") -%}
 {%- if ty.is_union() and union_cls -%}{{ union_cls }}
 {%- elif ty.is_list() -%}List<{{ java_type(ty.inner_type(), union_cls) }}>
 {%- elif ty.is_set() -%}Set<{{ java_type(ty.inner_type(), union_cls) }}>
 {%- elif ty.is_map() -%}Map<String,{{ java_type(ty.value_type(), union_cls) }}>
+{%- elif ty.is_schema_ref() and ty.to_java() == "Builder" -%}{{ sdk.java_package }}.models.Builder
 {%- else -%}{{ ty.to_java() }}
+{%- endif -%}
+{%- endmacro %}
+
+{#- "true" when the query parameter `p` declares a union of scalars and lists of scalars, which
+    its options class types. -#}
+{% macro typed_param_union(p) -%}
+{%- if p.typed_union is defined and not p.required -%}
+{%- set ns = namespace(plain=true) -%}
+{%- for v in p.typed_union.union_variants() -%}
+{%- set item = v.type.inner_type() if v.type.is_list() else v.type -%}
+{%- if v.json_type == "object" or item.is_schema_ref() or item.is_union() or item.is_json_object() or item.is_list() -%}
+{%- set ns.plain = false -%}
+{%- endif -%}
+{%- endfor -%}
+{{ "true" if ns.plain }}
 {%- endif -%}
 {%- endmacro %}
 
@@ -53,70 +64,305 @@
 {{ html(text) | to_doc_comment(style="java") }}
 {%- endmacro %}
 
-{#- Declaration of `field`, named `var`, initialized to its discriminator value if any. -#}
+{#- Getter and builder method names of `fields`: their idents, `_`-suffixed when they would clash
+    with a method every model has. -#}
+{% macro member_names(fields, owner) -%}
+{%- set ns = namespace(names=[]) -%}
+{%- for name in field_idents(fields, "camel", owner) | split(" ") | reject("equalto", "") -%}
+{%- set clash = name in ["builder", "toBuilder", "hashCode", "toString", "getClass", "notify",
+    "notifyAll", "wait", "clone", "finalize", "toJson", "additionalProperties", "copy", "build"] -%}
+{%- set ns.names = ns.names + [name ~ "_" if clash else name] -%}
+{%- endfor -%}
+{{ ns.names | join(" ") }}
+{%- endmacro %}
+
+{#- How `field` is held: `flatten` (an allOf part), `required`, `nullable` (required, may be
+    null), `tri` (optional and nullable: unset, null or a value) or `optional`. -#}
+{% macro kind(field) -%}
+{%- if field.flatten -%}flatten
+{%- elif field.required and not field.nullable -%}required
+{%- elif field.required -%}nullable
+{%- elif field.nullable -%}tri
+{%- else -%}optional
+{%- endif -%}
+{%- endmacro %}
+
+{#- `List`, `Set` or `Map` for a collection field, else empty. -#}
+{% macro collection(field) -%}
+{%- if field.flatten -%}
+{%- elif field.type.is_list() -%}List
+{%- elif field.type.is_set() -%}Set
+{%- elif field.type.is_map() -%}Map
+{%- endif -%}
+{%- endmacro %}
+
+{#- `expr`, the value of `field`, copied with the `Utils.<how>List` (`mutable` or `copy`) helpers. -#}
+{% macro copied(field, expr, how) -%}
+{%- set c = collection(field) -%}
+{%- if not c -%}{{ expr }}
+{%- elif kind(field) == "tri" -%}{{ expr }} == null ? null : {{ expr }}.map(Utils::{{ how }}{{ c }})
+{%- else -%}Utils.{{ how }}{{ c }}({{ expr }})
+{%- endif -%}
+{%- endmacro %}
+
+{#- ` = <default>` for a field with a discriminator default, else empty. -#}
+{% macro initializer(field, ty, default) -%}
+{%- if default is not none -%}
+{%- set value = default | tojson if ty == "String" else ty ~ ".of(" ~ (default | tojson) ~ ")" -%}
+{{ " = " ~ ("Optional.of(" ~ value ~ ")" if kind(field) == "tri" else value) }}
+{%- endif -%}
+{%- endmacro %}
+
+{#- The Java type a field of kind `k` is stored as. -#}
+{% macro stored_type(field, union_cls) -%}
+{%- set ty = java_type(field.type, union_cls) -%}
+{{ "Optional<" ~ ty ~ ">" if kind(field) == "tri" else ty }}
+{%- endmacro %}
+
+{#- Declaration of `field`, named `var`, in a model. -#}
 {% macro declaration(field, var, union_cls="", default=none) -%}
 {% set ty = java_type(field.type, union_cls) -%}
 {% if field.flatten -%}
 @JsonUnwrapped
 private {{ ty }} {{ var }};
 {% else -%}
-{% if default is not none -%}
-{% set value = default | tojson if ty == "String" else ty ~ ".of(" ~ (default | tojson) ~ ")" -%}
-{% set init = " = " ~ ("Optional.of(" ~ value ~ ")" if is_optional(field) else value) -%}
-{% endif -%}
 @JsonProperty({{ field.name | tojson }})
-{% if field.required and field.nullable %}@JsonInclude(JsonInclude.Include.ALWAYS){% endif %}
-private {% if is_optional(field) %}Optional<{{ ty }}>{% else %}{{ ty }}{% endif %} {{ var }}{{ init | default("") }};
+{% if kind(field) == "nullable" %}@JsonInclude(JsonInclude.Include.ALWAYS)
+{% endif -%}
+private {{ stored_type(field, union_cls) }} {{ var }}{{ initializer(field, ty, default) }};
 {% endif -%}
 {%- endmacro %}
 
-{#- Fluent setter, getter, bean setter and collection helpers of `field` in `cls`. -#}
-{% macro accessors(field, var, pascal, cls, union_cls="") -%}
-{% set m = {
-    "var": var,
-    "accessor": pascal ~ "_" if pascal == "Class" else pascal,
-    "type": java_type(field.type, union_cls),
-    "optional": is_optional(field) == "true",
-} -%}
-{% set deprecated = "@Deprecated " if field.deprecated else "" -%}
-{% set wrap = "Optional.ofNullable(" ~ m.var ~ ")" if m.optional else m.var -%}
-{% if field.description is defined -%}
-{{ javadoc(field.description) }}
-{% endif -%}
-{{ deprecated }}public {{ cls }} {{ m.var }}({{ m.type }} {{ m.var }}) {
-    this.{{ m.var }} = {{ wrap }};
-    return this;
-}
+{#- The Javadoc of an accessor of `field`, `summary` (HTML) or its description, then `tags`. -#}
+{% macro field_doc(field, tags, summary="") -%}
+{% set text -%}
+{% if summary %}{{ summary }}{% elif field.description is defined %}{{ html(field.description) }}{% else %}The {@code {{ html(field.name) }}} property.{% endif %}
 
-{% if field.type.is_list() or field.type.is_set() or field.type.is_map() -%}
-{% set is_map = field.type.is_map() -%}
-{% set item_ty = java_type(field.type.value_type() if is_map else field.type.inner_type(), union_cls) -%}
-{% set empty = "new HashMap<>()" if is_map else ("new LinkedHashSet<>()" if field.type.is_set() else "new ArrayList<>()") -%}
-{% set current = "this." ~ m.var ~ (".get()" if m.optional else "") -%}
-{{ deprecated }}public {{ cls }} {{ "put" if is_map else "add" }}{{ pascal }}Item({% if is_map %}String key, {% endif %}{{ item_ty }} item) {
-    if (this.{{ m.var }} == null{% if m.optional %} || this.{{ m.var }}.isEmpty(){% endif %}) {
-        this.{{ m.var }} = {% if m.optional %}Optional.of({{ empty }}){% else %}{{ empty }}{% endif %};
-    }
-    {{ current }}.{{ "put(key, item)" if is_map else "add(item)" }};
-    return this;
-}
-
+{{ tags }}
+{%- if field.deprecated %}
+@deprecated the API deprecates this property.
+{%- endif %}
+{%- endset -%}
+{{ text | to_doc_comment(style="java") }}
+{% if field.deprecated %}@Deprecated
 {% endif -%}
-{% if field.required and not field.nullable -%}
-@javax.annotation.Nonnull
+{%- endmacro %}
+
+{#- Getter of `field`: the value of a required one, an Optional of the others. -#}
+{% macro getter(field, var, union_cls="") -%}
+{% set ty = java_type(field.type, union_cls) -%}
+{% set k = kind(field) -%}
+{% if k == "required" -%}
+{{ field_doc(field, "@return the value, never null") }}public {{ ty }} {{ var }}() {
+    return Utils.required({{ var }}, {{ field.name | tojson }});
+}
+{% elif k == "flatten" -%}
+{{ field_doc(field, "@return the properties of this part") }}public {{ ty }} {{ var }}() {
+    return {{ var }};
+}
+{% elif k == "tri" -%}
+{{ field_doc(field, "@return the value, empty when unset or null") }}public Optional<{{ ty }}> {{ var }}() {
+    return Utils.optional({{ var }});
+}
 {% else -%}
-@javax.annotation.Nullable
+{{ field_doc(field, "@return the value, empty when " ~ ("null" if k == "nullable" else "unset")) }}public Optional<{{ ty }}> {{ var }}() {
+    return Optional.ofNullable({{ var }});
+}
 {% endif -%}
-{{ deprecated }}public {{ m.type }} get{{ m.accessor }}() {
-    {% if m.optional -%}
-    return {{ m.var }} == null ? null : {{ m.var }}.orElse(null);
+{%- endmacro %}
+
+{#- Builder setters of `field`, returning `builder`. -#}
+{% macro setters(field, var, pascal, builder, union_cls="") -%}
+{% set ty = java_type(field.type, union_cls) -%}
+{% set k = kind(field) -%}
+{% set c = collection(field) -%}
+{% set value = "Utils.mutable" ~ c ~ "(" ~ var ~ ")" if c else var -%}
+{% set param = "@param " ~ var ~ " the value" ~ (", null to send an explicit {@code null}" if k == "tri" else "") -%}
+{{ field_doc(field, param ~ "\n@return this builder") }}public {{ builder }} {{ var }}({{ ty }} {{ var }}) {
+    this.{{ var }} = {{ "Optional.ofNullable(" ~ value ~ ")" if k == "tri" else value }};
+    return this;
+}
+{% if c %}
+{% set item_ty = java_type(field.type.value_type() if c == "Map" else field.type.inner_type(), union_cls) -%}
+{% set empty = "new LinkedHashMap<>()" if c == "Map" else ("new LinkedHashSet<>()" if c == "Set" else "new ArrayList<>()") -%}
+{% set current = "this." ~ var ~ (".get()" if k == "tri" else "") -%}
+{% set tags = ("@param key the key\n" if c == "Map" else "") ~ "@param item the item\n@return this builder" -%}
+{% set summary = ("Puts an entry in" if c == "Map" else "Adds an item to") ~ " {@code " ~ html(field.name) ~ "}." -%}
+{{ field_doc(field, tags, summary) }}public {{ builder }} {{ "put" if c == "Map" else "add" }}{{ pascal }}Item({% if c == "Map" %}String key, {% endif %}{{ item_ty }} item) {
+    if (this.{{ var }} == null{% if k == "tri" %} || this.{{ var }}.isEmpty(){% endif %}) {
+        this.{{ var }} = {{ "Optional.of(" ~ empty ~ ")" if k == "tri" else empty }};
+    }
+    {{ current }}.{{ "put(key, item)" if c == "Map" else "add(item)" }};
+    return this;
+}
+{% endif -%}
+{%- endmacro %}
+
+{#- Fields, constructors, getters, unknown properties and builder of the model `cls`. The
+    properties of its flattened allOf parts are kept with its unknown ones, which the parts are read
+    from: Jackson would hand every part, and its unknown properties, the properties of the others. -#}
+{% macro model_members(cls, fields, vars, pascals, unions, defaults={}) -%}
+{% set parts = fields | selectattr("flatten") | list -%}
+{% for field in fields -%}
+{% if not field.flatten -%}
+{{ declaration(field, vars[loop.index0], unions[loop.index0], defaults[field.name] if field.name in defaults else none) }}
+{% endif -%}
+{% endfor -%}
+private final Map<String, JsonNode> additionalProperties = new LinkedHashMap<>();
+
+private {{ cls }}() {}
+
+private {{ cls }}(Builder builder) {
+    {% for field in fields -%}
+    {% if not field.flatten -%}
+    this.{{ vars[loop.index0] }} = {{ copied(field, "builder." ~ vars[loop.index0], "copy") }};
+    {% endif -%}
+    {% endfor -%}
+    this.additionalProperties.putAll(builder.additionalProperties);
+}
+
+/**
+ * A builder of {@code {{ cls }}}.
+ *
+ * @return a new builder
+ */
+public static Builder builder() {
+    return new Builder();
+}
+
+/**
+ * A builder starting from this value.
+ *
+ * @return a new builder
+ */
+public Builder toBuilder() {
+    Builder builder = new Builder();
+    {% for field in fields -%}
+    {% if not field.flatten -%}
+    builder.{{ vars[loop.index0] }} = {{ copied(field, vars[loop.index0], "mutable") }};
+    {% endif -%}
+    {% endfor -%}
+    builder.additionalProperties.putAll(additionalProperties);
+    return builder;
+}
+{% for field in fields %}
+
+{% if field.flatten -%}
+{% set ty = java_type(field.type) -%}
+{{ field_doc(field, "@return the properties of this part", "The properties of {@link " ~ ty ~ "}, which this schema extends.") }}public {{ ty }} {{ vars[loop.index0] }}() {
+    return Unions.convert(additionalProperties, {{ ty }}.class);
+}
+{%- else -%}
+{{ getter(field, vars[loop.index0], unions[loop.index0]) }}
+{%- endif %}
+{%- endfor %}
+
+/**
+ * Properties this version of the SDK does not know, kept as received and sent back.
+ *
+ * @return the properties by name, unmodifiable
+ */
+public Map<String, JsonNode> additionalProperties() {
+    {% if parts -%}
+    Map<String, JsonNode> unknown = new LinkedHashMap<>(additionalProperties);
+    {% for field in fields -%}
+    {% if field.flatten -%}
+    unknown.keySet().retainAll({{ vars[loop.index0] }}().additionalProperties().keySet());
+    {% endif -%}
+    {% endfor -%}
+    return Collections.unmodifiableMap(unknown);
     {% else -%}
-    return {{ m.var }};
+    return Collections.unmodifiableMap(additionalProperties);
     {% endif -%}
 }
 
-{{ deprecated }}public void set{{ m.accessor }}({{ m.type }} {{ m.var }}) {
-    this.{{ m.var }} = {{ wrap }};
+@JsonAnyGetter
+private Map<String, JsonNode> properties() {
+    return additionalProperties;
+}
+
+@JsonAnySetter
+private void putProperty(String name, JsonNode value) {
+    additionalProperties.put(name, value);
+}
+
+{% set ns = namespace(vars=[]) -%}
+{% for field in fields %}{% if not field.flatten %}{% set ns.vars = ns.vars + [vars[loop.index0]] %}{% endif %}{% endfor -%}
+{{ value_methods(cls, ns.vars + ["additionalProperties"]) }}
+
+/** Builds {@link {{ cls }}}. */
+public static final class Builder {
+    {% for field in fields -%}
+    {% if not field.flatten -%}
+    {% set ty = java_type(field.type, unions[loop.index0]) -%}
+    private {{ stored_type(field, unions[loop.index0]) }} {{ vars[loop.index0] }}{{ initializer(field, ty, defaults[field.name] if field.name in defaults else none) }};
+    {% endif -%}
+    {% endfor -%}
+    private final Map<String, JsonNode> additionalProperties = new LinkedHashMap<>();
+
+    private Builder() {}
+    {% for field in fields %}
+
+    {% if field.flatten -%}
+    {% set ty = java_type(field.type) -%}
+    {% set var = vars[loop.index0] -%}
+    {{ field_doc(field, "@param " ~ var ~ " the properties\n@return this builder", "Sets the properties of {@link " ~ ty ~ "}, which this schema extends.") }}public Builder {{ var }}({{ ty }} {{ var }}) {
+        additionalProperties.putAll(Utils.properties({{ var }}));
+        return this;
+    }
+    {%- else -%}
+    {{ setters(field, vars[loop.index0], pascals[loop.index0], "Builder", unions[loop.index0]) }}
+    {%- endif %}
+    {%- endfor %}
+
+    /**
+     * A property the SDK does not know, sent along.
+     *
+     * @param name the property name
+     * @param value the JSON value
+     * @return this builder
+     */
+    public Builder putAdditionalProperty(String name, JsonNode value) {
+        additionalProperties.put(name, value);
+        return this;
+    }
+
+    /**
+     * Properties the SDK does not know, sent along.
+     *
+     * @param additionalProperties the properties by name
+     * @return this builder
+     */
+    public Builder putAllAdditionalProperties(Map<String, JsonNode> additionalProperties) {
+        this.additionalProperties.putAll(additionalProperties);
+        return this;
+    }
+
+    /**
+     * Leaves out a property the SDK does not know.
+     *
+     * @param name the property name
+     * @return this builder
+     */
+    public Builder removeAdditionalProperty(String name) {
+        additionalProperties.remove(name);
+        return this;
+    }
+
+    /**
+     * The {@code {{ cls }}}.
+     *
+     * @return the immutable value
+     * @throws IllegalStateException when a required property is not set
+     */
+    public {{ cls }} build() {
+        {% for field in fields -%}
+        {% if kind(field) == "required" -%}
+        Utils.checkRequired({{ vars[loop.index0] }}, {{ field.name | tojson }});
+        {% endif -%}
+        {% endfor -%}
+        return new {{ cls }}(this);
+    }
 }
 {%- endmacro %}
 
@@ -154,11 +400,13 @@ public String toString() {
 }
 {%- endmacro %}
 
+
 {#- Model names that would shadow a type the generated code uses. -#}
 {% macro check_name(name) -%}
 {% if name in ["Object", "String", "Boolean", "Short", "Integer", "Long", "Float", "Double", "Void",
     "Override", "Deprecated", "List", "Map", "Set", "Optional", "Objects", "ArrayList", "HashMap",
-    "LinkedHashSet", "LinkedHashMap", "BigDecimal", "OffsetDateTime", "URI", "Utils"] -%}
+    "LinkedHashSet", "LinkedHashMap", "BigDecimal", "OffsetDateTime", "URI", "Utils", "Collections",
+    "JsonNode", "JsonAnyGetter", "JsonAnySetter"] -%}
 {{ panic("java codegen: schema `" ~ name ~ "` would shadow java's own `" ~ name ~ "`, rename it in the spec") }}
 {%- endif %}
 {%- endmacro %}
@@ -222,7 +470,11 @@ public String toString() {
 public abstract static class {{ cls }} {
     private {{ cls }}() {}
 
-    /** The value, as sent. */
+    /**
+     * The value, as sent.
+     *
+     * @return the value of the variant
+     */
     @JsonValue
     public abstract Object getValue();
     {% for v in variants -%}
@@ -230,25 +482,50 @@ public abstract static class {{ cls }} {
     {% set t = ns.types[loop.index0] -%}
     {% if v.empty %}
 
-    /** The empty string, which clears the value. */
+    /**
+     * The empty string, which clears the value.
+     *
+     * @return the empty variant
+     */
     public static {{ cls }} empty() {
         return Empty.INSTANCE;
     }
 
+    /**
+     * Whether this is the empty string.
+     *
+     * @return whether this is the empty variant
+     */
     public boolean isEmpty() {
         return this instanceof Empty;
     }
     {% else %}
 
+    /**
+     * The {@code {{ v.name }}} variant.
+     *
+     * @param value the value
+     * @return the union holding it
+     */
     public static {{ cls }} of{{ p }}({{ t }} value) {
         return new Of{{ p }}(Objects.requireNonNull(value, "value"));
     }
 
+    /**
+     * Whether this is the {@code {{ v.name }}} variant.
+     *
+     * @return whether it is
+     */
     public boolean is{{ p }}() {
         return this instanceof Of{{ p }};
     }
 
-    /** @throws IllegalStateException if this is another variant */
+    /**
+     * The value of the {@code {{ v.name }}} variant.
+     *
+     * @return the value
+     * @throws IllegalStateException if this is another variant
+     */
     public {{ t }} as{{ p }}() {
         if (this instanceof Of{{ p }}) {
             return ((Of{{ p }}) this).value;
@@ -261,12 +538,20 @@ public abstract static class {{ cls }} {
     {% set expanded = variants | selectattr("id") | list -%}
     {% if strings and expanded %}
 
-    /** The id: the string, or the {@code id} of the expanded object; null for other values. */
+    /**
+     * The id: the string, or the {@code id} of the expanded object.
+     *
+     * @return the id, null for other values
+     */
     public String id() {
         {% for v in variants -%}
         {% if v.name == "string" or v.id -%}
         if (this instanceof Of{{ pascals[loop.index0] }}) {
-            return ((Of{{ pascals[loop.index0] }}) this).value{% if v.id %}.getId(){% endif %};
+            {% if v.id -%}
+            return Utils.optional(((Of{{ pascals[loop.index0] }}) this).value.id()).orElse(null);
+            {% else -%}
+            return ((Of{{ pascals[loop.index0] }}) this).value;
+            {% endif -%}
         }
         {% endif -%}
         {% endfor -%}
@@ -275,12 +560,22 @@ public abstract static class {{ cls }} {
     {% endif %}
     {% if objects %}
 
-    /** Whether no variant matched the value, kept as received. */
+    /**
+     * Whether no variant matched the value, kept as received.
+     *
+     * @return whether no variant matched
+     */
     public boolean isUnrecognized() {
         return this instanceof Unrecognized;
     }
 
-    /** The value read as {@code type}, such as another variant than the one decoding picked. */
+    /**
+     * The value read as {@code type}, such as another variant than the one decoding picked.
+     *
+     * @param <T> the type
+     * @param type the class
+     * @return the value as a {@code type}
+     */
     public <T> T decodeAs(Class<T> type) {
         return {{ sdk.java_internal_package }}.Unions.convert(this, type);
     }
@@ -320,6 +615,7 @@ public abstract static class {{ cls }} {
     {% set t = ns.types[loop.index0] -%}
     {% if v.empty %}
 
+    /** The empty string. */
     public static final class Empty extends {{ cls }} {
         private static final Empty INSTANCE = new Empty();
 
@@ -348,6 +644,7 @@ public abstract static class {{ cls }} {
     }
     {% else %}
 
+    /** The {@code {{ v.name }}} variant. */
     public static final class Of{{ p }} extends {{ cls }} {
         private final {{ t }} value;
 
@@ -456,13 +753,19 @@ public abstract static class {{ cls }} {
 /**
  * Parse {@code json} as {@code {{ cls }}}.
  *
- * @throws java.io.UncheckedIOException if it is not valid JSON of this shape
+ * @param json the JSON text
+ * @return the value
+ * @throws {{ sdk.java_package }}.exceptions.InvalidDataException if it is not valid JSON of this shape
  */
 public static {{ cls }} fromJson(String json) {
     return Utils.parse(json, {{ cls }}.class);
 }
 
-/** This {{ cls }} as JSON. */
+/**
+ * This value as JSON.
+ *
+ * @return the JSON text
+ */
 public String toJson() {
     return Utils.json(this);
 }

@@ -15,7 +15,16 @@ import okhttp3.RequestBody;
 public final class Multipart {
     private final MultipartBody.Builder builder = new MultipartBody.Builder().setType(MultipartBody.FORM);
 
-    /** Adds a field: scalars as text, objects as JSON, lists as one part per item. */
+    /** An empty form. */
+    public Multipart() {}
+
+    /**
+     * Adds a field: scalars as text, objects as JSON, lists as one part per item.
+     *
+     * @param name the field name
+     * @param value the value, left out when null
+     * @return this form
+     */
     public Multipart field(String name, Object value) {
         if (value == null) {
             return this;
@@ -37,6 +46,13 @@ public final class Multipart {
         return this;
     }
 
+    /**
+     * Adds a file.
+     *
+     * @param name the field name
+     * @param upload the file, left out when null
+     * @return this form
+     */
     public Multipart file(String name, Upload upload) {
         if (upload != null) {
             String filename = upload.getFilename() != null ? upload.getFilename() : "file";
@@ -45,6 +61,11 @@ public final class Multipart {
         return this;
     }
 
+    /**
+     * The body.
+     *
+     * @return the multipart body
+     */
     public RequestBody build() {
         return builder.build();
     }

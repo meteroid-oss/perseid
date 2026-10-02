@@ -18,16 +18,21 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import @@JAVA_PACKAGE@@.exceptions.@@CLIENT_NAME@@Exception;
+import @@JAVA_PACKAGE@@.exceptions.InvalidDataException;
 import java.util.AbstractMap;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -40,6 +45,143 @@ public final class Utils {
 
     private Utils() {}
 
+    /**
+     * The value of a required property, which a response may still leave out.
+     *
+     * @param <T> the property type
+     * @param value the value, null when left out
+     * @param name the JSON name of the property
+     * @return the value
+     * @throws InvalidDataException when it was left out
+     */
+    public static <T> T required(T value, String name) {
+        if (value == null) {
+            throw new InvalidDataException("`" + name + "` is required, but the response left it out");
+        }
+        return value;
+    }
+
+    /**
+     * Checks a builder set a required property.
+     *
+     * @param value the value
+     * @param name the JSON name of the property
+     * @throws IllegalStateException when it is not set
+     */
+    public static void checkRequired(Object value, String name) {
+        if (value == null) {
+            throw new IllegalStateException("`" + name + "` is required, but was not set");
+        }
+    }
+
+    /**
+     * An optional value as an {@link Optional}, null meaning empty.
+     *
+     * @param <T> the value type
+     * @param value the value
+     * @return the value, or empty
+     */
+    public static <T> Optional<T> optional(Optional<T> value) {
+        return value == null ? Optional.empty() : value;
+    }
+
+    /**
+     * A value as an {@link Optional}, null meaning empty.
+     *
+     * @param <T> the value type
+     * @param value the value
+     * @return the value, or empty
+     */
+    public static <T> Optional<T> optional(T value) {
+        return Optional.ofNullable(value);
+    }
+
+    /**
+     * A copy a builder can add to.
+     *
+     * @param <T> the item type
+     * @param items the items, or null
+     * @return a new list, or null
+     */
+    public static <T> List<T> mutableList(Collection<? extends T> items) {
+        return items == null ? null : new ArrayList<>(items);
+    }
+
+    /**
+     * A copy a builder can add to.
+     *
+     * @param <T> the item type
+     * @param items the items, or null
+     * @return a new set, or null
+     */
+    public static <T> Set<T> mutableSet(Collection<? extends T> items) {
+        return items == null ? null : new LinkedHashSet<>(items);
+    }
+
+    /**
+     * A copy a builder can add to.
+     *
+     * @param <V> the value type
+     * @param entries the entries, or null
+     * @return a new map, or null
+     */
+    public static <V> Map<String, V> mutableMap(Map<String, ? extends V> entries) {
+        return entries == null ? null : new LinkedHashMap<>(entries);
+    }
+
+    /**
+     * An unmodifiable copy, for a built model.
+     *
+     * @param <T> the item type
+     * @param items the items, or null
+     * @return the copy, or null
+     */
+    public static <T> List<T> copyList(Collection<? extends T> items) {
+        return items == null ? null : Collections.unmodifiableList(new ArrayList<>(items));
+    }
+
+    /**
+     * An unmodifiable copy, for a built model.
+     *
+     * @param <T> the item type
+     * @param items the items, or null
+     * @return the copy, or null
+     */
+    public static <T> Set<T> copySet(Collection<? extends T> items) {
+        return items == null ? null : Collections.unmodifiableSet(new LinkedHashSet<>(items));
+    }
+
+    /**
+     * An unmodifiable copy, for a built model.
+     *
+     * @param <V> the value type
+     * @param entries the entries, or null
+     * @return the copy, or null
+     */
+    public static <V> Map<String, V> copyMap(Map<String, ? extends V> entries) {
+        return entries == null ? null : Collections.unmodifiableMap(new LinkedHashMap<>(entries));
+    }
+
+    /**
+     * The JSON properties of a model, for the model extending it.
+     *
+     * @param value the model, or null
+     * @return its properties by name, empty for null
+     */
+    public static Map<String, JsonNode> properties(Object value) {
+        Map<String, JsonNode> properties = new LinkedHashMap<>();
+        if (value != null) {
+            MAPPER.valueToTree(value).fields().forEachRemaining(e -> properties.put(e.getKey(), e.getValue()));
+        }
+        return properties;
+    }
+
+    /**
+     * A query parameter value as sent, before URL encoding.
+     *
+     * @param v the value
+     * @return the text
+     */
     public static String serializeQueryParam(Object v) {
         if (v instanceof ToQueryParam) {
             return ((ToQueryParam) v).toQueryParam();
@@ -60,8 +202,12 @@ public final class Utils {
     }
 
     /**
-     * Append a collection as repeated query parameters, one entry per item
-     * (OpenAPI {@code explode=true} behavior, e.g. {@code ?tag=a&tag=b}).
+     * Append a collection as repeated query parameters, one entry per item (OpenAPI {@code
+     * explode=true} behavior, e.g. {@code ?tag=a&tag=b}).
+     *
+     * @param url the URL builder
+     * @param name the parameter name
+     * @param values the items
      */
     public static void addExplodedQueryParameter(HttpUrl.Builder url, String name, Iterable<?> values) {
         for (Object item : values) {
@@ -73,6 +219,12 @@ public final class Utils {
      * Append the JSON value of {@code value}: objects as {@code name[key]=value}, lists as
      * repeated {@code name=item} ({@code name[]=item} with {@code deepObject}, {@code name=a,b}
      * without {@code explode}).
+     *
+     * @param url the URL builder
+     * @param name the parameter name
+     * @param value the value
+     * @param deepObject whether lists are sent as {@code name[]=item}
+     * @param explode whether lists of scalars repeat {@code name}
      */
     public static void addStructuredQueryParameter(
             HttpUrl.Builder url, String name, Object value, boolean deepObject, boolean explode) {
@@ -86,6 +238,12 @@ public final class Utils {
      * {@code name[key]=value}, {@code name[]=item} for lists of scalars and {@code
      * name[0][key]=value} for lists of objects. Top-level lists of scalars repeat {@code name}
      * unless {@code deepObject} or not {@code explode}.
+     *
+     * @param name the parameter name
+     * @param value the JSON value
+     * @param deepObject whether lists are sent as {@code name[]=item}
+     * @param explode whether lists of scalars repeat {@code name}
+     * @param out receives the pairs
      */
     public static void encodeParam(
             String name,
@@ -135,6 +293,10 @@ public final class Utils {
     /**
      * {@code value} as one path segment, which the URL builder percent-encodes. Dot segments and
      * empty values are rejected: they would change the path of the request.
+     *
+     * @param name the parameter name
+     * @param value the value
+     * @return the segment
      */
     public static String pathSegment(String name, Object value) {
         String segment = value == null ? "" : serializeQueryParam(value);
@@ -145,26 +307,45 @@ public final class Utils {
         return segment;
     }
 
+    /** A value with its own query string form. */
     public interface ToQueryParam {
-        /** The value as sent in a query string, before URL encoding. */
+        /**
+         * The value as sent in a query string, before URL encoding.
+         *
+         * @return the text
+         */
         String toQueryParam();
     }
 
-    /** {@code value} as JSON; a value the mapper cannot write is a bug, thrown unchecked. */
+    /**
+     * {@code value} as JSON; a value the mapper cannot write is a bug, thrown unchecked.
+     *
+     * @param value the value
+     * @return the JSON text
+     */
     public static String json(Object value) {
         try {
             return MAPPER.writeValueAsString(value);
         } catch (JsonProcessingException e) {
-            throw new UncheckedIOException(e);
+            throw new @@CLIENT_NAME@@Exception("cannot serialize " + value.getClass().getSimpleName(), e);
         }
     }
 
-    /** Parse {@code json} into a {@code type}, throwing {@link UncheckedIOException} if invalid. */
+    /**
+     * Parse {@code json} into a {@code type}.
+     *
+     * @param <T> the type
+     * @param json the JSON text
+     * @param type the class
+     * @return the value
+     * @throws InvalidDataException if it is not valid JSON of this shape
+     */
     public static <T> T parse(String json, Class<T> type) {
         try {
             return MAPPER.readValue(json, type);
         } catch (JsonProcessingException e) {
-            throw new UncheckedIOException(e);
+            throw new InvalidDataException(
+                    "not a JSON " + type.getSimpleName() + ": " + e.getOriginalMessage(), e);
         }
     }
 
@@ -176,6 +357,8 @@ public final class Utils {
     /**
      * A new mapper configured like the SDK's: ISO-8601 dates keeping their offset, decimals as
      * strings, unknown properties ignored.
+     *
+     * @return a new mapper
      */
     public static ObjectMapper getObjectMapper() {
         return MAPPER.copy();
@@ -193,17 +376,43 @@ public final class Utils {
         return mapper;
     }
 
-    /** Reads a union of values told apart by their JSON type, such as {@code string | Customer}. */
+    /**
+     * Reads a union of values told apart by their JSON type, such as {@code string | Customer}.
+     *
+     * @param <T> the union class
+     */
     public abstract static class UnionDeserializer<T> extends StdDeserializer<T> {
         private static final long serialVersionUID = 1L;
 
+        /**
+         * A deserializer of {@code type}.
+         *
+         * @param type the union class
+         */
         protected UnionDeserializer(Class<T> type) {
             super(type);
         }
 
-        /** The variant holding {@code node}, or null when none takes its JSON type. */
+        /**
+         * The variant holding {@code node}, or null when none takes its JSON type.
+         *
+         * @param node the JSON value
+         * @param ctxt the context
+         * @return the variant, or null
+         * @throws IOException if a variant fails to decode
+         */
         protected abstract T decode(JsonNode node, DeserializationContext ctxt) throws IOException;
 
+        /**
+         * {@code node} decoded as {@code type}.
+         *
+         * @param <V> the type
+         * @param node the JSON value
+         * @param ctxt the context
+         * @param type the type
+         * @return the value
+         * @throws IOException if it fails to decode
+         */
         protected static <V> V read(JsonNode node, DeserializationContext ctxt, TypeReference<V> type)
                 throws IOException {
             return ctxt.readTreeAsValue(node, ctxt.getTypeFactory().constructType(type));

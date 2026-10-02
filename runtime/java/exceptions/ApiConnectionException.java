@@ -3,19 +3,21 @@ package @@JAVA_PACKAGE@@.exceptions;
 
 import java.io.IOException;
 
-/** The request failed without a response: connection, TLS or I/O error. Its code is 0. */
-public class ApiConnectionException extends ApiException {
+/** The request failed without a response, after its retries: connection, TLS or I/O error. */
+public class ApiConnectionException extends @@CLIENT_NAME@@Exception {
     private static final long serialVersionUID = 1L;
 
-    private final IOException cause;
-
+    /**
+     * An exception for a failed request.
+     *
+     * @param cause the I/O error
+     */
     public ApiConnectionException(IOException cause) {
-        super(String.valueOf(cause.getMessage()), 0, null);
-        this.cause = cause;
+        super(String.valueOf(cause.getMessage()), cause);
     }
 
     @Override
     public synchronized IOException getCause() {
-        return cause;
+        return (IOException) super.getCause();
     }
 }
