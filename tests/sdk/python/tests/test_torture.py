@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -125,7 +126,7 @@ paths:
     post:
       operationId: create_chat
       requestBody:
-        required: true
+        required: false
         content: {application/json: {schema: {$ref: '#/components/schemas/ChatRequest'}}}
       responses:
         "200":
@@ -217,7 +218,18 @@ SAMPLES = {
     },
     "ThingPatch": {"description": None, "count": None},
     "Activity": {"kind": "reopened", "at": "2024-01-02T03:04:05+00:00"},
-    "Reserved": {"class": "c", "type": "t", "self": "s", "1leading": "1", "with space": "w"},
+    "Reserved": {
+        "class": "c",
+        "type": "t",
+        "self": "s",
+        "1leading": "1",
+        "with space": "w",
+        "properties": {"k": "v"},
+        "extra": "x",
+        "extra_fields": "e",
+        "additional_properties": "a",
+        "any_properties": "p",
+    },
     "Widget": {"id": "w", "name": "n", "reactions": {"+1": 1, "-1": 2}},
 }
 
@@ -382,6 +394,36 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(request.headers["authorization"], "Bearer token")
         self.assertEqual(request.extensions["timeout"]["read"], 2)
 
+    def test_headers_of_the_call_or_client_win_over_its_credentials(self) -> None:
+        with client(self.respond(httpx.Response(200, json=THING))) as api:
+            api.things.retrieve("t", extra_headers={"Authorization": "Bearer call"})
+            api.with_options(default_headers={"authorization": "Bearer client"}).things.retrieve("t")
+            api.things.retrieve("t")
+        auth = [r.headers.get_list("authorization") for r in self.requests]
+        self.assertEqual(auth, [["Bearer call"], ["Bearer client"], ["Bearer token"]])
+
+    def test_the_old_constructor_arguments_still_work(self) -> None:
+        def http() -> httpx.Client:
+            return httpx.Client(transport=httpx.MockTransport(self.respond(httpx.Response(200, json=THING))))
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            clients = [
+                Torture(token="old", http_client=http()),
+                Torture("old", TortureOptions(), http()),
+                Torture("old", None, httpx_client=http()),
+            ]
+        self.assertEqual([w.category for w in caught], [DeprecationWarning] * 3)
+        self.assertEqual(caught[0].filename, __file__)
+        for api in clients:
+            with api:
+                api.things.retrieve("t")
+        self.assertEqual([r.headers["authorization"] for r in self.requests], ["Bearer old"] * 3)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with self.assertRaises(TypeError):
+                Torture("new", token="old")
+
     def test_query_and_header_params(self) -> None:
         with client(self.respond(httpx.Response(200, json={"data": [], "total": 0}))) as api:
             api.things.list(
@@ -528,11 +570,34 @@ class ClientTest(unittest.TestCase):
         shape = asyncio.run(run())
         self.assertIsInstance(shape.content, models.Circle)
 
+    def test_a_bodiless_2xx_next_to_a_json_one_is_none(self) -> None:
+        update = models.WidgetUpdate(name="n")
+        responses = (httpx.Response(204), httpx.Response(200, json={"id": "w", "name": "n"}))
+        with client(self.respond(*responses)) as api:
+            self.assertIsNone(api.widgets.update("w", update))
+            self.assertEqual(api.widgets.update("w", update), models.Widget(id="w", name="n"))
+        with client(self.respond(httpx.Response(204))) as api:
+            raw = api.with_raw_response.widgets.update("w", update)
+        self.assertEqual((raw.status_code, raw.parse()), (204, None))
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(204)
+
+        async def run() -> object:
+            transport = httpx.MockTransport(handler)
+            async with torture.AsyncTorture(
+                "token", http_client=httpx.AsyncClient(transport=transport)
+            ) as api:
+                return await api.widgets.update("w", update)
+
+        self.assertIsNone(asyncio.run(run()))
+
     def test_keyword_resources_are_escaped(self) -> None:
         reserved = SAMPLES["Reserved"]
         with client(self.respond(httpx.Response(200, json=reserved))) as api:
             echoed = api.class_.reserved(models.Reserved.from_dict(reserved))
         self.assertEqual(echoed.class_, "c")
+        self.assertEqual((echoed.extra_fields_, echoed.extra_fields), ("e", {}))
         self.assertEqual(json.loads(self.requests[0].content), reserved)
 
 
@@ -596,7 +661,7 @@ class Chunks(httpx.SyncByteStream):
 
 
 class StreamTest(unittest.TestCase):
-    def chat(self, stream: Chunks):
+    def chat(self, stream: Chunks, *body: object):
         requests: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -604,14 +669,20 @@ class StreamTest(unittest.TestCase):
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
 
         api = paged.Paged("k", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
-        return api.chat.create_stream(paged.models.ChatRequest()), requests
+        return api.chat.create_stream(*body), requests
 
     def test_events_decode_into_models_until_done(self) -> None:
         events = b'event: chunk\nid: 7\ndata: {"id": "a"}\n\ndata: [DONE]\n\ndata: {"id": "b"}\n\n'
-        stream, requests = self.chat(Chunks(events))
+        stream, requests = self.chat(Chunks(events), paged.models.ChatRequest(stream=False))
         with stream:
             self.assertEqual(list(stream), [paged.models.Item(id="a")])
         self.assertEqual((stream.last_event.event, stream.last_event.id), ("chunk", "7"))
+        self.assertEqual(json.loads(requests[0].content), {"stream": True})
+
+    def test_the_stream_twin_of_an_optional_body_sends_stream_alone(self) -> None:
+        stream, requests = self.chat(Chunks(b"data: [DONE]\n\n"))
+        with stream:
+            self.assertEqual(list(stream), [])
         self.assertEqual(json.loads(requests[0].content), {"stream": True})
 
     def test_a_connection_lost_mid_stream_is_an_sdk_error(self) -> None:
@@ -644,6 +715,19 @@ class ScoresTest(unittest.TestCase):
         self.assertIsInstance(raised.exception, APIStatusError)
         self.assertEqual(raised.exception.body, models.ValidationError(message="bad", fields={"name": ["short"]}))
         self.assertEqual(raised.exception.request_id, "r1")
+        self.assertEqual(
+            str(raised.exception),
+            'Error code: 422 - {"message":"bad","fields":{"name":["short"]}}',
+        )
+        long = httpx.Response(404, text="x" * 600)
+        with client(self.respond(long)) as api:
+            with self.assertRaises(NotFoundError) as raised:
+                api.things.retrieve("t")
+        self.assertEqual(str(raised.exception), f"Error code: 404 - {'x' * 500}...")
+        with client(self.respond(httpx.Response(404))) as api:
+            with self.assertRaises(NotFoundError) as raised:
+                api.things.retrieve("t")
+        self.assertEqual(str(raised.exception), "Error code: 404 - Not Found")
         for status, error in ((404, NotFoundError), (500, InternalServerError), (418, APIStatusError)):
             with self.subTest(status=status):
                 response = httpx.Response(status, json={"title": "t"})

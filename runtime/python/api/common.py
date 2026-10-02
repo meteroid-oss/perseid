@@ -75,6 +75,7 @@ __all__ = [
     "ErrorTypes",
     "QueryParams",
     "Timeout",
+    "decode_optional_response",
     "decode_response",
     "default_retry_schedule",
     "serialize_form_body",
@@ -300,6 +301,21 @@ def decode_response(response: httpx.Response, type_: object) -> object:
         raise APIResponseValidationError(response, str(exc)) from exc
 
 
+@t.overload
+def decode_optional_response(response: httpx.Response, type_: type[_T]) -> _T | None: ...
+
+
+@t.overload
+def decode_optional_response(response: httpx.Response, type_: object) -> t.Any: ...
+
+
+def decode_optional_response(response: httpx.Response, type_: object) -> object:
+    """Like :func:`decode_response`, but ``None`` for a 2xx without a body, such as a 204."""
+    if not response.content:
+        return None
+    return decode_response(response, type_)
+
+
 def _retry_after(response: httpx.Response) -> float | None:
     """The delay a response asks for before a retry, in seconds, if any."""
     header = response.headers.get("retry-after-ms")
@@ -376,7 +392,14 @@ class ApiBase:
         schemes = chosen_schemes(
             self._cfg, self._cfg.security if spec.security is None else spec.security
         )
-        apply_auth(self._cfg, schemes, token, headers, params)
+        credentials = httpx.Headers()
+        apply_auth(self._cfg, schemes, token, credentials, params)
+        for key, value in credentials.items():
+            # Headers of the client or of the call win over its credentials.
+            if key == "cookie" and key in headers:
+                headers[key] = f"{headers[key]}; {value}"
+            elif key not in headers:
+                headers[key] = value
 
         # Passed per request, so it also applies to a caller-supplied `httpx` client.
         timeout = self._cfg.timeout if isinstance(spec.timeout, Unset) else spec.timeout

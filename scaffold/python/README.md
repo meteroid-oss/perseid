@@ -33,7 +33,8 @@ async with Async@@CLIENT_NAME@@() as client:
     ...
 ```
 
-Every method also takes `extra_headers=` and `timeout=` for that request only.
+Every method also takes `extra_headers=` and `timeout=` for that request only; these
+headers, like `default_headers`, win over the client's credentials.
 
 ## Models
 
@@ -44,7 +45,8 @@ expandable id, is typed `str | Model`. A union variant fills in its own tag: pas
 `content=` alone and the discriminator follows.
 
 Properties the API added after this SDK was generated are kept in `extra_fields` (and read
-as attributes at runtime), and sent back when the model is serialized.
+as attributes at runtime), and sent back when the model is serialized. A property named
+after a model member, such as `extra_fields` or `to_dict`, gets a trailing `_`.
 
 ## Pagination
 
