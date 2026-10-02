@@ -503,6 +503,65 @@ func formatValue(v any) string {
 	}
 }
 
+// jsonField is a struct field whose JSON name `encoding/json` cannot carry in a
+// struct tag (a quote, backslash or comma in it), encoded and decoded by hand.
+type jsonField struct {
+	Name  string
+	Value any
+	Omit  bool
+}
+
+// marshalWithFields encodes base, a struct, and appends the fields its tags
+// cannot name to the resulting object.
+func marshalWithFields(base any, fields []jsonField) ([]byte, error) {
+	data, err := json.Marshal(base)
+	if err != nil {
+		return nil, err
+	}
+	data = bytes.TrimSpace(data)
+	if len(data) < 2 || data[0] != '{' || data[len(data)-1] != '}' {
+		return nil, fmt.Errorf("@@PACKAGE_NAME@@: %T must encode to a JSON object", base)
+	}
+	out := append([]byte(nil), data[:len(data)-1]...)
+	empty := len(bytes.TrimSpace(data[1:len(data)-1])) == 0
+	for _, field := range fields {
+		if field.Omit {
+			continue
+		}
+		key, err := json.Marshal(field.Name)
+		if err != nil {
+			return nil, err
+		}
+		value, err := json.Marshal(field.Value)
+		if err != nil {
+			return nil, err
+		}
+		if !empty {
+			out = append(out, ',')
+		}
+		empty = false
+		out = append(append(append(out, key...), ':'), value...)
+	}
+	return append(out, '}'), nil
+}
+
+// unmarshalFields decodes the members of the JSON object data named in targets
+// into the pointers they map to, leaving targets whose member is absent as is.
+func unmarshalFields(data []byte, targets map[string]any) error {
+	var members map[string]json.RawMessage
+	if err := json.Unmarshal(data, &members); err != nil {
+		return err
+	}
+	for name, target := range targets {
+		if raw, ok := members[name]; ok {
+			if err := json.Unmarshal(raw, target); err != nil {
+				return fmt.Errorf("@@PACKAGE_NAME@@: field %q: %w", name, err)
+			}
+		}
+	}
+	return nil
+}
+
 // marshalUnionVariant encodes a tagged union: the variant payload and the fields
 // the variants share are merged into one object, with the discriminator.
 func marshalUnionVariant(tagField, tagValue string, payload any, shared ...any) ([]byte, error) {

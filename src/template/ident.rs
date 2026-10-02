@@ -194,7 +194,8 @@ fn keywords(language: &str) -> Result<Vec<&'static [&'static str]>, Error> {
 
 /// `name` as the value of a Go `json:"..."` struct tag. `encoding/json` silently ignores tags whose
 /// name has a quote, backslash, comma or other punctuation outside its allowed set, so such a name
-/// is rejected instead of generating a struct that serializes under the wrong key.
+/// is rejected instead of generating a struct that serializes under the wrong key. Plain structs
+/// check `go_taggable` first and encode such fields by hand.
 pub(crate) fn go_tag(name: &str) -> Result<String, Error> {
     const ALLOWED: &str = "!#$%&()*+-./:;<=>?@[]^_{|}~ ";
     if name.is_empty()

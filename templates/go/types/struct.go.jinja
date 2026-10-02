@@ -10,7 +10,12 @@
 {% set ns = namespace(defaulted=[]) -%}
 {% for field in type.fields if field.name in defaults and not (type.fields | selectattr("flatten") | list) %}{% set ns.defaulted = ns.defaulted + [field] %}{% endfor -%}
 {% set defaulted = ns.defaulted -%}
-{% set rendered_types %}{% for field in type.fields %}{{ field_type(field) }} {% endfor %}{{ unions }}{% if defaulted %} json.{% endif %}{% endset -%}
+{#- Fields whose JSON name a struct tag cannot carry are encoded by MarshalJSON/UnmarshalJSON. -#}
+{% set untagged = type.fields | rejectattr("flatten") | rejectattr("name", "go_taggable") | list -%}
+{% if untagged and (type.fields | selectattr("flatten") | list) -%}
+{{ panic("go codegen: `" ~ type.name ~ "` flattens another schema and has the property " ~ (untagged[0].name | tojson) ~ ", which cannot be a `json` struct tag: rename the property in the spec") }}
+{%- endif -%}
+{% set rendered_types %}{% for field in type.fields %}{{ field_type(field) }} {% endfor %}{{ unions }}{% if defaulted or untagged %} json.{% endif %}{% endset -%}
 package {{ sdk.package_name }}
 {% if "time.Time" in rendered_types and "json." in rendered_types %}
 import (
@@ -31,10 +36,10 @@ import "encoding/json"
 {% endif %}// Encodes as {{ defaults[field.name] | tojson }} when left empty.
 {% endif %}{% if field.type.is_datetime() %}// RFC 3339 timestamp.
 {% endif %}{% if field.deprecated %}{{ go_deprecated("field") }}
-{% endif %}{% if field.flatten %}{{ go_type(field.type) }}{% else %}{{ go_export(field.name) }} {{ field_type(field) }} {{ go_json_tag(field) }}{% endif %}
+{% endif %}{% if field.flatten %}{{ go_type(field.type) }}{% else %}{{ go_export(field.name) }} {{ field_type(field) }} {% if field in untagged %}`json:"-"`{% else %}{{ go_json_tag(field) }}{% endif %}{% endif %}
 {% endfor %}}
-{% if defaulted %}
-// MarshalJSON implements json.Marshaler, filling in the discriminator.
+{% if defaulted or untagged %}
+// MarshalJSON implements json.Marshaler{% if defaulted %}, filling in the discriminator{% endif %}.
 func (v {{ type_name }}) MarshalJSON() ([]byte, error) {
 	type plain {{ type_name }}
 {% for field in defaulted %}{% set value = defaults[field.name] | tojson if go_type(field.type) == "string" else go_type(field.type) ~ "(" ~ (defaults[field.name] | tojson) ~ ")" %}{% if field_type(field) is startingwith("*") %}	if v.{{ go_export(field.name) }} == nil {
@@ -43,6 +48,20 @@ func (v {{ type_name }}) MarshalJSON() ([]byte, error) {
 {% else %}	if v.{{ go_export(field.name) }} == "" {
 		v.{{ go_export(field.name) }} = {{ value }}
 	}
-{% endif %}{% endfor %}	return json.Marshal(plain(v))
+{% endif %}{% endfor %}{% if untagged %}	return marshalWithFields(plain(v), []jsonField{
+{% for field in untagged %}		{Name: {{ field.name | tojson }}, Value: v.{{ go_export(field.name) }}{% if not field.required %}, Omit: {% if field_type(field) is startingwith("*") %}v.{{ go_export(field.name) }} == nil{% else %}len(v.{{ go_export(field.name) }}) == 0{% endif %}{% endif %}},
+{% endfor %}	})
+{% else %}	return json.Marshal(plain(v))
+{% endif %}}
+{% endif %}{% if untagged %}
+// UnmarshalJSON implements json.Unmarshaler.
+func (v *{{ type_name }}) UnmarshalJSON(data []byte) error {
+	type plain {{ type_name }}
+	if err := json.Unmarshal(data, (*plain)(v)); err != nil {
+		return err
+	}
+	return unmarshalFields(data, map[string]any{
+{% for field in untagged %}		{{ field.name | tojson }}: &v.{{ go_export(field.name) }},
+{% endfor %}	})
 }
 {% endif %}{{ unions }}

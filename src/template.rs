@@ -50,6 +50,7 @@ pub fn populate_env(
          owner: Cow<'_, str>| { ident::idents(&names, &case, language.as_deref(), &owner) },
     );
     env.add_filter("go_tag", |s: Cow<'_, str>| ident::go_tag(&s));
+    env.add_test("go_taggable", |s: Cow<'_, str>| ident::go_tag(&s).is_ok());
     env.add_filter("go_name", |s: Cow<'_, str>| go::initialisms(&s));
     // `tojson` writes `'` as `\u0027`, which Rust string literals reject.
     env.add_filter("rust_str", |s: Cow<'_, str>| format!("{s:?}"));
