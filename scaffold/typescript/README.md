@@ -18,9 +18,12 @@ const client = new @@CLIENT_NAME@@({ apiKey: "your-api-key" });
 ```
 
 Without `apiKey`, the client reads the `@@ENV_PREFIX@@_API_KEY` environment variable, and
-`@@ENV_PREFIX@@_BASE_URL` overrides the default server URL (`serverUrl` overrides both). Every
-API area is a property of the client, and every method takes a last `RequestOptions` argument:
-`{ signal, headers, timeout, maxRetries, idempotencyKey }`.
+without `baseURL` the `@@ENV_PREFIX@@_BASE_URL` one, then the API's default server URL. When the
+API declares no server, one of them is required. The other options are `timeout` (milliseconds),
+`maxRetries`, `defaultHeaders`, `defaultQuery`, `fetch`, `middleware` and `debug`.
+
+Every API area is a property of the client, and every method takes a last `RequestOptions`
+argument: `{ signal, headers, query, timeout, maxRetries, idempotencyKey }`.
 
 ## Models
 
@@ -100,10 +103,10 @@ for await (const chunk of stream) {
 Connection errors, timeouts, 408, 429 and 5xx responses are retried twice with exponential
 backoff, honouring `Retry-After` and `retry-after-ms`, when the request is idempotent or carries
 an `Idempotency-Key` (POST requests get one automatically). Each attempt times out after
-`requestTimeout` milliseconds (`Infinity` waits forever).
+`timeout` milliseconds (`Infinity` waits forever).
 
 ```ts
-const client = new @@CLIENT_NAME@@({ maxRetries: 5, requestTimeout: 20_000 });
+const client = new @@CLIENT_NAME@@({ maxRetries: 5, timeout: 20_000 });
 await client.someResource.retrieve("id", { maxRetries: 0, timeout: 5_000 });
 ```
 

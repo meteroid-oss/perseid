@@ -40,7 +40,7 @@ test("every error is a PetstoreError, API errors parse their body as JSON", asyn
   const { petstore } = client([json({ message: "nope" }, 404)]);
   await assert.rejects(petstore.pets.retrieve("1"), (error) => {
     assert.ok(error instanceof sdk.NotFoundError && error instanceof sdk.APIError);
-    assert.ok(error instanceof sdk.PetstoreError && error instanceof sdk.ApiException);
+    assert.ok(error instanceof sdk.PetstoreError);
     assert.equal(error.name, "NotFoundError");
     assert.deepEqual(error.error, { message: "nope" });
     assert.equal(error.requestId, "req_1");
@@ -109,13 +109,14 @@ test("the API key and base URL come from the environment unless given", async ()
       return json(PET);
     };
     await new sdk.Petstore({ fetch }).pets.retrieve("1");
-    await new sdk.Petstore({ apiKey: "arg", serverUrl: "https://arg.test", fetch }).pets.retrieve("1");
-    await new sdk.Petstore("positional", { fetch }).pets.retrieve("1");
+    await new sdk.Petstore({ apiKey: "arg", baseURL: "https://arg.test", fetch }).pets.retrieve("1");
+    delete process.env.PETSTORE_BASE_URL;
+    await new sdk.Petstore({ fetch }).pets.retrieve("1");
     assert.equal(seen[0].url.href, "https://env.test/v9/pets/1");
     assert.equal(seen[0].init.headers.authorization, "Bearer from-env");
     assert.equal(seen[1].url.href, "https://arg.test/pets/1");
     assert.equal(seen[1].init.headers.authorization, "Bearer arg");
-    assert.equal(seen[2].init.headers.authorization, "Bearer positional");
+    assert.equal(seen[2].url.origin, "https://petstore.example.com");
   } finally {
     delete process.env.PETSTORE_API_KEY;
     delete process.env.PETSTORE_BASE_URL;

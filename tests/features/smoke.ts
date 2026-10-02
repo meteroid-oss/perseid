@@ -7,7 +7,7 @@ import {
   type Widget,
 } from "../src";
 
-const serverUrl = process.env.FEATURES_URL!;
+const baseURL = process.env.FEATURES_URL!;
 
 async function collect<T extends { id: string }>(items: AsyncIterable<T>): Promise<string[]> {
   const ids: string[] = [];
@@ -18,38 +18,38 @@ async function collect<T extends { id: string }>(items: AsyncIterable<T>): Promi
 }
 
 async function main() {
-  const client = new Features({ apiKey: "tok", serverUrl });
+  const client = new Features({ apiKey: "tok", baseURL });
   assert.equal((await client.account.retrieveHealth()).status, "||");
   assert.equal((await client.account.retrieveMachine()).status, "Bearer tok||");
-  assert.deepEqual(await collect(client.widgets.listIter()), ["w1", "w2", "w3"]);
+  assert.deepEqual(await collect(client.widgets.list()), ["w1", "w2", "w3"]);
   assert.deepEqual(
-    await collect(client.widgets.listEventsIter("w1", { kind: "created" })),
+    await collect(client.widgets.listEvents("w1", { kind: "created" })),
     ["e1", "e2", "e3"]
   );
-  assert.deepEqual(await collect(client.gadgets.listIter()), ["g1", "g2", "g3"]);
-  assert.deepEqual(await collect(client.records.listIter()), ["r1", "r2", "r3"]);
+  assert.deepEqual(await collect(client.gadgets.list()), ["g1", "g2", "g3"]);
+  assert.deepEqual(await collect(client.records.list()), ["r1", "r2", "r3"]);
 
-  const basic = new Features(null, { serverUrl, basicAuth: { username: "u", password: "p" } });
+  const basic = new Features({ baseURL, basicAuth: { username: "u", password: "p" } });
   assert.equal((await basic.account.session()).status, "Basic dTpw||");
 
-  const provided = new Features(null, { serverUrl, tokenProvider: async () => "fresh" });
+  const provided = new Features({ baseURL, tokenProvider: async () => "fresh" });
   assert.equal((await provided.account.retrieveMachine()).status, "Bearer fresh||");
 
-  const keyed = new Features(null, { serverUrl, apiKeys: { apiKey: "k" } });
-  assert.deepEqual(await collect(keyed.widgets.listIter()), ["w1", "w2", "w3"]);
-  await assert.rejects(new Features({ serverUrl }).widgets.list(), (error: unknown) => {
+  const keyed = new Features({ baseURL, apiKeys: { apiKey: "k" } });
+  assert.deepEqual(await collect(keyed.widgets.list()), ["w1", "w2", "w3"]);
+  await assert.rejects(new Features({ baseURL }).widgets.list(), (error: unknown) => {
     assert.ok(error instanceof AuthenticationError && error instanceof FeaturesError);
     assert.deepEqual(error.error, { error: "unauthorized" });
     assert.equal(error.requestId, "req_mock");
     return true;
   });
   await assert.rejects(
-    new Features({ apiKey: "tok", serverUrl: "http://127.0.0.1:9", maxRetries: 0 }).widgets.list(),
+    new Features({ apiKey: "tok", baseURL: "http://127.0.0.1:9", maxRetries: 0 }).widgets.list(),
     APIConnectionError
   );
 
   process.env.FEATURES_API_KEY = "env";
-  process.env.FEATURES_BASE_URL = serverUrl;
+  process.env.FEATURES_BASE_URL = baseURL;
   assert.equal((await new Features().account.retrieveMachine()).status, "Bearer env||");
   assert.equal((await new Features({ apiKey: "arg" }).account.retrieveMachine()).status, "Bearer arg||");
   delete process.env.FEATURES_API_KEY;
