@@ -97,7 +97,7 @@ requestOptions{% if cancellation %}, cancellationToken{% endif %}
 {%- endmacro -%}
 {#- The summary of an operation, starting with a newline. -#}
 {% macro summary(op) -%}
-{% if op.description is defined %}
+{% if op.description | default("") | trim %}
     {{ m.doc(op.description) | indent(4) }}
 {%- else %}
     /// <summary>Calls <c>{{ op.method | upper }} {{ op.path | replace("&", "&amp;") }}</c>.</summary>
@@ -483,7 +483,7 @@ public sealed class {{ class_name }}
 {
 {%- for field in op.multipart_fields %}
 {%- if not loop.first %}{{ "\n" }}{% endif %}
-{%- if field.description is defined %}
+{%- if field.description | default("") | trim %}
     {{ m.doc(field.description) | indent(4) }}
 {%- else %}
     /// <summary>The <c>{{ field.name | replace("&", "&amp;") | replace("<", "&lt;") | replace(">", "&gt;") }}</c> {% if field.is_file %}file{% else %}field{% endif %}.</summary>

@@ -10,7 +10,7 @@
 using System.Text.Json.Serialization;
 
 namespace {{ sdk.package_name }}.Models;
-{% if type.description is defined %}
+{% if type.description | default("") | trim %}
 {{ m.doc(type.description) }}
 {%- else %}
 /// <summary>

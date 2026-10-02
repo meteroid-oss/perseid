@@ -6,7 +6,7 @@
 {%- set tag_default = tags[field.name] if field.required and field.name in tags else none %}
 {%- set patch = (patch_body | default(false) or owner is endingwith "Patch") and field.nullable %}
 {%- if lead | default(true) or not loop.first %}{{ "\n" }}{% endif %}
-{%- if field.description is defined %}
+{%- if field.description | default("") | trim %}
 {{ m.doc(field.description) }}
 {%- else %}
 /// <summary>The <c>{{ field.name | replace("&", "&amp;") | replace("<", "&lt;") }}</c> property.</summary>

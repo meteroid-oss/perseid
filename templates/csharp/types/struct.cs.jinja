@@ -4,7 +4,7 @@
 {% include "types/usings.cs.jinja" %}
 
 namespace {{ sdk.package_name }}.Models;
-{% if type.description is defined %}
+{% if type.description | default("") | trim %}
 {{ m.doc(type.description) }}
 {%- else %}
 /// <summary>The <c>{{ type.name }}</c> object.</summary>

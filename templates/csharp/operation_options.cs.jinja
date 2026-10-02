@@ -25,7 +25,7 @@ public sealed record {{ class_name }}
 {
 {%- for p in operation.query_params %}
 {%- if not loop.first %}{{ "\n" }}{% endif %}
-{%- if p.description is defined %}
+{%- if p.description | default("") | trim %}
     {{ m.doc(p.description) | indent(4) }}
 {%- else %}
     /// <summary>The <c>{{ p.name | replace("&", "&amp;") | replace("<", "&lt;") }}</c> query parameter.</summary>
@@ -35,7 +35,7 @@ public sealed record {{ class_name }}
 {%- endfor %}
 {%- for p in operation.header_params %}
 {%- if operation.query_params or not loop.first %}{{ "\n" }}{% endif %}
-{%- if p.description is defined %}
+{%- if p.description | default("") | trim %}
     {{ m.doc(p.description) | indent(4) }}
 {%- else %}
     /// <summary>The <c>{{ p.name | replace("&", "&amp;") | replace("<", "&lt;") }}</c> {{ "cookie" if p.cookie else "header" }}.</summary>
