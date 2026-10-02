@@ -624,7 +624,19 @@ class ClientTest(unittest.TestCase):
     def test_keyword_resources_are_escaped(self) -> None:
         reserved = SAMPLES["Reserved"]
         with client(self.respond(httpx.Response(200, json=reserved))) as api:
-            echoed = api.class_.reserved(models.Reserved.from_dict(reserved))
+            # Its body is flattened into keyword arguments, escaped like the model fields.
+            echoed = api.class_.reserved(
+                class_="c",
+                type="t",
+                self_="s",
+                value_1leading="1",
+                with_space="w",
+                properties={"k": "v"},
+                extra="x",
+                extra_fields_="e",
+                additional_properties="a",
+                any_properties="p",
+            )
         self.assertEqual(echoed.class_, "c")
         self.assertEqual((echoed.extra_fields_, echoed.extra_fields), ("e", {}))
         self.assertEqual(json.loads(self.requests[0].content), reserved)
