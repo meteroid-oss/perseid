@@ -145,7 +145,10 @@ class SseParser {
       }
       const data = this.data.slice(0, -1);
       this.data = "";
-      return { event, data, id: this.id, retry: this.retry };
+      // A `retry` field applies to the event it arrives on, unlike the id.
+      const retry = this.retry;
+      this.retry = undefined;
+      return { event, data, id: this.id, retry };
     }
     if (line.startsWith(":")) {
       return undefined;

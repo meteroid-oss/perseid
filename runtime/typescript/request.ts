@@ -196,6 +196,18 @@ function encodePathParam(name: string, value: unknown, style: string, explode: b
   return text;
 }
 
+/** URLs resolve `.` and `..` segments, even percent-encoded, so a value of either cannot be sent. */
+function checkedPath(name: string, path: string): string {
+  const query = path.indexOf("?");
+  const dotSegment = (query === -1 ? path : path.slice(0, query))
+    .split("/")
+    .some((segment) => segment === "." || segment === "..");
+  if (dotSegment) {
+    throw new @@CLIENT_NAME@@Error(`path parameter ${name} cannot be "." or ".."`);
+  }
+  return path;
+}
+
 /** @internal */
 export class @@CLIENT_NAME@@Request {
   private body?: BodyInit;
@@ -218,7 +230,7 @@ export class @@CLIENT_NAME@@Request {
     if (this.path === newPath) {
       throw new @@CLIENT_NAME@@Error(`path parameter ${name} not found`);
     }
-    this.path = newPath;
+    this.path = checkedPath(name, newPath);
   }
 
   /** Substitutes a path parameter serialized by its OpenAPI `style`. */
@@ -227,7 +239,7 @@ export class @@CLIENT_NAME@@Request {
     if (this.path === newPath) {
       throw new @@CLIENT_NAME@@Error(`path parameter ${name} not found`);
     }
-    this.path = newPath;
+    this.path = checkedPath(name, newPath);
   }
 
   /** Array values are comma-joined (OpenAPI `style: form, explode: false`). */
@@ -337,8 +349,8 @@ export class @@CLIENT_NAME@@Request {
   }
 
   /**
-   * Sends the request and parses the JSON response body; an empty body (`204`) gives
-   * `undefined`.
+   * Sends the request and parses the JSON response body; a `204` gives `undefined`, any other
+   * empty body an `APIDecodeError`.
    *
    * A non-2xx response throws an `APIError`, of a subclass such as `NotFoundError` for common
    * statuses; no response an `APIConnectionError`, or `APIConnectionTimeoutError` once the
@@ -353,7 +365,7 @@ export class @@CLIENT_NAME@@Request {
   ): APIPromise<R> {
     return new APIPromise(this.sendInner(ctx, options), async (response) => {
       const text = await read(response, (r) => r.text(), options?.signal);
-      if (response.status === 204 || text === "") {
+      if (response.status === 204) {
         return undefined as R;
       }
       let json: unknown;
