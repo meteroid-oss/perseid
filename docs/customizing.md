@@ -19,10 +19,10 @@ Four extension points, none of which needs a fork.
 | Language | Option |
 |---|---|
 | TypeScript | `middleware`: `(request, next) => Response` |
-| Python | `middleware` and `async_middleware` |
+| Python | `middleware=` of `Client(...)` and `AsyncClient(...)` |
 | Go | `Options.Middleware`, a `RoundTripper` wrapper |
 | Java | `getInterceptors()`, OkHttp interceptors, also added to a client given to `setHttpClient` |
-| Rust | `Middleware` trait, `options.middleware` |
+| Rust | `Middleware` trait, `Client::builder().middleware(...)` |
 | C# | `Handlers`, `DelegatingHandler`s, also run in front of your own `HttpClient` |
 
 Middleware runs inside the retry loop, after credentials are set, and the first one registered is
@@ -51,6 +51,7 @@ const petstore = new Petstore("sk_live_...", {
 and in Rust:
 
 ```rust
+#[derive(Default)]
 struct Cache(Mutex<HashMap<String, Bytes>>);
 
 impl Middleware for Cache {
@@ -74,8 +75,7 @@ impl Middleware for Cache {
     }
 }
 
-let mut options = PetstoreOptions::default();
-options.middleware.push(Cache(Default::default()));
+let client = Petstore::builder().middleware(Cache::default()).build();
 ```
 
 ## Webhooks
