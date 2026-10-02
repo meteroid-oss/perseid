@@ -14,7 +14,7 @@ Calls are futures: run them on Tokio.
 use @@RUST_CRATE@@::api::@@CLIENT_NAME@@;
 
 // The token from `@@ENV_PREFIX@@_API_KEY`, the base URL from `@@ENV_PREFIX@@_BASE_URL` when set
-let client = @@CLIENT_NAME@@::from_env();
+let client = @@CLIENT_NAME@@::from_env()?;
 
 let client = @@CLIENT_NAME@@::builder()
     .token("your-api-key")
@@ -22,8 +22,11 @@ let client = @@CLIENT_NAME@@::builder()
     .timeout(std::time::Duration::from_secs(20))
     .max_retries(3)
     .header("x-team", "billing")
-    .build();
+    .build()?;
 ```
+
+Building a client fails with `Error::Request` when it has no base URL (the API declares none and
+neither `base_url()` nor `@@ENV_PREFIX@@_BASE_URL` is set) or an invalid one.
 
 Every API area hangs off the client (`client.items()`), and `with_options` sets headers, the
 timeout, retries or the idempotency key of the calls made through it:
@@ -33,8 +36,9 @@ and can move to other tasks.
 Operations take their path parameters, their body, then their query and header parameters as an
 options struct: `ItemsListOptions::new(required).limit(10)`. When every parameter is optional,
 pass the struct or `None`: `client.items().list(ItemsListOptions::new().limit(10))`. Models keep
-the properties this version of the SDK does not know in `extra`, and send them back. Operations
-that may answer without a body return an `Option`.
+the properties this version of the SDK does not know in `extra`, and send them back. Models only
+found in responses are `#[non_exhaustive]`: build them, in tests say, with `new(required...)` and
+field assignments. Operations that may answer without a body return an `Option`.
 
 ## Raw responses
 

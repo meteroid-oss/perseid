@@ -22,8 +22,10 @@ received, and each SDK reads a value as another variant than the one picked.
 
 Clients come from `Acme::builder()` (token, base URL, timeout, `max_retries`, headers,
 middleware, `http_client`, or `connector` for any hyper connector: custom TLS roots, client
-certificates, a proxy), `Acme::new(token)` or `Acme::from_env()`. Methods return a `Call`, a
-future of the decoded body; `.with_response().await` also gives the status, headers and
+certificates, a proxy), `Acme::new(token)` or `Acme::from_env()`, which all return a `Result`.
+When the spec has no server, `base_url()` or `ACME_BASE_URL` is required: without either they fail
+with an `Error::Request` naming both, and they reject a base URL that is not absolute http(s).
+Methods return a `Call`, a future of the decoded body; `.with_response().await` also gives the status, headers and
 `request_id()`. `with_options(RequestOptions)` on a resource sets headers, the timeout, retries or
 the idempotency key of its calls:
 `client.items().with_options(RequestOptions::new().max_retries(0)).list(None)`. Query and header
@@ -38,7 +40,10 @@ crate is re-exported as `api::http`.
 
 Structs keep the properties they do not declare in `extra` (`extra_properties` when the schema has
 an `extra` property) and send them back; `allOf` parts are inlined into one struct. Only structs
-without required fields, or whose required fields have a default, implement `Default`. Enums and unions
+without required fields, or whose required fields have a default, implement `Default`. Structs no
+request sends are `#[non_exhaustive]`, so new response properties are not breaking: build them
+with `new(required...)` or `Default`, then assign fields; request structs also take struct
+literals (`Charge { capture: Some(true), ..Charge::new(100) }`). Enums and unions
 are `#[non_exhaustive]` and decode values this version does not know into an `Unknown` variant
 that serializes back unchanged. Recursive fields are boxed. Dates are `chrono` types. In PATCH
 bodies, nullable optional fields are `Option<Option<T>>`: `Some(None)` sends `null`.

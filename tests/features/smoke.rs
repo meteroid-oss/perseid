@@ -17,7 +17,7 @@ fn builder() -> FeaturesBuilder {
 }
 
 fn client(token: &str) -> Features {
-    builder().token(token).build()
+    builder().token(token).build().unwrap()
 }
 
 async fn ids<P, T>(items: Paginator<P, T>, id: fn(T) -> String) -> Vec<String>
@@ -56,12 +56,12 @@ async fn smoke() {
     let status = tok.account().with_options(other).retrieve_machine().await.unwrap().status;
     assert_eq!(status, "Bearer other||");
 
-    let basic = builder().basic_auth("u", "p").build();
+    let basic = builder().basic_auth("u", "p").build().unwrap();
     assert_eq!(basic.account().session().await.unwrap().status, "Basic dTpw||");
     let provider = TokenProvider::new(|| async { Ok("fresh".to_owned()) });
-    let provided = builder().token_provider(provider).build();
+    let provided = builder().token_provider(provider).build().unwrap();
     assert_eq!(provided.account().retrieve_machine().await.unwrap().status, "Bearer fresh||");
-    let keyed = builder().api_key("api_key", "k").build();
+    let keyed = builder().api_key("api_key", "k").build().unwrap();
     assert_eq!(ids(keyed.widgets().list_iter(None), |w| w.id).await, ["w1", "w2", "w3"]);
     let anonymous = client("");
     let error = anonymous.widgets().list_iter(None).next().await.unwrap().unwrap_err();
@@ -109,13 +109,19 @@ async fn parity() {
     let url = std::env::var("FEATURES_URL").unwrap();
     std::env::set_var("FEATURES_BASE_URL", &url);
     std::env::set_var("FEATURES_API_KEY", "from-env");
-    let from_env = Features::from_env();
+    let from_env = Features::from_env().unwrap();
     assert_eq!(from_env.account().retrieve_machine().await.unwrap().status, "Bearer from-env||");
-    let explicit = Features::builder().token("explicit").base_url(url).build();
+    let explicit = Features::builder().token("explicit").base_url(url).build().unwrap();
     assert_eq!(explicit.account().retrieve_machine().await.unwrap().status, "Bearer explicit||");
     std::env::set_var("FEATURES_BASE_URL", "http://127.0.0.1:9");
-    let unreachable = Features::builder().token("t").max_retries(0).build();
+    let unreachable = Features::builder().token("t").max_retries(0).build().unwrap();
     assert!(unreachable.account().retrieve_health().await.unwrap_err().is_connection());
+    let invalid = Features::builder().base_url("features.example.com").build().unwrap_err();
+    assert!(invalid.to_string().contains("`features.example.com` is not an absolute"), "{invalid}");
+
+    let mut widget = Widget::new("w9", "nine");
+    widget.extra.insert("color".into(), "blue".into());
+    assert_eq!(serde_json::to_value(&widget).unwrap()["color"], "blue");
 }
 
 #[tokio::test]

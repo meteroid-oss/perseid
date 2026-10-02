@@ -11,6 +11,7 @@ cp "$here/../fixtures/petstore.yaml" "$work/openapi.yaml"
 cd "$work"
 perseid init --sdks "$lang"
 sed -i '/^name = /a webhooks = true' perseid.toml
+if [ "$lang" = rust ]; then sed -i '/^base_url = /d' perseid.toml; fi
 if [ "$lang" = go ]; then printf '\n[go]\nmodule = "github.com/petstore/petstore-go"\n' >> perseid.toml; fi
 if [ "$lang" = csharp ]; then printf '\n[csharp.context]\ndependency_injection = true\n' >> perseid.toml; fi
 perseid generate "$lang"

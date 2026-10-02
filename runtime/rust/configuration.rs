@@ -9,8 +9,7 @@ pub struct Configuration {
     pub user_agent: Option<String>,
     pub bearer_access_token: Option<String>,
     pub timeout: Option<Duration>,
-    pub num_retries: u32,
-    pub retry_schedule: Option<Vec<Duration>>,
+    pub max_retries: u32,
     pub middleware: Vec<Arc<dyn Middleware>>,
     /// Sent with every request, below the headers of one call.
     pub headers: Vec<(String, String)>,
