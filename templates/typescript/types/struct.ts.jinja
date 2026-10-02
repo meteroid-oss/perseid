@@ -35,7 +35,7 @@ export interface {{ type_name }}{% if base_names %} extends {{ ns.parents | join
 {% set extras = not intersect -%}
 {% set inherited = inherited_fields | list -%}
 {#- A typed `additionalProperties` converts the values of those properties. -#}
-{% set extra_ty = type.additional_properties if type.additional_properties is defined else none -%}
+{% set extra_ty = type.additional_properties.value_type() if type.additional_properties is defined else none -%}
 {% set parse_extra = (", (item: any) => " ~ m.from_json("item", extra_ty)) if extra_ty is not none and m.converted(extra_ty) else "" -%}
 {% set serialize_extra = (", (item: any) => " ~ m.to_json("item", extra_ty)) if extra_ty is not none and m.converted(extra_ty, true) else "" -%}
 /** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
