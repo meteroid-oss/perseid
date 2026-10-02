@@ -14,7 +14,7 @@
 {% if type.fields | length > 0 %} {
     {% for field in type.fields -%}
     {% set ty = m.field_type(field, m.union_class(field, type_name, type_names)) -%}
-    {{ m.member(field.name, type_name) }} = {% if field.required %}Json.Deserialize<{{ ty }}>(Json.Property(root, "{{ field.name }}"), options){% else %}Json.Optional<{{ ty }}>(root, "{{ field.name }}", options){% endif %},
+    {{ m.member(field.name, type_name) }} = {% if field.required %}Json.Deserialize<{{ ty }}>(Json.Property(root, {{ field.name | tojson }}), options){% else %}Json.Optional<{{ ty }}>(root, {{ field.name | tojson }}, options){% endif %},
     {% endfor -%}
 }{% endif %}
 {%- endmacro -%}
@@ -51,7 +51,7 @@ public abstract partial record {{ type_name }}
     public sealed record {{ class }}() : {{ type_name }}
 {% endif -%}
     {
-        public override string {{ tag_prop }} => "{{ variant.name }}";
+        public override string {{ tag_prop }} => {{ variant.name | tojson }};
     }
 {% if variant.type == "struct" and variant.fields | default([]) | length > 0 %}
     /// <summary>The fields of the <c>{{ variant.name }}</c> variant.</summary>
@@ -83,7 +83,7 @@ internal sealed class {{ type_name }}Converter : JsonConverter<{{ type_name }}>
 {% for variant in type.variants -%}
 {% set class = variant_class(variant) -%}
 {% set source %}{% if adjacent %}Json.Property(root, "{{ type.content_field }}"){% else %}root{% endif %}{% endset -%}
-            "{{ variant.name }}" => new {{ type_name }}.{{ class }}(
+            {{ variant.name | tojson }} => new {{ type_name }}.{{ class }}(
 {%- if variant.type == "ref" and variant.schema_ref is defined -%}
                 Json.Deserialize<{{ variant.schema_ref | to_upper_camel_case }}>({{ source }}, options)
 {%- elif variant.type == "struct" and variant.fields | default([]) | length > 0 -%}
@@ -110,11 +110,11 @@ internal sealed class {{ type_name }}Converter : JsonConverter<{{ type_name }}>
 {% for field in type.fields -%}
 {% set prop = m.member(field.name, type_name) -%}
 {% if field.required -%}
-        fields.Add(new("{{ field.name }}", Json.ToNode(value.{{ prop }}, options)));
+        fields.Add(new({{ field.name | tojson }}, Json.ToNode(value.{{ prop }}, options)));
 {% else -%}
         if (value.{{ prop }} is not null)
         {
-            fields.Add(new("{{ field.name }}", Json.ToNode(value.{{ prop }}, options)));
+            fields.Add(new({{ field.name | tojson }}, Json.ToNode(value.{{ prop }}, options)));
         }
 {% endif -%}
 {% endfor -%}

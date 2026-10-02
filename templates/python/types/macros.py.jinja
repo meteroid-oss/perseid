@@ -22,6 +22,11 @@
     {{ name | ident("snake", "python") }}
 {%- endmacro %}
 
+{#- A model attribute: also clear of the builtins and `BaseModel` members a field would shadow. -#}
+{% macro py_field(name) -%}
+    {{ name | ident("snake", "python_field") }}
+{%- endmacro %}
+
 {#- The module a schema or resource is generated into. -#}
 {% macro module_name(name) -%}
     {{ name | ident("snake", "python") }}
@@ -38,7 +43,7 @@
     {%- if field.flatten -%}
         {{ py_ident(field.type.to_python()) }}
     {%- else -%}
-        {{ py_ident(field.name) }}
+        {{ py_field(field.name) }}
     {%- endif -%}
 {%- endmacro %}
 

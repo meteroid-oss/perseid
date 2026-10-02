@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, py_ident -%}
+{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, model_imports, py_field -%}
 {#- A union variant's discriminator defaults to its tag: `Circle(radius=1)`. -#}
 {% set defaults = type.discriminator_defaults if type.discriminator_defaults is defined else {} -%}
 {% set runtime_names = ["BaseModel"] -%}
@@ -17,7 +17,7 @@
 {% set json_keys %}
     {#- Keyed by the attribute name: a keyword field `class` is exposed as `class_`. -#}
     {%- for field in type.fields if not field.flatten -%}
-        {%- set attr = py_ident(field.name) -%}
+        {%- set attr = py_field(field.name) -%}
         {%- if attr != field.name -%}
             "{{ attr }}": {{ py_str(field.name) }},
         {%- endif -%}

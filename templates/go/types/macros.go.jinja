@@ -245,7 +245,7 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
 
 {#- `omitempty` only for optional fields: a required nullable one sends `null`. -#}
 {% macro go_json_tag(field) -%}
-    `json:"{{ field.name }}{% if not field.required %},omitempty{% endif %}"`
+    `json:"{{ field.name | go_tag }}{% if not field.required %},omitempty{% endif %}"`
 {%- endmacro %}
 
 {#- Render a `// Deprecated:` marker, which is the convention Go tooling

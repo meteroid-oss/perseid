@@ -23,6 +23,22 @@ const PYTHON: &[&str] = &[
     // Not keywords, but names that linters reject as ambiguous (E741).
     "I", "O", "l",
 ];
+/// Python names that, as a class member or parameter, shadow a name the generated annotations use
+/// (`str`, `datetime`, `t`), or are `self` and `cls`.
+const PYTHON_SHADOWING: &[&str] = &[
+    "self", "cls", "str", "bool", "int", "float", "bytes", "set", "tuple", "object", "type",
+    "datetime", "t",
+];
+/// Python names only model fields must avoid: the builtin generics a method may keep (`list`
+/// operations are annotated `t.List`), and the members `BaseModel` defines.
+const PYTHON_FIELD: &[&str] = &[
+    "list",
+    "dict",
+    "to_dict",
+    "to_json",
+    "from_dict",
+    "from_json",
+];
 const GO: &[&str] = &[
     "break",
     "case",
@@ -158,13 +174,14 @@ const TYPESCRIPT: &[&str] = &[
     "await",
 ];
 
-fn keywords(language: &str) -> Result<&'static [&'static str], Error> {
+fn keywords(language: &str) -> Result<Vec<&'static [&'static str]>, Error> {
     Ok(match language {
-        "rust" => RUST,
-        "python" => PYTHON,
-        "go" => GO,
-        "java" => JAVA,
-        "typescript" => TYPESCRIPT,
+        "rust" => vec![RUST],
+        "python" => vec![PYTHON, PYTHON_SHADOWING],
+        "python_field" => vec![PYTHON, PYTHON_SHADOWING, PYTHON_FIELD],
+        "go" => vec![GO],
+        "java" => vec![JAVA],
+        "typescript" => vec![TYPESCRIPT],
         other => {
             return Err(Error::new(
                 ErrorKind::InvalidOperation,
@@ -172,6 +189,28 @@ fn keywords(language: &str) -> Result<&'static [&'static str], Error> {
             ));
         }
     })
+}
+
+/// `name` as the value of a Go `json:"..."` struct tag. `encoding/json` silently ignores tags whose
+/// name has a quote, backslash, comma or other punctuation outside its allowed set, so such a name
+/// is rejected instead of generating a struct that serializes under the wrong key.
+pub(crate) fn go_tag(name: &str) -> Result<String, Error> {
+    const ALLOWED: &str = "!#$%&()*+-./:;<=>?@[]^_{|}~ ";
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_alphanumeric() || ALLOWED.contains(c))
+    {
+        return Err(Error::new(
+            ErrorKind::InvalidOperation,
+            format!(
+                "go codegen: the property name {name:?} cannot be a `json` struct tag \
+                 (quotes, backslashes, commas and control characters are not allowed), \
+                 rename it in the spec"
+            ),
+        ));
+    }
+    Ok(name.to_owned())
 }
 
 /// `name` as a `case` (`snake`, `camel`, `pascal` or `shouty`) identifier. Comparison operators
@@ -216,8 +255,14 @@ pub(crate) fn ident(name: &str, case: &str, language: Option<&str>) -> Result<St
     } else if out.starts_with(|c: char| c.is_ascii_digit()) {
         out = convert(&format!("value {words}"))?;
     }
+    if language == Some("go") && case == "pascal" && !out.starts_with(|c: char| c.is_uppercase()) {
+        // A first rune that is not an uppercase letter would leave the field unexported.
+        out.insert(0, 'X');
+    }
     if let Some(language) = language
-        && keywords(language)?.contains(&out.as_str())
+        && keywords(language)?
+            .iter()
+            .any(|set| set.contains(&out.as_str()))
     {
         out = match language == "rust" && !RUST_NOT_RAW.contains(&out.as_str()) {
             true => format!("r#{out}"),
@@ -269,6 +314,31 @@ mod tests {
         assert_eq!(ident("type", "camel", Some("go")).unwrap(), "type_");
         assert_eq!(ident("Type", "pascal", Some("go")).unwrap(), "Type");
         assert_eq!(ident("default", "camel", None).unwrap(), "default");
+    }
+
+    #[test]
+    fn python_members_avoid_shadowing() {
+        let field = |n: &str| ident(n, "snake", Some("python_field")).unwrap();
+        let method = |n: &str| ident(n, "snake", Some("python")).unwrap();
+        assert_eq!(method("str"), "str_");
+        assert_eq!(method("self"), "self_");
+        assert_eq!(method("list"), "list");
+        assert_eq!(field("list"), "list_");
+        assert_eq!(field("str"), "str_");
+        assert_eq!(field("to_dict"), "to_dict_");
+        assert_eq!(field("toJson"), "to_json_");
+        assert_eq!(field("name"), "name");
+    }
+
+    #[test]
+    fn go_fields_are_exported_and_tags_checked() {
+        assert_eq!(ident("名前", "pascal", Some("go")).unwrap(), "X名前");
+        assert_eq!(ident("name", "pascal", Some("go")).unwrap(), "Name");
+        assert_eq!(go_tag("user-id").unwrap(), "user-id");
+        assert_eq!(go_tag("名前").unwrap(), "名前");
+        assert!(go_tag("say\"hi").is_err());
+        assert!(go_tag("back\\slash").is_err());
+        assert!(go_tag("a,b").is_err());
     }
 
     #[test]

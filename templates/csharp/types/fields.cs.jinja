@@ -7,7 +7,7 @@
 {% if field.description is defined %}
 {{ m.doc(field.description) }}
 {%- endif %}
-[JsonPropertyName("{{ field.name }}")]
+[JsonPropertyName({{ field.name | tojson }})]
 {% if patch -%}
 [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
 [JsonConverter(typeof(MaybeUnsetConverter<{{ ty }}>))]
