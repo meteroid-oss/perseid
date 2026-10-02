@@ -173,7 +173,9 @@ constant per value: an unknown value is kept and sent back unchanged, `isKnown()
 and `known()` returns an enum to `switch` on. Unions of a primitive and an object are typed
 (`Charge.ChargeCustomer.ofString("cus_1")`, `id()` for expandable objects); unions of objects keep
 unmatched objects as `Unrecognized`, and `decodeAs(Customer.class)` reads a value as another
-variant. The HTTP plumbing lives in an `internal` package.
+variant. Tagged unions have `isCircle()`/`asCircle()` per variant besides their subclasses. An
+operation that may answer a bodiless 2xx returns an `Optional`. The HTTP plumbing lives in an
+`internal` package.
 
 ## C#
 
@@ -183,15 +185,18 @@ public member. `new AcmeClient()` reads `ACME_API_KEY` and `ACME_BASE_URL`. Ever
 and takes a `RequestOptions` (`Headers`, `Timeout`, `MaxRetries`, `IdempotencyKey`) then a
 `CancellationToken`. Each resource implements an interface (`IAcmeClient.Customers` is an
 `ICustomersApi`) to mock in tests, and `client.Customers.WithRawResponse.RetrieveAsync(id)` returns
-an `ApiResponse<Customer>` with `StatusCode`, `Headers`, `RequestId` and the `Value`. Pass your own
+an `ApiResponse<Customer>` with `StatusCode`, `Headers`, `RequestId` and the `Value`. An operation
+that may answer a bodiless 2xx returns a `Customer?`, `null` then. Pass your own
 `HttpClient` or an `HttpMessageHandler` in the options, or set `dependency_injection = true` under
 `[csharp.context]` for `services.AddAcmeClient(o => o.Token = ...)`, an `IHttpClientFactory` typed
-client (the scaffolded project then references `Microsoft.Extensions.Http`). Each call is an
+client (the scaffolded project then references `Microsoft.Extensions.Http`) whose `HttpClient` has no
+timeout of its own, leaving it to the SDK's. Each call is an
 `Activity` of the `ActivitySource` named after the package.
 
 Models are `sealed record`s with `init` properties and read-only collections, compared by value
 (collections and JSON included); properties the SDK does not know are kept in
-`AdditionalProperties` and sent back. Unknown enum values expose `IsKnown`. Nullable optional PATCH
+`AdditionalProperties` and sent back. Unknown enum values expose `IsKnown`, and the known ones are
+also constants in `Status.Values` to `switch` on `status.Value`. Nullable optional PATCH
 fields are `MaybeUnset<T>`: assign `null` to send `null`, leave them unset to omit them. Dates are
 `DateTimeOffset`s, so fractions of a second beyond 100 nanoseconds are rounded. A union is an
 abstract record with a nested record per variant (`StringValue`, `ListValue`... for JSON types),
