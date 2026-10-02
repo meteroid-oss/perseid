@@ -1,51 +1,49 @@
 # Auth, pagination, streaming and encoding
 
+What the SDKs do on the wire, from what the spec declares. See [languages](languages.md) for
+each SDK's syntax.
+
 ## Authentication
 
-Clients read `components.securitySchemes` and honor the `security` of each operation, including
-`security: []` for public endpoints. For every request they send the credentials of the first
-alternative that is fully configured:
+Clients read `components.securitySchemes` and honor each operation's `security`, including
+`security: []` for public endpoints. Each request sends the credentials of the first alternative
+that is fully configured.
 
 | Scheme | Configured with |
 |---|---|
-| `http` bearer, `openIdConnect` | the constructor token, or a token provider called before each request |
-| `oauth2` | the same, or with a `clientCredentials` flow, a client id and secret: the client fetches the token itself |
-| `http` basic | `basicAuth` / `basic_auth` / `BasicAuth` / `setBasicAuth` |
-| `apiKey` in a header, query parameter or cookie | the constructor token, or per scheme in `apiKeys` / `api_keys` / `ApiKeys` |
+| `http` bearer, `openIdConnect` | The constructor token, or a token provider called before each request |
+| `oauth2` | The same, or a client id and secret for a `clientCredentials` flow |
+| `http` basic | `basicAuth` / `basic_auth` / `BasicAuth` |
+| `apiKey` in a header, query parameter or cookie | The constructor token, or one key per scheme in `apiKeys` / `api_keys` / `APIKeys` |
 
 ```ts
-new Acme({ apiKey: "sk_live_..." });                              // unchanged
-new Acme({ tokenProvider: () => oauth.accessToken() });           // OAuth2, refreshed by you
+new Acme({ apiKey: "sk_live_..." });
+new Acme({ tokenProvider: () => oauth.accessToken() });
 ```
 
-Without a token, clients read `ACME_API_KEY`, and `ACME_BASE_URL` overrides the base URL. The
-prefix is the `name` in SCREAMING_SNAKE_CASE, or `env_prefix` under `[context]`.
-
-A spec without `securitySchemes` keeps sending `Authorization: Bearer <token>`.
+- Without a token, clients read `ACME_API_KEY`. `ACME_BASE_URL` overrides the base URL.
+- The prefix is the `name` in SCREAMING_SNAKE_CASE, or `env_prefix` under `[context]`.
+- A spec without `securitySchemes` sends `Authorization: Bearer <token>`.
 
 ### OAuth2 client credentials
 
-For an `oauth2` scheme with a `clientCredentials` flow, the client takes `clientId` and
-`clientSecret` (`client_id`, `client_secret`, `ClientID`, `ClientSecret` ... in each language), by
-default from `ACME_CLIENT_ID` and `ACME_CLIENT_SECRET`:
-
 ```ts
-new Acme({ clientId: "...", clientSecret: "..." });
+new Acme({ clientId: "...", clientSecret: "..." }); // or ACME_CLIENT_ID and ACME_CLIENT_SECRET
 ```
 
-The client posts `grant_type=client_credentials` to the `tokenUrl` on first use (a relative one
-is resolved against the base URL), asking for the scopes the operations require, and sends the
-access token as a bearer token. The credentials travel in an HTTP basic header (RFC 6749), or as
-form fields with the client auth option set to `body`. The token is kept until a minute before
-`expires_in` is up (or half its life when shorter), concurrent requests share one token request,
-the token request goes through the client's middleware, timeout and retries, and an access token
-the API answers with `401` is replaced once and the request sent again. A token provider or the
-constructor token wins over the client credentials.
+- The client posts `grant_type=client_credentials` to the `tokenUrl` on first use, asking for the
+  scopes the operations require. A relative `tokenUrl` resolves against the base URL.
+- Credentials go in an HTTP basic header (RFC 6749), or as form fields with the client auth
+  option set to `body`.
+- The token is cached until a minute before `expires_in`, or half its life when shorter.
+  Concurrent requests share one token request.
+- The token request goes through the client's middleware, timeout and retries.
+- A `401` replaces the token once and sends the request again.
+- A token provider or a constructor token takes precedence over client credentials.
 
 ## Pagination
 
-Mark list operations with `x-pagination`, or describe them once in `perseid.toml` to match every
-operation with that query parameter and response shape:
+Mark list operations with `x-pagination`:
 
 ```yaml
 x-pagination:
@@ -55,6 +53,9 @@ x-pagination:
   items: data                   # the default
 ```
 
+Or describe them once in `perseid.toml`, to match every operation with that query parameter and
+response shape:
+
 ```toml
 [pagination]                    # or [[pagination]] with `operations = [...]` to scope rules
 page = "page"
@@ -62,9 +63,10 @@ total_pages = "pagination_meta.total_pages"
 first_page = 0
 ```
 
-`x-pagination: false` opts an operation out of `perseid.toml` rules. Paginated operations give
-both every item, fetching pages on demand, and the pages themselves (items, the response body,
-whether there is a next page and how to fetch it):
+`x-pagination: false` opts an operation out of the `perseid.toml` rules.
+
+Paginated operations give every item, fetching pages on demand, and the pages themselves: their
+items, the response body, and whether there is a next page.
 
 ```ts
 for await (const customer of client.customers.list({ perPage: 100 })) { ... }
@@ -74,7 +76,6 @@ const page = await client.customers.list();       // page.items, page.hasNextPag
 ```python
 for customer in client.customers.list(per_page=100): ...
 page = client.customers.list()                     # page.items, page.has_next_page(), page.get_next_page()
-async for customer in async_client.customers.list(): ...
 ```
 
 ```go
@@ -83,7 +84,7 @@ page, err := client.Customers().List(ctx, nil) // page.Items, page.Body, page.Ha
 ```
 
 ```rust
-let mut customers = client.customers().list_iter(None); // a Stream that owns its client
+let mut customers = client.customers().list_iter(None);
 while let Some(customer) = customers.next().await { let customer = customer?; }
 let page = client.customers().list_iter(None).first_page().await?; // items(), next_page()
 ```
@@ -98,28 +99,31 @@ await foreach (var customer in client.Customers.ListAutoPagingAsync(new() { PerP
 var page = await client.Customers.ListAutoPagingAsync().GetFirstPageAsync(); // Items, GetNextPageAsync()
 ```
 
-## Streaming
-
-`text/event-stream` responses return an event stream (`for await`, `for`, `Next()`, `Iterable`,
-`next().await`, `await foreach`), `multipart/form-data` bodies a typed `...Body` with `Upload` files,
-and `application/octet-stream` bodies accept bytes or streams. Streamed uploads are not retried.
-Bodies of any other media type (`image/png`, `text/plain`...) are sent as given, with their media
-type, and list fields of multipart bodies as one part per item. A JSON response that may also be an
-event stream gets a `..._stream` twin method, which sets the body's boolean `stream` property to
-`true` when it has one.
-
-When the `text/event-stream` content references a schema, as OpenAI's spec does, each event's
-`data` decodes into that model and the stream ends at `data: [DONE]`. The raw event (`event`, `id`)
-of the last item stays available as `lastEvent` / `last_event` / `Event()` / `LastEvent`.
+## Streaming and uploads
 
 ```ts
 const stream = await client.completions.createStream({ prompt: "hi" });
 for await (const chunk of stream) process.stdout.write(chunk.delta);
 ```
 
+| Media type | SDK |
+|---|---|
+| `text/event-stream` response | An event stream: `for await`, `for`, `range`, `Stream`, `Iterable`, `await foreach` |
+| `multipart/form-data` body | A typed `...Body`, with `Upload` files. List fields are one part per item |
+| `application/octet-stream` body | Bytes or a stream |
+| Any other media type (`image/png`, `text/plain`...) | Sent as given, with its media type |
+
+- When the event stream content references a schema, as OpenAI's spec does, each event's `data`
+  decodes into that model and the stream ends at `data: [DONE]`.
+- The raw event (`event`, `id`) of the last item is `lastEvent` / `last_event` / `Event()` /
+  `LastEvent`.
+- A JSON response that may also be an event stream gets a `..._stream` twin method. It sets the
+  body's boolean `stream` property to `true` when there is one.
+- Streamed uploads are not retried.
+
 ## Raw responses
 
-Every SDK can return the status, headers and request id of a successful call with its parsed body:
+Every SDK can return the status, headers and request id of a successful call with its body.
 
 | Language | |
 |---|---|
@@ -132,9 +136,8 @@ Every SDK can return the status, headers and request id of a successful call wit
 
 ## Query parameters and form bodies
 
-Lists repeat their parameter (`?tag=a&tag=b`), or are comma-separated with `explode: false`.
 Objects, lists of objects and untyped JSON values are sent the way Stripe-style APIs read them,
-for query parameters and `application/x-www-form-urlencoded` bodies alike:
+in query parameters and `application/x-www-form-urlencoded` bodies alike:
 
 ```
 filter[status]=open&filter[amount][gte]=5     # objects, nested as deep as they go
@@ -143,33 +146,42 @@ filter[tags][]=a&filter[tags][]=b             # lists inside objects
 expand[]=a&expand[]=b                         # lists with `style: deepObject`
 ```
 
-Form body properties follow their `encoding` (`style`, `explode`). Paths with a query of their
-own, such as `/responses?beta=true`, keep it.
+| Parameter | Sent as |
+|---|---|
+| List | Repeated (`?tag=a&tag=b`), comma-separated with `explode: false` |
+| `pipeDelimited`, `spaceDelimited` list | `ids=a\|b\|c`, `ids=a b c`; repeated with `explode` |
+| `content: application/json` (query, path, header) | Typed by its schema, sent as compact JSON, percent-encoded where needed |
+| Cookie | Typed like a header, sent in one `Cookie` header, percent-encoded |
+| Header list | As the caller writes it |
+| Form body property | Follows its `encoding` (`style`, `explode`) |
 
-`pipeDelimited` and `spaceDelimited` lists without `explode` are sent as `ids=a|b|c` and
-`ids=a b c`; with `explode` they repeat the parameter like `form`. A parameter with
-`content: application/json` (query, path or header) is typed by its schema and sent as compact JSON,
-percent-encoded where it needs to be.
+- A path with a query of its own, such as `/responses?beta=true`, keeps it.
+- A parameter whose name another parameter of the operation takes (`id` in the query and in a
+  header) gets a `_query`, `_header` or `_cookie` suffix in the SDK. Its wire name is untouched.
 
-Cookie parameters are typed like header ones and sent in one `Cookie` header, percent-encoded. A
-parameter whose name another one of the operation already takes (`id` in the query and in a
-header) gets a `_query`, `_header` or `_cookie` suffix in the SDK, its wire name untouched; path
-variables the path uses without declaring them are strings.
+### Path parameters
 
-Plain path parameters are strings: unions of scalars are accepted. Other path parameters follow
-their `style` and `explode` as the OpenAPI table has it: `label` (`.a.b`), `matrix` (`;id=a,b`),
-and lists and objects (`a,b,c`, `k,v,k2,v2`, or `k=v,k2=v2` exploded) are typed values. Header
-lists are sent as the caller writes them. Operations using a construct perseid does not support are
-skipped with a warning naming them.
+- Plain path parameters are strings. Unions of scalars are accepted.
+- Others follow their `style` and `explode`: `label` (`.a.b`), `matrix` (`;id=a,b`), lists and
+  objects (`a,b,c`, `k,v,k2,v2`, or `k=v,k2=v2` exploded).
+- Path variables the path uses without declaring them are strings.
 
 ## Bodies and responses
 
-A request body of any JSON schema is accepted, including a bare list or scalar, a boolean schema
-and a recursive alias (`Tree: array of Tree`, typed as plain JSON where an SDK cannot spell it).
-Nullable items, map values and response bodies stay nullable: a `null` body decodes to the
-language's empty value without an error. An operation declaring both a body and a bodiless `204`
-(or any bodiless 2xx) returns an optional value, empty for the bodiless response.
+- A request body can be any JSON schema: a bare list or scalar, a boolean schema, a recursive
+  alias (`Tree: array of Tree`, typed as plain JSON where an SDK cannot spell it).
+- Nullable items, map values and response bodies stay nullable. A `null` body decodes to the
+  language's empty value.
+- An operation declaring both a body and a bodiless 2xx (such as `204`) returns an optional
+  value, empty for the bodiless response.
 
-Every operation is sent to the one base URL of the client. Operations or path items declaring their
-own `servers` warn, naming the operation: put them in a spec of their own, or set the base URL when
-creating the client.
+## Base URL
+
+Every operation goes to the client's one base URL. Operations or path items declaring `servers`
+that the root `servers` do not list produce a warning naming them. Put them in a spec of their
+own, or set the base URL when creating the client.
+
+## Unsupported constructs
+
+An operation using a construct perseid does not support is skipped, with a warning naming it.
+See [spec support](configuration.md#spec-support).
