@@ -182,7 +182,10 @@ def encode_path_param(name: str, value: t.Any, style: str, explode: bool) -> Enc
     value = to_json_value(value)
     if style == "json":
         return EncodedPathParam(_quote_unreserved(_compact_json(value)))
-    quote = lambda item: _quote_unreserved(_path_text(item))  # noqa: E731
+
+    def quote(item: t.Any) -> str:
+        return _quote_unreserved(_path_text(item))
+
     head, separator = {"label": (".", "."), "matrix": (";", ";")}.get(style, ("", ","))
     key = _quote_unreserved(name)
     if isinstance(value, list):
