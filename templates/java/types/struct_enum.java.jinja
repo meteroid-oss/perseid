@@ -204,7 +204,6 @@ public abstract class {{ type_name }} {
         {% set vn.unions = vn.unions + [m.union_name(field, type_name ~ cls, fpascals[loop.index0])] -%}
         {% endfor -%}
         {% set vunions = vn.unions -%}
-        {% set extra = variant.fields | selectattr("flatten") | list | length == 0 -%}
         {% if content -%}
         @JsonProperty({{ content | tojson }})
         private Content data;
@@ -249,14 +248,14 @@ public abstract class {{ type_name }} {
                 isGetterVisibility = Visibility.NONE,
                 setterVisibility = Visibility.NONE)
         public static final class Content {
-            {{ m.model_members("Content", variant.fields, fvars, fpascals, vunions, {}, extra) }}
+            {{ m.model_members("Content", variant.fields, fvars, fpascals, vunions, {}) }}
             {% for field in variant.fields %}{% if vunions[loop.index0] %}
 
             {{ m.union_class(field.type, vunions[loop.index0], classes + [type_name]) }}
             {%- endif %}{% endfor %}
         }
         {% else -%}
-        {{ m.model_members(cls, variant.fields, fvars, fpascals, vunions, {}, extra) | replace("public boolean equals(Object o) {\n    if (this == o) {\n        return true;\n    }\n    if (o == null || getClass() != o.getClass()) {", "public boolean equals(Object o) {\n    if (this == o) {\n        return true;\n    }\n    if (o == null || getClass() != o.getClass()" ~ (" || !super.equals(o)" if shared else "") ~ ") {") }}
+        {{ m.model_members(cls, variant.fields, fvars, fpascals, vunions, {}) | replace("public boolean equals(Object o) {\n    if (this == o) {\n        return true;\n    }\n    if (o == null || getClass() != o.getClass()) {", "public boolean equals(Object o) {\n    if (this == o) {\n        return true;\n    }\n    if (o == null || getClass() != o.getClass()" ~ (" || !super.equals(o)" if shared else "") ~ ") {") }}
         {% for field in variant.fields %}{% if vunions[loop.index0] %}
 
         {{ m.union_class(field.type, vunions[loop.index0], classes + [type_name]) }}

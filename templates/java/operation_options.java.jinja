@@ -11,10 +11,10 @@
 {% set ns.params = ns.params + [p] -%}
 {% set ns.fields = ns.fields + [name ~ "_" if name in ["builder", "toBuilder", "hashCode", "toString", "getClass", "build"] else name] -%}
 {% set ns.pascals = ns.pascals + [pascals[loop.index0]] -%}
-{% if p.union is defined -%}
+{% if m.typed_param_union(p) -%}
 {% set union_cls = pascals[loop.index0] ~ ("Value" if pascals[loop.index0] in ["Builder", class_name] else "") -%}
 {% set ns.types = ns.types + [union_cls] -%}
-{% set ns.unions = ns.unions + [[p.union, union_cls]] -%}
+{% set ns.unions = ns.unions + [[p.typed_union, union_cls]] -%}
 {% else -%}
 {% set ns.types = ns.types + [p.type.to_java() if loop.index0 < operation.query_params | length else "String"] -%}
 {% endif -%}

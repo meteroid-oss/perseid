@@ -11,10 +11,9 @@
 {% endfor -%}
 {% set unions = ns.unions -%}
 {% set defaults = type.discriminator_defaults | default({}) -%}
-{#- Jackson hands the properties of an allOf part to the part and the any-setter alike. -#}
-{% set extra = type.fields | selectattr("flatten") | list | length == 0 -%}
 package {{ sdk.java_package }}.models;
 
+import {{ sdk.java_internal_package }}.Unions;
 import {{ sdk.java_internal_package }}.Utils;
 
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
@@ -63,7 +62,7 @@ Immutable: build one with {@link #builder()}, change a copy with {@link #toBuild
         isGetterVisibility = Visibility.NONE,
         setterVisibility = Visibility.NONE)
 public final class {{ class_ty }} {
-    {{ m.model_members(class_ty, type.fields, vars, pascals, unions, defaults, extra) }}
+    {{ m.model_members(class_ty, type.fields, vars, pascals, unions, defaults) }}
 
     {{ m.json_methods(class_ty) }}
 {% for field in type.fields %}{% if unions[loop.index0] %}

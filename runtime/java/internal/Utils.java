@@ -163,6 +163,20 @@ public final class Utils {
     }
 
     /**
+     * The JSON properties of a model, for the model extending it.
+     *
+     * @param value the model, or null
+     * @return its properties by name, empty for null
+     */
+    public static Map<String, JsonNode> properties(Object value) {
+        Map<String, JsonNode> properties = new LinkedHashMap<>();
+        if (value != null) {
+            MAPPER.valueToTree(value).fields().forEachRemaining(e -> properties.put(e.getKey(), e.getValue()));
+        }
+        return properties;
+    }
+
+    /**
      * A query parameter value as sent, before URL encoding.
      *
      * @param v the value

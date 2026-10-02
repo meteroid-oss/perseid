@@ -19,6 +19,21 @@
 {%- endif -%}
 {%- endmacro %}
 
+{#- "true" when the query parameter `p` declares a union of scalars and lists of scalars, which
+    its options class types. -#}
+{% macro typed_param_union(p) -%}
+{%- if p.typed_union is defined and not p.required -%}
+{%- set ns = namespace(plain=true) -%}
+{%- for v in p.typed_union.union_variants() -%}
+{%- set item = v.type.inner_type() if v.type.is_list() else v.type -%}
+{%- if v.json_type == "object" or item.is_schema_ref() or item.is_union() or item.is_json_object() or item.is_list() -%}
+{%- set ns.plain = false -%}
+{%- endif -%}
+{%- endfor -%}
+{{ "true" if ns.plain }}
+{%- endif -%}
+{%- endmacro %}
+
 {#- Whether `ty` holds a typed union, rendered as a class. -#}
 {% macro has_union(ty) -%}
 {%- if ty.is_union() -%}true
@@ -183,25 +198,27 @@ private {{ stored_type(field, union_cls) }} {{ var }}{{ initializer(field, ty, d
 {% endif -%}
 {%- endmacro %}
 
-{#- Fields, constructors, getters, unknown properties and builder of the model `cls`, whose
-    unknown properties are kept when `extra`. -#}
-{% macro model_members(cls, fields, vars, pascals, unions, defaults={}, extra=true) -%}
+{#- Fields, constructors, getters, unknown properties and builder of the model `cls`. The
+    properties of its flattened allOf parts are kept with its unknown ones, which the parts are read
+    from: Jackson would hand every part, and its unknown properties, the properties of the others. -#}
+{% macro model_members(cls, fields, vars, pascals, unions, defaults={}) -%}
+{% set parts = fields | selectattr("flatten") | list -%}
 {% for field in fields -%}
+{% if not field.flatten -%}
 {{ declaration(field, vars[loop.index0], unions[loop.index0], defaults[field.name] if field.name in defaults else none) }}
+{% endif -%}
 {% endfor -%}
-{% if extra -%}
 private final Map<String, JsonNode> additionalProperties = new LinkedHashMap<>();
-{% endif %}
 
 private {{ cls }}() {}
 
 private {{ cls }}(Builder builder) {
     {% for field in fields -%}
+    {% if not field.flatten -%}
     this.{{ vars[loop.index0] }} = {{ copied(field, "builder." ~ vars[loop.index0], "copy") }};
-    {% endfor -%}
-    {% if extra -%}
-    this.additionalProperties.putAll(builder.additionalProperties);
     {% endif -%}
+    {% endfor -%}
+    this.additionalProperties.putAll(builder.additionalProperties);
 }
 
 /**
@@ -221,65 +238,82 @@ public static Builder builder() {
 public Builder toBuilder() {
     Builder builder = new Builder();
     {% for field in fields -%}
+    {% if not field.flatten -%}
     builder.{{ vars[loop.index0] }} = {{ copied(field, vars[loop.index0], "mutable") }};
-    {% endfor -%}
-    {% if extra -%}
-    builder.additionalProperties.putAll(additionalProperties);
     {% endif -%}
+    {% endfor -%}
+    builder.additionalProperties.putAll(additionalProperties);
     return builder;
 }
 {% for field in fields %}
 
+{% if field.flatten -%}
+{% set ty = java_type(field.type) -%}
+{{ field_doc(field, "@return the properties of this part", "The properties of {@link " ~ ty ~ "}, which this schema extends.") }}public {{ ty }} {{ vars[loop.index0] }}() {
+    return Unions.convert(additionalProperties, {{ ty }}.class);
+}
+{%- else -%}
 {{ getter(field, vars[loop.index0], unions[loop.index0]) }}
+{%- endif %}
 {%- endfor %}
-{% if extra %}
 
 /**
  * Properties this version of the SDK does not know, kept as received and sent back.
  *
  * @return the properties by name, unmodifiable
  */
-@JsonAnyGetter
 public Map<String, JsonNode> additionalProperties() {
+    {% if parts -%}
+    Map<String, JsonNode> unknown = new LinkedHashMap<>(additionalProperties);
+    {% for field in fields -%}
+    {% if field.flatten -%}
+    unknown.keySet().retainAll({{ vars[loop.index0] }}().additionalProperties().keySet());
+    {% endif -%}
+    {% endfor -%}
+    return Collections.unmodifiableMap(unknown);
+    {% else -%}
     return Collections.unmodifiableMap(additionalProperties);
+    {% endif -%}
+}
+
+@JsonAnyGetter
+private Map<String, JsonNode> properties() {
+    return additionalProperties;
 }
 
 @JsonAnySetter
-private void putAdditionalProperty(String name, JsonNode value) {
+private void putProperty(String name, JsonNode value) {
     additionalProperties.put(name, value);
 }
-{% endif %}
 
-{{ value_methods(cls, vars + (["additionalProperties"] if extra else [])) }}
+{% set ns = namespace(vars=[]) -%}
+{% for field in fields %}{% if not field.flatten %}{% set ns.vars = ns.vars + [vars[loop.index0]] %}{% endif %}{% endfor -%}
+{{ value_methods(cls, ns.vars + ["additionalProperties"]) }}
 
 /** Builds {@link {{ cls }}}. */
 public static final class Builder {
     {% for field in fields -%}
+    {% if not field.flatten -%}
     {% set ty = java_type(field.type, unions[loop.index0]) -%}
     private {{ stored_type(field, unions[loop.index0]) }} {{ vars[loop.index0] }}{{ initializer(field, ty, defaults[field.name] if field.name in defaults else none) }};
+    {% endif -%}
     {% endfor -%}
-    {% if extra -%}
     private final Map<String, JsonNode> additionalProperties = new LinkedHashMap<>();
-    {% endif %}
 
     private Builder() {}
     {% for field in fields %}
 
-    {{ setters(field, vars[loop.index0], pascals[loop.index0], "Builder", unions[loop.index0]) }}
-    {%- endfor %}
-    {% if extra %}
-
-    /**
-     * Properties the SDK does not know, sent along, replacing those set before.
-     *
-     * @param additionalProperties the properties by name
-     * @return this builder
-     */
-    public Builder additionalProperties(Map<String, JsonNode> additionalProperties) {
-        this.additionalProperties.clear();
-        this.additionalProperties.putAll(additionalProperties);
+    {% if field.flatten -%}
+    {% set ty = java_type(field.type) -%}
+    {% set var = vars[loop.index0] -%}
+    {{ field_doc(field, "@param " ~ var ~ " the properties\n@return this builder", "Sets the properties of {@link " ~ ty ~ "}, which this schema extends.") }}public Builder {{ var }}({{ ty }} {{ var }}) {
+        additionalProperties.putAll(Utils.properties({{ var }}));
         return this;
     }
+    {%- else -%}
+    {{ setters(field, vars[loop.index0], pascals[loop.index0], "Builder", unions[loop.index0]) }}
+    {%- endif %}
+    {%- endfor %}
 
     /**
      * A property the SDK does not know, sent along.
@@ -292,7 +326,28 @@ public static final class Builder {
         additionalProperties.put(name, value);
         return this;
     }
-    {% endif %}
+
+    /**
+     * Properties the SDK does not know, sent along.
+     *
+     * @param additionalProperties the properties by name
+     * @return this builder
+     */
+    public Builder putAllAdditionalProperties(Map<String, JsonNode> additionalProperties) {
+        this.additionalProperties.putAll(additionalProperties);
+        return this;
+    }
+
+    /**
+     * Leaves out a property the SDK does not know.
+     *
+     * @param name the property name
+     * @return this builder
+     */
+    public Builder removeAdditionalProperty(String name) {
+        additionalProperties.remove(name);
+        return this;
+    }
 
     /**
      * The {@code {{ cls }}}.

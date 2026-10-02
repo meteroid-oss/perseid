@@ -227,6 +227,13 @@ class RoundTripTest {
         JsonNode json = PLAIN.readTree(composed.toJson());
         assertFalse(json.has("base"));
         assertEquals("b1", json.get("id").asText());
+
+        String json2 = "{\"id\":\"b1\",\"extra\":\"e\",\"sibling_prop\":\"s\",\"color\":\"red\"}";
+        Composed colored = Composed.fromJson(json2);
+        assertEquals(java.util.Set.of("color"), colored.additionalProperties().keySet());
+        assertEquals(PLAIN.readTree(json2), PLAIN.readTree(colored.toJson()));
+        Composed built = Composed.builder().base(colored.base()).extra("e").siblingProp("s").build();
+        assertEquals(colored, built);
     }
 
     @ParameterizedTest

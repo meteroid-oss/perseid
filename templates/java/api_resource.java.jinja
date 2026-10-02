@@ -598,7 +598,7 @@ public final class {{ resource_type_name }} {
         HttpUrl.Builder url = client.newUrlBuilder(){{ ns.calls | join("") }};
         {% for p in op.query_params -%}
         {% set explode = p.explode | default(true) -%}
-        {% set typed_union = p.union is defined and not p.required -%}
+        {% set typed_union = m.typed_param_union(p) == "true" -%}
         {% set var = pv.exprs[loop.index0] if p.required else "value" ~ loop.index -%}
         {% set add -%}
             {% if p.structured or typed_union -%}
