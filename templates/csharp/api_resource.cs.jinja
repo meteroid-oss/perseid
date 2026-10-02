@@ -19,7 +19,7 @@
 {% else %}{% set f.value = f.response_type -%}
 {% endif -%}
 {#- Without a value: a bodiless success next to one with a body, or a `null` body. -#}
-{% set f.may_be_empty = (op.response_may_be_empty | default(false) or op.response_body_optional | default(false)) and f.response_type and f.value == f.response_type and op.pagination is not defined -%}
+{% set f.may_be_empty = op.response_may_be_empty | default(false) and f.response_type and f.value == f.response_type and op.pagination is not defined -%}
 {% if f.may_be_empty %}{% set f.value = f.value ~ "?" %}{% endif -%}
 {% set f.takes_body = op.request_body_schema_name is defined or op.request_body_json_type is defined or op.request_body_kind in ["binary", "multipart"] -%}
 {% set f.has_options = op | has_query_or_header_params -%}

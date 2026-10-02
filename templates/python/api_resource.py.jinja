@@ -13,7 +13,7 @@ from __future__ import annotations
 {% set streams = resource.operations | selectattr("response_is_event_stream") | list -%}
 {% set paginated = resource.operations | selectattr("pagination", "defined") | list -%}
 {% set may_be_empty = namespace(any=false) -%}
-{% for op in resource.operations if (op.response_may_be_empty | default(false) or op.response_body_optional | default(false)) and op.pagination is not defined and not (op.response_is_event_stream or op.response_is_binary or op.response_is_text) -%}
+{% for op in resource.operations if op.response_may_be_empty | default(false) and op.pagination is not defined and not (op.response_is_event_stream or op.response_is_binary or op.response_is_text) -%}
     {% if op.response_body_json_type is defined or op.response_body_schema_name is defined %}{% set may_be_empty.any = true %}{% endif -%}
 {% endfor -%}
 {#- Models a method names that `referenced_components` leaves out: event and typed union ones. -#}
@@ -204,7 +204,7 @@ class {{ class_name }}({{ base_class }}):
 {%- set return_type = "str" %}
 {%- elif response_type is not none %}
 {%- set return_type = response_type %}
-{%- if (op.response_may_be_empty | default(false) or op.response_body_optional | default(false)) and op.pagination is not defined %}
+{%- if op.response_may_be_empty | default(false) and op.pagination is not defined %}
 {%- set return_type = response_type ~ " | None" %}
 {%- endif %}
 {%- else %}
@@ -501,11 +501,9 @@ class {{ class_name }}({{ base_class }}):
 {%- elif return_type != "None" %}
 {%- set decode = "decode_optional_response" if return_type != response_type else "decode_response" %}
 {%- set response_schema = types[op.response_body_schema_name] if op.response_body_schema_name is defined else none %}
-{%- set null_body = op.response_body_optional | default(false) %}
-{%- if null_body or (response_schema and response_schema.kind == "struct_enum" and is_flat_union(response_schema)) %}
-        {#- A union alias is not a class, so `decode_response` cannot infer its type. A body
-            that may be `null` decodes into the optional type. #}
-        decoded: {{ unshadow(return_type) }} = {{ decode }}(response, {{ return_type if null_body else response_type }})
+{%- if response_schema and response_schema.kind == "struct_enum" and is_flat_union(response_schema) %}
+        {#- A union alias is not a class, so `decode_response` cannot infer its type. #}
+        decoded: {{ unshadow(return_type) }} = {{ decode }}(response, {{ response_type }})
         return decoded
 {%- else %}
         return {{ decode }}(response, {{ response_type }})

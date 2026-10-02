@@ -142,7 +142,7 @@ impl {{ resource_type_name }} {
     {% else -%}
     {% set returned = "()" -%}
     {% endif -%}
-    {% set may_be_empty = (op.response_may_be_empty | default(false) or op.response_body_optional | default(false)) and op.pagination is undefined and (op.response_body_schema_name is defined or op.response_body_json_type is defined) -%}
+    {% set may_be_empty = op.response_may_be_empty | default(false) and op.pagination is undefined and (op.response_body_schema_name is defined or op.response_body_json_type is defined) -%}
     {% if may_be_empty %}{% set returned %}Option<{{ returned }}>{% endset %}{% endif -%}
     {% if op.description is defined -%}
         {{ op.description | to_doc_comment(style="rust") }}

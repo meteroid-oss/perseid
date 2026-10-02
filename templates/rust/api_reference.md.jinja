@@ -41,7 +41,7 @@
         {%- elif op.response_body_is_list %}{% set body = "Vec<" ~ (op.response_body_schema_name | to_upper_camel_case) ~ ">" -%}
         {%- elif op.response_body_schema_name is defined %}{% set body = op.response_body_schema_name | to_upper_camel_case -%}
         {%- else %}{% set body = "()" %}{% endif -%}
-        {{ option(body, (op.response_may_be_empty | default(false) or op.response_body_optional | default(false)) and op.pagination is undefined and body != "()") }}
+        {{ option(body, op.response_may_be_empty | default(false) and op.pagination is undefined and body != "()") }}
     {%- endif -%}
 {%- endmacro -%}
 {% macro returns(op) -%}

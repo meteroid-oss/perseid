@@ -28,7 +28,7 @@
     {%- elif op.response_is_text %}string
     {%- else -%}
         {%- set body = m.response_type(op) | replace("Models.", "") -%}
-        {{ body ~ ("?" if body and (op.response_may_be_empty | default(false) or op.response_body_optional | default(false)) and op.pagination is not defined) }}
+        {{ body ~ ("?" if body and op.response_may_be_empty | default(false) and op.pagination is not defined) }}
     {%- endif -%}
 {%- endmacro -%}
 {% macro returns(op) -%}

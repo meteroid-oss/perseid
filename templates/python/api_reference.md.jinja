@@ -83,7 +83,7 @@
     {%- elif op.response_is_text -%}
         {%- set returned = "str" -%}
     {%- elif response -%}
-        {%- set returned = response ~ (" | None" if op.response_may_be_empty | default(false) or op.response_body_optional | default(false) else "") -%}
+        {%- set returned = response ~ (" | None" if op.response_may_be_empty | default(false) else "") -%}
     {%- else -%}
         {%- set returned = "None" -%}
     {%- endif -%}

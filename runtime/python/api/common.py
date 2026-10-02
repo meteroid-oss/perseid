@@ -407,8 +407,9 @@ def decode_optional_response(response: httpx.Response, type_: object) -> t.Any: 
 
 
 def decode_optional_response(response: httpx.Response, type_: object) -> object:
-    """Like :func:`decode_response`, but ``None`` for a 2xx without a body, such as a 204."""
-    if response.status_code in (204, 205) or not response.content.strip():
+    """Like :func:`decode_response`, but ``None`` for a 2xx without a body, such as a 204,
+    or with a JSON ``null`` body."""
+    if response.status_code in (204, 205) or response.content.strip() in (b"", b"null"):
         return None
     return decode_response(response, type_)
 
