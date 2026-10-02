@@ -160,10 +160,10 @@ export class MultipartBody {
   public file(name: string, upload: Upload, contentType?: string): this {
     const file = upload instanceof Blob || upload instanceof Uint8Array ? { data: upload } : upload;
     const filename = file.filename ?? (typeof File !== "undefined" && file.data instanceof File ? file.data.name : "file");
-    const contentType =
+    const partType =
       file.contentType ?? ((file.data instanceof Blob && file.data.type) || contentType || "application/octet-stream");
     this.parts.push(
-      `--${this.boundary}\r\nContent-Disposition: form-data; name="${quoted(name)}"; filename="${quoted(filename)}"\r\nContent-Type: ${contentType}\r\n\r\n`,
+      `--${this.boundary}\r\nContent-Disposition: form-data; name="${quoted(name)}"; filename="${quoted(filename)}"\r\nContent-Type: ${partType}\r\n\r\n`,
       file.data as BlobPart,
       "\r\n"
     );
