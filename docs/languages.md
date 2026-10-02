@@ -44,17 +44,31 @@ response, with `payload()` decoding it as `api::ErrorBody` (the spec's common er
 
 ## TypeScript
 
-The package ships ESM and CommonJS builds behind an `exports` map. Every method takes a last
-`{ signal, headers, timeout }` argument, and models convert with `XSerializer.parse(json)` /
-`XSerializer.serialize(value)`. With `int64 = "bigint"` or `"string"`, responses are parsed without
-losing digits, and `parseJson` / `stringifyJson` do the same for webhook payloads. API errors are
-`ApiException` subclasses by status (`NotFoundError`, `RateLimitError`, `InternalServerError`...)
-with `error`, the body parsed as its declared schema (typed as `<Client>ErrorBody`), and
-`requestId`; a timeout throws `ApiTimeoutError`. `requestTimeout: Infinity` turns the timeout off.
-Expandable fields are `string | Customer` (`expandableId(value)` gives
-the id either way); a union of objects parses an object with the serializer of the variant it
-matches and keeps other objects as received. The webhook verifier has no
-Node.js imports, so it runs in browsers, Workers and edge runtimes.
+The package ships ESM and CommonJS builds behind an `exports` map, and type-checks under
+`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes` and `noImplicitOverride`.
+`new Acme({ apiKey })` reads `ACME_API_KEY` and `ACME_BASE_URL` when not given
+(`new Acme(token, options)` still works). Every method takes a last
+`{ signal, headers, timeout, maxRetries, idempotencyKey }` argument and returns an `APIPromise`:
+await it for the body, or call `.withResponse()` for `{ data, response, requestId }` and
+`.asResponse()` for the unread `Response`. List methods return a `PagePromise`, iterated with
+`for await` over every item or awaited for a `Page` (`items`, `body`, `hasNextPage()`,
+`getNextPage()`, `iterPages()`); `listIter()` is a deprecated alias. Event streams whose events
+have a schema are a `Stream<Model>` up to `[DONE]`, with the raw event as `stream.lastEvent`, and
+`..._stream` twins send `stream: true`; others are an `EventStream` of raw events.
+
+Models convert with `XSerializer.parse(json)` / `XSerializer.serialize(value)`, keeping the
+properties the SDK does not know under their JSON names. With `int64 = "bigint"` or `"string"`,
+responses are parsed without losing digits, and `parseJson` / `stringifyJson` do the same for
+webhook payloads. Everything the SDK throws is an `<Client>Error`: `APIError` subclasses by status
+(`NotFoundError`, `RateLimitError`, `InternalServerError`...) with `status`, `headers`,
+`requestId`, `body` and `error`, the body parsed as its declared schema (typed as
+`<Client>ErrorBody`) or as JSON; `APIConnectionError` and its `APIConnectionTimeoutError`,
+`APIUserAbortError` and `APIDecodeError`. `ApiError`, `ApiException` and `ApiTimeoutError` are
+deprecated aliases. `requestTimeout: Infinity` turns the timeout off. Unions of scalars and lists
+are typed in query, header and path parameters. Expandable fields are `string | Customer`
+(`expandableId(value)` gives the id either way); a union of objects parses an object with the
+serializer of the variant it matches and keeps other objects as received. The webhook verifier
+has no Node.js imports, so it runs in browsers, Workers and edge runtimes.
 
 ## Python
 
