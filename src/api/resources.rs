@@ -459,6 +459,9 @@ pub(crate) struct Operation {
     ///
     /// Only required string-typed parameters are currently supported.
     path_params: Vec<String>,
+    /// Path parameters with their types, in `path_params` order.
+    #[serde(default)]
+    typed_path_params: Vec<TypedParam>,
     /// Header parameters.
     ///
     /// Only string-typed parameters are currently supported.
@@ -603,6 +606,7 @@ impl Operation {
         let op_name = op_id.rsplit('/').next().unwrap_or(&op_id).to_owned();
 
         let mut path_params = Vec::new();
+        let mut typed_path_params = Vec::new();
         let mut query_params = Vec::new();
         let mut header_params = Vec::new();
 
@@ -618,6 +622,11 @@ impl Operation {
                 } => {
                     enforce_string_parameter(&parameter_data, false)
                         .with_context(|| format!("path parameter `{name}`"))?;
+                    typed_path_params.push(TypedParam {
+                        name: parameter_data.name.clone(),
+                        r#type: FieldType::from_openapi(parameter_data.format)
+                            .unwrap_or(FieldType::String),
+                    });
                     path_params.push(parameter_data.name);
                 }
                 openapi::Parameter::Header {
@@ -629,6 +638,7 @@ impl Operation {
                     header_params.push(HeaderParam {
                         name: parameter_data.name,
                         required: parameter_data.required,
+                        schema_type: FieldType::from_openapi(parameter_data.format).ok(),
                     });
                 }
                 openapi::Parameter::Query {
@@ -714,6 +724,7 @@ impl Operation {
             method: method.to_owned(),
             path: path.to_owned(),
             path_params,
+            typed_path_params,
             header_params,
             query_params,
             request_body_schema_name: request.schema_name,
@@ -1374,6 +1385,21 @@ fn named_or_list_of_named(
 struct HeaderParam {
     name: String,
     required: bool,
+    /// The schema's type, none for a `content` header. Not `type`, which templates read as
+    /// "not a plain string".
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_field_type"
+    )]
+    schema_type: Option<FieldType>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct TypedParam {
+    name: String,
+    #[serde(serialize_with = "serialize_field_type")]
+    r#type: FieldType,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1789,13 +1815,25 @@ mod tests {
     fn unions_of_scalars_lists_and_content_are_text_parameters() {
         let id = json!({ "name": "id", "in": "path", "required": true,
             "schema": { "anyOf": [{ "type": "integer" }, { "type": "string" }] } });
-        assert_eq!(parameter(id).unwrap().path_params, ["id"]);
+        let op = parameter(id).unwrap();
+        assert_eq!(op.path_params, ["id"]);
+        assert!(matches!(
+            op.typed_path_params[0].r#type,
+            FieldType::Union { .. }
+        ));
         let list = json!({ "name": "beta", "in": "header",
             "schema": { "type": "array", "items": { "type": "string" } } });
-        assert_eq!(parameter(list).unwrap().header_params[0].name, "beta");
+        let op = parameter(list).unwrap();
+        assert_eq!(op.header_params[0].name, "beta");
+        assert!(matches!(
+            op.header_params[0].schema_type,
+            Some(FieldType::List { .. })
+        ));
         let filter = json!({ "name": "X-Filter", "in": "header",
             "content": { "application/json": { "schema": { "type": "object" } } } });
-        assert_eq!(parameter(filter).unwrap().header_params[0].name, "X-Filter");
+        let op = parameter(filter).unwrap();
+        assert_eq!(op.header_params[0].name, "X-Filter");
+        assert!(op.header_params[0].schema_type.is_none());
         let nested = json!({ "name": "rows", "in": "header", "schema": { "type": "array",
             "items": { "type": "array", "items": { "type": "string" } } } });
         assert!(parameter(nested).is_err());

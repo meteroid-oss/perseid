@@ -244,6 +244,10 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
     let mut stack: Vec<&mut Resource> = resources.values_mut().collect();
     while let Some(resource) = stack.pop() {
         for op in &mut resource.operations {
+            // Settled first, so that `typed_union` tells references apart by their JSON type.
+            for param in &mut op.query_params {
+                settle(&mut param.r#type, &known, &op.id);
+            }
             op.untype_unions();
             op.forget_typed_unions_of_unknown_types(types);
         }
