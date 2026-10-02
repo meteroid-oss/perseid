@@ -13,6 +13,8 @@ namespace {{ sdk.package_name }}.Models;
 /// <c>{{ sdk.client_name }}JsonContext.Default.Options</c> to <c>JsonSerializer</c> to (de)serialize models yourself.
 /// </summary>
 [JsonSourceGenerationOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
+{#- Always registered: a context without any `JsonSerializable` gets no generated members and fails to compile. #}
+[JsonSerializable(typeof(JsonNode))]
 {% for _, type in api.types | items -%}
 {% if type.kind not in ["string_alias", "alias"] -%}
 {% set type_name = type.name | to_upper_camel_case -%}
