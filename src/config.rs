@@ -672,6 +672,7 @@ impl Config {
             "npm_package": if language == "typescript" { &package } else { &kebab },
             "go_module": self.go_module(sdk).unwrap_or_else(|| kebab.clone()),
             "default_base_url": pick(&target.base_url, &self.base_url, "http://localhost"),
+            "base_url": target.base_url.clone().or_else(|| self.base_url.clone()),
             "user_agent_prefix": pick(&target.user_agent, &self.user_agent, &kebab),
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
             "env_prefix": self.name.to_shouty_snake_case(),
@@ -1332,6 +1333,14 @@ mod tests {
         assert_eq!(context(toml, "go")["env_prefix"], "REAL_WORLD");
         let toml = format!("{toml}[context]\nenv_prefix = \"RW\"\n");
         assert_eq!(context(&toml, "go")["env_prefix"], "RW");
+    }
+
+    #[test]
+    fn base_url_is_null_unless_configured() {
+        let toml = "name = \"A\"\nsdks = [\"go\"]\n";
+        assert_eq!(context(toml, "go")["base_url"], Value::Null);
+        let toml = format!("base_url = \"https://a.test\"\n{toml}");
+        assert_eq!(context(&toml, "go")["base_url"], "https://a.test");
     }
 
     #[test]
