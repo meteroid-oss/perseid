@@ -4,13 +4,14 @@ use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
 use http::{HeaderMap, StatusCode};
-use unions::{
+use unions_sdk::{
     api::{
         middleware::{BoxError, BoxFuture, Middleware, Next, Request, Response},
-        CompletionsRetrieveOptions, CreateGradeRequest, CreateTranscriptionResponse, Unions,
+        CompletionsRetrieveOptions, UnionsSdk,
     },
     models::{
-        CreateTranscriptionRequest, GradeByScore, GradeByText, Include, ModelIds,
+        CreateGradeRequest, CreateTranscriptionRequest, CreateTranscriptionResponse, GradeByScore,
+        GradeByText, Include, ModelIds,
     },
 };
 
@@ -29,8 +30,8 @@ impl Reply {
         }
     }
 
-    fn client(&self) -> Unions {
-        Unions::builder()
+    fn client(&self) -> UnionsSdk {
+        UnionsSdk::builder()
             .token("token")
             .max_retries(0)
             .middleware(self.clone())
@@ -59,7 +60,7 @@ impl Middleware for Reply {
 #[tokio::test]
 async fn a_union_response_body_decodes_as_its_best_variant() {
     let verbose = Reply::new(r#"{"text":"hi","duration":1.5,"language":"en"}"#);
-    let request = CreateTranscriptionRequest::new(ModelIds::from("alpha-1"), "file_1");
+    let request = CreateTranscriptionRequest::new("file_1", ModelIds::from("alpha-1"));
     let body = verbose.client().transcriptions().create(request.clone()).await.unwrap();
     assert!(matches!(body, CreateTranscriptionResponse::TranscriptionVerbose(ref v) if v.language == "en"));
 

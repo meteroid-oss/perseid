@@ -2,8 +2,8 @@
 //! decoding and encoding of unions sharing a JSON type, best-match object unions, open enums and
 //! models with a field no SDK can type.
 use serde_json::{json, Value};
-use unions::models::{
-    AllowedTools, ChatModel, Completion, CompletionCreatedAt, CompletionPrompt, CompletionStop,
+use unions_sdk::models::{
+    AllowedTools, Completion, CompletionCreatedAt, CompletionPrompt, CompletionStop,
     CreateCompletionRequest, CreateCompletionRequestPrompt, Include, ImageRef, ModelIds,
     ModelIdsWithRef, ToolChoice, Untypable, Voice, VoiceWithOpen,
 };
@@ -125,7 +125,7 @@ fn open_enums_keep_unknown_values() {
     // `string | $ref enum`: the values of the referenced enum are known too.
     assert!(!matches!(ModelIdsWithRef::from("chat-large"), ModelIdsWithRef::Unknown(_)));
     assert!(matches!(ModelIdsWithRef::from("other"), ModelIdsWithRef::Unknown(_)));
-    assert!(!matches!(ChatModel::from("chat-small"), ChatModel::Unknown(_)));
+    assert!(!matches!(ModelIdsWithRef::from("chat-small"), ModelIdsWithRef::Unknown(_)));
 }
 
 #[test]
