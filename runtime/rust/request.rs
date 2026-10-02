@@ -100,6 +100,14 @@ fn json<T: DeserializeOwned>(body: ResponseBody) -> Result<T, Error> {
     serde_json::from_slice(&body.bytes()?).map_err(decode_error)
 }
 
+fn json_or_none<T: DeserializeOwned>(body: ResponseBody) -> Result<Option<T>, Error> {
+    let bytes = body.bytes()?;
+    if bytes.trim_ascii().is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_slice(&bytes).map(Some).map_err(decode_error)
+}
+
 fn empty(body: ResponseBody) -> Result<(), Error> {
     body.bytes().map(drop)
 }
@@ -398,6 +406,14 @@ impl Request {
     /// A call decoding the JSON response body as `T`.
     pub fn json<T: DeserializeOwned + Send + 'static>(self, cfg: &Arc<Configuration>) -> Call<T> {
         Call::new(self, cfg.clone(), json::<T>, false)
+    }
+
+    /// A call decoding the JSON response body as `T`, or `None` when there is no body.
+    pub fn json_or_none<T: DeserializeOwned + Send + 'static>(
+        self,
+        cfg: &Arc<Configuration>,
+    ) -> Call<Option<T>> {
+        Call::new(self, cfg.clone(), json_or_none::<T>, false)
     }
 
     /// A call whose response has no body worth decoding.

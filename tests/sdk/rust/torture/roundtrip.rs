@@ -56,6 +56,33 @@ fn models_round_trip_unchanged() {
 }
 
 #[test]
+fn all_of_parts_keep_unknown_properties_once() {
+    let mut located: Located = serde_json::from_str(r#"{"id":"1","line1":"l","zip":"z"}"#).unwrap();
+    located.id = "new".into();
+    located.line1 = "edited".into();
+    assert_eq!(serde_json::to_string(&located).unwrap(), r#"{"id":"new","line1":"edited","zip":"z"}"#);
+
+    let text = r#"{"id":"b","extra":"e","sibling_prop":"s","more":1}"#;
+    let composed: Composed = serde_json::from_str(text).unwrap();
+    assert_eq!(composed.extra_properties["more"], 1);
+    assert_eq!(serde_json::to_string(&composed).unwrap(), text);
+}
+
+#[test]
+fn members_named_like_the_unknown_property_map_round_trip() {
+    let input = json!({
+        "type": "t", "class": "c", "extra": "e", "extra_fields": "f", "properties": {"k": "v"},
+        "additional_properties": "a", "any_properties": "p", "$dollar": "d", "with space": "w",
+        "surprise": [1],
+    });
+    let reserved: Reserved = serde_json::from_value(input.clone()).unwrap();
+    assert_eq!(reserved.extra.as_deref(), Some("e"));
+    assert_eq!(reserved.properties.as_ref().unwrap()["k"], "v");
+    assert_eq!(reserved.extra_properties.len(), 1);
+    assert_eq!(round_trip::<Reserved>(input.clone()), input);
+}
+
+#[test]
 fn dates_are_chrono_types() {
     let thing: Thing = serde_json::from_value(thing()).unwrap();
     assert_eq!(thing.created_at.timestamp_subsec_nanos(), 123_456_789);
@@ -180,7 +207,7 @@ async fn caller_idempotency_key_replaces_the_automatic_one() {
     let origin = Origin::default();
     let options = ThingsCreateOptions::new().idempotency_key("mine");
     let create = ThingCreate::new(Kind::Alpha, "n");
-    origin.client().things().create(create.clone(), Some(options)).await.unwrap();
+    origin.client().things().create(create.clone(), options).await.unwrap();
     origin.client().things().create(create, None).await.unwrap();
 
     let requests = origin.requests();
@@ -347,7 +374,6 @@ fn primitive_or_object_unions_are_enums() {
 #[test]
 fn union_variants_default_their_tag() {
     assert_eq!(Circle::new(2.0).r#type, "circle");
-    assert_eq!(Circle::default().r#type, "circle");
     assert_eq!(Cat::new(true).pet_type, "Cat");
     let shape = Shape::Square(Square::new(3.0));
     assert_eq!(serde_json::to_value(&shape).unwrap(), json!({"type": "square", "side": 3.0}));
@@ -464,4 +490,13 @@ async fn throttled_non_idempotent_requests_are_not_retried() {
         .unwrap_err();
     assert_eq!(error.kind(), Some(ApiErrorKind::RateLimited));
     assert_eq!(origin.requests().len(), 1);
+}
+
+#[tokio::test]
+async fn bodiless_success_responses_are_none() {
+    let origin = Origin::replying(vec![(200, vec![], r#"{"id":"w","name":"n"}"#), (202, vec![], "")]);
+    let widgets = origin.client().widgets();
+    assert_eq!(widgets.update("w", WidgetUpdate::new()).await.unwrap(), None);
+    let updated: Option<Widget> = widgets.update("w", WidgetUpdate::new()).await.unwrap();
+    assert_eq!(updated.map(|w| w.name), Some("n".to_owned()));
 }

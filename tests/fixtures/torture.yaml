@@ -844,6 +844,8 @@ components:
           $ref: '#/components/schemas/StringMap'
         nested:
           $ref: '#/components/schemas/Nested'
+        located:
+          $ref: '#/components/schemas/Located'
         objects:
           $ref: '#/components/schemas/ObjectUnions'
     # Unions of several objects without a discriminator.
@@ -1169,6 +1171,10 @@ components:
       - properties:
           depth:
             type: integer
+    Located:
+      allOf:
+      - $ref: '#/components/schemas/Base'
+      - $ref: '#/components/schemas/Address'
   parameters:
     WidgetId:
       name: widget_id
