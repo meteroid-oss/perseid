@@ -33,13 +33,11 @@
     {{ module ~ "_api" if module in ["client", "common", "middleware"] else module }}
 {%- endmacro %}
 
-{#- The attribute of a field; a `flatten` field is named after the schema it inlines. -#}
+{#- The attribute of a field; a `flatten` field is named after the schema it inlines,
+    and one named after a `BaseModel` member gets a trailing `_`, like a keyword. -#}
 {% macro field_ident(field) -%}
-    {%- if field.flatten -%}
-        {{ py_ident(field.type.to_python()) }}
-    {%- else -%}
-        {{ py_ident(field.name) }}
-    {%- endif -%}
+    {%- set name = py_ident(field.type.to_python() if field.flatten else field.name) -%}
+    {{ name ~ "_" if name in ["extra_fields", "from_dict", "from_json", "to_dict", "to_json"] else name }}
 {%- endmacro %}
 
 {#- The Python annotation for a field type. An any-JSON schema (`{}`) is

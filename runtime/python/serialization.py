@@ -559,7 +559,8 @@ class BaseModel:
             self.__dict__["_extra"] = extra
 
     def _with_extra(self, out: dict[str, t.Any]) -> dict[str, t.Any]:
-        for key, value in self.extra_fields.items():
+        extra: dict[str, t.Any] = self.__dict__.get("_extra") or {}
+        for key, value in extra.items():
             out.setdefault(key, value)
         return out
 
@@ -754,7 +755,7 @@ class TaggedUnionModel(BaseModel):
         if union._CONTENT_KEY is not None:
             model._keep_extra(data, known)
         elif isinstance(content, BaseModel) and known is not None:
-            content._keep_extra(content.extra_fields, known)
+            content._keep_extra(content.__dict__.get("_extra") or {}, known)
         return model
 
 

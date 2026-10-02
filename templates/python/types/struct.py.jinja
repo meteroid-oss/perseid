@@ -17,7 +17,7 @@
 {% set json_keys %}
     {#- Keyed by the attribute name: a keyword field `class` is exposed as `class_`. -#}
     {%- for field in type.fields if not field.flatten -%}
-        {%- set attr = py_ident(field.name) -%}
+        {%- set attr = field_ident(field) -%}
         {%- if attr != field.name -%}
             "{{ attr }}": {{ py_str(field.name) }},
         {%- endif -%}

@@ -70,6 +70,14 @@ class {{ class_name }}(TaggedUnionModel):
     {%- elif type.repr != "internally_tagged" %}
     {{ panic("unsupported struct enum representation `" ~ type.repr ~ "` for `" ~ type.name ~ "`") }}
     {%- endif %}
+    {%- set json_keys %}
+        {%- for field in type.fields if not field.flatten and field_ident(field) != field.name -%}
+            "{{ field_ident(field) }}": {{ py_str(field.name) }},
+        {%- endfor -%}
+    {%- endset %}
+    {%- if json_keys | trim %}
+    _JSON_KEYS: t.ClassVar[t.Mapping[str, str]] = { {{ json_keys | trim }} }
+    {%- endif %}
     _VARIANTS: t.ClassVar[t.Mapping[str, str | None]] = {
     {%- for variant in type.variants %}
         {{ py_str(variant.name) }}: {% if variant.schema_ref is defined %}"{{ variant.schema_ref | to_upper_camel_case }}"{% else %}None{% endif %},

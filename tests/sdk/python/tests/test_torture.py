@@ -217,7 +217,18 @@ SAMPLES = {
     },
     "ThingPatch": {"description": None, "count": None},
     "Activity": {"kind": "reopened", "at": "2024-01-02T03:04:05+00:00"},
-    "Reserved": {"class": "c", "type": "t", "self": "s", "1leading": "1", "with space": "w"},
+    "Reserved": {
+        "class": "c",
+        "type": "t",
+        "self": "s",
+        "1leading": "1",
+        "with space": "w",
+        "properties": {"k": "v"},
+        "extra": "x",
+        "extra_fields": "e",
+        "additional_properties": "a",
+        "any_properties": "p",
+    },
     "Widget": {"id": "w", "name": "n", "reactions": {"+1": 1, "-1": 2}},
 }
 
@@ -555,6 +566,7 @@ class ClientTest(unittest.TestCase):
         with client(self.respond(httpx.Response(200, json=reserved))) as api:
             echoed = api.class_.reserved(models.Reserved.from_dict(reserved))
         self.assertEqual(echoed.class_, "c")
+        self.assertEqual((echoed.extra_fields_, echoed.extra_fields), ("e", {}))
         self.assertEqual(json.loads(self.requests[0].content), reserved)
 
 
