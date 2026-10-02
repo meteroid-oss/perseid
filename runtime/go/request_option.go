@@ -8,9 +8,10 @@ import (
 	"time"
 )
 
-// RequestOption adjusts a single call, on top of the client's [Options]:
+// RequestOption adjusts a single call, on top of the client's [Options]. Every
+// method takes them last:
 //
-//	client.Customers().GetCustomer(ctx, id, @@PACKAGE_NAME@@.WithTimeout(time.Minute))
+//	opts := []@@PACKAGE_NAME@@.RequestOption{@@PACKAGE_NAME@@.WithTimeout(time.Minute), @@PACKAGE_NAME@@.WithMaxRetries(0)}
 type RequestOption func(*callConfig)
 
 // WithHeader sets a header on the request, replacing any value the SDK would send.
@@ -41,12 +42,28 @@ func WithMaxRetries(retries int) RequestOption {
 	}
 }
 
+// WithResponseInto stores the HTTP response of the call in *dst, for its status
+// and headers, such as the request id. Its body has already been read into the
+// result, and can be read again; for an event stream, it is the stream itself.
+// It is also set when the call fails with an [*APIError].
+//
+//	var resp *http.Response
+//	opt := @@PACKAGE_NAME@@.WithResponseInto(&resp)
+//	// after the call:
+//	log.Print(resp.StatusCode, resp.Header.Get("X-Request-Id"))
+func WithResponseInto(dst **http.Response) RequestOption {
+	return func(c *callConfig) {
+		c.response = dst
+	}
+}
+
 // callConfig is the per-call view of the client configuration.
 type callConfig struct {
 	headers       http.Header
 	timeout       time.Duration
 	retrySchedule []time.Duration
 	jitter        bool
+	response      **http.Response
 }
 
 func (c *config) callConfig(options []RequestOption) callConfig {

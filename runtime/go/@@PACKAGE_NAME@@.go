@@ -4,25 +4,37 @@ package @@PACKAGE_NAME@@
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
 const (
-	// DefaultServerURL is the @@CLIENT_NAME@@ API endpoint used when Options.ServerURL
-	// is empty.
+	// DefaultServerURL is the @@CLIENT_NAME@@ API endpoint used when neither
+	// Options.ServerURL nor the @@ENV_PREFIX@@_BASE_URL environment variable is set.
 	DefaultServerURL = "@@DEFAULT_BASE_URL@@"
 
 	// DefaultNumRetries is how many times a request is retried when it fails
-	// transiently: network errors, 408, 429 and 5xx responses.
+	// transiently: connection errors, timeouts, 408, 429 and 5xx responses, as
+	// long as the request is idempotent or carries an Idempotency-Key.
 	DefaultNumRetries = 2
+
+	// APIKeyEnv names the environment variable [New] reads the API token from
+	// when it is given an empty one.
+	APIKeyEnv = "@@ENV_PREFIX@@_API_KEY"
+
+	// BaseURLEnv names the environment variable that overrides
+	// DefaultServerURL when Options.ServerURL is empty.
+	BaseURLEnv = "@@ENV_PREFIX@@_BASE_URL"
 )
 
 // Options configures a [Client]. The zero value is valid and selects the
 // defaults documented on each field.
 type Options struct {
-	// ServerURL overrides the API base URL. Defaults to DefaultServerURL.
+	// ServerURL overrides the API base URL. Defaults to the @@ENV_PREFIX@@_BASE_URL
+	// environment variable, then DefaultServerURL.
 	ServerURL string
 
 	// HTTPClient is the client used to perform requests. Supply your own to
@@ -51,7 +63,12 @@ type Options struct {
 	// UserAgent overrides the User-Agent header sent with every request.
 	UserAgent string
 
-	// Debug writes a one-line summary of every request and response to stderr.
+	// Logger receives a debug record for every attempt and response.
+	Logger *slog.Logger
+
+	// Debug logs every attempt and response to stderr when Logger is nil.
+	//
+	// Deprecated: set Logger, e.g. to a [slog.Logger] at debug level.
 	Debug bool
 
 	// TokenProvider is called before each request for a fresh bearer token,
@@ -75,7 +92,7 @@ type config struct {
 	timeout       time.Duration
 	retrySchedule []time.Duration
 	jitter        bool
-	debug         bool
+	logger        *slog.Logger
 	tokenProvider func(ctx context.Context) (string, error)
 	basicAuth     *BasicAuth
 	apiKeys       map[string]string
@@ -86,6 +103,9 @@ func newConfig(token string, options *Options) *config {
 	if options != nil {
 		opts = *options
 	}
+	if token == "" {
+		token = os.Getenv(APIKeyEnv)
+	}
 
 	cfg := &config{
 		serverURL:  DefaultServerURL,
@@ -93,15 +113,22 @@ func newConfig(token string, options *Options) *config {
 		userAgent:  "@@USER_AGENT_PREFIX@@-go/" + Version,
 		httpClient: http.DefaultClient,
 		timeout:    DefaultTimeout,
-		debug:      opts.Debug,
+		logger:     opts.Logger,
 
 		tokenProvider: opts.TokenProvider,
 		basicAuth:     opts.BasicAuth,
 		apiKeys:       opts.APIKeys,
 	}
 
-	if opts.ServerURL != "" {
-		cfg.serverURL = strings.TrimSuffix(opts.ServerURL, "/")
+	if cfg.logger == nil && opts.Debug {
+		cfg.logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	}
+	serverURL := opts.ServerURL
+	if serverURL == "" {
+		serverURL = os.Getenv(BaseURLEnv)
+	}
+	if serverURL != "" {
+		cfg.serverURL = strings.TrimSuffix(serverURL, "/")
 	}
 	if opts.HTTPClient != nil {
 		cfg.httpClient = opts.HTTPClient
@@ -143,12 +170,9 @@ func exponentialBackoff(retries int) []time.Duration {
 
 	schedule := make([]time.Duration, 0, retries)
 	backoff := 500 * time.Millisecond
-	for i := 0; i < retries; i++ {
+	for range retries {
 		schedule = append(schedule, backoff)
-		backoff *= 2
-		if backoff > maxBackoff {
-			backoff = maxBackoff
-		}
+		backoff = min(backoff*2, maxBackoff)
 	}
 	return schedule
 }
