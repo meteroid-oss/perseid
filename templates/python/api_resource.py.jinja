@@ -288,7 +288,14 @@ class {{ class_name }}({{ base_class }}):
 {%- endif %}
                 ),
 {%- elif op.stream_property is defined %}
+{%- if op.request_body_optional %}
+                json_body={
+                    **({} if {{ body_param }} is None else to_json_value({{ body_param }}, {{ body_type }})),
+                    {{ py_str(op.stream_property) }}: True,
+                },
+{%- else %}
                 json_body={**to_json_value({{ body_param }}, {{ body_type }}), {{ py_str(op.stream_property) }}: True},
+{%- endif %}
 {%- else %}
                 json_body=to_json_value({{ body_param }}, {{ body_type }}),
 {%- endif %}

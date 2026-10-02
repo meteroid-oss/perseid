@@ -125,7 +125,7 @@ paths:
     post:
       operationId: create_chat
       requestBody:
-        required: true
+        required: false
         content: {application/json: {schema: {$ref: '#/components/schemas/ChatRequest'}}}
       responses:
         "200":
@@ -596,7 +596,7 @@ class Chunks(httpx.SyncByteStream):
 
 
 class StreamTest(unittest.TestCase):
-    def chat(self, stream: Chunks):
+    def chat(self, stream: Chunks, *body: object):
         requests: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -604,14 +604,20 @@ class StreamTest(unittest.TestCase):
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
 
         api = paged.Paged("k", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
-        return api.chat.create_stream(paged.models.ChatRequest()), requests
+        return api.chat.create_stream(*body), requests
 
     def test_events_decode_into_models_until_done(self) -> None:
         events = b'event: chunk\nid: 7\ndata: {"id": "a"}\n\ndata: [DONE]\n\ndata: {"id": "b"}\n\n'
-        stream, requests = self.chat(Chunks(events))
+        stream, requests = self.chat(Chunks(events), paged.models.ChatRequest(stream=False))
         with stream:
             self.assertEqual(list(stream), [paged.models.Item(id="a")])
         self.assertEqual((stream.last_event.event, stream.last_event.id), ("chunk", "7"))
+        self.assertEqual(json.loads(requests[0].content), {"stream": True})
+
+    def test_the_stream_twin_of_an_optional_body_sends_stream_alone(self) -> None:
+        stream, requests = self.chat(Chunks(b"data: [DONE]\n\n"))
+        with stream:
+            self.assertEqual(list(stream), [])
         self.assertEqual(json.loads(requests[0].content), {"stream": True})
 
     def test_a_connection_lost_mid_stream_is_an_sdk_error(self) -> None:
