@@ -13,6 +13,8 @@ Four extension points, none of which needs a fork.
 4. **Ejected templates and runtime.** `perseid eject <lang>` copies the built-in Jinja templates and
    runtime to `.perseid/`. Files you keep there override the built-ins; delete the rest to keep
    receiving upstream updates. `context` tables in `perseid.toml` reach templates as `sdk.*`.
+   `api_reference.md.jinja` renders `api.md`, and `docs.jinja` names the API for it and for the
+   first README.
 
 ## Middleware
 

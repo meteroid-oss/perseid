@@ -18,6 +18,13 @@ without a discriminator when their properties tell them apart
 [unions of objects](configuration.md#unions-of-objects). An object no variant matches is kept as
 received, and each SDK reads a value as another variant than the one picked.
 
+Every SDK has an `api.md` at its root, regenerated with the code: each method by resource as the
+language calls it (`client.customers.list(...)`, `client.Customers().List(ctx, ...)`), with its
+parameters, return type, HTTP method and path, linking the models. The README, written once and
+then yours, links it, and its examples (client, a call, pagination, streaming, errors, raw
+responses, per-call options) call the API's own operations: a retrieve, the first paginated list
+and the first stream, sections left out when the API has none.
+
 ## Rust
 
 Clients come from `Acme::builder()` (token, base URL, timeout, `max_retries`, headers,

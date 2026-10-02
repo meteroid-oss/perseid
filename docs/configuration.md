@@ -200,6 +200,15 @@ another variant than the one picked (see [languages](languages.md)).
 
 ## Templates
 
+Each language has templates for its resources (`api_resource`), client (`api_summary`) and
+models (`component_type`), and `api_reference.md.jinja`, which renders `api.md` at the root of
+the SDK: every method by resource, in the language's call syntax, with its HTTP request and the
+models it returns. A template picks its output file with `set_summary_filename("api.md")`.
+Generated Markdown is never formatted, and `generate --check` compares it like the code.
+`docs.jinja` holds the macros naming the API in that language, which `api.md` and the README
+share: the scaffolded `README.md` is rendered once, with `examples` (`call`, `list`, `stream` and
+`create`: the operations its snippets call, picked from the spec, each `null` when none fits).
+
 `perseid inspect` prints the model templates receive. In templates,
 `name | ident("snake", "rust")` turns a spec name into an identifier (cases `snake`, `camel`,
 `pascal` and `shouty`, keywords escaped for `rust`, `python`, `go`, `java` or `typescript`), and

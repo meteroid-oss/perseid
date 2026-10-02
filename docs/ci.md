@@ -87,8 +87,10 @@ Without a spec in the repository, `spec` defaults to `openapi.json`, where `pers
 push it. Meanwhile `perseid generate --spec <path|url>` previews the SDKs.
 
 `perseid generate` starts each SDK from its package skeleton (manifest, README, errors) the first
-time, and prints where each one went. An SDK with its own `repo` is generated into a shallow clone
-under `.perseid/repos/<owner>/<name>`. Changes there that perseid didn't make stop `generate`,
+time, and prints where each one went. The README's examples call operations of the spec (a
+retrieve, the first paginated list, a stream); it is yours afterwards, while `api.md`, the
+reference of every method, is regenerated with the code. An SDK with its own `repo` is generated
+into a shallow clone under `.perseid/repos/<owner>/<name>`. Changes there that perseid didn't make stop `generate`,
 unless `--pr` is passed. `generate --out <dir>` writes every SDK to `<dir>/<language>` without
 cloning anything, and `--out <dir> --check` compares against that directory.
 
