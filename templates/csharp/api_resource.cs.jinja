@@ -18,6 +18,8 @@
 {% elif op.response_is_text %}{% set f.value = "string" -%}
 {% else %}{% set f.value = f.response_type -%}
 {% endif -%}
+{% set f.may_be_empty = op.response_may_be_empty | default(false) and f.response_type and f.value == f.response_type and op.pagination is not defined -%}
+{% if f.may_be_empty %}{% set f.value = f.value ~ "?" %}{% endif -%}
 {% set f.takes_body = op.request_body_schema_name is defined or op.request_body_json_type is defined or op.request_body_kind in ["binary", "multipart"] -%}
 {% set f.has_options = op | has_query_or_header_params -%}
 {% set f.required_options = op | has_required_query_or_header_params -%}
@@ -102,6 +104,8 @@ public interface {{ interface_name }}
 
 {{ summary(op) -}}
 {{ param_docs(op, f) }}
+{% if f.may_be_empty %}    /// <returns>The response body, or <c>null</c> when the response has none.</returns>
+{% endif -%}
 {% set thrown = namespace(classes=[]) -%}
 {% for status, _ in op.errors | default({}) | items if m.status_exception(status) not in thrown.classes -%}
 {% set thrown.classes = thrown.classes + [m.status_exception(status)] -%}
@@ -287,6 +291,11 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
         {
             request.{{ setter }}({{ body }}, {{ context }}.{{ m.type_info(f.body_type) }}{{ form_lists }});
         }
+{% if body != f.body and not op.request_body_is_form %}        else
+        {
+            request.SetJsonBody(new JsonObject { [{{ op.stream_property | tojson }}] = true });
+        }
+{% endif -%}
 {% else %}        request.{{ setter }}({{ body }}, {{ context }}.{{ m.type_info(f.body_type) }}{{ form_lists }});
 {% endif -%}
 {% elif op.request_body_kind == "binary" -%}
@@ -317,6 +326,7 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
 {% elif op.response_is_event_stream %}        return _transport.SendEventStreamAsync(request, requestOptions, cancellationToken);
 {% elif op.response_is_binary %}        return _transport.SendBytesAsync(request, requestOptions, cancellationToken);
 {% elif op.response_is_text %}        return _transport.SendTextAsync(request, requestOptions, cancellationToken);
+{% elif f.may_be_empty %}        return _transport.SendJsonOrDefaultAsync<{{ f.response_type }}, {{ f.value }}>(request, {{ context }}.{{ m.type_info(f.response_type) }}, requestOptions, cancellationToken);
 {% elif f.response_type %}        return _transport.SendJsonAsync(request, {{ context }}.{{ m.type_info(f.response_type) }}, requestOptions, cancellationToken);
 {% else %}        return _transport.SendAsync(request, requestOptions, cancellationToken);
 {% endif -%}

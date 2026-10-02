@@ -48,6 +48,11 @@
             {% set returns = "returning(" ~ res_item ~ ".class)" -%}
         {% endif -%}
     {% endif -%}
+    {% set may_be_empty = op.response_may_be_empty | default(false) and "returning(" in returns and op.pagination is not defined -%}
+    {% if may_be_empty -%}
+        {% set res_type = "Optional<" ~ res_type ~ ">" -%}
+        {% set returns = returns | replace("returning(", "returningOptional(") -%}
+    {% endif -%}
     {% set has_body = op.request_body_schema_name is defined or op.request_body_json_type is defined -%}
     {#- Positional parameters: path, then required query and header parameters. -#}
     {% set required = (op.query_params + op.header_params) | selectattr("required") | list -%}
@@ -134,6 +139,7 @@
         "body_var": body_var,
         "has_body": has_body,
         "page": page,
+        "empty_note": ", empty when the response has none" if may_be_empty else "",
     }] -%}
 {% endfor -%}
 
@@ -304,6 +310,7 @@ import java.net.URI;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 {% for c in referenced_components -%}
@@ -338,7 +345,7 @@ public final class {{ async_type_name }} {
     }
 {% for o in ops.list %}
 
-    {{ overloads(o, "CompletableFuture<" ~ o.type ~ ">", "sendAsync", "sync.", "the response body, once received") | indent(4) }}
+    {{ overloads(o, "CompletableFuture<" ~ o.type ~ ">", "sendAsync", "sync.", "the response body" ~ o.empty_note ~ ", once received") | indent(4) }}
 {% if o.page %}
 
     {{ pager_overloads(o, APAGINATOR ~ "<" ~ o.page.item ~ ">", "pageOf" ~ o.pascal, APAGINATOR) | indent(4) }}
@@ -531,7 +538,7 @@ public final class {{ resource_type_name }} {
 
 {% for o in ops.list -%}
     {% set op = o.op -%}
-    {{ overloads(o, "void" if o.type == "Void" else o.type, "send", "", "the response body" if o.type != "Void" else "") | indent(4) }}
+    {{ overloads(o, "void" if o.type == "Void" else o.type, "send", "", "the response body" ~ o.empty_note if o.type != "Void" else "") | indent(4) }}
     {% set full -%}{{ o.params }}{% if o.has_options %}final {{ o.options_type }} options, {% endif %}final {{ RO }} requestOptions{% endset -%}
     {% if op.security is defined -%}
         {% set http_client -%}
@@ -671,7 +678,8 @@ public final class {{ resource_type_name }} {
         {% elif o.has_body and op.stream_property is defined -%}
             {% set setter = op.stream_property | ident("camel", "java") -%}
             {% set streamed = body_var ~ ".toBuilder()." ~ setter ~ "(true).build()" -%}
-            {% set chain = chain + [".json(" ~ (body_var ~ " == null ? null : " ~ streamed if op.request_body_optional else streamed) ~ ")"] -%}
+            {% set only_stream = "java.util.Map.of(" ~ (op.stream_property | tojson) ~ ", true)" -%}
+            {% set chain = chain + [".json(" ~ (body_var ~ " == null ? " ~ only_stream ~ " : " ~ streamed if op.request_body_optional else streamed) ~ ")"] -%}
         {% elif o.has_body -%}
             {% set chain = chain + [".json(" ~ body_var ~ ")"] -%}
         {% endif -%}

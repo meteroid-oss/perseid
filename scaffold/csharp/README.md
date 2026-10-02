@@ -27,7 +27,8 @@ Resources hang off the client as properties (the examples below use a `Pets` res
 method is async and takes an optional `RequestOptions` (headers, timeout, retries,
 idempotency key) and a `CancellationToken`. Models are records with `init` properties, compared by
 value; properties this SDK version does not know are kept in `AdditionalProperties` and sent back.
-Unions are abstract records to match on, and enums keep unknown values too (`IsKnown`).
+Unions are abstract records to match on, and enums keep unknown values too (`IsKnown`); `switch`
+on `status.Value` with the `Status.Values` constants.
 
 ## Errors
 
@@ -55,8 +56,8 @@ successful response the SDK cannot read throws an `ApiDecodeException`.
 ## Retries and timeouts
 
 Connection errors, timeouts, 408, 429 and 5xx responses are retried twice with jittered backoff
-(0.5s, then 1s), honoring `Retry-After` and `retry-after-ms`, when the request is idempotent or
-carries an `Idempotency-Key` (POST requests get one). Each attempt times out after @@TIMEOUT@@ seconds.
+(0.5s, then 1s), honoring `Retry-After` and `retry-after-ms` up to a minute (the backoff
+otherwise), when the request is idempotent or carries an `Idempotency-Key` (POST requests get one). Each attempt times out after @@TIMEOUT@@ seconds.
 
 ```csharp
 var client = new @@CLIENT_NAME@@Client(options: new() { MaxRetries = 5, Timeout = TimeSpan.FromSeconds(20) });

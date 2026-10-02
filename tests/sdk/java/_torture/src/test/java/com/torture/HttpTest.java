@@ -17,6 +17,9 @@ import com.torture.exceptions.InvalidDataException;
 import com.torture.exceptions.NotFoundException;
 import com.torture.exceptions.TortureException;
 import com.torture.exceptions.UnprocessableEntityException;
+import com.torture.streaming.EventStream;
+import com.torture.models.ChatReply;
+import com.torture.models.ChatRequest;
 import com.torture.models.Kind;
 import com.torture.models.Thing;
 import com.torture.models.ThingCreate;
@@ -31,6 +34,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletionException;
 import okhttp3.OkHttpClient;
 import org.junit.jupiter.api.AfterEach;
@@ -47,6 +51,9 @@ class HttpTest {
     private final List<String> idempotencyKeys = new ArrayList<>();
     private final List<String> traces = new ArrayList<>();
     private final List<String> required = new ArrayList<>();
+    private final List<String> bodies = new ArrayList<>();
+    private int okStatus = 200;
+    private String okType = "application/json";
     private String errorBody = "{\"title\":\"no\"}";
     private String okBody = THING;
     private final Deque<Integer> statuses = new ArrayDeque<>();
@@ -62,6 +69,7 @@ class HttpTest {
             idempotencyKeys.add(exchange.getRequestHeaders().getFirst("idempotency-key"));
             traces.add(exchange.getRequestHeaders().getFirst("x-trace"));
             required.add(exchange.getRequestHeaders().getFirst("x-required"));
+            bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             int status = statuses.isEmpty() ? 200 : statuses.poll();
             if (retryAfter != null && status != 200) {
                 exchange.getResponseHeaders().add("Retry-After", retryAfter);
@@ -71,7 +79,11 @@ class HttpTest {
             }
             exchange.getResponseHeaders().add("x-request-id", "req_" + requests.size());
             byte[] body = (status == 200 ? okBody : errorBody).getBytes(StandardCharsets.UTF_8);
-            exchange.sendResponseHeaders(status, body.length);
+            exchange.getResponseHeaders().add("content-type", status == 200 ? okType : "application/json");
+            if (status == 200) {
+                status = okStatus;
+            }
+            exchange.sendResponseHeaders(status, body.length == 0 ? -1 : body.length);
             exchange.getResponseBody().write(body);
             exchange.close();
         });
@@ -152,14 +164,47 @@ class HttpTest {
     }
 
     @Test
-    void aLongRetryAfterReturnsTheError() {
-        statuses.add(429);
+    void aLongRetryAfterFallsBackToTheBackoff() {
+        statuses.addAll(List.of(429, 429, 429));
         retryAfter = "3600";
         ApiException error = assertThrows(ApiException.class, () -> client().things().retrieve("t"));
         assertEquals(429, error.statusCode());
         assertEquals("3600", error.headers().get("retry-after"));
-        assertEquals("req_1", error.requestId().orElseThrow());
-        assertEquals(1, requests.size());
+        assertEquals("req_3", error.requestId().orElseThrow());
+        assertEquals(3, requests.size());
+    }
+
+    @Test
+    void everyServerErrorIsRetried() {
+        statuses.add(501);
+        assertEquals("n", client().things().retrieve("t").name());
+        assertEquals(2, requests.size());
+    }
+
+    @Test
+    void streamTwinsSetStreamWithoutTouchingTheBody() {
+        okType = "text/event-stream";
+        okBody = "data: {\"text\":\"hi\"}\n\ndata: [DONE]\n\n";
+        List<String> texts = new ArrayList<>();
+        try (EventStream<ChatReply> stream = client().chats().createStream(null)) {
+            stream.forEach(reply -> texts.add(reply.text()));
+        }
+        ChatRequest body = ChatRequest.builder().model("m").build();
+        client().chats().createStream(body).close();
+        assertEquals(List.of("hi"), texts);
+        assertEquals("{\"stream\":true}", bodies.get(0));
+        assertEquals("{\"model\":\"m\",\"stream\":true}", bodies.get(1));
+        assertTrue(body.stream().isEmpty());
+    }
+
+    @Test
+    void aBodilessSuccessIsEmptyWhereTheSpecAllowsIt() {
+        okStatus = 202;
+        okBody = "";
+        assertEquals(Optional.empty(), client().jobs().retrieve("j"));
+        okStatus = 200;
+        okBody = "{\"id\":\"j\"}";
+        assertEquals("j", client().jobs().retrieve("j").orElseThrow().id());
     }
 
     @Test

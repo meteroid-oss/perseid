@@ -49,6 +49,16 @@ public class ClientTests
         Assert.NotSame(client, provider.GetRequiredService<IPetstoreClient>());
     }
 
+    [Fact]
+    public void TheFactoryHttpClientLeavesTimeoutsToTheSdk()
+    {
+        var services = new ServiceCollection();
+        services.AddPetstoreClient();
+        using var provider = services.BuildServiceProvider();
+        var http = provider.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(PetstoreClient));
+        Assert.Equal(Timeout.InfiniteTimeSpan, http.Timeout);
+    }
+
     private sealed class FakePets : IPetsApi
     {
         public IPetsApiWithRawResponse WithRawResponse => throw new NotSupportedException();

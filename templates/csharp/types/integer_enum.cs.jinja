@@ -1,5 +1,6 @@
 {% import "macros.cs.jinja" as m -%}
 {% set type_name = type.name | to_upper_camel_case -%}
+{% set values_class = "KnownValues" if type_name == "Values" else "Values" -%}
 // this file is @generated
 #pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
 using System.Text.Json.Serialization;
@@ -19,12 +20,23 @@ public readonly partial record struct {{ type_name }}(long Value) : IIntegerEnum
 {
 {% for varname, value in type.variants -%}
 {% set name = m.member(varname, type_name) -%}
-{% if name in ["Value", "FromValue", "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
+{% if name in ["Value", values_class, "FromValue", "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
     /// <summary><c>{{ value }}</c></summary>
     public static {{ type_name }} {{ name }} { get; } = new({{ value }});
 {% endfor %}
     /// <summary>Whether this SDK version knows the value.</summary>
     public bool IsKnown => Value is {% for _, value in type.variants %}{{ value }}{% if not loop.last %} or {% endif %}{% endfor %};
+
+    /// <summary>The known values as constants, to <c>switch</c> on <see cref="Value"/>.</summary>
+    public static class {{ values_class }}
+    {
+{% for varname, value in type.variants -%}
+{% set name = m.member(varname, type_name) -%}
+{% if name in ["Value", values_class, "FromValue", "IsKnown", "Equals", "GetHashCode", "ToString"] %}{% set name = name ~ "Variant" %}{% endif -%}
+        /// <summary><c>{{ value }}</c></summary>
+        public const long {{ name }} = {{ value }};
+{% endfor -%}
+    }
 
     /// <summary>The value <paramref name="value"/>, known or not.</summary>
     /// <param name="value">The JSON value.</param>

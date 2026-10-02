@@ -56,7 +56,8 @@ and `widget.toBuilder().name("m").build()` changes a copy. Required properties a
 (`widget.id()`), others as an `Optional`. For an optional property that accepts `null`, passing
 `null` to the builder sends `null`, while leaving it unset leaves it out. Properties this SDK
 version does not know are kept in `additionalProperties()` and sent back. Enums keep values added
-to the API later (`isKnown()`, `known()` to `switch` on), and so do unions (`isUnrecognized()`).
+to the API later (`isKnown()`, `known()` to `switch` on), and so do unions (`isUnrecognized()`);
+a tagged union tells its variants apart with `isCircle()` and `asCircle()`.
 
 ## Async and raw responses
 
@@ -114,8 +115,8 @@ Every exception the SDK throws is a `@@CLIENT_NAME@@Exception`:
   property it left out.
 
 Connection errors, timeouts, 408, 429 and 5xx responses are retried with jittered backoff,
-honoring `Retry-After` and `retry-after-ms`, when the method is idempotent or the request carries
-an `Idempotency-Key` (POST requests get one automatically).
+honoring `Retry-After` and `retry-after-ms` up to a minute (the backoff otherwise), when the method
+is idempotent or the request carries an `Idempotency-Key` (POST requests get one automatically).
 
 - Source: @@REPOSITORY@@
 - License: @@LICENSE@@

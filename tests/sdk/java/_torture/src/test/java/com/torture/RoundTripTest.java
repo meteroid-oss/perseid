@@ -188,6 +188,18 @@ class RoundTripTest {
     }
 
     @Test
+    void taggedUnionsHaveIsAndAsAccessors() {
+        Shape circle = Shape.fromJson("{\"type\":\"circle\",\"radius\":1.5}");
+        assertTrue(circle.isCircle());
+        assertFalse(circle.isSquare());
+        assertEquals(1.5, circle.asCircle().data().radius());
+        assertThrows(IllegalStateException.class, circle::asSquare);
+        Shape unknown = Shape.fromJson("{\"type\":\"triangle\"}");
+        assertTrue(unknown.isUnrecognized());
+        assertEquals("triangle", unknown.asUnrecognized().type());
+    }
+
+    @Test
     void variantsWrapTheirModelAndWriteTheDiscriminatorOnce() {
         Shape shape = new Shape.Circle(Circle.builder().radius(2.5).build());
         assertEquals("{\"radius\":2.5,\"type\":\"circle\"}", shape.toJson());
