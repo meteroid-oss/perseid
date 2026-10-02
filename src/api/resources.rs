@@ -87,9 +87,7 @@ pub(crate) fn from_openapi(
         }
     }
     for resource in resources.values_mut() {
-        if let Err(e) = resource.disambiguate_operation_names() {
-            errors.push(format!("{e:#}"));
-        }
+        resource.disambiguate_operation_names();
     }
 
     (resources, errors)
@@ -337,8 +335,9 @@ impl Resource {
         Ok(())
     }
 
-    /// Falls back to the full operation id for operations whose short names collide.
-    fn disambiguate_operation_names(&mut self) -> anyhow::Result<()> {
+    /// Falls back to the full operation id for operations whose short names collide. Names that
+    /// still clash are reported by `naming::apply`, once `x-perseid-name` and `[methods]` apply.
+    fn disambiguate_operation_names(&mut self) {
         let key = |op: &Operation| op.name.to_snake_case();
         let counts = self.operations.iter().map(key).counts();
         for op in &mut self.operations {
@@ -346,18 +345,6 @@ impl Resource {
                 op.name = op.id.clone();
             }
         }
-        let mut seen = BTreeMap::new();
-        for op in &self.operations {
-            if let Some(other) = seen.insert(key(op), &op.id) {
-                bail!(
-                    "operations `{other}` and `{}` both become `{}` in resource `{}`",
-                    op.id,
-                    key(op),
-                    self.name
-                );
-            }
-        }
-        Ok(())
     }
 
     fn new(name: String) -> Self {
@@ -1180,7 +1167,7 @@ impl RequestBody {
             let description = describe_schema(&obj);
             ensure!(
                 kind == RequestBodyKind::Json,
-                "a form body needs an object schema, not {description}"
+                "a form body needs a `$ref` to an object schema, not an inline {description}"
             );
             let json_type = FieldType::from_schema_object(obj)?;
             return Ok(Self {
@@ -2068,7 +2055,7 @@ mod tests {
             operation("gists/get"),
             operation("repos/list"),
         ];
-        resource.disambiguate_operation_names().unwrap();
+        resource.disambiguate_operation_names();
         let names: Vec<_> = resource
             .operations
             .iter()
