@@ -295,7 +295,9 @@ fn webhooks_verifier_is_opt_in() {
     let dir = project();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
-    assert!(!dir.path().join("rust/src/webhooks.rs").exists());
+    // Rust always ships the verifier, gated by its `webhooks` cargo feature, so that
+    // `--all-features` (and docs.rs) builds whatever the setting.
+    assert!(dir.path().join("rust/src/webhooks.rs").exists());
     assert!(!dir.path().join("go/webhooks.go").exists());
 
     let config = dir.path().join("perseid.toml");
