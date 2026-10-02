@@ -227,6 +227,21 @@ export class @@CLIENT_NAME@@Request {
     return parse(parseJson(text));
   }
 
+  /** Same as `send`, for a response that may be empty (`204`) or `null`: both give `null`. */
+  public async sendOptional<R>(
+    ctx: @@CLIENT_NAME@@RequestContext,
+    parse: (json: any) => R,
+    options?: RequestOptions
+  ): Promise<R | null> {
+    const response = await this.sendInner(ctx, options);
+    const text = await response.text();
+    if (response.status === 204 || response.status === 205 || text.trim() === "") {
+      return null;
+    }
+    const json = parseJson(text);
+    return json === null || json === undefined ? null : parse(json);
+  }
+
   /** Same as `send`, returning the response body as bytes. */
   public async sendBinary(
     ctx: @@CLIENT_NAME@@RequestContext,

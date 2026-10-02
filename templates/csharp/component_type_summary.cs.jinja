@@ -65,7 +65,7 @@ namespace {{ sdk.package_name }}.Models;
 [JsonSerializable(typeof({{ union }}))]
 {% set t = namespace(ty=field.type) -%}
 {% for _ in range(8) -%}
-{% if t.ty.is_list() or t.ty.is_set() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
+{% if t.ty.is_list() or t.ty.is_set() or t.ty.is_nullable() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
 {% endfor -%}
 {% set ids = namespace(cases=[], strings=0) -%}
 {% for v in t.ty.union_variants() -%}

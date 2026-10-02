@@ -88,6 +88,40 @@ internal sealed class ApiTransport : IDisposable
             ?? throw new JsonException($"expected a {typeof(T).Name} body, got null");
     }
 
+    /// <summary>Like <see cref="SendJsonAsync{T}"/>, but an empty body or <c>null</c> is <c>null</c>.</summary>
+    public async Task<T?> SendOptionalJsonAsync<T>(
+        ApiRequest request,
+        JsonTypeInfo<T> typeInfo,
+        RequestOptions? options,
+        CancellationToken cancellationToken
+    )
+        where T : class
+    {
+        var result = await SendWithRetriesAsync(request, options, false, cancellationToken)
+            .ConfigureAwait(false);
+        return IsNullBody(result.Body) ? null : JsonSerializer.Deserialize(result.Body, typeInfo);
+    }
+
+    /// <summary>The <see cref="SendOptionalJsonAsync{T}"/> of value types.</summary>
+    public async Task<T?> SendOptionalStructJsonAsync<T>(
+        ApiRequest request,
+        JsonTypeInfo<T> typeInfo,
+        RequestOptions? options,
+        CancellationToken cancellationToken
+    )
+        where T : struct
+    {
+        var result = await SendWithRetriesAsync(request, options, false, cancellationToken)
+            .ConfigureAwait(false);
+        return IsNullBody(result.Body) ? null : JsonSerializer.Deserialize(result.Body, typeInfo);
+    }
+
+    private static bool IsNullBody(byte[] body)
+    {
+        var text = System.Text.Encoding.UTF8.GetString(body).Trim();
+        return text.Length == 0 || text == "null";
+    }
+
     public async Task<byte[]> SendBytesAsync(
         ApiRequest request,
         RequestOptions? options,

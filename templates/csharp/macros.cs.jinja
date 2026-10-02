@@ -93,7 +93,7 @@
 {% macro union_class(field, owner, taken) -%}
 {% set t = namespace(ty=field.type) -%}
 {% for _ in range(8) -%}
-{% if t.ty.is_list() or t.ty.is_set() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
+{% if t.ty.is_list() or t.ty.is_set() or t.ty.is_nullable() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
 {% endfor -%}
 {% if t.ty.is_union() -%}
 {% set id = owner ~ (field.name | to_rust_variant) -%}
@@ -120,9 +120,14 @@
 {%- endif %}
 {%- endmacro %}
 
+{# Whether the C# type `ty` is a value type, which `?` makes a `Nullable<T>` of. -#}
+{% macro is_value_type(ty) -%}
+{% if ty in ["bool", "int", "long", "short", "ushort", "ulong", "float", "double", "decimal", "DateTimeOffset"] %}yes{% endif %}
+{%- endmacro %}
+
 {# The `JsonContext` property of a body type: its name, or a flattened name for generics. -#}
 {% macro type_info(type) -%}
-{% set type = type | replace("Models.", "") -%}
+{% set type = type | replace("Models.", "") | replace("?", "OrNull") -%}
 {% set clr = {"string": "String", "bool": "Boolean", "int": "Int32", "long": "Int64", "short": "Int16",
     "ushort": "UInt16", "ulong": "UInt64", "float": "Single", "double": "Double", "decimal": "Decimal"} -%}
 {% if "<" in type %}Json{{ type | to_upper_camel_case }}{% else %}{{ clr[type] | default(type) }}{% endif %}

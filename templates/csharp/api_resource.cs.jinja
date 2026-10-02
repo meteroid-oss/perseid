@@ -48,7 +48,7 @@ public sealed partial class {{ resource_type_name }}
 {% elif op.response_is_text -%}
 {% set returns = "Task<string>" -%}
 {% elif response_type -%}
-{% set returns = "Task<" ~ response_type ~ ">" -%}
+{% set returns = "Task<" ~ response_type ~ ("?" if op.response_body_optional else "") ~ ">" -%}
 {% else -%}
 {% set returns = "Task" -%}
 {% endif %}
@@ -154,6 +154,7 @@ public sealed partial class {{ resource_type_name }}
 {% if op.response_is_event_stream %}        return _transport.SendEventStreamAsync(request, requestOptions, cancellationToken);
 {% elif op.response_is_binary %}        return _transport.SendBytesAsync(request, requestOptions, cancellationToken);
 {% elif op.response_is_text %}        return _transport.SendTextAsync(request, requestOptions, cancellationToken);
+{% elif response_type and op.response_body_optional %}        return _transport.{{ "SendOptionalStructJsonAsync" if m.is_value_type(response_type) else "SendOptionalJsonAsync" }}(request, {{ context }}.{{ m.type_info(response_type) }}, requestOptions, cancellationToken);
 {% elif response_type %}        return _transport.SendJsonAsync(request, {{ context }}.{{ m.type_info(response_type) }}, requestOptions, cancellationToken);
 {% else %}        return _transport.SendAsync(request, requestOptions, cancellationToken);
 {% endif -%}

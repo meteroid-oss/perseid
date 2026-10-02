@@ -171,6 +171,23 @@ func (c *Client) execute(ctx context.Context, req *request, out any) error {
 	return nil
 }
 
+// executeOptional is execute for a response that may come without a value: an
+// empty body (a 204) or JSON null. It reports whether a value was decoded into out.
+func (c *Client) executeOptional(ctx context.Context, req *request, out any) (bool, error) {
+	body, status, err := c.do(ctx, req)
+	if err != nil {
+		return false, err
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return false, nil
+	}
+	if err := json.Unmarshal(body, out); err != nil {
+		return false, &DecodeError{StatusCode: status, RawBody: body, Err: err}
+	}
+	return true, nil
+}
+
 // executeBinary performs the request and returns the raw response body, for
 // endpoints that serve PDFs or other binary content.
 func (c *Client) executeBinary(ctx context.Context, req *request) ([]byte, error) {

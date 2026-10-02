@@ -99,6 +99,7 @@ public class {{ resource_type_name }} {
             {% set res_java_type = res_item ~ ".class" -%}
         {% endif -%}
     {% endif -%}
+    {% set res_ann = "@javax.annotation.Nullable " if op.response_body_optional | default(false) else "" -%}
     {% set has_body = op.request_body_schema_name is defined or op.request_body_json_type is defined -%}
     {% if op.request_body_schema_name is defined -%}
         {% set req_body_type = op.request_body_schema_name | to_upper_camel_case -%}
@@ -153,25 +154,25 @@ public class {{ resource_type_name }} {
     {% endset -%}
 
     {{ doc }}
-    public {{ res_type }} {{ op_name }}({{ func_args | strip_trailing_comma }}) {
+    {{ res_ann }}public {{ res_type }} {{ op_name }}({{ func_args | strip_trailing_comma }}) {
         {% if res_type != "void" %}return {% endif %}{{ op_name }}({{ call_args }}{% if has_options %}new {{ options_type }}(), {% endif %}{{ request_options }}.none());
     }
     {% if has_options %}
 
     {{ doc }}
-    public {{ res_type }} {{ op_name }}({{ func_args }}final {{ options_type }} options) {
+    {{ res_ann }}public {{ res_type }} {{ op_name }}({{ func_args }}final {{ options_type }} options) {
         {% if res_type != "void" %}return {% endif %}{{ op_name }}({{ call_args }}options, {{ request_options }}.none());
     }
 
 
     {{ doc }}
-    public {{ res_type }} {{ op_name }}({{ func_args }}final {{ request_options }} requestOptions) {
+    {{ res_ann }}public {{ res_type }} {{ op_name }}({{ func_args }}final {{ request_options }} requestOptions) {
         {% if res_type != "void" %}return {% endif %}{{ op_name }}({{ call_args }}new {{ options_type }}(), requestOptions);
     }
     {% endif %}
 
     {{ doc }}
-    public {{ res_type }} {{ op_name }}(
+    {{ res_ann }}public {{ res_type }} {{ op_name }}(
             {{ func_args }}
             {%- if has_options %}final {{ options_type }} options, {% endif -%}
             final {{ request_options }} requestOptions) {

@@ -872,7 +872,7 @@ impl Promoter {
                 "/requestBody/content/{}/schema",
                 media.replace('/', "~1")
             )) {
-                self.body(schema, format!("{id}_request"));
+                self.body(schema, format!("{id}_request"), false);
             }
         }
         let Some(Value::Object(responses)) = op.get_mut("responses") else {
@@ -892,12 +892,29 @@ impl Promoter {
                 _ => format!("{id}_response_{status}"),
             };
             if let Some(schema) = response.pointer_mut("/content/application~1json/schema") {
-                self.body(schema, name);
+                self.body(schema, name, true);
             }
         }
     }
 
-    fn body(&mut self, schema: &mut Value, name: String) {
+    /// Promotes the schema of a body. A request body drops `null`, which is not a value the SDK
+    /// offers; a response body keeps it as `oneOf: [X, {type: null}]`, which the SDK returns
+    /// as an optional.
+    fn body(&mut self, schema: &mut Value, name: String, keep_null: bool) {
+        let nullable = keep_null
+            && (nullable_wrapper(schema).is_some()
+                || schema
+                    .get("type")
+                    .and_then(Value::as_array)
+                    .is_some_and(|types| types.iter().any(|t| t == "null")));
+        self.body_value(schema, name);
+        if nullable {
+            let inner = schema.take();
+            *schema = json!({ "oneOf": [inner, { "type": "null" }] });
+        }
+    }
+
+    fn body_value(&mut self, schema: &mut Value, name: String) {
         // A body is either sent or not: `null` is not a value the SDK should offer.
         if let Some((key, index)) = nullable_wrapper(schema) {
             *schema = schema[key][index].take();

@@ -2378,3 +2378,87 @@ fn schema_names_that_collide_or_start_with_a_digit_are_renamed() {
         }
     }
 }
+
+/// Every generated file of `language` under `dir`, concatenated.
+fn generated_text(dir: &Path, language: &str) -> String {
+    fn walk(path: &Path, out: &mut String) {
+        for entry in fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if let Ok(text) = fs::read_to_string(&path) {
+                out.push_str(&text);
+            }
+        }
+    }
+    let mut out = String::new();
+    walk(&dir.join(language), &mut out);
+    out
+}
+
+#[test]
+fn nullable_items_values_and_optional_responses_are_typed_in_every_language() {
+    let languages = ["rust", "typescript", "python", "go", "java", "csharp"];
+    let dir = project_from("petstore.yaml", &languages);
+    let spec = "openapi: 3.1.0\ninfo: {title: Nullables, version: 1.0.0}\n\
+        servers: [{url: https://x.example.com}]\n\
+        paths:\n\
+        \x20 /echo:\n    post:\n      operationId: echo\n      tags: [echo]\n      requestBody:\n        required: true\n        \
+        content: {application/json: {schema: {$ref: '#/components/schemas/Holder'}}}\n      responses:\n        \
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Holder'}}}}\n\
+        \x20 /maybe:\n    get:\n      operationId: get_maybe\n      tags: [echo]\n      responses:\n        \
+        '200': {description: ok, content: {application/json: {schema: {oneOf: [{$ref: '#/components/schemas/Holder'}, {type: 'null'}]}}}}\n\
+        \x20 /gone:\n    get:\n      operationId: get_gone\n      tags: [echo]\n      responses:\n        \
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Holder'}}}}\n        \
+        '204': {description: gone}\n\
+        components:\n  schemas:\n    Holder:\n      type: object\n      properties:\n        \
+        tags: {type: array, items: {type: [string, 'null']}}\n        \
+        labels: {type: object, additionalProperties: {type: [string, 'null']}}\n";
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let expected: [(&str, &[&str]); 6] = [
+        (
+            "rust",
+            &[
+                "Vec<Option<String>>",
+                "HashMap<String, Option<String>>",
+                "Option<crate::models::Holder>",
+                "execute_optional",
+            ],
+        ),
+        (
+            "typescript",
+            &["(string | null)[]", "sendOptional(", "| null>"],
+        ),
+        (
+            "python",
+            &[
+                "list[str | None]",
+                "dict[str, str | None]",
+                "Holder | None",
+                "(204, 205)",
+            ],
+        ),
+        (
+            "go",
+            &["[]*string", "map[string]*string", "executeOptional"],
+        ),
+        ("java", &["@javax.annotation.Nullable public Holder "]),
+        (
+            "csharp",
+            &[
+                "List<string?>",
+                "Dictionary<string, string?>",
+                "Task<Holder?>",
+                "SendOptionalJsonAsync",
+            ],
+        ),
+    ];
+    for (language, needles) in expected {
+        let text = generated_text(dir.path(), language);
+        for needle in needles {
+            assert!(text.contains(needle), "{language}: missing `{needle}`");
+        }
+    }
+}

@@ -503,6 +503,10 @@ pub(crate) struct Operation {
     /// True if the response is a JSON array of `response_body_schema_name`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     response_body_is_list: bool,
+    /// True if the JSON response may come without a value: a `null` body, or a success status
+    /// without a body next to one with a body. SDKs return an optional.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    response_body_optional: bool,
     /// Type of a JSON response that is not a named schema or a list of one, e.g. a map of
     /// integers. It only holds values whose SDK type is their JSON value.
     #[serde(
@@ -721,6 +725,7 @@ impl Operation {
             multipart_fields: request.multipart_fields,
             response_body_schema_name: response.schema_name,
             response_body_is_list: response.is_list,
+            response_body_optional: response.optional,
             response_body_json_type: response.json_type,
             response_is_binary: response.kind == ResponseKind::Binary,
             response_is_text: response.kind == ResponseKind::Text,
@@ -743,6 +748,7 @@ impl Operation {
             stream: true,
             response_body_schema_name: None,
             response_body_is_list: false,
+            response_body_optional: false,
             response_body_json_type: None,
             response_is_event_stream: true,
             json_or_event_stream: false,
@@ -865,6 +871,10 @@ impl Operation {
                 found
             }
         };
+        // A page is always there.
+        if self.pagination.is_some() {
+            self.response_body_optional = false;
+        }
         Ok(())
     }
 
@@ -1165,6 +1175,8 @@ struct ResponseBody {
     schema_name: Option<String>,
     is_list: bool,
     json_type: Option<FieldType>,
+    /// The JSON body may be `null`, or another success status has no body.
+    optional: bool,
     /// A JSON body that may also come as `text/event-stream`, depending on the request.
     also_event_stream: bool,
 }
@@ -1204,6 +1216,7 @@ fn responses_from_openapi(
     success.sort_by_key(|(code, ..)| *code);
 
     let mut chosen: Option<(String, ResponseBody)> = None;
+    let mut without_body = false;
     for (_, status, response) in success {
         let status = match status {
             openapi::StatusCode::Code(0) => "default".to_owned(),
@@ -1212,7 +1225,7 @@ fn responses_from_openapi(
         let body = ResponseBody::from_openapi(response, schemas)
             .with_context(|| format!("response `{status}`"))?;
         match &chosen {
-            _ if body.kind == ResponseKind::None => {}
+            _ if body.kind == ResponseKind::None => without_body = true,
             None => chosen = Some((status, body)),
             Some((first, kept)) if *kept != body => tracing::warn!(
                 "responses `{first}` and `{status}` have different bodies, the SDK decodes `{first}`"
@@ -1230,10 +1243,10 @@ fn responses_from_openapi(
             Some((status, get_schema_name(obj.reference.as_deref())?))
         })
         .collect();
-    Ok((
-        chosen.map(|(_, body)| body).unwrap_or_default(),
-        error_schemas,
-    ))
+    let mut body = chosen.map(|(_, body)| body).unwrap_or_default();
+    // A success without a body, such as `204`, next to one with a JSON body.
+    body.optional |= without_body && body.kind == ResponseKind::Json;
+    Ok((body, error_schemas))
 }
 
 impl ResponseBody {
@@ -1260,12 +1273,15 @@ impl ResponseBody {
             let Schema::Object(obj) = &schema.json_schema else {
                 bail!("boolean schemas are not supported");
             };
+            let (obj, optional) = peel_nullable(obj);
+            let obj = &obj;
             if let Some((schema_name, is_list)) = named_or_list_of_named(obj, schemas) {
                 return Ok(Self {
                     kind: ResponseKind::Json,
                     schema_name: Some(schema_name),
                     is_list,
                     json_type: None,
+                    optional,
                     also_event_stream,
                 });
             }
@@ -1278,6 +1294,7 @@ impl ResponseBody {
             return Ok(Self {
                 kind: ResponseKind::Json,
                 json_type: Some(json_type),
+                optional,
                 also_event_stream,
                 ..Self::default()
             });
@@ -1287,6 +1304,25 @@ impl ResponseBody {
         }
         Ok(kind(ResponseKind::Binary))
     }
+}
+
+/// The schema without its `null` alternative, and whether it had one: `oneOf: [X, {type: null}]`
+/// or `type: [X, "null"]`.
+fn peel_nullable(obj: &SchemaObject) -> (SchemaObject, bool) {
+    let variants = obj
+        .subschemas
+        .as_ref()
+        .and_then(|s| s.one_of.as_ref().or(s.any_of.as_ref()));
+    if let Some(variants) = variants
+        && let Some(Schema::Object(inner)) = super::types::extract_nullable_variant(variants)
+    {
+        return (inner.clone(), true);
+    }
+    let null_type = matches!(
+        &obj.instance_type,
+        Some(SingleOrVec::Vec(types)) if types.contains(&InstanceType::Null)
+    );
+    (obj.clone(), null_type)
 }
 
 /// `$ref: X` or `{type: array, items: {$ref: X}}`, following references to array components.
@@ -1817,5 +1853,70 @@ mod tests {
         let mut params = vec!["a".to_owned()];
         add_undeclared_path_params("/x/{a}/y/{thing}/{thing}", &mut params);
         assert_eq!(params, ["a", "thing"]);
+    }
+}
+
+#[cfg(test)]
+mod optional_response_tests {
+    use serde_json::{Value, json};
+
+    use super::*;
+
+    fn pick(value: Value) -> ResponseBody {
+        let schemas: IndexMap<String, openapi::SchemaObject> = IndexMap::new();
+        responses_from_openapi(serde_json::from_value(value).unwrap(), &schemas)
+            .unwrap()
+            .0
+    }
+
+    fn json_body(schema: Value) -> Value {
+        json!({ "description": "", "content": { "application/json": { "schema": schema } } })
+    }
+
+    fn item() -> Value {
+        json!({ "$ref": "#/components/schemas/Item" })
+    }
+
+    #[test]
+    fn a_null_alternative_makes_the_body_optional() {
+        let body = pick(json!({
+            "200": json_body(json!({ "oneOf": [item(), { "type": "null" }] }))
+        }));
+        assert_eq!(body.schema_name.as_deref(), Some("Item"));
+        assert!(body.optional);
+        let body = pick(json!({
+            "200": json_body(json!({ "anyOf": [{ "type": "null" }, item()] }))
+        }));
+        assert_eq!(
+            (body.schema_name.as_deref(), body.optional),
+            (Some("Item"), true)
+        );
+        let body = pick(json!({ "200": json_body(json!({ "type": ["string", "null"] })) }));
+        assert_eq!(
+            (body.json_type, body.optional),
+            (Some(FieldType::String), true)
+        );
+    }
+
+    #[test]
+    fn a_success_without_a_body_next_to_one_with_makes_it_optional() {
+        let body = pick(json!({
+            "200": json_body(item()),
+            "204": { "description": "gone" }
+        }));
+        assert_eq!(body.schema_name.as_deref(), Some("Item"));
+        assert!(body.optional);
+    }
+
+    #[test]
+    fn plain_bodies_are_required() {
+        assert!(!pick(json!({ "200": json_body(item()) })).optional);
+        let none = pick(json!({ "204": { "description": "" } }));
+        assert!(!none.optional && none.kind == ResponseKind::None);
+        let binary = pick(json!({
+            "200": { "description": "", "content": { "application/pdf": { "schema": { "type": "string" } } } },
+            "204": { "description": "" }
+        }));
+        assert!(!binary.optional);
     }
 }

@@ -208,6 +208,9 @@ impl<'a> {{ resource_type_name }}<'a> {
         {% elif op.response_body_schema_name is undefined and op.response_body_json_type is undefined -%}
             .execute_empty(self.cfg)
             .await
+        {% elif op.response_body_optional -%}
+            .execute_optional(self.cfg)
+            .await
         {% else -%}
             .execute(self.cfg)
             .await

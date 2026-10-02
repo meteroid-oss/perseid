@@ -217,9 +217,9 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
                     *ty = FieldType::JsonObject;
                 }
             }
-            FieldType::List { inner } | FieldType::Set { inner } => {
-                settle(Arc::make_mut(inner), known, owner)
-            }
+            FieldType::List { inner }
+            | FieldType::Set { inner }
+            | FieldType::Nullable { inner } => settle(Arc::make_mut(inner), known, owner),
             FieldType::Map { value_ty } => settle(Arc::make_mut(value_ty), known, owner),
             _ => {}
         }
@@ -263,7 +263,9 @@ pub(crate) fn set_union_ids(types: &mut Types) {
                     }
                 }
             }
-            FieldType::List { inner } | FieldType::Set { inner } => set(Arc::make_mut(inner), ids),
+            FieldType::List { inner }
+            | FieldType::Set { inner }
+            | FieldType::Nullable { inner } => set(Arc::make_mut(inner), ids),
             FieldType::Map { value_ty } => set(Arc::make_mut(value_ty), ids),
             _ => {}
         }
@@ -542,7 +544,7 @@ fn resolve_schema_ref_in_field_type(
                 data: TypeData::StringAlias,
             });
         }
-        FieldType::List { inner } | FieldType::Set { inner } => {
+        FieldType::List { inner } | FieldType::Set { inner } | FieldType::Nullable { inner } => {
             resolve_schema_ref_in_field_type(Arc::make_mut(inner), string_alias_names);
         }
         FieldType::Map { value_ty } => {
@@ -924,6 +926,9 @@ fn promote_field_type(
                 new_types,
             )?;
         }
+        FieldType::Nullable { inner } => {
+            promote_field_type(Arc::make_mut(inner), base_name, existing, new_types)?;
+        }
         FieldType::Map { value_ty } => {
             promote_field_type(
                 Arc::make_mut(value_ty),
@@ -1186,7 +1191,7 @@ fn is_null_schema(schema: &Schema) -> bool {
 }
 
 /// `X` in the `oneOf`/`anyOf: [X, {type: null}]` nullable pattern, in either order.
-fn extract_nullable_variant(variants: &[Schema]) -> Option<&Schema> {
+pub(super) fn extract_nullable_variant(variants: &[Schema]) -> Option<&Schema> {
     match variants {
         [a, b] if is_null_schema(a) && !is_null_schema(b) => Some(b),
         [a, b] if is_null_schema(b) && !is_null_schema(a) => Some(a),
@@ -1772,6 +1777,7 @@ impl UnionVariant {
             FieldType::Decimal => "decimal",
             FieldType::List { .. } | FieldType::Set { .. } => "list",
             FieldType::Map { .. } | FieldType::JsonObject => "object",
+            FieldType::Nullable { inner } => return Self::name_of(inner),
             FieldType::SchemaRef { .. }
             | FieldType::Union { .. }
             | FieldType::StringEnum { .. } => {
@@ -1798,6 +1804,7 @@ impl UnionVariant {
             | FieldType::StringEnum { .. } => "string",
             FieldType::List { .. } | FieldType::Set { .. } => "array",
             FieldType::Map { .. } | FieldType::JsonObject => "object",
+            FieldType::Nullable { inner } => return Self::json_type_of(inner),
             FieldType::SchemaRef { .. } | FieldType::Union { .. } => return None,
         })
     }
@@ -1856,6 +1863,12 @@ pub(crate) enum FieldType {
     Map {
         value_ty: Arc<FieldType>,
     },
+    /// A value that may also be `null`: the items of a list or the values of a map that allow
+    /// it, or the body of a response that may be `null`. Fields carry their nullability in
+    /// [`Field::nullable`] instead.
+    Nullable {
+        inner: Arc<FieldType>,
+    },
     /// The name of another schema that defines this type.
     SchemaRef {
         name: String,
@@ -1891,7 +1904,25 @@ impl FieldType {
         let openapi::ParameterSchemaOrContent::Schema(s) = format else {
             bail!("found unexpected 'content' data format");
         };
-        Self::from_schema(s.json_schema)
+        // A parameter cannot send `null` items.
+        Ok(Self::from_schema(s.json_schema)?.without_nullable())
+    }
+
+    /// This type with the `null` of the items and values of collections dropped.
+    pub(crate) fn without_nullable(self) -> Self {
+        match self {
+            Self::Nullable { inner } => Arc::unwrap_or_clone(inner).without_nullable(),
+            Self::List { inner } => Self::List {
+                inner: Arc::new(Arc::unwrap_or_clone(inner).without_nullable()),
+            },
+            Self::Set { inner } => Self::Set {
+                inner: Arc::new(Arc::unwrap_or_clone(inner).without_nullable()),
+            },
+            Self::Map { value_ty } => Self::Map {
+                value_ty: Arc::new(Arc::unwrap_or_clone(value_ty).without_nullable()),
+            },
+            other => other,
+        }
     }
 
     fn from_schema(s: Schema) -> anyhow::Result<Self> {
@@ -1902,9 +1933,43 @@ impl FieldType {
         Self::from_schema_object(obj)
     }
 
+    fn from_schema_nullable(s: Schema) -> anyhow::Result<Self> {
+        let Schema::Object(obj) = s else {
+            bail!("found unexpected `true` schema");
+        };
+
+        Self::from_schema_object_nullable(obj)
+    }
+
     pub(crate) fn from_schema_object(obj: SchemaObject) -> anyhow::Result<Self> {
         let (field_type, _nullable) = Self::from_schema_object_with_nullable(obj)?;
         Ok(field_type)
+    }
+
+    /// Like [`Self::from_schema_object`], keeping nullability as [`Self::Nullable`], for the
+    /// items of lists, the values of maps and response bodies.
+    pub(crate) fn from_schema_object_nullable(obj: SchemaObject) -> anyhow::Result<Self> {
+        let (field_type, nullable) = Self::from_schema_object_with_nullable(obj)?;
+        Ok(field_type.nullable_if(nullable))
+    }
+
+    /// This type, which accepts `null` when `nullable`.
+    pub(crate) fn nullable_if(self, nullable: bool) -> Self {
+        match self {
+            Self::Nullable { .. } => self,
+            _ if nullable => Self::Nullable {
+                inner: Arc::new(self),
+            },
+            _ => self,
+        }
+    }
+
+    /// The type without its [`Self::Nullable`] wrapper.
+    pub(crate) fn non_null(&self) -> &Self {
+        match self {
+            Self::Nullable { inner } => inner.non_null(),
+            _ => self,
+        }
     }
 
     /// Parse a schema object, returning the field type and whether it's nullable.
@@ -2020,7 +2085,7 @@ impl FieldType {
                 let array = obj.array.unwrap_or_default();
                 let inner = match array.items {
                     None => Self::JsonObject,
-                    Some(SingleOrVec::Single(ty)) => Self::from_schema(*ty)?,
+                    Some(SingleOrVec::Single(ty)) => Self::from_schema_nullable(*ty)?,
                     Some(SingleOrVec::Vec(_)) => {
                         bail!("tuple arrays (`items` as a list) are not supported")
                     }
@@ -2041,7 +2106,7 @@ impl FieldType {
                 match obj.additional_properties.map(|s| *s) {
                     None | Some(Schema::Bool(_)) => Self::JsonObject,
                     Some(Schema::Object(schema_object)) => {
-                        let value_ty = Arc::new(Self::from_schema_object(schema_object)?);
+                        let value_ty = Arc::new(Self::from_schema_object_nullable(schema_object)?);
                         Self::Map { value_ty }
                     }
                 }
@@ -2075,6 +2140,7 @@ impl FieldType {
             Self::Decimal => "decimal".into(),
             Self::DateTime => "DateTimeOffset".into(),
             Self::JsonObject | Self::Union { .. } => "JsonNode".into(),
+            Self::Nullable { inner } => format!("{}?", inner.to_csharp_typename()).into(),
             Self::Map { value_ty } => {
                 format!("Dictionary<string, {}>", value_ty.to_csharp_typename()).into()
             }
@@ -2103,6 +2169,15 @@ impl FieldType {
             Self::Uri | Self::String | Self::Decimal => "string".into(),
             Self::DateTime => "time.Time".into(),
             Self::JsonObject | Self::Union { .. } => "map[string]any".into(),
+            // Slices, maps and untyped JSON are nil already.
+            Self::Nullable { inner } => match inner.non_null() {
+                Self::List { .. }
+                | Self::Set { .. }
+                | Self::Map { .. }
+                | Self::JsonObject
+                | Self::Union { .. } => inner.to_go_typename(),
+                _ => format!("*{}", inner.to_go_typename()).into(),
+            },
             Self::Map { value_ty } => format!("map[string]{}", value_ty.to_go_typename()).into(),
             Self::List { inner } | Self::Set { inner } => {
                 format!("[]{}", inner.to_go_typename()).into()
@@ -2126,6 +2201,7 @@ impl FieldType {
             Self::Uri | Self::String => "String".into(),
             Self::Decimal => "java.math.BigDecimal".into(),
             Self::DateTime => "Instant".into(),
+            Self::Nullable { inner } => format!("{}?", inner.to_kotlin_typename()).into(),
             Self::Map { value_ty } => {
                 format!("Map<String,{}>", value_ty.to_kotlin_typename()).into()
             }
@@ -2155,6 +2231,12 @@ impl FieldType {
             Self::String | Self::Uri => "string".into(),
             Self::DateTime => "Date".into(),
             Self::JsonObject | Self::Union { .. } => "any".into(),
+            Self::Nullable { inner } => format!("{} | null", inner.to_js_typename()).into(),
+            Self::List { inner } | Self::Set { inner }
+                if matches!(**inner, Self::Nullable { .. }) =>
+            {
+                format!("({})[]", inner.to_js_typename()).into()
+            }
             Self::List { inner } | Self::Set { inner } => {
                 format!("{}[]", inner.to_js_typename()).into()
             }
@@ -2187,6 +2269,7 @@ impl FieldType {
             Self::List { inner } | Self::Set { inner } => {
                 format!("Vec<{}>", inner.to_rust_typename()).into()
             }
+            Self::Nullable { inner } => format!("Option<{}>", inner.to_rust_typename()).into(),
             Self::Map { value_ty } => format!(
                 "std::collections::HashMap<String, {}>",
                 value_ty.to_rust_typename(),
@@ -2215,7 +2298,9 @@ impl FieldType {
             | Self::Uri
             | Self::JsonObject
             | Self::Union { .. } => true,
-            Self::List { inner } | Self::Set { inner } => inner.is_plain_json(),
+            Self::List { inner } | Self::Set { inner } | Self::Nullable { inner } => {
+                inner.is_plain_json()
+            }
             Self::Map { value_ty } => value_ty.is_plain_json(),
             Self::Decimal | Self::DateTime | Self::SchemaRef { .. } | Self::StringEnum { .. } => {
                 false
@@ -2230,8 +2315,16 @@ impl FieldType {
                     *self = target.clone();
                 }
             }
-            Self::List { inner } | Self::Set { inner } => {
+            Self::List { inner } | Self::Set { inner } | Self::Nullable { inner } => {
                 Arc::make_mut(inner).inline_aliases(aliases);
+                // An alias of a nullable type is not nested twice.
+                if let Self::Nullable { inner } = self
+                    && let Self::Nullable { inner: twice } = &**inner
+                {
+                    *self = Self::Nullable {
+                        inner: twice.clone(),
+                    };
+                }
             }
             Self::Map { value_ty } => Arc::make_mut(value_ty).inline_aliases(aliases),
             Self::Union { variants, .. } => {
@@ -2261,7 +2354,9 @@ impl FieldType {
                     refs
                 })
                 .collect(),
-            Self::List { inner } | Self::Set { inner } => inner.union_refs(),
+            Self::List { inner } | Self::Set { inner } | Self::Nullable { inner } => {
+                inner.union_refs()
+            }
             Self::Map { value_ty } => value_ty.union_refs(),
             _ => BTreeSet::new(),
         }
@@ -2287,7 +2382,7 @@ impl FieldType {
                     }
                 }
             }
-            Self::List { inner } | Self::Set { inner } => {
+            Self::List { inner } | Self::Set { inner } | Self::Nullable { inner } => {
                 Arc::make_mut(inner).settle_object_unions(best_match, counts)
             }
             Self::Map { value_ty } => {
@@ -2301,7 +2396,9 @@ impl FieldType {
     pub(crate) fn untype_unions(&mut self) {
         match self {
             Self::Union { .. } => *self = Self::JsonObject,
-            Self::List { inner } | Self::Set { inner } => Arc::make_mut(inner).untype_unions(),
+            Self::List { inner } | Self::Set { inner } | Self::Nullable { inner } => {
+                Arc::make_mut(inner).untype_unions()
+            }
             Self::Map { value_ty } => Arc::make_mut(value_ty).untype_unions(),
             _ => {}
         }
@@ -2310,9 +2407,10 @@ impl FieldType {
     pub(crate) fn referenced_schema(&self) -> Option<&str> {
         match self {
             Self::SchemaRef { name, .. } => Some(name),
-            Self::List { inner: ty } | Self::Set { inner: ty } | Self::Map { value_ty: ty } => {
-                ty.referenced_schema()
-            }
+            Self::List { inner: ty }
+            | Self::Set { inner: ty }
+            | Self::Nullable { inner: ty }
+            | Self::Map { value_ty: ty } => ty.referenced_schema(),
             _ => None,
         }
     }
@@ -2328,6 +2426,9 @@ impl FieldType {
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
             Self::Uri => "str".into(),
             Self::JsonObject | Self::Union { .. } => "t.Dict[str, t.Any]".into(),
+            Self::Nullable { inner } => {
+                format!("t.Optional[{}]", inner.to_python_typename()).into()
+            }
             Self::Set { inner } | Self::List { inner } => {
                 format!("t.List[{}]", inner.to_python_typename()).into()
             }
@@ -2353,6 +2454,7 @@ impl FieldType {
             FieldType::DateTime => "OffsetDateTime".into(),
             FieldType::Uri => "URI".into(),
             FieldType::JsonObject | FieldType::Union { .. } => "Object".into(),
+            FieldType::Nullable { inner } => inner.to_java_typename(),
             FieldType::List { inner } => format!("List<{}>", inner.to_java_typename()).into(),
             FieldType::Set { inner: field_type } => {
                 format!("Set<{}>", field_type.to_java_typename()).into()
@@ -2394,7 +2496,9 @@ impl FieldType {
             | FieldType::Union { .. }
             | FieldType::Date => false,
             FieldType::StringEnum { .. } => false,
-            FieldType::List { inner } | FieldType::Set { inner } => inner.needs_java_import(),
+            FieldType::List { inner }
+            | FieldType::Set { inner }
+            | FieldType::Nullable { inner } => inner.needs_java_import(),
             FieldType::Map { value_ty } => value_ty.needs_java_import(),
             FieldType::SchemaRef { inner, .. } => {
                 // String aliases don't need import - they resolve to String
@@ -2434,6 +2538,7 @@ impl FieldType {
             | FieldType::Date
             | FieldType::SchemaRef { .. } => self.to_php_typename(),
             FieldType::StringEnum { .. } => "string".into(),
+            FieldType::Nullable { inner } => inner.to_phpdoc_typename(),
             FieldType::Set { inner } | FieldType::List { inner } => {
                 format!("list<{}>", inner.to_phpdoc_typename()).into()
             }
@@ -2461,6 +2566,7 @@ impl FieldType {
             | FieldType::List { .. }
             | FieldType::Set { .. }
             | FieldType::Map { .. } => "array".into(),
+            FieldType::Nullable { inner } => inner.to_php_typename(),
             FieldType::SchemaRef { name, .. } => name.clone().into(),
         }
     }
@@ -2535,6 +2641,10 @@ impl minijinja::value::Object for FieldType {
                 ensure_no_args(args, "is_list")?;
                 Ok(matches!(**self, Self::List { .. }).into())
             }
+            "is_nullable" => {
+                ensure_no_args(args, "is_nullable")?;
+                Ok(matches!(**self, Self::Nullable { .. }).into())
+            }
             "is_set" => {
                 ensure_no_args(args, "is_set")?;
                 Ok(matches!(**self, Self::Set { .. }).into())
@@ -2573,6 +2683,7 @@ impl minijinja::value::Object for FieldType {
                     | F::List { .. }
                     | F::Set { .. }
                     | F::Map { .. }
+                    | F::Nullable { .. }
                     | F::SchemaRef { .. }
                     | F::Date => false,
                     F::StringEnum { .. } => false,
@@ -2620,12 +2731,14 @@ impl minijinja::value::Object for FieldType {
                 Ok(matches!(**self, Self::Date).into())
             }
 
-            // Returns the inner type of a list or set
+            // Returns the inner type of a list, set or nullable type
             "inner_type" => {
                 ensure_no_args(args, "inner_type")?;
 
                 let ty = match &**self {
-                    FieldType::List { inner } | FieldType::Set { inner } => {
+                    FieldType::List { inner }
+                    | FieldType::Set { inner }
+                    | FieldType::Nullable { inner } => {
                         Some(minijinja::Value::from_dyn_object(inner.clone()))
                     }
                     _ => None,
@@ -3405,5 +3518,99 @@ mod tests {
             fields,
             [("id", FieldType::String), ("note", FieldType::Int64)]
         );
+    }
+}
+
+#[cfg(test)]
+mod nullable_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn parse(value: serde_json::Value) -> FieldType {
+        FieldType::from_schema_object_nullable(serde_json::from_value(value).unwrap()).unwrap()
+    }
+
+    fn nullable(inner: FieldType) -> FieldType {
+        FieldType::Nullable {
+            inner: Arc::new(inner),
+        }
+    }
+
+    fn list(inner: FieldType) -> FieldType {
+        FieldType::List {
+            inner: Arc::new(inner),
+        }
+    }
+
+    #[test]
+    fn nullable_items_and_values_are_kept() {
+        let items = parse(json!({"type": "array", "items": {"type": ["string", "null"]}}));
+        assert_eq!(items, list(nullable(FieldType::String)));
+        let values = parse(json!({
+            "type": "object", "additionalProperties": {"type": ["integer", "null"]}
+        }));
+        assert_eq!(
+            values,
+            FieldType::Map {
+                value_ty: Arc::new(nullable(FieldType::Int64))
+            }
+        );
+    }
+
+    #[test]
+    fn nullable_one_of_items_keep_their_reference() {
+        let widget = FieldType::SchemaRef {
+            name: "Widget".into(),
+            inner: None,
+        };
+        let items = parse(json!({
+            "type": "array",
+            "items": {"oneOf": [{"$ref": "#/components/schemas/Widget"}, {"type": "null"}]}
+        }));
+        assert_eq!(items, list(nullable(widget)));
+        assert_eq!(items.referenced_schema(), Some("Widget"));
+    }
+
+    #[test]
+    fn non_nullable_items_are_unchanged() {
+        let items = parse(json!({"type": "array", "items": {"type": "string"}}));
+        assert_eq!(items, list(FieldType::String));
+        // A nullable list is the field's `nullable`, not a type wrapper.
+        let field = Field::from_schema(
+            "tags".into(),
+            serde_json::from_value(json!({"type": ["array", "null"], "items": {"type": "string"}}))
+                .unwrap(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (field.r#type, field.nullable),
+            (list(FieldType::String), true)
+        );
+    }
+
+    #[test]
+    fn nullable_types_are_named_in_every_language() {
+        let ty = list(nullable(FieldType::String));
+        assert_eq!(ty.to_rust_typename(), "Vec<Option<String>>");
+        assert_eq!(ty.to_js_typename(), "(string | null)[]");
+        assert_eq!(ty.to_go_typename(), "[]*string");
+        assert_eq!(ty.to_python_typename(), "t.List[t.Optional[str]]");
+        assert_eq!(ty.to_java_typename(), "List<String>");
+        assert_eq!(ty.to_csharp_typename(), "List<string?>");
+        assert_eq!(ty.to_kotlin_typename(), "List<String?>");
+        // Slices are nil already.
+        let nested = list(nullable(list(FieldType::Int32)));
+        assert_eq!(nested.to_go_typename(), "[][]int32");
+    }
+
+    #[test]
+    fn nullable_wrappers_do_not_nest_and_can_be_dropped() {
+        let ty = nullable(nullable(FieldType::Bool));
+        assert_eq!(ty.clone().nullable_if(true), ty);
+        assert_eq!(FieldType::Bool.nullable_if(false), FieldType::Bool);
+        let dropped = list(nullable(FieldType::Bool)).without_nullable();
+        assert_eq!(dropped, list(FieldType::Bool));
+        assert!(list(nullable(FieldType::Bool)).is_plain_json());
     }
 }

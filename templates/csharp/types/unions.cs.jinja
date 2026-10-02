@@ -5,7 +5,7 @@
 {% if name -%}
 {% set t = namespace(ty=field.type) -%}
 {% for _ in range(8) -%}
-{% if t.ty.is_list() or t.ty.is_set() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
+{% if t.ty.is_list() or t.ty.is_set() or t.ty.is_nullable() %}{% set t.ty = t.ty.inner_type() %}{% elif t.ty.is_map() %}{% set t.ty = t.ty.value_type() %}{% endif -%}
 {% endfor -%}
 {% set variants = namespace(list=[]) -%}
 {% set objects = t.ty.union_mode() != "json" -%}
@@ -13,7 +13,7 @@
 {% set class = m.union_variant_class(v, name) -%}
 {% set leaf = namespace(ty=v.type) -%}
 {% for _ in range(8) -%}
-{% if leaf.ty.is_list() or leaf.ty.is_set() %}{% set leaf.ty = leaf.ty.inner_type() %}{% elif leaf.ty.is_map() %}{% set leaf.ty = leaf.ty.value_type() %}{% endif -%}
+{% if leaf.ty.is_list() or leaf.ty.is_set() or leaf.ty.is_nullable() %}{% set leaf.ty = leaf.ty.inner_type() %}{% elif leaf.ty.is_map() %}{% set leaf.ty = leaf.ty.value_type() %}{% endif -%}
 {% endfor -%}
 {% set ty = v.type.to_csharp() -%}
 {% if leaf.ty.is_schema_ref() and leaf.ty.to_csharp() not in ["string", "JsonNode"] -%}

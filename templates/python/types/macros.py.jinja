@@ -51,7 +51,9 @@
     `t.Any`, as its value may be a list, a scalar or `null` too. A union told
     apart by JSON type is `str | Customer`, its `""` variant `t.Literal[""]`. -#}
 {% macro py_type(ty) -%}
-    {%- if ty.is_union() and ty.union_mode() != "json" -%}
+    {%- if ty.is_nullable() -%}
+        {%- if ty.inner_type().is_json_object() and not ty.inner_type().is_union() -%}t.Any{%- else -%}{{ py_type(ty.inner_type()) }} | None{%- endif -%}
+    {%- elif ty.is_union() and ty.union_mode() != "json" -%}
         t.Annotated[{% for variant in ty.union_variants() %}{% if variant.empty %}t.Literal[""]{% else %}{{ py_type(variant.type) }}{% endif %} | {% endfor %}UnknownVariant, {{ object_union(ty) }}]
     {%- elif ty.is_union() -%}
         {%- for variant in ty.union_variants() -%}
@@ -94,7 +96,7 @@
     {%- if ty.is_union() -%}
         {%- if ty.union_mode() != "json" %}1{% endif -%}
         {%- for v in ty.union_variants() %}{{ has_object_union(v.type) }}{% endfor -%}
-    {%- elif ty.is_list() or ty.is_set() -%}
+    {%- elif ty.is_list() or ty.is_set() or ty.is_nullable() -%}
         {{ has_object_union(ty.inner_type()) }}
     {%- elif ty.is_map() -%}
         {{ has_object_union(ty.value_type()) }}

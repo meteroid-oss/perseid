@@ -334,6 +334,18 @@ impl Request {
         serde_json::from_slice(&bytes).map_err(decode_error)
     }
 
+    /// Runs a request whose response may be empty or `null`, such as a `204`.
+    pub async fn execute_optional<T: DeserializeOwned>(
+        self,
+        conf: &Configuration,
+    ) -> Result<Option<T>, Error> {
+        let bytes = self.execute_bytes(conf).await?;
+        if bytes.iter().all(u8::is_ascii_whitespace) {
+            return Ok(None);
+        }
+        serde_json::from_slice(&bytes).map_err(decode_error)
+    }
+
     /// Runs a request whose response has no body worth decoding.
     pub async fn execute_empty(self, conf: &Configuration) -> Result<(), Error> {
         self.execute_bytes(conf).await.map(drop)

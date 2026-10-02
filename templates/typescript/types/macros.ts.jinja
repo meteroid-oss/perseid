@@ -9,7 +9,9 @@
 
 {# `unknown` for any-JSON values, so callers narrow them before use. -#}
 {% macro js_type(type) -%}
-    {%- if type.is_union() -%}
+    {%- if type.is_nullable() -%}
+        {{ js_type(type.inner_type()) }} | null
+    {%- elif type.is_union() -%}
         {%- for v in type.union_variants() -%}
             {% if not loop.first %} | {% endif %}{% if v.empty %}""{% elif untyped_int64(v) %}number{% else %}{{ js_type(v.type) }}{% endif %}
         {%- endfor -%}
@@ -18,7 +20,7 @@
     {%- elif is_int64(type) -%}
         {{ sdk.int64 }}
     {%- elif type.is_list() or type.is_set() -%}
-        {% if type.inner_type().is_union() %}({{ js_type(type.inner_type()) }})[]{% else %}{{ js_type(type.inner_type()) }}[]{% endif %}
+        {% if type.inner_type().is_union() or type.inner_type().is_nullable() %}({{ js_type(type.inner_type()) }})[]{% else %}{{ js_type(type.inner_type()) }}[]{% endif %}
     {%- elif type.is_map() -%}
         { [key: string]: {{ js_type(type.value_type()) }} }
     {%- else -%}
@@ -66,7 +68,9 @@
 
 {# `yes` when values of `type` need converting from JSON, or to JSON with `outgoing`. -#}
 {% macro converted(type, outgoing=false) -%}
-    {%- if type.is_union() -%}
+    {%- if type.is_nullable() -%}
+        {{ converted(type.inner_type(), outgoing) }}
+    {%- elif type.is_union() -%}
         {%- for v in type.union_variants() if variant_converted(v, outgoing) %}{% if loop.first %}yes{% endif %}{% endfor -%}
     {%- elif type.is_schema_ref() -%}
         yes
@@ -103,7 +107,9 @@
 {%- endmacro %}
 
 {% macro from_json(expr, type) -%}
-    {%- if type.is_union() and converted(type) -%}
+    {%- if type.is_nullable() -%}
+        {%- if converted(type) %}({{ expr }} == null ? null : {{ from_json(expr, type.inner_type()) }}){% else %}{{ expr }}{% endif -%}
+    {%- elif type.is_union() and converted(type) -%}
         {{ union_json(expr, type, false) }}
     {%- elif type.is_datetime() -%}
         parseDateTime({{ expr }})
@@ -122,7 +128,9 @@
 
 {# Dates are left to `JSON.stringify`, which calls `toISOString`. -#}
 {% macro to_json(expr, type) -%}
-    {%- if type.is_union() and converted(type, true) -%}
+    {%- if type.is_nullable() -%}
+        {%- if converted(type, true) %}({{ expr }} == null ? null : {{ to_json(expr, type.inner_type()) }}){% else %}{{ expr }}{% endif -%}
+    {%- elif type.is_union() and converted(type, true) -%}
         {{ union_json(expr, type, true) }}
     {%- elif type.is_schema_ref() -%}
         {{ type.to_js() }}Serializer.serialize({{ expr }})

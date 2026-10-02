@@ -48,7 +48,7 @@ impl crate::request::QueryParamValue for chrono::NaiveDate {
 {% endfor -%}
 {%- endmacro %}
 {% macro nested_exports(module, name, ty) -%}
-{% if ty.is_list() or ty.is_set() -%}
+{% if ty.is_list() or ty.is_set() or ty.is_nullable() -%}
 {{ nested_exports(module, name, ty.inner_type()) }}
 {%- elif ty.is_map() -%}
 {{ nested_exports(module, name, ty.value_type()) }}

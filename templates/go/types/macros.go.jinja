@@ -35,6 +35,13 @@
 {% macro go_type(ty, union=none) -%}
     {%- if union and ty.is_union() -%}
         {{ union }}
+    {%- elif union and ty.is_nullable() -%}
+        {%- set inner = ty.inner_type() -%}
+        {%- if inner.is_list() or inner.is_set() or inner.is_map() or inner.is_json_object() and not inner.is_union() -%}
+            {{ go_type(inner, union) }}
+        {%- else -%}
+            *{{ go_type(inner, union) }}
+        {%- endif -%}
     {%- elif union and (ty.is_list() or ty.is_set()) -%}
         []{{ go_type(ty.inner_type(), union) }}
     {%- elif union and ty.is_map() -%}
@@ -48,7 +55,7 @@
 {% macro go_has_union(ty) -%}
     {%- if ty.is_union() -%}
         true
-    {%- elif ty.is_list() or ty.is_set() -%}
+    {%- elif ty.is_list() or ty.is_set() or ty.is_nullable() -%}
         {{ go_has_union(ty.inner_type()) }}
     {%- elif ty.is_map() -%}
         {{ go_has_union(ty.value_type()) }}
@@ -72,7 +79,7 @@
 {#- The declaration of the union `name` found in `ty`: one pointer per variant,
     decoded by the JSON type of the value. -#}
 {% macro go_union(name, ty) -%}
-{%- if ty.is_list() or ty.is_set() -%}
+{%- if ty.is_list() or ty.is_set() or ty.is_nullable() -%}
 {{ go_union(name, ty.inner_type()) }}
 {%- elif ty.is_map() -%}
 {{ go_union(name, ty.value_type()) }}

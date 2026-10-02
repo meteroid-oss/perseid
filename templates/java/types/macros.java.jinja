@@ -16,6 +16,7 @@
 {#- Java type of `ty`, its unions rendered as the `union_cls` class. -#}
 {% macro java_type(ty, union_cls="") -%}
 {%- if ty.is_union() and union_cls -%}{{ union_cls }}
+{%- elif ty.is_nullable() -%}{{ java_type(ty.inner_type(), union_cls) }}
 {%- elif ty.is_list() -%}List<{{ java_type(ty.inner_type(), union_cls) }}>
 {%- elif ty.is_set() -%}Set<{{ java_type(ty.inner_type(), union_cls) }}>
 {%- elif ty.is_map() -%}Map<String,{{ java_type(ty.value_type(), union_cls) }}>
@@ -26,7 +27,7 @@
 {#- Whether `ty` holds a typed union, rendered as a class. -#}
 {% macro has_union(ty) -%}
 {%- if ty.is_union() -%}true
-{%- elif ty.is_list() or ty.is_set() -%}{{ has_union(ty.inner_type()) }}
+{%- elif ty.is_list() or ty.is_set() or ty.is_nullable() -%}{{ has_union(ty.inner_type()) }}
 {%- elif ty.is_map() -%}{{ has_union(ty.value_type()) }}
 {%- endif -%}
 {%- endmacro %}

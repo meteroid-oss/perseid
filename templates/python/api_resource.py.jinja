@@ -103,6 +103,8 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
 {%- set return_type = "bytes" %}
 {%- elif op.response_is_text %}
 {%- set return_type = "str" %}
+{%- elif response_type is not none and op.response_body_optional %}
+{%- set return_type = response_type ~ " | None" %}
 {%- elif response_type is not none %}
 {%- set return_type = response_type %}
 {%- else %}
@@ -286,6 +288,12 @@ class {{ resource_class_name }}{{ class_suffix }}({{ base_class }}):
         return response.content
 {%- elif op.response_is_text %}
         return response.text
+{%- elif return_type != "None" and op.response_body_optional %}
+        if response.status_code in (204, 205) or not response.content.strip():
+            return None
+        {#- A union alias is not a class, so `decode_response` cannot infer its type. #}
+        decoded: {{ return_type }} = decode_response(response, {{ return_type }})
+        return decoded
 {%- elif return_type != "None" and sdk.flat_unions %}
         {#- A union alias is not a class, so `decode_response` cannot infer its type. #}
         decoded: {{ return_type }} = decode_response(response, {{ return_type }})

@@ -72,6 +72,7 @@ export class {{ resource_type_name }} {
         {% else -%}
             {% set response_type = "void" -%}
         {% endif -%}
+        {% if op.response_body_optional | default(false) %}{% set response_type = response_type ~ " | null" %}{% endif -%}
         {{ m.doc(op.description, op.deprecated) }}public {{ op.name | ident("camel") }}(
             {% for p in op.path_params -%}
                 {{ p | ident("camel", "typescript") }}: string,
@@ -171,13 +172,13 @@ export class {{ resource_type_name }} {
                 return request.sendText(this.requestCtx, requestOptions);
             {% elif op.response_body_json_type is defined -%}
                 {% set parse = m.from_json("json", op.response_body_json_type) -%}
-                return request.send(this.requestCtx, (json: any) => {{ parse }}, requestOptions);
+                return request.send{% if op.response_body_optional %}Optional{% endif %}(this.requestCtx, (json: any) => {{ parse }}, requestOptions);
             {% elif op.response_body_schema_name is defined -%}
                 {% set serializer = (op.response_body_schema_name | to_upper_camel_case) ~ "Serializer" -%}
                 {% if op.response_body_is_list -%}
-                return request.send(this.requestCtx, (json: any[]) => json.map((item) => {{ serializer }}.parse(item)), requestOptions);
+                return request.send{% if op.response_body_optional %}Optional{% endif %}(this.requestCtx, (json: any[]) => json.map((item) => {{ serializer }}.parse(item)), requestOptions);
                 {% else -%}
-                return request.send(this.requestCtx, {{ serializer }}.parse, requestOptions);
+                return request.send{% if op.response_body_optional %}Optional{% endif %}(this.requestCtx, {{ serializer }}.parse, requestOptions);
                 {% endif -%}
             {% else -%}
                 return request.sendNoResponseBody(this.requestCtx, requestOptions);

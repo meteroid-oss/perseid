@@ -296,11 +296,14 @@ public class @@CLIENT_NAME@@HttpClient {
                 if (!response.isSuccessful()) {
                     throw error(response);
                 }
-                if (type == null || response.code() == 204 || response.body() == null) {
+                if (type == null
+                        || response.code() == 204
+                        || response.code() == 205
+                        || response.body() == null) {
                     return null;
                 }
                 String text = response.body().string();
-                return text.isEmpty() ? null : objectMapper.readValue(text, type);
+                return text.isBlank() ? null : objectMapper.readValue(text, type);
             }
         }
 

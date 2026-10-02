@@ -61,7 +61,7 @@ type {{ resource_type_name }} struct {
 {% if op.response_is_event_stream %}{% set ret_type = "*EventStream" %}{% set ret_zero = "nil" %}
 {% elif op.response_is_binary %}{% set ret_type = "[]byte" %}{% set ret_zero = "nil" %}
 {% elif op.response_is_text %}{% set ret_type = "string" %}{% set ret_zero = '""' %}
-{% elif op.response_body_json_type is defined %}{% set ret_type = go_type(op.response_body_json_type) %}{% set ret_zero = "out" %}
+{% elif op.response_body_json_type is defined %}{% set json_nilable = op.response_body_json_type.is_list() or op.response_body_json_type.is_set() or op.response_body_json_type.is_map() or op.response_body_json_type.is_json_object() %}{% set ret_type = go_type(op.response_body_json_type) %}{% if op.response_body_optional and not json_nilable %}{% set ret_type = "*" ~ ret_type %}{% endif %}{% set ret_zero = "out" %}
 {% elif op.response_body_is_list %}{% set ret_type = "[]" ~ go_ident(op.response_body_schema_name) %}{% set ret_zero = "nil" %}
 {% elif op.response_body_schema_name is defined %}{% set ret_type = "*" ~ go_ident(op.response_body_schema_name) %}{% set ret_zero = "nil" %}
 {% else %}{% set ret_type = "" %}{% endif %}
@@ -136,11 +136,23 @@ type {{ resource_type_name }} struct {
 {% if op.response_is_event_stream %}	return a.client.executeEventStream(ctx, req)
 {% elif op.response_is_binary %}	return a.client.executeBinary(ctx, req)
 {% elif op.response_is_text %}	return a.client.executeText(ctx, req)
+{% elif op.response_body_json_type is defined and op.response_body_optional %}	var out {{ go_type(op.response_body_json_type) }}
+	present, err := a.client.executeOptional(ctx, req, &out)
+	if err != nil || !present {
+		return nil, err
+	}
+	return {% if not json_nilable %}&{% endif %}out, nil
 {% elif op.response_body_json_type is defined %}	var out {{ ret_type }}
 	if err := a.client.execute(ctx, req, &out); err != nil {
 		return out, err
 	}
 	return out, nil
+{% elif op.response_body_schema_name is defined and op.response_body_optional %}	var out {% if op.response_body_is_list %}[]{% endif %}{{ go_ident(op.response_body_schema_name) }}
+	present, err := a.client.executeOptional(ctx, req, &out)
+	if err != nil || !present {
+		return nil, err
+	}
+	return {% if not op.response_body_is_list %}&{% endif %}out, nil
 {% elif op.response_body_schema_name is defined %}	var out {% if op.response_body_is_list %}[]{% endif %}{{ go_ident(op.response_body_schema_name) }}
 	if err := a.client.execute(ctx, req, &out); err != nil {
 		return {{ ret_zero }}, err

@@ -10,6 +10,8 @@
 chrono::DateTime<chrono::Utc>
 {%- elif ty.is_date() -%}
 chrono::NaiveDate
+{%- elif ty.is_nullable() -%}
+Option<{{ rust_type(ty.inner_type(), union) }}>
 {%- elif ty.is_list() or ty.is_set() -%}
 Vec<{{ rust_type(ty.inner_type(), union) }}>
 {%- elif ty.is_map() -%}
@@ -30,7 +32,7 @@ Box<{{ ty.to_rust() }}>
 
 {# The union `ty` holds, directly or as list items or map values: "1" or "". -#}
 {% macro has_union(ty) -%}
-{% if ty.is_union() %}1{% elif ty.is_list() or ty.is_set() %}{{ has_union(ty.inner_type()) }}{% elif ty.is_map() %}{{ has_union(ty.value_type()) }}{% endif %}
+{% if ty.is_union() %}1{% elif ty.is_list() or ty.is_set() or ty.is_nullable() %}{{ has_union(ty.inner_type()) }}{% elif ty.is_map() %}{{ has_union(ty.value_type()) }}{% endif %}
 {%- endmacro %}
 
 {% macro unknown_variant(names) -%}
@@ -56,7 +58,7 @@ Box<{{ ty.to_rust() }}>
 {%- endmacro %}
 
 {% macro union_enum(name, ty) -%}
-{% if ty.is_list() or ty.is_set() -%}
+{% if ty.is_list() or ty.is_set() or ty.is_nullable() -%}
 {{ union_enum(name, ty.inner_type()) }}
 {%- elif ty.is_map() -%}
 {{ union_enum(name, ty.value_type()) }}
