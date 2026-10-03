@@ -127,6 +127,18 @@ class PathAndQueryTest(unittest.TestCase):
         self.assertEqual(handler.requests[0].url.raw_path, b"/api/v2/items/a%2Fb%3Fc")
         self.assertEqual(handler.requests[1].url.raw_path, b"/api/v2/items/%2E%2E")
 
+    def test_dot_segments_of_styled_path_parameters_are_encoded(self) -> None:
+        encode = features.api.common.encode_path_param
+        self.assertEqual(encode("id", "", "label", False), "%2E")
+        self.assertEqual(encode("id", ".", "label", False), "%2E%2E")
+        self.assertEqual(encode("id", "a", "label", False), ".a")
+
+    def test_api_key_cookie_keeps_cookie_octets(self) -> None:
+        octets = features.api._auth._COOKIE_OCTETS
+        quote = urllib.parse.quote
+        self.assertEqual(quote("abc/def+ghi==", safe=octets), "abc/def+ghi==")
+        self.assertEqual(quote('a b,c;d"e\\f', safe=octets), "a%20b%2Cc%3Bd%22e%5Cf")
+
     def test_query_values_survive_encoding(self) -> None:
         for value in QUERY_VALUES:
             with self.subTest(value=value):

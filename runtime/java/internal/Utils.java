@@ -62,6 +62,31 @@ public final class Utils {
     }
 
     /**
+     * A {@code name=value} cookie pair for an API key. The key is an opaque credential, so it is
+     * sent as is but for the bytes that are not RFC 6265 cookie-octets.
+     *
+     * @param name the cookie name
+     * @param value the API key
+     * @return the pair
+     */
+    public static String apiKeyCookiePair(String name, String value) {
+        StringBuilder encoded = new StringBuilder();
+        for (byte b : value.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+            int c = b & 0xFF;
+            if (c == 0x21
+                    || (c >= 0x23 && c <= 0x2B)
+                    || (c >= 0x2D && c <= 0x3A)
+                    || (c >= 0x3C && c <= 0x5B)
+                    || (c >= 0x5D && c <= 0x7E)) {
+                encoded.append((char) c);
+            } else {
+                encoded.append(String.format("%%%02X", c));
+            }
+        }
+        return name + "=" + encoded;
+    }
+
+    /**
      * The value of a required property, which a response may still leave out.
      *
      * @param <T> the property type

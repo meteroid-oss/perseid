@@ -305,7 +305,7 @@ public final class @@CLIENT_NAME@@Auth {
                     if ("query".equals(scheme.location)) {
                         authenticated.setQueryParameter(scheme.param, apiKey(name));
                     } else if ("cookie".equals(scheme.location)) {
-                        request.addHeader("Cookie", Utils.cookiePair(scheme.param, apiKey(name)));
+                        request.addHeader("Cookie", Utils.apiKeyCookiePair(scheme.param, apiKey(name)));
                     } else {
                         request.header(scheme.param, apiKey(name));
                     }

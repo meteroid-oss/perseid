@@ -196,7 +196,12 @@ def encode_path_param(name: str, value: t.Any, style: str, explode: bool) -> Enc
     value = to_json_value(value)
     if style == "json":
         return EncodedPathParam(_quote_unreserved(_compact_json(value)))
+    result = _encode_styled_path_param(name, value, style, explode)
+    # A whole segment of dots would be resolved away by the URL.
+    return EncodedPathParam(result.replace(".", "%2E") if result in (".", "..") else result)
 
+
+def _encode_styled_path_param(name: str, value: t.Any, style: str, explode: bool) -> str:
     def quote(item: t.Any) -> str:
         return _quote_unreserved(_path_text(item))
 
@@ -206,25 +211,25 @@ def encode_path_param(name: str, value: t.Any, style: str, explode: bool) -> Enc
         values = [quote(item) for item in value]
         if style == "matrix":
             if explode:
-                return EncodedPathParam("".join(f";{key}={item}" for item in values))
-            return EncodedPathParam(f";{key}=" + ",".join(values))
-        return EncodedPathParam(head + (separator if explode else ",").join(values))
+                return "".join(f";{key}={item}" for item in values)
+            return f";{key}=" + ",".join(values)
+        return head + (separator if explode else ",").join(values)
     if isinstance(value, dict):
         pairs = [(_quote_unreserved(field), quote(item)) for field, item in value.items()]
         flat = ",".join(part for pair in pairs for part in pair)
         if style == "matrix":
             if explode:
-                return EncodedPathParam("".join(f";{field}={item}" for field, item in pairs))
-            return EncodedPathParam(f";{key}={flat}")
+                return "".join(f";{field}={item}" for field, item in pairs)
+            return f";{key}={flat}"
         if explode:
-            return EncodedPathParam(head + separator.join(f"{f}={i}" for f, i in pairs))
-        return EncodedPathParam(head + flat)
+            return head + separator.join(f"{f}={i}" for f, i in pairs)
+        return head + flat
     text = quote(value)
     if style == "label":
-        return EncodedPathParam(f".{text}")
+        return f".{text}"
     if style == "matrix":
-        return EncodedPathParam(f";{key}" if text == "" else f";{key}={text}")
-    return EncodedPathParam(text)
+        return f";{key}" if text == "" else f";{key}={text}"
+    return text
 
 
 def serialize_form_body(

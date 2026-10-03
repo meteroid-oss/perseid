@@ -262,7 +262,7 @@ func (c *Client) authenticate(ctx context.Context, req *request, security [][]st
 			case "query":
 				req.SetQueryParam(scheme.param, key)
 			case "cookie":
-				req.SetCookie(scheme.param, key)
+				req.SetAPIKeyCookie(scheme.param, key)
 			default:
 				req.SetHeader(scheme.param, key)
 			}

@@ -119,6 +119,22 @@ func (r *request) SetCookie(name, value string) {
 	r.cookies = append(r.cookies, name+"="+cookieEscape(value))
 }
 
+// SetAPIKeyCookie adds an API key cookie. The key is an opaque credential, so it is sent as is
+// but for the bytes that are not RFC 6265 cookie-octets.
+func (r *request) SetAPIKeyCookie(name, value string) {
+	var b strings.Builder
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c == 0x21 || c >= 0x23 && c <= 0x2B || c >= 0x2D && c <= 0x3A ||
+			c >= 0x3C && c <= 0x5B || c >= 0x5D && c <= 0x7E {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	r.cookies = append(r.cookies, name+"="+b.String())
+}
+
 // cookieEscape percent-encodes everything but the unreserved characters, which keeps a cookie
 // value RFC 6265 safe.
 func cookieEscape(s string) string {
@@ -200,6 +216,10 @@ func (r *request) SetStyledPathParam(name string, v any, style string, explode b
 	if err != nil {
 		r.err = requestError("encoding path parameter %q: %w", name, err)
 		return
+	}
+	// A whole segment of dots would be resolved away by the URL.
+	if encoded == "." || encoded == ".." {
+		encoded = strings.ReplaceAll(encoded, ".", "%2E")
 	}
 	r.path = strings.ReplaceAll(r.path, "{"+name+"}", encoded)
 }
@@ -374,12 +394,15 @@ func (c *Client) execute(ctx context.Context, req *request, out any) error {
 	if err != nil {
 		return err
 	}
-	if out == nil || status == http.StatusNoContent {
+	if out == nil || status == http.StatusNoContent || status == http.StatusResetContent {
 		return nil
 	}
-	// Only an optional body, decoded into a pointer, may be empty.
-	if len(bytes.TrimSpace(body)) == 0 && reflect.TypeOf(out).Elem().Kind() == reflect.Pointer {
-		return nil
+	// Only an optional body, decoded into a pointer, slice, map or interface, may be empty.
+	if len(bytes.TrimSpace(body)) == 0 {
+		switch reflect.TypeOf(out).Elem().Kind() {
+		case reflect.Pointer, reflect.Slice, reflect.Map, reflect.Interface:
+			return nil
+		}
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return &DecodeError{StatusCode: status, RawBody: body, Err: err}

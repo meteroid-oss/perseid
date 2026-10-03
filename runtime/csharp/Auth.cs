@@ -192,7 +192,7 @@ internal sealed class ApiAuth(IReadOnlyDictionary<string, SecurityScheme> scheme
                     }
                     else if (scheme.In == "cookie")
                     {
-                        var cookie = $"{scheme.Param}={Uri.EscapeDataString(key)}";
+                        var cookie = $"{scheme.Param}={EscapeApiKeyCookie(key)}";
                         headers["Cookie"] = headers.TryGetValue("Cookie", out var existing)
                             ? $"{existing}; {cookie}"
                             : cookie;
@@ -232,6 +232,26 @@ internal sealed class ApiAuth(IReadOnlyDictionary<string, SecurityScheme> scheme
             SchemeKind.Basic => credentials.Basic is not null,
             _ => !string.IsNullOrEmpty(ApiKey(name, credentials)),
         };
+
+    /// <summary>An API key is an opaque credential: only what is not an RFC 6265 cookie-octet is
+    /// percent-encoded.</summary>
+    private static string EscapeApiKeyCookie(string key)
+    {
+        var builder = new StringBuilder();
+        foreach (var b in Encoding.UTF8.GetBytes(key))
+        {
+            if (b == 0x21 || (b >= 0x23 && b <= 0x2B) || (b >= 0x2D && b <= 0x3A)
+                || (b >= 0x3C && b <= 0x5B) || (b >= 0x5D && b <= 0x7E))
+            {
+                builder.Append((char)b);
+            }
+            else
+            {
+                builder.Append('%').Append(b.ToString("X2"));
+            }
+        }
+        return builder.ToString();
+    }
 
     private static string? ApiKey(string name, Credentials credentials) =>
         credentials.ApiKeys.TryGetValue(name, out var key) && !string.IsNullOrEmpty(key)

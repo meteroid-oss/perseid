@@ -49,6 +49,9 @@ class SecurityScheme(t.NamedTuple):
 _EXPIRY_MARGIN = 60.0
 """Seconds before its expiry that an access token is renewed, or half its life when shorter."""
 
+_COOKIE_OCTETS = "!#$%&'()*+-./0123456789:<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+"""Every RFC 6265 cookie-octet, so that an opaque API key is sent as is."""
+
 
 class OAuthTokens:
     """OAuth2 client credentials: an access token per token URL, kept until it is about to expire.
@@ -199,7 +202,7 @@ def apply_auth(
             if scheme.location == "query":
                 params.append((scheme.param, key))
             elif scheme.location == "cookie":
-                cookie = f"{scheme.param}={urllib.parse.quote(key, safe='')}"
+                cookie = f"{scheme.param}={urllib.parse.quote(key, safe=_COOKIE_OCTETS)}"
                 previous = headers.get("cookie")
                 headers["cookie"] = cookie if previous is None else f"{previous}; {cookie}"
             else:

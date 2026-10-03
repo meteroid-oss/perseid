@@ -587,13 +587,17 @@ impl Request {
             value.set_sensitive(true);
             self.headers.insert(name, value);
         }
-        self.cookies
-            .extend(auth.cookies.into_iter().map(|(name, value)| (name.to_owned(), value)));
         let mut cookie = self
             .cookies
             .iter()
             .map(|(name, value)| format!("{name}={}", utf8_percent_encode(value, COOKIE_VALUE)))
             .collect::<Vec<_>>();
+        // An API key is an opaque credential: only what is not a cookie-octet is encoded.
+        cookie.extend(
+            auth.cookies
+                .iter()
+                .map(|(name, value)| format!("{name}={}", utf8_percent_encode(value, API_KEY_COOKIE))),
+        );
         // A `Cookie` header of the call is merged with the cookies instead of replacing them.
         for value in self.overrides.get_all("cookie") {
             cookie.push(String::from_utf8_lossy(value.as_bytes()).into_owned());
@@ -864,6 +868,9 @@ const COOKIE_VALUE: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
+/// What RFC 6265 does not allow in a cookie value: controls, space, `"`, `,`, `;` and `\`.
+const API_KEY_COOKIE: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b',').add(b';').add(b'\\');
+
 fn header(name: &str, value: &str) -> Result<(HeaderName, HeaderValue), BoxError> {
     Ok((HeaderName::from_bytes(name.as_bytes())?, HeaderValue::try_from(value)?))
 }
@@ -1017,7 +1024,7 @@ fn encode_path_param(
         "matrix" => (";", ";"),
         _ => ("", ","),
     };
-    match value {
+    let encoded = match value {
         serde_json::Value::Array(items) => {
             let values: Vec<String> = items.iter().map(|item| encode(&text(item))).collect();
             match (style, explode) {
@@ -1059,7 +1066,12 @@ fn encode_path_param(
                 _ => value,
             }
         }
+    };
+    // A whole segment of dots would be resolved away by the URL.
+    if encoded == "." || encoded == ".." {
+        return encoded.replace('.', "%2E");
     }
+    encoded
 }
 
 pub(crate) trait QueryParamValue {
@@ -1088,5 +1100,29 @@ impl QueryParamValue for rust_decimal::Decimal {
 impl<T: QueryParamValue> QueryParamValue for Vec<T> {
     fn encode(&self) -> String {
         self.iter().map(T::encode).collect::<Vec<_>>().join(",")
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    #[test]
+    fn api_key_cookie_keeps_cookie_octets() {
+        let sent = |key: &str| utf8_percent_encode(key, API_KEY_COOKIE).to_string();
+        assert_eq!(sent("abc/def+ghi=="), "abc/def+ghi==");
+        assert_eq!(sent("a b,c;d\"e\\f"), "a%20b%2Cc%3Bd%22e%5Cf");
+        assert_eq!(sent("caf\u{e9}"), "caf%C3%A9");
+    }
+
+    #[test]
+    fn styled_path_params_never_become_dot_segments() {
+        let encode = |value: &str, style: &str| {
+            encode_path_param("id", &serde_json::Value::String(value.to_owned()), style, false)
+        };
+        assert_eq!(encode("", "label"), "%2E");
+        assert_eq!(encode(".", "label"), "%2E%2E");
+        assert_eq!(encode("..", "simple"), "%2E%2E");
+        assert_eq!(encode("a", "label"), ".a");
     }
 }

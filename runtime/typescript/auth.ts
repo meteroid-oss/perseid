@@ -10,6 +10,19 @@ export type SecurityScheme =
   | { kind: "basic" }
   | { kind: "api_key"; in: "header" | "query" | "cookie"; param: string };
 
+/** An API key is an opaque credential: only what is not an RFC 6265 cookie-octet is percent-encoded. */
+function apiKeyCookieValue(key: string): string {
+  return Array.from(new TextEncoder().encode(key), (byte) =>
+    byte === 0x21 ||
+    (byte >= 0x23 && byte <= 0x2b) ||
+    (byte >= 0x2d && byte <= 0x3a) ||
+    (byte >= 0x3c && byte <= 0x5b) ||
+    (byte >= 0x5d && byte <= 0x7e)
+      ? String.fromCharCode(byte)
+      : `%${byte.toString(16).toUpperCase().padStart(2, "0")}`,
+  ).join("");
+}
+
 /** Alternatives of scheme names: the first one whose credentials are all configured is sent. */
 export type Security = string[][];
 
@@ -168,7 +181,7 @@ export async function applyAuth(
       if (scheme.in === "query") {
         url.searchParams.set(scheme.param, key);
       } else if (scheme.in === "cookie") {
-        const cookie = `${scheme.param}=${encodeURIComponent(key)}`;
+        const cookie = `${scheme.param}=${apiKeyCookieValue(key)}`;
         headers.cookie = headers.cookie ? `${headers.cookie}; ${cookie}` : cookie;
       } else {
         headers[scheme.param.toLowerCase()] = key;
