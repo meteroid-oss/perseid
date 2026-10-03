@@ -90,6 +90,22 @@ class OAuthTest(unittest.TestCase):
         )
         self.assertEqual(server.calls[1].headers["authorization"], "Bearer at-1")
 
+    def test_schemes_sharing_a_token_url_keep_a_token_per_scope(self) -> None:
+        server = Server()
+        with client(server) as api:
+            self.assertEqual(api.account.retrieve_machine().status, "at-1")
+            self.assertEqual(api.account.retrieve_admin().status, "at-2")
+            self.assertEqual(api.account.retrieve_machine().status, "at-1")
+            self.assertEqual(api.account.retrieve_admin().status, "at-2")
+        scopes = [dict(urllib.parse.parse_qsl(call.content.decode()))["scope"] for call in server.token_calls]
+        self.assertEqual(scopes, ["secrets.read secrets.write", "secrets.admin"])
+
+    def test_an_absolute_path_token_url_resolves_against_the_origin(self) -> None:
+        resolve = vault.api.common.token_url
+        self.assertEqual(resolve(BASE, "/oauth/token"), "https://vault.test/oauth/token")
+        self.assertEqual(resolve(BASE, "oauth/token"), TOKEN_URL)
+        self.assertEqual(resolve(BASE, "https://auth.test/t"), "https://auth.test/t")
+
     def test_public_operations_send_no_credentials_and_fetch_no_token(self) -> None:
         server = Server()
         with client(server) as api:

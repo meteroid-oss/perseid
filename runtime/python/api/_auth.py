@@ -54,7 +54,7 @@ _COOKIE_OCTETS = "!#$%&'()*+-./0123456789:<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`ab
 
 
 class OAuthTokens:
-    """OAuth2 client credentials: an access token per token URL, kept until it is about to expire.
+    """OAuth2 client credentials: an access token per token URL and scope, kept until it is about to expire.
 
     The client fetches a token on first use with :attr:`client_id` and :attr:`client_secret`,
     sending them in an HTTP basic header (``client_auth="basic"``) or as form fields (``"body"``).
@@ -77,7 +77,7 @@ class OAuthTokens:
         return self._async_lock
 
     def cached(self, url: str) -> str | None:
-        """The access token fetched from ``url``, unless it is about to expire."""
+        """The access token kept under ``url``, unless it is about to expire."""
         entry = self._tokens.get(url)
         return entry[0] if entry is not None and entry[1] > time.monotonic() else None
 
@@ -107,10 +107,14 @@ class OAuthTokens:
 
 
 def token_url(base_path: str, url: str) -> str:
-    """``url`` as an absolute URL: a relative one is resolved against the base URL."""
+    """``url`` as an absolute URL: an absolute-path reference is resolved against the origin of
+    the base URL, any other relative one is joined under it."""
     if "://" in url:
         return url
-    return f"{base_path}{url if url.startswith('/') else '/' + url}"
+    if url.startswith("/"):
+        parts = urllib.parse.urlsplit(base_path)
+        return f"{parts.scheme}://{parts.netloc}{url}"
+    return f"{base_path}/{url}"
 
 
 class _Credentials(t.Protocol):

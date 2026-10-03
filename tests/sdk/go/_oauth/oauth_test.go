@@ -124,6 +124,25 @@ func want(t *testing.T, got, want any) {
 	}
 }
 
+func TestSchemesSharingATokenURLKeepATokenPerScope(t *testing.T) {
+	t.Setenv(APIKeyEnv, "")
+	s := newServer()
+	client := s.client(Options{})
+	admin := func() string {
+		health, err := client.Account().RetrieveAdmin(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return health.Status
+	}
+	want(t, status(t, client), "at-1")
+	want(t, admin(), "at-2")
+	want(t, status(t, client), "at-1")
+	want(t, admin(), "at-2")
+	tokens, _ := s.tokenRequests()
+	want(t, len(tokens), 2)
+}
+
 func TestATokenIsFetchedOnFirstUseAndKept(t *testing.T) {
 	t.Setenv(APIKeyEnv, "")
 	s := newServer()

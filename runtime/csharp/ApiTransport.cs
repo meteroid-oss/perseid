@@ -91,7 +91,15 @@ internal sealed class ApiTransport : IDisposable
         CancellationToken cancellationToken
     )
     {
-        var request = new ApiRequest(HttpMethod.Post, tokenUrl, "oauth.token") { Security = [] };
+        // An absolute-path reference resolves against the origin of the base URL, any other relative one under it.
+        var endpoint = tokenUrl;
+        if (!tokenUrl.Contains("://"))
+        {
+            endpoint = tokenUrl.StartsWith('/')
+                ? new Uri(_baseUrl).GetLeftPart(UriPartial.Authority) + tokenUrl
+                : _baseUrl.TrimEnd('/') + "/" + tokenUrl;
+        }
+        var request = new ApiRequest(HttpMethod.Post, endpoint, "oauth.token") { Security = [] };
         var form = new List<KeyValuePair<string, string>> { new("grant_type", "client_credentials") };
         if (scope.Length > 0)
         {

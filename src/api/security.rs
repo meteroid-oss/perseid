@@ -213,17 +213,11 @@ fn parse_scheme(name: &str, scheme: &Value) -> Result<SecurityScheme, String> {
         },
         Some("apiKey") => (SchemeKind::ApiKey, text("in"), text("name"), None),
         Some("oauth2") => {
-            // A relative URL is resolved against the server URL: it always starts with a slash.
+            // A relative URL is kept as written: the runtimes resolve it against the base URL.
             let token_url = scheme["flows"]["clientCredentials"]["tokenUrl"]
                 .as_str()
                 .filter(|url| !url.is_empty())
-                .map(|url| {
-                    if url.contains("://") || url.starts_with('/') {
-                        url.to_owned()
-                    } else {
-                        format!("/{url}")
-                    }
-                });
+                .map(str::to_owned);
             (SchemeKind::Bearer, None, None, token_url)
         }
         Some("openIdConnect") => (SchemeKind::Bearer, None, None, None),
@@ -313,7 +307,7 @@ mod tests {
             &json!({"type": "oauth2", "flows": {"clientCredentials": {"tokenUrl": "oauth/token", "scopes": {}}}}),
         )
         .unwrap();
-        assert_eq!(relative.token_url.as_deref(), Some("/oauth/token"));
+        assert_eq!(relative.token_url.as_deref(), Some("oauth/token"));
         let plain = security.schemes.iter().find(|s| s.name == "plain").unwrap();
         assert_eq!(plain.token_url, None);
         assert_eq!(plain.scope, "");

@@ -40,16 +40,35 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Health' }
+  /admin:
+    get:
+      operationId: admin_status
+      tags: [account]
+      security:
+        - oauth_admin: [secrets.admin]
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
 components:
   securitySchemes:
     oauth:
       type: oauth2
       flows:
         clientCredentials:
-          tokenUrl: /oauth/token
+          tokenUrl: oauth/token
           scopes:
             secrets.read: Read secrets
             secrets.write: Write secrets
+    oauth_admin:
+      type: oauth2
+      flows:
+        clientCredentials:
+          tokenUrl: oauth/token
+          scopes:
+            secrets.admin: Administer secrets
   schemas:
     Health:
       type: object

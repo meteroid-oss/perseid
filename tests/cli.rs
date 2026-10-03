@@ -3391,7 +3391,7 @@ fn oauth2_client_credentials_clients_get_the_credentials_options_and_the_token_u
     for language in LANGUAGES {
         let sources = files(&dir.path().join(language));
         let all: String = sources.iter().map(|(_, text)| text.as_str()).collect();
-        assert!(all.contains("/oauth/token"), "{language}: no token URL");
+        assert!(all.contains("\"oauth/token\""), "{language}: no token URL");
         assert!(
             all.contains("secrets.read secrets.write"),
             "{language}: the scopes of the requirements are not asked for"
@@ -3519,4 +3519,26 @@ components:
     assert!(source("event_data.go").contains("type EventData struct"));
     assert!(source("part_text_variant.go").contains("type PartTextVariant struct"));
     assert!(source("part.go").contains("marshalUnionVariant("));
+}
+
+#[test]
+fn oauth2_token_urls_are_passed_to_the_runtimes_as_written() {
+    let dir = project_from("oauth.yaml", &LANGUAGES);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    for language in LANGUAGES {
+        let all = generated_text(dir.path(), language);
+        assert!(
+            all.contains("\"oauth/token\""),
+            "{language}: token URL rewritten"
+        );
+        assert!(
+            !all.contains("\"/oauth/token\""),
+            "{language}: token URL rewritten"
+        );
+        assert!(
+            all.contains("secrets.admin"),
+            "{language}: no scope of the second scheme"
+        );
+    }
 }

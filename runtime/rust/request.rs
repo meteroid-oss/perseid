@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use std::{
+    borrow::Cow,
     fmt,
     hash::{BuildHasher as _, Hasher as _},
     sync::Arc,
@@ -175,7 +176,7 @@ impl Attempt {
 /// HTTP request builder with retry logic.
 pub(crate) struct Request {
     method: Method,
-    path: &'static str,
+    path: Cow<'static, str>,
     query_params: Vec<(String, String)>,
     path_params: Vec<(&'static str, String)>,
     /// Path parameters already serialized and percent-encoded by their style.
@@ -199,7 +200,7 @@ impl Request {
     pub fn new(method: Method, path: &'static str) -> Self {
         Request {
             method,
-            path,
+            path: Cow::Borrowed(path),
             query_params: Vec::new(),
             path_params: Vec::new(),
             encoded_path_params: Vec::new(),
@@ -712,7 +713,7 @@ impl Request {
         const PATH: &AsciiSet = &FRAGMENT.add(b'#').add(b'?').add(b'{').add(b'}');
         const PATH_SEGMENT: &AsciiSet = &PATH.add(b'/').add(b'%');
 
-        let mut path = self.path.to_owned();
+        let mut path = self.path.to_string();
         for (name, value) in &self.path_params {
             if value == "." || value == ".." {
                 return Err(format!(
@@ -796,12 +797,10 @@ fn oauth_token<'a>(
             .oauth
             .as_ref()
             .ok_or_else(|| request_error("no OAuth2 client credentials"))?;
-        let key = if url.contains("://") {
-            url.to_owned()
-        } else {
-            format!("{}{url}", conf.base_path.trim_end_matches('/'))
-        };
-        let fetch = SyncFuture::new(fetch_token(conf, url, scope));
+        let endpoint = token_endpoint(&conf.base_path, url);
+        // Schemes of one token URL with different scopes get different tokens.
+        let key = format!("{endpoint}\n{scope}");
+        let fetch = SyncFuture::new(fetch_token(conf, endpoint, scope));
         let token = client.token(&key, fetch).await?;
         Ok(OAuthUse {
             url,
@@ -812,11 +811,27 @@ fn oauth_token<'a>(
     })
 }
 
+/// The absolute URL of a token endpoint: an absolute-path reference is resolved against the origin
+/// of the base URL, any other relative one is joined under it.
+fn token_endpoint(base_path: &str, token_url: &str) -> String {
+    if token_url.contains("://") {
+        return token_url.to_owned();
+    }
+    let base = base_path.trim_end_matches('/');
+    if token_url.starts_with('/') {
+        if let Ok(parsed) = url::Url::parse(base) {
+            return format!("{}{token_url}", parsed.origin().ascii_serialization());
+        }
+        return format!("{base}{token_url}");
+    }
+    format!("{base}/{token_url}")
+}
+
 /// Requests an access token with the client credentials grant, through the client's middleware,
 /// timeout and retries like any other request. Gives the token and its lifetime, if declared.
 async fn fetch_token(
     conf: &Configuration,
-    token_url: &'static str,
+    endpoint: String,
     scope: &str,
 ) -> Result<(String, Option<Duration>), Error> {
     #[derive(serde::Deserialize)]
@@ -836,7 +851,8 @@ async fn fetch_token(
     if !scope.is_empty() {
         form.insert("scope".to_owned(), scope.into());
     }
-    let mut request = Request::new(Method::POST, token_url).with_security(&[]);
+    let mut request = Request::new(Method::POST, "").with_security(&[]);
+    request.path = Cow::Owned(endpoint);
     if client.in_body {
         form.insert("client_id".to_owned(), client.client_id.clone().into());
         form.insert("client_secret".to_owned(), client.client_secret.clone().into());

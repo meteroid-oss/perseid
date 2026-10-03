@@ -114,7 +114,22 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                 throw new IllegalArgumentException("Invalid token URL: " + tokenUrl);
             }
         } else {
-            url = baseUrl.newBuilder().addPathSegments(tokenUrl.replaceFirst("^/+", "")).build();
+            // An absolute-path reference resolves against the origin of the base URL, any other
+            // relative one under it; a query stays a query.
+            if (tokenUrl.startsWith("/")) {
+                url = baseUrl.resolve(tokenUrl);
+            } else {
+                int query = tokenUrl.indexOf('?');
+                HttpUrl.Builder joined =
+                        baseUrl.newBuilder().addPathSegments(query < 0 ? tokenUrl : tokenUrl.substring(0, query));
+                if (query >= 0) {
+                    joined.encodedQuery(tokenUrl.substring(query + 1));
+                }
+                url = joined.build();
+            }
+            if (url == null) {
+                throw new IllegalArgumentException("Invalid token URL: " + tokenUrl);
+            }
         }
         FormBody.Builder form = new FormBody.Builder().add("grant_type", "client_credentials");
         if (!scope.isEmpty()) {

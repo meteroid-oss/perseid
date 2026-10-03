@@ -37,7 +37,7 @@ type securityScheme struct {
 // when that is shorter.
 const oauthExpiryMargin = time.Minute
 
-// oauthTokens runs the OAuth2 client credentials flow: it keeps an access token per token URL
+// oauthTokens runs the OAuth2 client credentials flow: it keeps an access token per token URL and scope
 // until it is about to expire and shares one token request among concurrent callers.
 type oauthTokens struct {
 	clientID     string
@@ -73,7 +73,7 @@ func newOAuthTokens(clientID, clientSecret, clientAuth string) *oauthTokens {
 	}
 }
 
-// token returns the access token cached for key (its token URL), else the one fetch obtains:
+// token returns the access token cached for key (its token URL and scope), else the one fetch obtains:
 // concurrent callers share a single fetch.
 func (o *oauthTokens) token(ctx context.Context, key string, fetch func(context.Context) (string, time.Time, error)) (string, error) {
 	for {
@@ -132,20 +132,26 @@ type oauthUse struct {
 	token  string
 }
 
-// tokenEndpoint is the URL a token endpoint is requested at, and the path or URL to request it by.
-func (c *config) tokenEndpoint(tokenURL string) (key, target string) {
+// tokenEndpoint is the absolute URL a token endpoint is requested at: an absolute-path reference
+// is resolved against the origin of the server URL, any other relative one is joined under it.
+func (c *config) tokenEndpoint(tokenURL string) string {
 	if strings.Contains(tokenURL, "://") {
-		return tokenURL, tokenURL
+		return tokenURL
 	}
-	if !strings.HasPrefix(tokenURL, "/") {
-		tokenURL = "/" + tokenURL
+	if strings.HasPrefix(tokenURL, "/") {
+		if base, err := url.Parse(c.serverURL); err == nil && base.Scheme != "" && base.Host != "" {
+			return base.Scheme + "://" + base.Host + tokenURL
+		}
+		return c.serverURL + tokenURL
 	}
-	return c.serverURL + tokenURL, tokenURL
+	return c.serverURL + "/" + tokenURL
 }
 
-// oauthToken returns the access token of a bearer scheme with the URL it came from.
+// oauthToken returns the access token of a bearer scheme with the key it is cached under: the
+// token URL and the scope.
 func (c *Client) oauthToken(ctx context.Context, scheme securityScheme) (string, string, error) {
-	key, target := c.cfg.tokenEndpoint(scheme.tokenURL)
+	target := c.cfg.tokenEndpoint(scheme.tokenURL)
+	key := target + "\n" + scheme.scope
 	token, err := c.cfg.oauth.token(ctx, key, func(ctx context.Context) (string, time.Time, error) {
 		return c.fetchToken(ctx, target, scheme.scope)
 	})

@@ -579,7 +579,7 @@ class ApiBase:
         renewed: bool,
         replayable: bool,
     ) -> bool:
-        """Whether ``response`` rejects the OAuth2 access token ``used`` (its token URL and
+        """Whether ``response`` rejects the OAuth2 access token ``used`` (its cache key and
         value) that the request carried, which is then forgotten."""
         oauth = self._cfg.oauth
         if (
@@ -650,16 +650,17 @@ class ApiBaseSync(ApiBase):
         return response
 
     def _oauth_token(self, scheme: SecurityScheme) -> tuple[str, str]:
-        """The access token of ``scheme`` with its token URL: the cached one, else a new one.
+        """The access token of ``scheme`` with its cache key (token URL and scope): the cached one, else a new one.
         Concurrent callers share one token request."""
         oauth = self._cfg.oauth
         assert oauth is not None
         url, spec = self._token_request(scheme)
+        key = f"{url}\n{scheme.scope}"
         with oauth.lock:
-            token = oauth.cached(url)
+            token = oauth.cached(key)
             if token is None:
-                token = oauth.store(url, *self._parse_token(self._request(spec)))
-        return url, token
+                token = oauth.store(key, *self._parse_token(self._request(spec)))
+        return key, token
 
     def _request(self, spec: ApiRequest) -> httpx.Response:
         token = sync_token(self._cfg) if self._needs_token(spec) else None
@@ -721,16 +722,17 @@ class ApiBaseAsync(ApiBase):
         return response
 
     async def _oauth_token(self, scheme: SecurityScheme) -> tuple[str, str]:
-        """The access token of ``scheme`` with its token URL: the cached one, else a new one.
+        """The access token of ``scheme`` with its cache key (token URL and scope): the cached one, else a new one.
         Concurrent callers share one token request."""
         oauth = self._cfg.oauth
         assert oauth is not None
         url, spec = self._token_request(scheme)
+        key = f"{url}\n{scheme.scope}"
         async with oauth.async_lock():
-            token = oauth.cached(url)
+            token = oauth.cached(key)
             if token is None:
-                token = oauth.store(url, *self._parse_token(await self._request(spec)))
-        return url, token
+                token = oauth.store(key, *self._parse_token(await self._request(spec)))
+        return key, token
 
     async def _request(self, spec: ApiRequest) -> httpx.Response:
         token = await async_token(self._cfg) if self._needs_token(spec) else None

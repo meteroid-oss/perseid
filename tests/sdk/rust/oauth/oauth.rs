@@ -134,6 +134,17 @@ async fn status(client: &Vault) -> String {
 }
 
 #[tokio::test]
+async fn schemes_sharing_a_token_url_keep_a_token_per_scope() {
+    let server = Server::new();
+    let client = server.client().build().unwrap();
+    assert_eq!(status(&client).await, "at-1");
+    assert_eq!(client.account().retrieve_admin().await.unwrap().status, "at-2");
+    assert_eq!(status(&client).await, "at-1");
+    assert_eq!(client.account().retrieve_admin().await.unwrap().status, "at-2");
+    assert_eq!(server.token_requests().len(), 2);
+}
+
+#[tokio::test]
 async fn a_token_is_fetched_on_first_use_and_kept() {
     let server = Server::new();
     let client = server.client().build().unwrap();

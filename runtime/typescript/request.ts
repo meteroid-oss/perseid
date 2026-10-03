@@ -83,8 +83,12 @@ export interface @@CLIENT_NAME@@RequestContext extends Credentials {
  * the client's middleware, timeout and retries like any other.
  */
 export async function fetchOAuthToken(ctx: @@CLIENT_NAME@@RequestContext, grant: OAuthGrant): Promise<OAuthToken> {
-  const absolute = /^[a-z][a-z0-9+.-]*:\/\//i.test(grant.tokenUrl);
-  const request = new @@CLIENT_NAME@@Request("POST", absolute || grant.tokenUrl.startsWith("/") ? grant.tokenUrl : `/${grant.tokenUrl}`);
+  // An absolute-path reference resolves against the origin of the base URL, any other relative one under it.
+  let endpoint = grant.tokenUrl;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(endpoint)) {
+    endpoint = endpoint.startsWith("/") ? new URL(ctx.baseUrl).origin + endpoint : `${ctx.baseUrl.replace(/\/+$/, "")}/${endpoint}`;
+  }
+  const request = new @@CLIENT_NAME@@Request("POST", endpoint);
   const form: Record<string, string> = { grant_type: "client_credentials" };
   if (grant.scope !== "") {
     form.scope = grant.scope;
