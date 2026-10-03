@@ -247,7 +247,7 @@ internal sealed class ApiAuth(IReadOnlyDictionary<string, SecurityScheme> scheme
             }
             else
             {
-                builder.Append('%').Append(b.ToString("X2"));
+                builder.Append('%').Append(b.ToString("X2", System.Globalization.CultureInfo.InvariantCulture));
             }
         }
         return builder.ToString();
