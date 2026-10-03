@@ -44,9 +44,39 @@ pub(super) fn to_3_1(doc: &mut Value) -> Result<()> {
     Ok(())
 }
 
-/// Drops what 3.2 adds to a path item and 3.1 has no place for: the QUERY method and
-/// `additionalOperations`, with a warning.
+const METHODS: [&str; 8] = [
+    "get", "put", "post", "delete", "options", "head", "patch", "trace",
+];
+
+/// The name of a parameter 3.1 cannot express: `in: querystring`, or a cookie in `style: cookie`.
+/// `parameter` is an inline parameter or a reference into `components.parameters`.
+fn unsupported_parameter<'a>(parameter: &'a Value, components: &'a Value) -> Option<&'a str> {
+    let parameter = match parameter.get("$ref").and_then(Value::as_str) {
+        Some(reference) => reference
+            .strip_prefix("#/components/parameters/")
+            .and_then(|name| components.get(name))?,
+        None => parameter,
+    };
+    let unsupported = parameter.get("in").and_then(Value::as_str) == Some("querystring")
+        || parameter.get("style").and_then(Value::as_str) == Some("cookie");
+    unsupported.then(|| parameter.get("name").and_then(Value::as_str).unwrap_or(""))
+}
+
+fn unsupported_in<'a>(parameters: Option<&'a Value>, components: &'a Value) -> Option<&'a str> {
+    parameters?
+        .as_array()?
+        .iter()
+        .find_map(|p| unsupported_parameter(p, components))
+}
+
+/// Drops what 3.2 adds to a path item and 3.1 has no place for: the QUERY method,
+/// `additionalOperations` and the operations with a `querystring` or `style: cookie` parameter,
+/// with a warning.
 fn drop_3_2_operations(doc: &mut Value) {
+    let components = doc
+        .pointer("/components/parameters")
+        .cloned()
+        .unwrap_or(Value::Null);
     for section in ["paths", "webhooks"] {
         let Some(items) = doc.get_mut(section).and_then(Value::as_object_mut) else {
             continue;
@@ -61,7 +91,35 @@ fn drop_3_2_operations(doc: &mut Value) {
             if item.remove("additionalOperations").is_some() {
                 eprintln!("warning: additionalOperations of {path} skipped: not supported");
             }
+            let shared = unsupported_in(item.get("parameters"), &components).map(str::to_owned);
+            for method in METHODS {
+                let Some(operation) = item.get(method) else {
+                    continue;
+                };
+                let name = shared
+                    .as_deref()
+                    .or_else(|| unsupported_in(operation.get("parameters"), &components));
+                if let Some(name) = name {
+                    eprintln!(
+                        "warning: {} {path} skipped: parameter `{name}` is not supported \
+                         (`in: querystring` or `style: cookie`)",
+                        method.to_uppercase()
+                    );
+                    item.remove(method);
+                }
+            }
+            if shared.is_some()
+                && let Some(Value::Array(parameters)) = item.get_mut("parameters")
+            {
+                parameters.retain(|p| unsupported_parameter(p, &components).is_none());
+            }
         }
+    }
+    if let Some(parameters) = doc
+        .pointer_mut("/components/parameters")
+        .and_then(Value::as_object_mut)
+    {
+        parameters.retain(|_, p| unsupported_parameter(p, &Value::Null).is_none());
     }
 }
 
@@ -504,6 +562,33 @@ mod tests {
 
     fn schemas(s: Value) -> Value {
         upgraded(json!({ "schemas": s }))["components"]["schemas"].clone()
+    }
+
+    #[test]
+    fn operations_with_3_2_only_parameters_are_dropped() {
+        let mut doc = json!({
+            "openapi": "3.2.0",
+            "paths": {
+                "/a": { "get": { "parameters": [{ "name": "q", "in": "querystring" }] },
+                        "post": { "parameters": [{ "$ref": "#/components/parameters/Ck" }] },
+                        "put": { "responses": {} } },
+                "/b": { "parameters": [{ "name": "s", "in": "cookie", "style": "cookie" }],
+                        "get": { "responses": {} } }
+            },
+            "components": { "parameters": {
+                "Ck": { "name": "c", "in": "cookie", "style": "cookie" },
+                "Ok": { "name": "o", "in": "query" }
+            } }
+        });
+        to_3_1(&mut doc).unwrap();
+        assert!(
+            doc["paths"]["/a"].get("get").is_none() && doc["paths"]["/a"].get("post").is_none()
+        );
+        assert!(doc["paths"]["/a"].get("put").is_some());
+        assert!(doc["paths"]["/b"].get("get").is_none());
+        assert_eq!(doc["paths"]["/b"]["parameters"], json!([]));
+        assert!(doc["components"]["parameters"].get("Ck").is_none());
+        assert!(doc["components"]["parameters"].get("Ok").is_some());
     }
 
     #[test]

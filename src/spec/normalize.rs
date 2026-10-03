@@ -25,7 +25,7 @@ const PROPERTY_ANNOTATIONS: [&str; 5] = [
 ];
 
 pub(super) fn normalize(doc: &mut Value) -> Result<()> {
-    canonicalize_refs(doc);
+    let renames = canonicalize_refs(doc);
     upgrade::type_unions(doc);
     let root = doc.clone();
     inline_operation_refs(doc, &root)?;
@@ -35,7 +35,71 @@ pub(super) fn normalize(doc: &mut Value) -> Result<()> {
     infer_discriminators(doc);
     Promoter::run(doc);
     flatten_all_of(doc);
+    // Pinned last, so that tags inferred from the variants' discriminator enums come first.
+    let tags = renames.into_iter().map(|(old, new)| (new, old)).collect();
+    pin_implicit_tags(doc, &tags);
     Ok(())
+}
+
+/// Gives each `$ref` variant of a discriminated union that targets a schema in `tags` (by its
+/// current name) and that no `mapping` entry names an explicit entry keyed by the tag given
+/// there: the implicit tag is the schema name as the spec spells it, and renaming the schema
+/// (unsafe characters, reserved names) must not change what is on the wire.
+fn pin_implicit_tags(value: &mut Value, tags: &BTreeMap<String, String>) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(|v| pin_implicit_tags(v, tags)),
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if !matches!(
+                    key.as_str(),
+                    "example" | "examples" | "default" | "enum" | "const"
+                ) {
+                    pin_implicit_tags(child, tags);
+                }
+            }
+            let Some(Value::Object(discriminator)) = map.get("discriminator") else {
+                return;
+            };
+            if !discriminator
+                .get("propertyName")
+                .is_some_and(Value::is_string)
+            {
+                return;
+            }
+            let mut mapping = discriminator
+                .get("mapping")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let target_name = |t: &str| t.rsplit('/').next().map(str::to_owned);
+            let mut added = false;
+            for key in ["oneOf", "anyOf"] {
+                for variant in map.get(key).and_then(Value::as_array).into_iter().flatten() {
+                    let Some(reference) = variant.get("$ref").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Some((name, tag)) = reference
+                        .strip_prefix(SCHEMA_PREFIX)
+                        .and_then(|n| tags.get_key_value(n))
+                    else {
+                        continue;
+                    };
+                    let mapped = mapping
+                        .values()
+                        .filter_map(Value::as_str)
+                        .any(|t| target_name(t).as_deref() == Some(name.as_str()));
+                    if !mapped && !mapping.contains_key(tag) {
+                        mapping.insert(tag.clone(), Value::from(reference));
+                        added = true;
+                    }
+                }
+            }
+            if added && let Some(Value::Object(d)) = map.get_mut("discriminator") {
+                d.insert("mapping".into(), Value::Object(mapping));
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Whether a schema name needs renaming because `$ref`s cannot spell it as a plain path segment.
@@ -71,7 +135,8 @@ fn unescape_segment(segment: &str) -> String {
 /// Makes every local `$ref` plain: fragments are percent-decoded, JSON pointer escapes in schema
 /// names are resolved (schemas whose names cannot be a path segment are renamed), and references
 /// into a schema's nested locations are replaced by the schema found there.
-fn canonicalize_refs(doc: &mut Value) {
+/// Returns the schema renames made (spec name to new name).
+fn canonicalize_refs(doc: &mut Value) -> BTreeMap<String, String> {
     let renames = sanitize_schema_names(doc);
     promote_recursive_locations(doc, &renames);
     for _ in 0..8 {
@@ -80,6 +145,7 @@ fn canonicalize_refs(doc: &mut Value) {
             break;
         }
     }
+    renames
 }
 
 /// The schema name and the segments below it a local `$ref` into `components.schemas` points
@@ -631,6 +697,8 @@ pub(super) fn rename_reserved_schemas(
             .collect();
         *schemas = renamed;
     }
+    let tags = renames.keys().map(|n| (n.clone(), n.clone())).collect();
+    pin_implicit_tags(doc, &tags);
     rename_references(doc, &renames);
     renames
 }
@@ -2261,6 +2329,32 @@ mod tests {
             schemas["Event"]["discriminator"]["mapping"]["u"],
             json!("UploadModel2")
         );
+    }
+
+    #[test]
+    fn renamed_variants_keep_their_implicit_discriminator_tag() {
+        let mut doc = json!({
+            "openapi": "3.1.0",
+            "info": { "title": "t", "version": "1" },
+            "paths": {},
+            "components": { "schemas": {
+                "Result": { "type": "object" },
+                "Odd/Name": { "type": "object" },
+                "Tagged": { "type": "object", "properties": {
+                    "kind": { "type": "string", "enum": ["tagged"] } } },
+                "Event": { "oneOf": [
+                    { "$ref": "#/components/schemas/Result" },
+                    { "$ref": "#/components/schemas/Odd~1Name" },
+                    { "$ref": "#/components/schemas/Tagged" }],
+                    "discriminator": { "propertyName": "kind" } }
+            } }
+        });
+        normalize(&mut doc).unwrap();
+        rename_reserved_schemas(&mut doc, &BTreeSet::from(["Result".to_owned()]));
+        let mapping = &doc["components"]["schemas"]["Event"]["discriminator"]["mapping"];
+        assert_eq!(mapping["Result"], json!("#/components/schemas/ResultModel"));
+        assert_eq!(mapping["Odd/Name"], json!("#/components/schemas/Odd_Name"));
+        assert_eq!(mapping.get("Tagged"), None);
     }
 
     #[test]

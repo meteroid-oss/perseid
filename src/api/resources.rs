@@ -835,8 +835,12 @@ impl Operation {
                 } => {
                     let (r#type, json) = parameter_value(parameter_data.format, false)
                         .with_context(|| format!("query parameter `{name}`"))?;
-                    // `style: form` explodes arrays (`?tags=a&tags=b`) unless `explode: false`.
-                    let explode = parameter_data.explode.unwrap_or(true);
+                    // `style: form` explodes arrays (`?tags=a&tags=b`) unless `explode: false`;
+                    // the delimited styles join their items unless `explode: true`.
+                    let explode = parameter_data.explode.unwrap_or(matches!(
+                        style,
+                        openapi::QueryStyle::Form | openapi::QueryStyle::DeepObject
+                    ));
                     let deep_object = matches!(style, openapi::QueryStyle::DeepObject) && !json;
                     // Exploded delimited styles repeat the name, like `form`.
                     let delimiter = match style {
@@ -844,8 +848,15 @@ impl Operation {
                         openapi::QueryStyle::SpaceDelimited => Some(" "),
                         _ => None,
                     }
-                    .filter(|_| !explode && !json);
-                    if delimiter.is_some() {
+                    .filter(|_| !explode && !json)
+                    .filter(|_| {
+                        parameter_data.explode.is_some()
+                            || matches!(
+                                r#type.non_null(),
+                                FieldType::List { .. } | FieldType::Set { .. }
+                            )
+                    });
+                    if delimiter.is_some() && parameter_data.explode.is_some() {
                         ensure!(
                             matches!(
                                 r#type.non_null(),
@@ -2425,6 +2436,11 @@ mod tests {
         let spaces = json!({ "name": "ids", "in": "query", "style": "spaceDelimited",
             "schema": { "type": "array", "items": { "type": "string" } } });
         let op = parameter(spaces).unwrap();
+        assert_eq!(op.query_params[0].delimiter.as_deref(), Some(" "));
+        assert!(op.query_params[0].structured && !op.query_params[0].explode);
+        let exploded = json!({ "name": "ids", "in": "query", "style": "spaceDelimited",
+            "explode": true, "schema": { "type": "array", "items": { "type": "string" } } });
+        let op = parameter(exploded).unwrap();
         assert!(op.query_params[0].delimiter.is_none() && !op.query_params[0].structured);
         let scalar = json!({ "name": "id", "in": "query", "style": "pipeDelimited",
             "explode": false, "schema": { "type": "string" } });

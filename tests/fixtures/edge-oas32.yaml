@@ -15,7 +15,25 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/X'}
+  /qs:
+    get:
+      operationId: get_qs
+      tags: [x]
+      parameters:
+        - {name: filter, in: querystring, content: {application/x-www-form-urlencoded: {schema: {type: object}}}}
+      responses:
+        '200': {description: ok}
+  /session:
+    get:
+      operationId: get_session
+      tags: [x]
+      parameters:
+        - {$ref: '#/components/parameters/Session'}
+      responses:
+        '200': {description: ok}
 components:
+  parameters:
+    Session: {name: sid, in: cookie, style: cookie, schema: {type: string}}
   schemas:
     X:
       type: object
