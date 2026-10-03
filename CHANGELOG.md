@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/meteroid-oss/perseid/compare/v0.7.0...v0.7.1) (2026-10-03)
+
+
+### Bug Fixes
+
+* review findings on spec bundling, unions, OAuth and wire encoding ([#64](https://github.com/meteroid-oss/perseid/issues/64)) ([75f14c0](https://github.com/meteroid-oss/perseid/commit/75f14c0d2b5be8f784dc193176e6ac3b693f71ec))
+
 ## [0.7.0](https://github.com/meteroid-oss/perseid/compare/v0.6.0...v0.7.0) (2026-10-02)
 
 
