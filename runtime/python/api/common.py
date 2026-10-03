@@ -197,8 +197,9 @@ def encode_path_param(name: str, value: t.Any, style: str, explode: bool) -> Enc
     if style == "json":
         return EncodedPathParam(_quote_unreserved(_compact_json(value)))
     result = _encode_styled_path_param(name, value, style, explode)
-    # A whole segment of dots would be resolved away by the URL.
-    return EncodedPathParam(result.replace(".", "%2E") if result in (".", "..") else result)
+    # A whole segment of dots, plain or percent-encoded, would be resolved away by the URL.
+    dots = result.replace("%2E", ".")
+    return EncodedPathParam("%2E" * len(dots) if dots in (".", "..") else result)
 
 
 def _encode_styled_path_param(name: str, value: t.Any, style: str, explode: bool) -> str:
