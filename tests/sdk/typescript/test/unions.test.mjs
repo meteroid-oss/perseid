@@ -13,6 +13,10 @@ const { unionTry } = await import(
   pathToFileURL(join(dir, "typescript", "dist/esm/unions.js")).href
 );
 
+const dateTime = await import(
+  pathToFileURL(join(dir, "typescript", "dist/esm/datetime.js")).href
+);
+
 /** `value` as JSON: parsing leaves `undefined` in the absent optional fields. */
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
@@ -54,6 +58,17 @@ describe("unionTry", () => {
   it("falls through to the next variant when decoding fails", () => {
     assert.ok(unionTry("2024-01-02T03:04:05Z", dateOrString, undefined, false) instanceof Date);
     assert.equal(unionTry("yesterday", dateOrString, undefined, false), "yesterday");
+  });
+
+  it("keeps a string that only new Date() would accept as a string", () => {
+    const { parseDateTime } = dateTime;
+    const candidates = [
+      { type: "string", parse: (v) => parseDateTime(v) },
+      { type: "string", parse: (v) => v },
+    ];
+    assert.equal(unionTry("Version 2", candidates, undefined, false), "Version 2");
+    assert.equal(unionTry("1", candidates, undefined, false), "1");
+    assert.ok(unionTry("2024-01-02T03:04:05Z", candidates, undefined, false) instanceof Date);
   });
 
   it("tells arrays apart by their first element", () => {

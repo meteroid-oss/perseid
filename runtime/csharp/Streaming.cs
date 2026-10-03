@@ -219,12 +219,12 @@ internal sealed class SseParser
             var name = _event.Length > 0 ? _event : "message";
             _event = "";
             // A `retry` applies to the event it arrives on only; the `id` persists.
-            var retry = _retry;
-            _retry = null;
             if (_data.Length == 0)
             {
                 return null;
             }
+            var retry = _retry;
+            _retry = null;
             var data = _data.ToString(0, _data.Length - 1);
             _data.Clear();
             return new SseEvent(name, data, Id, retry);

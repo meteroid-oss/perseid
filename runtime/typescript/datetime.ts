@@ -27,6 +27,11 @@ export function parseDateTime(value: string): Date {
   return new Date(`${date}T${time}${millis}${normalizeOffset(offset)}`);
 }
 
+/** @internal Whether `value` is an RFC 3339 date-time, the strict form `parseDateTime` reads. */
+export function isDateTime(value: string): boolean {
+  return DATE_TIME_RE.test(value);
+}
+
 function normalizeOffset(offset: string | undefined): string {
   if (offset === undefined || offset === "Z" || offset === "z") {
     return "Z";

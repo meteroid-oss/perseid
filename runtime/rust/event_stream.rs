@@ -301,10 +301,10 @@ impl Parser {
         self.first_line = false;
         let result = if line.is_empty() {
             let event = std::mem::take(&mut self.event);
-            let retry = self.event_retry.take();
             if self.data.is_empty() {
                 None
             } else {
+                let retry = self.event_retry.take();
                 self.data.pop();
                 Some(SseEvent {
                     event: if event.is_empty() {
