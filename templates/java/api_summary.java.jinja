@@ -113,7 +113,7 @@ import java.util.Map;
  * try ({{ client }} client = {{ client }}.fromEnv()) {
  {% if sdk.example -%}
  {% for line in sdk.example | lines -%}
- *     {{ line | replace("@", "{@literal @}") }}
+ *     {{ line | replace("@", "{@literal @}") | java_comment }}
  {% endfor -%}
  {% else -%}
  *     // client.<resource>().<method>(...)

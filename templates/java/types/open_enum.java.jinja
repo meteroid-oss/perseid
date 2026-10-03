@@ -24,7 +24,7 @@ is an enum to switch on, {@code {{ unknown }}} for them, and {@link #known()} th
 {% if type.deprecated %}@Deprecated{% endif %}
 public final class {{ ty_name }} implements ToQueryParam {
     {% for value in values -%}
-    /** The value {@code {{ value | replace("@", "&#64;") }}}. */
+    /** The value {@code {{ value | replace("@", "&#64;") | java_comment }}}. */
     public static final {{ ty_name }} {{ members[loop.index0] }} = new {{ ty_name }}({{ value }}, {{ value_ty }}.{{ members[loop.index0] }});
     {% endfor %}
     private static final Map<{{ raw_ty }}, {{ ty_name }}> constants = Map.ofEntries(

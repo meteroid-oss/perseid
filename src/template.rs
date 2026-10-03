@@ -59,6 +59,15 @@ pub fn populate_env(
     env.add_filter("go_file", |s: Cow<'_, str>| {
         crate::generator::go_file_stem(s.to_snake_case())
     });
+    // `tojson` leaves U+0085, U+2028 and U+2029 raw, and C# ends a string literal at each of them.
+    env.add_filter(
+        "tojson",
+        |value: &Value, indent: Option<Value>, kwargs: Kwargs| -> Result<Value, minijinja::Error> {
+            let json = minijinja::filters::tojson(value, indent, kwargs)?;
+            let json = json.as_str().unwrap_or_default();
+            Ok(Value::from_safe_string(escape_line_separators(json)))
+        },
+    );
     // `tojson` writes `'` as `\u0027`, which Rust string literals reject.
     env.add_filter("rust_str", |s: Cow<'_, str>| format!("{s:?}"));
     env.add_filter("to_rust_variant", |s: Cow<'_, str>| {
@@ -112,9 +121,10 @@ pub fn populate_env(
         |s: Cow<'_, str>, kwargs: Kwargs| -> Result<String, minijinja::Error> {
             let style: Cow<'_, str> = kwargs.get("style")?;
             kwargs.assert_all_used()?;
+            let s = normalize_doc_text(&s);
             let s: Cow<'_, str> = match &*style {
                 "go" => go::doc_text(&s).into(),
-                _ => s,
+                _ => s.into(),
             };
 
             let prefix = match &*style {
@@ -130,7 +140,11 @@ pub fn populate_env(
                 }
                 "java" | "kotlin" | "javascript" | "js" | "ts" | "typescript" | "php_class" => {
                     // A `*/` in the text, as in a `release/*/*` glob, would end the comment.
-                    let s = s.replace("*/", "*\\/");
+                    let s = if &*style == "java" {
+                        java_comment(&s)
+                    } else {
+                        s.replace("*/", "*\\/")
+                    };
                     if !s.contains("\n") {
                         return Ok(format!("/** {s} */"));
                     }
@@ -159,6 +173,8 @@ pub fn populate_env(
                 .to_string())
         },
     );
+    // Text safe inside any Java comment, for template spots that do not go through `to_doc_comment`.
+    env.add_filter("java_comment", |s: Cow<'_, str>| java_comment(&s));
     env.add_filter(
         "with_javadoc_deprecation",
         |s: Cow<'_, str>, deprecated: bool| {
@@ -375,6 +391,28 @@ pub fn populate_env(
     Ok(env)
 }
 
+/// `s` with the Unicode line terminators written as `\uXXXX` escapes, as in a JSON string.
+fn escape_line_separators(s: &str) -> String {
+    s.replace('\u{85}', "\\u0085")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
+/// Doc text with every Unicode line terminator as `\n`, so no one comment style lets text after it
+/// out of the comment, and with no trailing whitespace on a line, as in a Markdown hard break.
+fn normalize_doc_text(s: &str) -> String {
+    s.replace(['\u{85}', '\u{2028}', '\u{2029}'], "\n")
+        .split('\n')
+        .map(str::trim_end)
+        .join("\n")
+}
+
+/// `s` as the text of a Java comment. `javac` decodes `\uXXXX` before it reads comments, so a
+/// backslash can close the comment or be an illegal escape, and a `*/` closes it.
+fn java_comment(s: &str) -> String {
+    s.replace('\\', "&#92;").replace("*/", "*&#47;")
+}
+
 fn mentions_ident(text: &str, name: &str) -> bool {
     let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
     !name.is_empty()
@@ -399,7 +437,58 @@ fn contains_required_param(value: Value) -> Result<bool, minijinja::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::mentions_ident;
+    use super::{java_comment, mentions_ident, normalize_doc_text};
+
+    fn doc(text: &str, style: &str) -> String {
+        let mut env = minijinja::Environment::new();
+        env = super::populate_env(env).unwrap();
+        env.render_str(
+            "{{ text | to_doc_comment(style=style) }}",
+            minijinja::context! { text => text, style => style },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn java_comments_hide_backslashes_and_comment_ends() {
+        assert_eq!(
+            java_comment(r"C:\users \u002a/ */*"),
+            "C:&#92;users &#92;u002a/ *&#47;*"
+        );
+        let out = doc(r"C:\users and \u002a/ and */*", "java");
+        assert!(!out.contains('\\'));
+        assert_eq!(out.matches("*/").count(), 1);
+    }
+
+    #[test]
+    fn unicode_line_terminators_end_doc_lines() {
+        let out = doc("one\u{2028}two\u{85}three\u{2029}four", "csharp");
+        assert_eq!(out, "/// one\n/// two\n/// three\n/// four");
+    }
+
+    #[test]
+    fn tojson_escapes_unicode_line_terminators() {
+        let env = super::populate_env(minijinja::Environment::new()).unwrap();
+        let out = env
+            .render_str(
+                "{{ v | tojson }}",
+                minijinja::context! { v => "a\u{2028}b\u{85}c\u{2029}" },
+            )
+            .unwrap();
+        assert_eq!(out, r#""a\u2028b\u0085c\u2029""#);
+    }
+
+    #[test]
+    fn doc_lines_lose_trailing_whitespace() {
+        assert_eq!(
+            normalize_doc_text("Line one  \nline two \n"),
+            "Line one\nline two\n"
+        );
+        assert_eq!(
+            doc("Line one  \nline two", "python"),
+            "\"\"\"Line one\nline two\"\"\""
+        );
+    }
 
     #[test]
     fn mentions_ident_matches_whole_identifiers_only() {

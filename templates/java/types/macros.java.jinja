@@ -499,7 +499,7 @@ public String toString() {
  * <p>An object is the first variant whose conditions it meets:
  * <ul>
 {%- for v in ty.object_variants() %}
- *   <li>{@link Of{{ (pascal_of.list | selectattr("name", "equalto", v.name) | first).pascal }}}: {% for c in v.when %}{% if not loop.first %} and {% endif %}{@code {{ c.property }}} {% if c.value is defined %}is {@code {{ c.value | tojson | replace("@", "&#64;") }}}{% else %}is present{% endif %}{% else %}any object{% endfor %}
+ *   <li>{@link Of{{ (pascal_of.list | selectattr("name", "equalto", v.name) | first).pascal }}}: {% for c in v.when %}{% if not loop.first %} and {% endif %}{@code {{ c.property }}} {% if c.value is defined %}is {@code {{ c.value | tojson | replace("@", "&#64;") | java_comment }}}{% else %}is present{% endif %}{% else %}any object{% endfor %}
 {%- endfor %}
  * </ul>
 {%- else %}
