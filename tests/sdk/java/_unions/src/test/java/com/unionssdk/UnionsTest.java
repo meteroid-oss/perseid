@@ -67,7 +67,9 @@ class UnionsTest {
     private void handle(HttpExchange exchange) throws IOException {
         String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         String text;
-        if (exchange.getRequestURI().getPath().equals("/v1/oauth/token")) {
+        // The spec declares tokenUrl "/oauth/token", an absolute-path reference that resolves
+        // against the origin of the base URL, not under its "/v1" path.
+        if (exchange.getRequestURI().getPath().equals("/oauth/token")) {
             text = "{\"access_token\":\"at\",\"token_type\":\"Bearer\",\"expires_in\":3600}";
         } else {
             bodies.add(body);
