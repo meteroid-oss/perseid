@@ -271,6 +271,7 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
                             Some(kind) => variant.json_type = kind.to_owned(),
                             None => settled = false,
                         }
+                        variant.loose = known.loose.contains(name);
                     }
                     variant.items = match &variant.r#type {
                         FieldType::List { inner } | FieldType::Set { inner } => {
@@ -306,10 +307,19 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
         }
     }
     struct Known {
+        /// The string aliases and string enums.
+        loose: BTreeSet<String>,
         kinds: BTreeMap<String, Option<&'static str>>,
         shapes: BTreeMap<String, Option<Vec<unions::Property>>>,
     }
     let known = Known {
+        loose: types
+            .iter()
+            .filter(|(_, ty)| {
+                matches!(ty.data, TypeData::StringEnum { .. } | TypeData::StringAlias)
+            })
+            .map(|(name, _)| name.clone())
+            .collect(),
         kinds: types
             .keys()
             .map(|name| (name.clone(), json_type(types, name, 0)))
@@ -2025,6 +2035,10 @@ pub(crate) struct UnionVariant {
     /// expandable unions (`string | Customer`) return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
+    /// A reference to a string alias or an open string enum, which accept any string and are
+    /// tried after the variants that parse a string.
+    #[serde(default, skip_serializing)]
+    pub loose: bool,
 }
 
 impl UnionVariant {
@@ -2045,6 +2059,7 @@ impl UnionVariant {
                 required: Vec::new(),
                 properties: Vec::new(),
                 id: None,
+                loose: false,
             });
         }
         let explicit_object = obj.instance_type == Some(InstanceType::Object.into());
@@ -2068,6 +2083,7 @@ impl UnionVariant {
             required: Vec::new(),
             properties: Vec::new(),
             id: None,
+            loose: false,
         })
     }
 
@@ -2138,12 +2154,13 @@ impl UnionVariant {
         variants
     }
 
-    /// Where the variant stands in the order decoders try them: the plain strings come last,
-    /// after the variants that parse them, and objects follow their rank.
-    fn try_key(&self) -> (bool, usize) {
+    /// Where the variant stands in the order decoders try them: the references to string aliases
+    /// and open string enums, then the plain strings, come last, after the variants that parse
+    /// a string, and objects follow their rank.
+    fn try_key(&self) -> (u8, usize) {
         let plain = !self.empty && matches!(self.r#type, FieldType::String | FieldType::Uri);
         (
-            plain,
+            if plain { 2 } else { u8::from(self.loose) },
             if self.json_type == "object" {
                 self.rank
             } else {
@@ -2443,11 +2460,11 @@ impl FieldType {
                             ),
                         })
                         .collect::<anyhow::Result<_>>()?;
+                    values = values.into_iter().unique().collect();
                     // A single value is a constant, most often a discriminator.
                     if values.len() <= 1 {
                         return Ok((Self::String, nullable));
                     }
-                    values.dedup();
                     let title = obj.metadata.as_ref().and_then(|m| m.title.clone());
                     return Ok((Self::StringEnum { values, title }, nullable));
                 }
@@ -4173,6 +4190,65 @@ mod tests {
             fields,
             [("id", FieldType::String), ("note", FieldType::Int64)]
         );
+    }
+
+    #[test]
+    fn open_enums_and_aliases_are_tried_after_the_strings_they_would_shadow() {
+        let mut types = types_from(json!({
+            "Holder": {"type": "object", "properties": {
+                "when": {"oneOf": [
+                    {"$ref": "#/components/schemas/Preset"},
+                    {"type": "string", "format": "date-time"}
+                ]}
+            }},
+            "Preset": {"type": "string", "enum": ["now", "later"]}
+        }));
+        resolve_unions(&mut types, &mut Resources::new());
+        let FieldType::Union { variants, .. } = field_type(&types, "Holder", "when") else {
+            panic!("not a union");
+        };
+        let mut order: Vec<_> = variants.iter().collect();
+        order.sort_by_key(|v| v.try_key());
+        let names: Vec<_> = order.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, ["date_time", "preset"]);
+    }
+
+    #[test]
+    fn union_rules_ignore_write_only_properties_of_responses() {
+        let mut types = types_from(json!({
+            "Holder": {"type": "object", "properties": {
+                "cred": {"oneOf": [
+                    {"$ref": "#/components/schemas/PasswordCred"},
+                    {"$ref": "#/components/schemas/TokenCred"}
+                ]}
+            }},
+            "PasswordCred": {"type": "object", "required": ["user", "password"], "properties": {
+                "user": {"type": "string"},
+                "password": {"type": "string", "writeOnly": true}
+            }},
+            "TokenCred": {"type": "object", "required": ["token"], "properties": {
+                "token": {"type": "string"}
+            }}
+        }));
+        relax_access_modes(&mut types, [], ["Holder"]);
+        resolve_unions(&mut types, &mut Resources::new());
+        let FieldType::Union { variants, .. } = field_type(&types, "Holder", "cred") else {
+            panic!("not a union");
+        };
+        let conditions: Vec<_> = variants.iter().flat_map(|v| &v.when).collect();
+        assert!(!conditions.is_empty());
+        assert!(conditions.iter().all(|c| c.property != "password"));
+    }
+
+    #[test]
+    fn repeated_enum_values_are_dropped_wherever_they_stand() {
+        let f = field(json!({"type": "string", "enum": ["a", "b", "a", "c"]}));
+        let FieldType::StringEnum { values, .. } = f.r#type else {
+            panic!("not an enum");
+        };
+        assert_eq!(values, ["a", "b", "c"]);
+        let f = field(json!({"type": "string", "enum": ["a", "a"]}));
+        assert_eq!(f.r#type, FieldType::String);
     }
 }
 

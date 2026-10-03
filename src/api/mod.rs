@@ -64,12 +64,14 @@ impl Api {
         );
         errors.extend(type_errors);
         types::untag_unions_with_non_object_variants(&mut types);
-        types::resolve_unions(&mut types, &mut resources);
+        // Before the unions are resolved, so that their rules do not rely on `writeOnly` fields
+        // responses lack, nor on `readOnly` ones requests lack.
         let (requests, responses) = resources::request_and_response_roots(&resources);
         let responses = responses
             .into_iter()
             .chain(webhooks.iter().map(String::as_str));
         types::relax_access_modes(&mut types, requests, responses);
+        types::resolve_unions(&mut types, &mut resources);
         types::set_union_ids(&mut types);
 
         // Promote inline enums (e.g. array-of-enum query params) to named

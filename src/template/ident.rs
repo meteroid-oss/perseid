@@ -176,7 +176,7 @@ const TYPESCRIPT: &[&str] = &[
     "await",
 ];
 
-fn keywords(language: &str) -> Result<Vec<&'static [&'static str]>, Error> {
+pub(crate) fn keywords(language: &str) -> Result<Vec<&'static [&'static str]>, Error> {
     Ok(match language {
         "rust" => vec![RUST],
         "python" => vec![PYTHON, PYTHON_SHADOWING],

@@ -327,6 +327,16 @@ pub fn collision(name: &str) -> Option<String> {
             "its Go package `{joined}` would shadow a standard library package or a generated file"
         ));
     }
+    // The package segment (`com.public.api`, Go's `package default`) must not be a keyword.
+    let keyword = ["rust", "python", "go", "java", "typescript"]
+        .into_iter()
+        .filter_map(|language| crate::template::ident::keywords(language).ok())
+        .flatten()
+        .flat_map(|list| list.iter().copied())
+        .find(|k| *k == snake || *k == joined);
+    if let Some(keyword) = keyword {
+        return Some(format!("`{keyword}` is a keyword in some SDK language"));
+    }
     if RESERVED_CLASSES.contains(&name) {
         return Some(format!(
             "`{name}` is a builtin or runtime type in some SDK language"
@@ -414,6 +424,15 @@ mod tests {
     fn titles_become_camel_case_names() {
         assert_eq!(from_title("Acme Pet Store API"), "AcmePetStore");
         assert_eq!(from_title("acme-billing REST service"), "AcmeBilling");
+    }
+
+    #[test]
+    fn keywords_get_a_suffix() {
+        assert_eq!(from_title("Public API"), "PublicSdk");
+        assert_eq!(from_title("Default"), "DefaultSdk");
+        assert!(check("Public").is_err());
+        assert!(check("Default").is_err());
+        assert!(check("Acme").is_ok());
     }
 
     #[test]
