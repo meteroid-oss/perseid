@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use heck::{ToKebabCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToShoutySnakeCase, ToSnakeCase};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -366,20 +366,7 @@ fn one_or_many<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Pagination>
 /// already is one (`AcmeAPI`).
 fn client_name<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     let name = String::deserialize(d)?;
-    let camel = match name.chars().all(|c| c.is_ascii_alphanumeric()) {
-        true if name.starts_with(|c: char| c.is_ascii_uppercase()) => name.clone(),
-        _ => name.to_upper_camel_case(),
-    };
-    match camel.starts_with(|c: char| c.is_ascii_alphabetic())
-        && camel.chars().all(|c| c.is_ascii_alphanumeric())
-    {
-        true => crate::client_name::check(&camel)
-            .map(|()| camel)
-            .map_err(serde::de::Error::custom),
-        false => Err(serde::de::Error::custom(format!(
-            "`name = {name:?}` must start with a letter and hold ASCII letters, digits, spaces, `-` or `_`"
-        ))),
-    }
+    crate::client_name::parse(&name).map_err(serde::de::Error::custom)
 }
 
 /// The JSON Schema of perseid.toml, for editors.
