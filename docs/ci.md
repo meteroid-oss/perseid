@@ -98,7 +98,7 @@ stored in the repository the workflow runs in.
 ### `perseid init`
 
 `init` works in your clone only. It finds the spec (a tracked `openapi` or `swagger` file, JSON or
-YAML) and asks which SDKs to generate, where they live and the client name. It writes:
+YAML) and asks which SDKs to generate, where they live and the API name. It writes:
 
 - `perseid.toml`;
 - `.github/workflows/sdks.yml`, which regenerates the SDKs;
