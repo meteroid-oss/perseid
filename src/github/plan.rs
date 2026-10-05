@@ -45,11 +45,15 @@ pub(super) enum Action {
         top: PathBuf,
         file: File,
     },
-    DeployKey {
-        api_repo: String,
-        sdks_repo: String,
-        /// Whether `perseid connect` can register it on `sdks_repo`, and the key it replaces.
-        register: (bool, Option<u64>),
+    Variable {
+        repo: String,
+        name: &'static str,
+        value: String,
+    },
+    /// Asks for a token reaching `hub`, stored as the SDK_GITHUB_TOKEN secret of `repo`.
+    Token {
+        repo: String,
+        hub: String,
     },
 }
 
@@ -122,12 +126,17 @@ impl Plan {
                     app.repos.join(", ")
                 )),
                 Action::AppKey(new) => Some(format!(
-                    "generate a private key at {}, then `gh secret set SDK_APP_PRIVATE_KEY -R <repo> < <downloaded>.private-key.pem` for {}",
+                    "generate a private key at {}, then `gh secret set SDK_APP_PRIVATE_KEY -R <repo> < <downloaded>.private-key.pem` on {}",
                     app::settings_url(new.slug.as_deref(), &new.owner),
                     new.repos.join(", ")
                 )),
                 Action::Write { file, .. } => Some(format!("write {}", file.path)),
-                Action::DeployKey { .. } => None,
+                Action::Variable { repo, name, value } => {
+                    Some(format!("gh variable set {name} -R {repo} --body {value}"))
+                }
+                Action::Token { repo, hub } => Some(format!(
+                    "create a fine-grained token with Contents read and write on {hub} at https://github.com/settings/personal-access-tokens/new, then `gh secret set {TOKEN} -R {repo}`"
+                )),
             })
             .collect()
     }
@@ -157,12 +166,12 @@ impl Plan {
 }
 
 /// The secret holding the token sdks.yml and sdk-release.yml open pull requests with.
-pub const TOKEN: &str = "PERSEID_TOKEN";
+pub const TOKEN: &str = "SDK_GITHUB_TOKEN";
 
 pub struct Session<'a> {
     pub api: &'a GitHub,
     pub login: &'a str,
-    /// Plans a GitHub App, instead of checking the `PERSEID_TOKEN` secret.
+    /// Plans a GitHub App, instead of checking the `SDK_GITHUB_TOKEN` secret.
     pub app: bool,
     /// Renders the SDKs to warn about files perseid would overwrite: slow, so `setup` only.
     pub collisions: bool,
@@ -564,11 +573,11 @@ pub fn apply(api: &GitHub, plan: &mut Plan, ui: &Ui) -> Result<()> {
                 crate::fsx::write(&top.join(&file.path), &file.content)?;
                 ui.ok(&format!("Wrote {}", file.path));
             }
-            Action::DeployKey {
-                api_repo,
-                sdks_repo,
-                register,
-            } => link::add_deploy_key(api, &api_repo, &sdks_repo, register, ui)?,
+            Action::Variable { repo, name, value } => {
+                secrets::set_variable(api, &repo, name, &value)?;
+                ui.ok(&format!("{name} is set on {repo}"));
+            }
+            Action::Token { repo, hub } => link::add_token(api, &repo, &hub, ui)?,
         }
     }
     Ok(())

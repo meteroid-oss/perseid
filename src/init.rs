@@ -264,7 +264,7 @@ fn next_steps(config: &Config, root: &Path) {
     });
     if let Some(file) = awaited {
         steps.push(format!(
-            "In the repository holding the spec, run `npx perseid connect {hub}`: it writes a workflow pushing the spec here as {file}, with a deploy key that can write to {hub} only"
+            "In the repository holding the spec, run `npx perseid connect {hub}`: it writes a workflow pushing the spec here as {file}, as the GitHub App above or with a token"
         ));
     }
     steps.push("`perseid status` checks the setup on GitHub".to_owned());

@@ -14,7 +14,7 @@ inputs:
   token:
     description: >-
       GitHub token opening the pull requests, with Contents, Pull requests and Workflows write on
-      every target repository, such as the PERSEID_TOKEN secret. Unused with `app-id`
+      every target repository, such as the SDK_GITHUB_TOKEN secret. Unused with `app-id`
     default: ''
 
   app-id:

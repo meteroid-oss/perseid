@@ -115,7 +115,7 @@ fn push(repos: &Repos, sha: &str) -> String {
 
 /// Runs the push step at `sha`, triggered by the release or tag `tag` when not empty.
 fn push_at(repos: &Repos, sha: &str, tag: &str) -> String {
-    push_with(repos, sha, tag, false, "PERSEID_SDKS_DEPLOY_KEY")
+    push_with(repos, sha, tag, false, "PERSEID_SDKS_TOKEN")
 }
 
 /// Runs `perseid push-spec` at `sha`, `private` leaving out the name of the repository it runs
@@ -128,7 +128,7 @@ fn push_with(repos: &Repos, sha: &str, tag: &str, private: bool, credential: &st
 
 /// Runs `perseid push-spec` at `sha` expecting it to fail, returning its output.
 fn push_failing(repos: &Repos, sha: &str, tag: &str) -> String {
-    let (success, out) = run_push(repos, sha, tag, false, "PERSEID_SDKS_DEPLOY_KEY");
+    let (success, out) = run_push(repos, sha, tag, false, "PERSEID_SDKS_TOKEN");
     assert!(!success, "{out}");
     out
 }
@@ -291,7 +291,7 @@ fn specs_reach_a_perseid_toml_in_a_folder() {
 fn private_sources_leave_their_name_out() {
     let (repos, shas) = repos();
     seed(&repos, None);
-    let out = push_with(&repos, &shas[3], "v1.0.0", true, "PERSEID_SDKS_DEPLOY_KEY");
+    let out = push_with(&repos, &shas[3], "v1.0.0", true, "PERSEID_SDKS_TOKEN");
     let at = format!("v1.0.0 ({})", &shas[3][..7]);
     assert!(out.contains(&format!("Pushed the spec of {at}")), "{out}");
     let source: Value = serde_json::from_str(&sdks_file(&repos, ".perseid/source.json")).unwrap();
@@ -337,7 +337,7 @@ fn generated_specs_are_written_before_being_pushed() {
         spec: "api/openapi.json",
         build: Some("cargo run --bin openapi > api/openapi.json"),
         hub: "acme/api-sdks",
-        auth: Auth::DeployKey,
+        auth: Auth::Token,
         private: false,
     });
     fs::write(
@@ -402,7 +402,7 @@ fn workflow(on: PushOn, auth: Auth, name: &str) -> Value {
 
 #[test]
 fn specs_are_pushed_on_changes_releases_or_tags() {
-    let change = workflow(PushOn::Change, Auth::DeployKey, "perseid-push-change.yml");
+    let change = workflow(PushOn::Change, Auth::Token, "perseid-push-change.yml");
     assert_eq!(change["on"]["push"]["branches"][0], "main");
     assert_eq!(change["on"]["push"]["paths"][0], "openapi.json");
 
@@ -433,7 +433,7 @@ fn runs_without_a_credential_say_which_is_missing() {
         .current_dir(&repos.api)
         .env("GITHUB_ACTIONS", "true")
         .env_remove("PERSEID_SDKS_TOKEN")
-        .env_remove("PERSEID_SDKS_DEPLOY_KEY")
+        .env_remove("PERSEID_SDKS_TOKEN")
         .env_remove("GITHUB_REF")
         .output()
         .unwrap();

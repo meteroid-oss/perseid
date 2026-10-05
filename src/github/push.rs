@@ -1,5 +1,5 @@
 //! `perseid push-spec`, which perseid-push.yml runs: commits the spec to the SDKs repository
-//! with a deploy key or a token, never an older commit's spec over a newer one's.
+//! with a token, never an older commit's spec over a newer one's.
 
 use std::{
     path::Path,
@@ -12,12 +12,6 @@ use serde_json::Value;
 
 use super::{join, link};
 use crate::config::{self, Config, Source};
-
-/// GitHub's SSH host keys, from https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
-const KNOWN_HOSTS: &str = "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
-github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=
-github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=
-";
 
 const BOT: [&str; 4] = [
     "-c",
@@ -47,7 +41,7 @@ pub fn push_spec(cwd: &Path, push: PushSpec) -> Result<ExitCode> {
         None => git(cwd, &["rev-parse", "HEAD"])?,
     };
     let temp = tempfile::tempdir()?;
-    let (url, auth) = remote(temp.path(), &to)?;
+    let (url, auth) = remote(&to)?;
     let sdks = temp.path().join("sdks");
     let target = sdks.to_string_lossy();
     run(git_remote(temp.path(), &auth).args(["clone", "--quiet", "--depth", "1", &url, &*target]))?;
@@ -143,58 +137,34 @@ fn off_default_branch() -> Option<String> {
     (branch != default).then(|| format!("`{branch}` isn't the default branch `{default}`: skipped"))
 }
 
-/// The URL of `to` and the environment git reaches it with: over HTTPS with the token in
-/// `PERSEID_SDKS_TOKEN`, or over SSH with the deploy key in `PERSEID_SDKS_DEPLOY_KEY`, trusting
-/// GitHub's host keys only. Without either, git's own credentials.
-fn remote(temp: &Path, to: &str) -> Result<(String, Vec<(String, String)>)> {
-    match (env("PERSEID_SDKS_TOKEN"), env("PERSEID_SDKS_DEPLOY_KEY")) {
-        (Some(_), Some(_)) => {
-            bail!("set PERSEID_SDKS_TOKEN or PERSEID_SDKS_DEPLOY_KEY, not both")
-        }
-        (Some(token), None) => {
-            let basic = BASE64.encode(format!("x-access-token:{token}"));
-            let count: usize = env("GIT_CONFIG_COUNT")
-                .and_then(|c| c.parse().ok())
-                .unwrap_or(0);
-            let auth = vec![
-                (
-                    format!("GIT_CONFIG_KEY_{count}"),
-                    "http.https://github.com/.extraheader".to_owned(),
-                ),
-                (
-                    format!("GIT_CONFIG_VALUE_{count}"),
-                    format!("AUTHORIZATION: basic {basic}"),
-                ),
-                ("GIT_CONFIG_COUNT".to_owned(), (count + 1).to_string()),
-            ];
-            Ok((format!("https://github.com/{to}.git"), auth))
-        }
-        (None, key) => {
-            let url = format!("git@github.com:{to}.git");
-            let Some(key) = key else {
-                if env("GITHUB_ACTIONS").as_deref() == Some("true") {
-                    bail!(
-                        "no credential for {to}: pass the action `deploy-key` or `token` (is the secret set in this repository?)"
-                    );
-                }
-                return Ok((url, vec![]));
-            };
-            let (key_file, hosts) = (temp.join("deploy_key"), temp.join("known_hosts"));
-            std::fs::write(&key_file, format!("{}\n", key.trim_end()))?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600))?;
-            }
-            std::fs::write(&hosts, KNOWN_HOSTS)?;
-            let ssh = format!(
-                "ssh -i '{}' -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='{}'",
-                key_file.display(),
-                hosts.display()
+/// The URL of `to` and the environment git reaches it with: the token in `PERSEID_SDKS_TOKEN`,
+/// else git's own credentials, outside GitHub Actions.
+fn remote(to: &str) -> Result<(String, Vec<(String, String)>)> {
+    let url = format!("https://github.com/{to}.git");
+    let Some(token) = env("PERSEID_SDKS_TOKEN") else {
+        if env("GITHUB_ACTIONS").as_deref() == Some("true") {
+            bail!(
+                "no credential for {to}: pass the action `token` (is the secret, or the App's key, set in this repository?)"
             );
-            Ok((url, vec![("GIT_SSH_COMMAND".to_owned(), ssh)]))
         }
-    }
+        return Ok((url, vec![]));
+    };
+    let basic = BASE64.encode(format!("x-access-token:{token}"));
+    let count: usize = env("GIT_CONFIG_COUNT")
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let auth = vec![
+        (
+            format!("GIT_CONFIG_KEY_{count}"),
+            "http.https://github.com/.extraheader".to_owned(),
+        ),
+        (
+            format!("GIT_CONFIG_VALUE_{count}"),
+            format!("AUTHORIZATION: basic {basic}"),
+        ),
+        ("GIT_CONFIG_COUNT".to_owned(), (count + 1).to_string()),
+    ];
+    Ok((url, auth))
 }
 
 fn git_remote(dir: &Path, auth: &[(String, String)]) -> Command {

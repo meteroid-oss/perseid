@@ -114,6 +114,14 @@ impl Ui {
         Ok(line.trim().to_owned())
     }
 
+    /// A line typed by the user without echoing it, in a terminal.
+    pub fn secret(&self, question: &str) -> Result<String> {
+        match std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            true => crate::prompt::password(question),
+            false => self.line(question),
+        }
+    }
+
     pub fn pause(&self, message: &str) -> Result<()> {
         print!("  {message} ");
         std::io::stdout().flush()?;
@@ -249,7 +257,7 @@ pub fn workflow(w: &Workflow) -> String {
     };
     format!(
         r#"# Written by `perseid init`: regenerates the SDKs when the spec changes and opens their pull
-# requests as the GitHub App set up by `perseid app`, or with the PERSEID_TOKEN secret.
+# requests as the GitHub App set up by `perseid app`, or with the SDK_GITHUB_TOKEN secret.
 name: SDKs
 
 on:
@@ -269,7 +277,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 {step}        with:
-          token: ${{{{ secrets.PERSEID_TOKEN }}}}
+          token: ${{{{ secrets.SDK_GITHUB_TOKEN }}}}
           app-id: ${{{{ vars.SDK_APP_ID }}}}
           app-private-key: ${{{{ secrets.SDK_APP_PRIVATE_KEY }}}}
 {dir}"#,
@@ -388,7 +396,7 @@ mod tests {
             yaml.ends_with(&format!(
                 "      - uses: {}
         with:
-          token: ${{{{ secrets.PERSEID_TOKEN }}}}
+          token: ${{{{ secrets.SDK_GITHUB_TOKEN }}}}
           app-id: ${{{{ vars.SDK_APP_ID }}}}
           app-private-key: ${{{{ secrets.SDK_APP_PRIVATE_KEY }}}}
           working-directory: api

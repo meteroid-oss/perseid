@@ -121,7 +121,7 @@ enum Command {
         no_format: bool,
     },
     /// Create or reuse the GitHub App that opens the SDK pull requests, install it and store its
-    /// credentials, once you agree: an alternative to the expiring `PERSEID_TOKEN` secret.
+    /// credentials, once you agree: an alternative to the expiring `SDK_GITHUB_TOKEN` secret.
     App {
         #[command(flatten)]
         apply: Apply,
@@ -143,7 +143,8 @@ enum Command {
         /// Tags pushing the spec with `--on tag`, as a GitHub Actions glob (default: `v*`).
         #[arg(long)]
         tags: Option<String>,
-        /// How the workflow authenticates to the SDKs repository (default: a deploy key).
+        /// How the workflow authenticates to the SDKs repository (default: the GitHub App of the
+        /// SDKs repository, when `perseid app` set one up, else a token).
         #[arg(long, value_enum)]
         auth: Option<Auth>,
         /// Leave this repository's name out of what the SDKs repository records.
@@ -153,7 +154,7 @@ enum Command {
         apply: Apply,
     },
     /// Commit the spec to the SDKs repository, unless it holds a newer one: what perseid-push.yml
-    /// runs, authenticating with the deploy key in `PERSEID_SDKS_DEPLOY_KEY` when set.
+    /// runs, authenticating with the token in `PERSEID_SDKS_TOKEN` when set.
     #[command(hide = true)]
     PushSpec {
         /// The OpenAPI document, relative to this directory.

@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 
 use super::{Ui, api::GitHub, api::web_base, secrets};
 
+pub const APP_ID: &str = "SDK_APP_ID";
+pub const APP_KEY: &str = "SDK_APP_PRIVATE_KEY";
+
 const WAIT: Duration = Duration::from_secs(15 * 60);
 
 pub struct App {
@@ -292,12 +295,9 @@ pub fn add_key(api: &GitHub, new: &NewKey, ui: &Ui) -> Result<()> {
         }
     };
     for repo in &new.repos {
-        secrets::set_secret(api, repo, "SDK_APP_PRIVATE_KEY", &pem)?;
+        secrets::set_secret(api, repo, APP_KEY, &pem)?;
     }
-    ui.ok(&format!(
-        "SDK_APP_PRIVATE_KEY is set on {}",
-        new.repos.join(", ")
-    ));
+    ui.ok(&format!("{APP_KEY} is set on {}", new.repos.join(", ")));
     let question = format!("Delete {}? The secrets hold the key now", file.display());
     if ui.confirm(&question, true)? {
         std::fs::remove_file(&file).with_context(|| format!("deleting {}", file.display()))?;

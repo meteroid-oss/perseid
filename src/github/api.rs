@@ -143,10 +143,6 @@ impl GitHub {
         self.expect("PUT", path, Some(&body))
     }
 
-    pub fn delete(&self, path: &str) -> Result<()> {
-        self.expect("DELETE", path, None).map(|_| ())
-    }
-
     pub fn patch(&self, path: &str, body: Value) -> Result<Value> {
         self.expect("PATCH", path, Some(&body))
     }

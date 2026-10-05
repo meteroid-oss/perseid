@@ -8,8 +8,8 @@ Every cross-repository write needs a credential that someone creates and stores:
 
 | Workflow | Credential |
 |---|---|
-| The spec repository's push | A deploy key, a personal token or its own App key |
-| `sdks.yml`, opening pull requests | `PERSEID_TOKEN`, a fine-grained token that expires, or the `SDK_APP_*` key of the App `perseid app` creates |
+| The spec repository's push | `SDK_GITHUB_TOKEN`, or a key of the App `perseid app` creates |
+| `sdks.yml`, opening pull requests | `SDK_GITHUB_TOKEN`, a fine-grained token that expires, or the `SDK_APP_*` key of the App `perseid app` creates |
 | `sdk-release.yml`, running release-please | The same credentials |
 
 A perseid GitHub App would cover all three. Its private key cannot be handed to users, so tokens
@@ -68,7 +68,7 @@ The repository being written to owns its policy, in `.github/perseid-trust.yml`:
 - `sdks.yml` and `sdk-release.yml` do the same for the SDK repositories. App tokens trigger
   workflows, so CI runs on SDK and release pull requests with no setting to change.
 - `perseid app` links to `github.com/apps/perseid/installations/new` to install the perseid App
-  on the repositories. `PERSEID_TOKEN` is not needed.
+  on the repositories. `SDK_GITHUB_TOKEN` is not needed.
 
 ## App permissions
 
@@ -83,7 +83,7 @@ repository.
 |---|---|
 | A stolen App key writes to every installing repository | Worker secret only, rotated; minimal App permissions; tokens always narrowed; audit log of every mint (repository, workflow, run id) |
 | A broker bug grants a token outside the policy | Small codebase, deny by default, tests from captured OIDC tokens, no wildcard repositories |
-| A broker outage stops SDK generation | Deploy keys, personal tokens and self-hosted Apps keep working; `--auth` picks one |
+| A broker outage stops SDK generation | Personal tokens and self-hosted Apps keep working; `--auth` picks one |
 | Users who refuse third-party Apps | As for an outage: every other `--auth` stays available |
 | Replayed OIDC tokens | Short expiry, plus the `jti` claim cached for its lifetime |
 

@@ -35,7 +35,7 @@ jobs:
           path: ${{ inputs.path }}
           app-id: ${{ vars.SDK_APP_ID }}
           app-private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
-          release-token: ${{ secrets.PERSEID_TOKEN }}
+          release-token: ${{ secrets.SDK_GITHUB_TOKEN }}
           ci-workflows: ${{ vars.SDK_CI_WORKFLOWS }}
 
   publish:

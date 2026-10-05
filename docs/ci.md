@@ -44,9 +44,8 @@ repo = "acme/api-{lang}"
 
 ### A separate SDKs repository
 
-The API repository only pushes its spec to the SDKs repository, with a deploy key that writes to
-that one repository. The SDKs repository generates the SDKs and gets no access to the API
-repository.
+The API repository only pushes its spec to the SDKs repository, as the GitHub App of the SDKs or
+with a token. The SDKs repository generates the SDKs and gets no access to the API repository.
 
 ```
 acme/api ──spec──▶ acme/api-sdks ──PRs──▶ acme/api-sdks (typescript/, python/)
@@ -58,7 +57,7 @@ acme/api ──spec──▶ acme/api-sdks ──PRs──▶ acme/api-typescrip
 npx perseid init                    # spec = "openapi.json", which connect pushes
 git add -A && git commit -m "ci: generate SDKs with perseid" && git push
 # in acme/api, once perseid.toml is on the default branch of acme/api-sdks
-npx perseid connect acme/api-sdks   # writes perseid-push.yml, offers a deploy key
+npx perseid connect acme/api-sdks   # writes perseid-push.yml, stores the App's key or a token
 ```
 
 ### A spec at a URL
@@ -74,26 +73,29 @@ You need:
 - Node 18+ for `npx perseid`, or the [install script](../install.sh).
 - Admin rights on the repository holding `perseid.toml`, to add its secret.
 - For `perseid app` in an organization: owner or GitHub App manager.
-- For `perseid connect`: admin rights on the API repository, and ideally on the SDKs repository.
+- For `perseid connect`: admin rights on the API repository, to store its credential.
 - An account on each registry you publish to: npm, PyPI, crates.io, Maven Central, NuGet.
 
-### Who can write where
+### Credentials
 
-Each workflow gets a credential reaching only the repositories it writes to. The credential is
-stored in the repository the workflow runs in.
+Every workflow writing to another repository uses one of two credentials, stored under the same
+names in each repository it runs in:
 
-| Workflow | Runs in | Writes to | Credential |
-|---|---|---|---|
-| `sdks.yml`, `sdk-release.yml` | the repository holding `perseid.toml`, each SDK repository | those repositories: contents, pull requests, workflows | the [`perseid app`](#perseid-app) App, else [`PERSEID_TOKEN`](#tokens) |
-| `perseid-push.yml` | the API repository | the SDKs repository: contents | a deploy key, else a token or an App, see [`--auth`](#perseid-connect) |
-| the publish job of `sdk-release.yml` | the SDK repository, `release` environment | the registries | [trusted publishing](#publishing), else a registry token |
+| Credential | Stored as | |
+|---|---|---|
+| The GitHub App [`perseid app`](#perseid-app) sets up | `SDK_APP_ID` variable, `SDK_APP_PRIVATE_KEY` secret | Each run mints a token for the repository it writes to, with the permissions it needs, for an hour. Nothing expires |
+| A [fine-grained token](#tokens) | `SDK_GITHUB_TOKEN` secret | Quicker to set up, but it expires and acts as you |
 
-- Anyone who can run workflows in a repository can use its secrets: `connect` gives the API
-  repository a key to the SDKs repository only, never one to the SDK repositories.
-- The `perseid app` App can push the spec too (`connect --auth app` with its ID and a new key).
-  Its key then reaches every SDK repository from the API repository: protect their default
-  branch and require a review on their `release` environment, or use a separate App installed on
-  the SDKs repository only.
+| Workflow | Runs in | Writes to |
+|---|---|---|
+| `sdks.yml`, `sdk-release.yml` | the repository holding `perseid.toml`, each SDK repository | those repositories: contents, pull requests, workflows |
+| `perseid-push.yml` | the API repository | the SDKs repository: contents |
+| the publish job of `sdk-release.yml` | the SDK repository, `release` environment | the registries, with [trusted publishing](#publishing) or a registry token |
+
+Anyone who can run workflows in a repository can use its secrets. The App's key reaches every
+repository the App is installed on, so `connect --auth app` lets the API repository write to the
+SDK repositories too. Protect their default branch and require a review on their `release`
+environment, or pass `--auth token` with a token reaching the SDKs repository only.
 
 ### `perseid init`
 
@@ -141,10 +143,10 @@ their release files in their first pull request.
 
 | Credential | |
 |---|---|
-| `PERSEID_TOKEN` secret | A [fine-grained token](https://github.com/settings/personal-access-tokens/new) with Contents, Pull requests and Workflows read and write, on the repository holding `perseid.toml` and every SDK repository |
+| `SDK_GITHUB_TOKEN` secret | A [fine-grained token](https://github.com/settings/personal-access-tokens/new) with Contents, Pull requests and Workflows read and write, on the repository holding `perseid.toml` and every SDK repository |
 | A GitHub App, set up by `perseid app` | Tokens minted on each run and never stored: nothing expires |
 
-- Add `PERSEID_TOKEN` to every SDK repository too: `sdk-release.yml` uses it.
+- Add `SDK_GITHUB_TOKEN` to every SDK repository too: `sdk-release.yml` uses it.
 - Workflows permission is needed because the first pull request in an SDK repository adds
   `sdk-release.yml`.
 - When the token expires within 30 days, `generate --pr` warns on each run.
@@ -152,7 +154,7 @@ their release files in their first pull request.
 Without either, the Action fails with:
 
 ```
-error: no token to open the SDK pull requests: add the PERSEID_TOKEN secret (a fine-grained token
+error: no token to open the SDK pull requests: add the SDK_GITHUB_TOKEN secret (a fine-grained token
 with Contents, Pull requests and Workflows read and write on the SDK repositories), or run `perseid app`
 ```
 
@@ -241,29 +243,24 @@ It reads `perseid.toml` from the SDKs repository and finds the spec here.
 | `--build "<command>"` | A command writing the spec in CI, when it is not committed |
 | `--on change\|release\|tag` | When to push the spec. Proposes `release` when the repository publishes GitHub releases, else `change` |
 | `--tags <glob>` | The tags of `--on tag`, `v*` by default |
-| `--auth deploy-key\|token\|app` | How the API repository authenticates, a deploy key by default |
+| `--auth app\|token` | How `perseid-push.yml` authenticates: the App of the SDKs repository when `perseid app` set one up, else a token |
 | `--private` | Leaves the API repository's name out of what the SDKs repository records |
 | `--dry-run`, `--yes`, `--no-browser` | As for `perseid app` |
 
 It plans two changes:
 
-1. A write deploy key on the SDKs repository, whose private half becomes the
-   `PERSEID_SDKS_DEPLOY_KEY` secret of the API repository. The key is generated in memory and
-   never written to disk.
+1. The [credential](#credentials) of the API repository:
+   - `app`: the `SDK_APP_ID` variable, copied from the SDKs repository, and the
+     `SDK_APP_PRIVATE_KEY` secret, a new key of the App. GitHub shows a key only once, so perseid
+     opens the App's settings page, where you generate one. It takes the newest download, or the
+     path you give, checks the key belongs to the App, stores it and offers to delete the file.
+   - `token`: the `SDK_GITHUB_TOKEN` secret, a fine-grained token with Contents read and write on
+     the SDKs repository, which you paste (with `--yes`, from the `SDK_GITHUB_TOKEN` environment
+     variable). perseid checks it can see the SDKs repository.
 2. `.github/workflows/perseid-push.yml`, written in your clone for you to commit.
 
-- perseid asks before adding the key and the secret. If you decline, it prints the `ssh-keygen`
-  and `gh` commands to add them yourself.
-- Without admin rights on the SDKs repository, it prints the public key for one of its admins.
-- A deploy key does not expire and reaches one repository only.
+- perseid asks before storing anything. If you decline, it prints how to do it yourself.
 - Running `connect` again keeps the settings you do not pass, and changes nothing once in sync.
-
-The other `--auth` values are checked but not created:
-
-| `--auth` | The API repository needs |
-|---|---|
-| `token` | `PERSEID_SDKS_TOKEN` secret: a fine-grained token with Contents read and write on the SDKs repository |
-| `app` | `PERSEID_PUSH_APP_ID` variable and `PERSEID_PUSH_APP_PRIVATE_KEY` secret: a GitHub App installed on the SDKs repository only |
 
 ### `perseid status`
 
@@ -305,7 +302,7 @@ jobs:
       - if: hashFiles('openapi.json') != ''
         uses: meteroid-oss/perseid@v0.6
         with:
-          token: ${{ secrets.PERSEID_TOKEN }}
+          token: ${{ secrets.SDK_GITHUB_TOKEN }}
           app-id: ${{ vars.SDK_APP_ID }}
           app-private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
 ```
@@ -327,7 +324,7 @@ The Action installs the perseid matching its own ref, then:
 | Input | Default | |
 |---|---|---|
 | `command` | `generate --pr` | Arguments passed to perseid. `generate --check` fails on drift, for pull request checks |
-| `token` | | Contents, Pull requests and Workflows write on every target repository, such as `PERSEID_TOKEN`. Unused with `app-id` |
+| `token` | | Contents, Pull requests and Workflows write on every target repository, such as `SDK_GITHUB_TOKEN`. Unused with `app-id` |
 | `app-id`, `app-private-key` | | A GitHub App whose token the Action mints |
 | `working-directory` | `.` | The directory holding `perseid.toml` |
 | `version` | the Action's ref | The perseid version to run |
@@ -399,7 +396,7 @@ jobs:
       - uses: actions/checkout@v5
       - run: perseid generate --pr
         env:
-          GH_TOKEN: ${{ secrets.PERSEID_TOKEN }}
+          GH_TOKEN: ${{ secrets.SDK_GITHUB_TOKEN }}
 ```
 
 Or anywhere:
@@ -485,7 +482,7 @@ Notes:
 | Input | `sdk-release.yml` passes | |
 |---|---|---|
 | `app-id`, `app-private-key` | `SDK_APP_ID` variable, `SDK_APP_PRIVATE_KEY` secret | A GitHub App whose token, minted for this repository with Contents and Pull requests write, runs release-please |
-| `release-token` | `PERSEID_TOKEN` secret | The token for release-please without an App |
+| `release-token` | `SDK_GITHUB_TOKEN` secret | The token for release-please without an App |
 | `token` | | Otherwise, the default `GITHUB_TOKEN` |
 | `ci-workflows` | `SDK_CI_WORKFLOWS` variable | Workflow files dispatched on the release PR branch when it was pushed with the default token |
 | `path` | the `path` of a manual run | A package to publish again, skipping release-please |
@@ -503,9 +500,9 @@ lead to. It needs:
 - "Allow auto-merge" in the repository settings;
 - required status checks, through branch protection or rulesets. Without any, GitHub merges at
   once;
-- checks that run on the pull requests: `PERSEID_TOKEN` or the App, or `ci-workflows` plus a
+- checks that run on the pull requests: `SDK_GITHUB_TOKEN` or the App, or `ci-workflows` plus a
   required commit status (see [the default `GITHUB_TOKEN`](#the-default-github_token));
-- `PERSEID_TOKEN` or the App for both `sdks.yml` and `sdk-release.yml`. A merge made with the
+- `SDK_GITHUB_TOKEN` or the App for both `sdks.yml` and `sdk-release.yml`. A merge made with the
   default `GITHUB_TOKEN` triggers no workflow, so nothing would be released.
 
 ## Formatting

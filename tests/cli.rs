@@ -968,7 +968,8 @@ fn tokens_expiring_within_30_days_are_warned_about() {
     let run = run_pr(dir.path(), &[], answers, &[("GITHUB_ACTIONS", "true")]);
     assert!(run.ok, "{}", run.output);
     let day = soon.split(' ').next().unwrap();
-    let warning = format!("::warning::the GitHub token expires on {day}: renew the PERSEID_TOKEN");
+    let warning =
+        format!("::warning::the GitHub token expires on {day}: renew the SDK_GITHUB_TOKEN");
     assert_eq!(run.output.matches(&warning).count(), 1, "{}", run.output);
 
     let answers = Answers {
@@ -987,7 +988,7 @@ fn pull_requests_in_actions_need_a_token() {
     let run = run_pr(dir.path(), &["--bump", "patch"], Answers::default(), &env);
     assert!(!run.ok, "{}", run.output);
     assert!(
-        run.output.contains("add the PERSEID_TOKEN secret"),
+        run.output.contains("add the SDK_GITHUB_TOKEN secret"),
         "{}",
         run.output
     );

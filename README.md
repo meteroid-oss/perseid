@@ -24,13 +24,13 @@ In the repository that holds your OpenAPI spec:
 
 ```sh
 npx perseid init              # pick the languages and where the SDKs live
-gh secret set PERSEID_TOKEN   # paste a fine-grained token, see below
+gh secret set SDK_GITHUB_TOKEN   # paste a fine-grained token, see below
 git add -A && git commit -m "ci: generate SDKs with perseid" && git push
 ```
 
 The push runs the `SDKs` workflow, which opens a pull request with every SDK.
 
-`PERSEID_TOKEN` is a [fine-grained token](https://github.com/settings/personal-access-tokens/new)
+`SDK_GITHUB_TOKEN` is a [fine-grained token](https://github.com/settings/personal-access-tokens/new)
 with **Contents**, **Pull requests** and **Workflows** set to read and write, on this repository
 and the SDK repositories. Fine-grained tokens expire, and perseid warns 30 days before.
 `npx perseid app` sets up a GitHub App instead, which doesn't expire.
@@ -114,10 +114,10 @@ The Actions are pinned to the release line of the perseid that wrote them, such 
 | One SDKs repository | `repo = "acme/api-sdks"` | `acme/api-sdks`, a folder per language |
 
 - perseid never creates repositories: `gh repo create acme/api-typescript`.
-- Add `PERSEID_TOKEN` to each SDK repository too: its release workflow uses it.
+- Add `SDK_GITHUB_TOKEN` to each SDK repository too: its release workflow uses it.
 - Spec in another repository? Run `perseid init` in the SDKs repository, then
   `npx perseid connect acme/api-sdks` in the API repository. It writes a workflow pushing the
-  spec, with a deploy key that reaches the SDKs repository only.
+  spec, as the App of `perseid app` or with a token.
 - A spec served at a URL needs no `connect`: `sdks.yml` fetches it daily.
 
 See [repository layouts](docs/ci.md#repository-layouts).
@@ -129,7 +129,7 @@ See [repository layouts](docs/ci.md#repository-layouts).
 | `init` | Write `perseid.toml` and the workflows. Local only: nothing is sent to GitHub. |
 | `generate` | Write the SDKs. `--out <dir>` previews, `--check` fails on drift, `--pr` opens pull requests. |
 | `connect <owner/repo>` | In the API repository: push the spec to the SDKs repository. |
-| `app` | Set up a GitHub App to open the pull requests instead of `PERSEID_TOKEN`. |
+| `app` | Set up a GitHub App to open the pull requests instead of `SDK_GITHUB_TOKEN`. |
 | `status` | Check the setup: secrets, workflows, last spec pushed, open pull requests, last runs. |
 | `inspect` | Print the model the templates receive, as JSON. |
 | `eject <lang>` | Copy the built-in templates and runtime of a language to `.perseid/` to edit them. |
