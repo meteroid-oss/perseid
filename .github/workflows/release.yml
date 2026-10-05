@@ -40,7 +40,7 @@ jobs:
           cargo build --release --locked --target ${{ matrix.target }}
           test "$(target/${{ matrix.target }}/release/perseid --version)" = "perseid ${TAG#v}"
           cp target/${{ matrix.target }}/release/perseid .
-          tar -czf perseid-${{ matrix.target }}.tar.gz perseid LICENSE LICENSE-Meteroid LICENSE-Svix NOTICE
+          tar -czf perseid-${{ matrix.target }}.tar.gz perseid LICENSE NOTICE
       - uses: actions/upload-artifact@v4
         with:
           name: perseid-${{ matrix.target }}

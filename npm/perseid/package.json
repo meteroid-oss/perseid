@@ -10,7 +10,7 @@
     "generator"
   ],
   "homepage": "https://github.com/meteroid-oss/perseid",
-  "license": "Apache-2.0 AND MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/meteroid-oss/perseid.git"

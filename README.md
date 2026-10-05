@@ -165,4 +165,4 @@ perseid started as a fork of [Svix's openapi-codegen](https://github.com/svix/op
 
 ## License
 
-Apache-2.0. Includes MIT-licensed code from Svix and Meteroid, see [NOTICE](NOTICE).
+Apache-2.0, see [LICENSE](LICENSE). Third-party attributions are in [NOTICE](NOTICE).
