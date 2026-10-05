@@ -173,6 +173,20 @@ impl GitHub {
                 };
                 (200, json!({ "installations": installations }))
             }
+            ("GET", ["api", "app"]) => {
+                let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256);
+                validation.set_required_spec_claims(&["exp"]);
+                let key = jsonwebtoken::DecodingKey::from_rsa_pem(PUBLIC_PEM.as_bytes()).unwrap();
+                match jsonwebtoken::decode::<Value>(auth.unwrap(), &key, &validation) {
+                    Ok(jwt) if jwt.claims["iss"] == 42 => {
+                        (200, json!({ "id": 42, "slug": "petstore-sdk-bot" }))
+                    }
+                    _ => (
+                        401,
+                        json!({ "message": "A JSON web token could not be decoded" }),
+                    ),
+                }
+            }
             ("POST", ["api", "app-manifests", code, "conversions"]) => {
                 assert_eq!(*code, "manifest-code");
                 self.app_created = true;
@@ -669,7 +683,7 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
     for line in [
         "+ perseid.toml\n+ .github/workflows/sdks.yml\n",
         "Packages: npm petstore, PyPI petstore, Go github.com/acme/petstore-go",
-        "Create the SDK repositories: `gh repo create acme/petstore-go --public`, `gh repo create acme/petstore-python --public`, `gh repo create acme/petstore-typescript --public`",
+        "Create the SDK repositories: `gh repo create acme/petstore-go --private`, `gh repo create acme/petstore-python --private`, `gh repo create acme/petstore-typescript --private`",
         "with access to acme/petstore, acme/petstore-go, acme/petstore-python, acme/petstore-typescript",
         "`perseid app` creates it in your browser",
         "PyPI: add acme/petstore-python as the pending publisher of petstore",
@@ -765,6 +779,40 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
         "{out}"
     );
     assert_eq!(server.lock().unwrap().writes(before), Vec::<&String>::new());
+
+    server
+        .lock()
+        .unwrap()
+        .repos
+        .get_mut("acme/petstore-go")
+        .unwrap()
+        .secrets
+        .clear();
+    let home = tempfile::tempdir().unwrap();
+    let downloads = home.path().join("Downloads");
+    fs::create_dir(&downloads).unwrap();
+    let downloaded = downloads.join("petstore-sdk-bot.2026-10-05.private-key.pem");
+    fs::write(&downloaded, PEM).unwrap();
+    let garbage = home.path().join("notes.txt");
+    fs::write(&garbage, "not a key").unwrap();
+    let answers = format!("\n{}\n\n\n", garbage.display());
+    let env = [TOKEN[0], ("HOME", home.path().to_str().unwrap())];
+    let (code, out) = perseid(dir.path(), bin.path(), port, &app, &answers, &env);
+    assert_eq!(code, 0, "{out}");
+    for line in [
+        "  + SDK_APP_PRIVATE_KEY on acme/petstore-go: a new key of the App, generated in your browser",
+        "→ Generate a private key of the App, under \"Private keys\": http://127.0.0.1",
+        "/web/organizations/acme/settings/apps/petstore-sdk-bot",
+        "notes.txt: not an RSA private key",
+        "✓ SDK_APP_PRIVATE_KEY is set on acme/petstore-go",
+    ] {
+        assert!(out.contains(line), "{line}\n{out}");
+    }
+    assert_eq!(
+        server.lock().unwrap().repos["acme/petstore-go"].secrets["SDK_APP_PRIVATE_KEY"],
+        PEM
+    );
+    assert!(!downloaded.exists(), "the downloaded key is deleted");
 
     let (code, out) = perseid(dir.path(), bin.path(), port, &["status"], "", &TOKEN);
     assert_eq!(code, 2, "sdks.yml isn't pushed yet: {out}");

@@ -30,6 +30,11 @@ pub fn ask(question: &str, placeholder: &str) -> Result<String> {
         .interact()?)
 }
 
+/// A free answer, empty when the user just presses enter.
+pub fn line(question: &str) -> Result<String> {
+    Ok(cliclack::input(question).required(false).interact()?)
+}
+
 pub fn confirm(question: &str, default: bool) -> Result<bool> {
     Ok(cliclack::confirm(question)
         .initial_value(default)

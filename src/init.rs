@@ -238,7 +238,7 @@ fn next_steps(config: &Config, root: &Path) {
     if !remote.is_empty() {
         let create: Vec<String> = remote
             .iter()
-            .map(|r| format!("`gh repo create {r} --public`"))
+            .map(|r| format!("`gh repo create {r} --private`"))
             .collect();
         let noun = match create.len() {
             1 => "repository",

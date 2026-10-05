@@ -90,9 +90,10 @@ stored in the repository the workflow runs in.
 
 - Anyone who can run workflows in a repository can use its secrets: `connect` gives the API
   repository a key to the SDKs repository only, never one to the SDK repositories.
-- The `perseid app` App could push the spec too (`connect --auth app` with its ID and a new
-  key), but its key would let the API repository write workflows to every SDK repository. Use a
-  separate App installed on the SDKs repository only.
+- The `perseid app` App can push the spec too (`connect --auth app` with its ID and a new key).
+  Its key then reaches every SDK repository from the API repository: protect their default
+  branch and require a review on their `release` environment, or use a separate App installed on
+  the SDKs repository only.
 
 ### `perseid init`
 
@@ -176,8 +177,10 @@ and asks first. If you decline, it prints the steps to do it by hand:
 | `--yes` | Applies without asking |
 | `--no-browser` | Prints URLs instead of opening them |
 
-Run `perseid app` again after adding an SDK repository: it installs the App there too. All SDK
-repositories must belong to one account.
+Run `perseid app` again after adding an SDK repository: it installs the App there too. GitHub
+shows a private key only once, so it asks you to generate a new one on the App's settings page,
+checks it belongs to the App, stores it on the repositories lacking one, and offers to delete the
+downloaded file. All SDK repositories must belong to one account.
 
 ### The default `GITHUB_TOKEN`
 

@@ -1,6 +1,7 @@
 use std::{
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
+    path::{Path, PathBuf},
     sync::mpsc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -10,7 +11,7 @@ use crypto_box::aead::{OsRng, rand_core::RngCore};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use serde_json::{Value, json};
 
-use super::{Ui, api::GitHub, api::web_base};
+use super::{Ui, api::GitHub, api::web_base, secrets};
 
 const WAIT: Duration = Duration::from_secs(15 * 60);
 
@@ -21,6 +22,7 @@ pub struct App {
     pub pem: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct Owner {
     pub login: String,
     pub organization: bool,
@@ -240,6 +242,107 @@ pub fn install(app: &App, owner: &Owner, repos: &[String], ui: &Ui) -> Result<()
     }
 }
 
+/// A new private key of an existing App, for the repositories lacking one.
+pub struct NewKey {
+    pub id: String,
+    pub slug: Option<String>,
+    pub owner: Owner,
+    pub repos: Vec<String>,
+}
+
+/// The App's settings page, where its private keys are generated.
+pub fn settings_url(slug: Option<&str>, owner: &Owner) -> String {
+    let web = web_base();
+    let apps = match owner.organization {
+        true => format!("{web}/organizations/{}/settings/apps", owner.login),
+        false => format!("{web}/settings/apps"),
+    };
+    match slug {
+        Some(slug) => format!("{apps}/{slug}"),
+        None => apps,
+    }
+}
+
+/// Has the user generate a private key of the App, checks it is the App's, stores it on the
+/// repositories lacking one, then offers to delete the downloaded file.
+pub fn add_key(api: &GitHub, new: &NewKey, ui: &Ui) -> Result<()> {
+    let url = settings_url(new.slug.as_deref(), &new.owner);
+    let pattern = format!("{}*.private-key.pem", new.slug.as_deref().unwrap_or(""));
+    ui.say(&format!(
+        "Generate a private key of the App, under \"Private keys\": {url}"
+    ));
+    ui.open(&url);
+    let (file, pem) = loop {
+        let answer = match ui.yes {
+            true => String::new(),
+            false => ui.line(&format!(
+                "Path of the downloaded key (enter: the newest {pattern} in ~/Downloads)"
+            ))?,
+        };
+        let file = match answer.trim() {
+            "" => newest_download(new.slug.as_deref()).with_context(|| {
+                format!("no {pattern} in ~/Downloads: run `perseid app` again with its path")
+            })?,
+            typed => typed_path(typed),
+        };
+        match read_key(&new.id, &file) {
+            Ok(pem) => break (file, pem),
+            Err(error) if !ui.yes => ui.warn(&format!("{}: {error:#}", file.display())),
+            Err(error) => return Err(error.context(format!("reading {}", file.display()))),
+        }
+    };
+    for repo in &new.repos {
+        secrets::set_secret(api, repo, "SDK_APP_PRIVATE_KEY", &pem)?;
+    }
+    ui.ok(&format!(
+        "SDK_APP_PRIVATE_KEY is set on {}",
+        new.repos.join(", ")
+    ));
+    let question = format!("Delete {}? The secrets hold the key now", file.display());
+    if ui.confirm(&question, true)? {
+        std::fs::remove_file(&file).with_context(|| format!("deleting {}", file.display()))?;
+        ui.ok(&format!("Deleted {}", file.display()));
+    }
+    Ok(())
+}
+
+/// The key in `file`, once GitHub accepts it as the App `id`'s.
+fn read_key(id: &str, file: &Path) -> Result<String> {
+    let pem = std::fs::read_to_string(file)?;
+    let key = EncodingKey::from_rsa_pem(pem.as_bytes())
+        .map_err(|_| anyhow::anyhow!("not an RSA private key"))?;
+    let reply = GitHub::new(Some(jwt(id, &key)?)).send("GET", "/app", None)?;
+    let theirs = reply.body["id"].as_u64().map(|i| i.to_string());
+    match reply.status == 200 && theirs.as_deref() == Some(id) {
+        true => Ok(pem),
+        false => bail!("GitHub doesn't accept it as a key of the App {id}"),
+    }
+}
+
+/// A path as typed or dropped on the terminal: quoted, with escaped spaces, or from `~`.
+fn typed_path(typed: &str) -> PathBuf {
+    let unquoted = typed.trim_matches(['\'', '"']).replace("\\ ", " ");
+    match (unquoted.strip_prefix("~/"), std::env::var_os("HOME")) {
+        (Some(rest), Some(home)) => Path::new(&home).join(rest),
+        _ => PathBuf::from(unquoted),
+    }
+}
+
+/// The last `<slug>….private-key.pem` downloaded, as GitHub names the keys it generates.
+fn newest_download(slug: Option<&str>) -> Option<PathBuf> {
+    let dir = Path::new(&std::env::var_os("HOME")?).join("Downloads");
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.ends_with(".private-key.pem") && slug.is_none_or(|s| name.starts_with(s))
+        })
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .max()
+        .map(|(_, path)| path)
+}
+
 pub fn owner(api: &GitHub, login: &str) -> Result<Owner> {
     let user: Value = api.get(&format!("/users/{login}"))?;
     Ok(Owner {
@@ -251,6 +354,18 @@ pub fn owner(api: &GitHub, login: &str) -> Result<Owner> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropped_paths_lose_their_quotes_and_escapes() {
+        assert_eq!(
+            typed_path("'/tmp/my keys/a.pem'"),
+            PathBuf::from("/tmp/my keys/a.pem")
+        );
+        assert_eq!(
+            typed_path("/tmp/my\\ keys/a.pem"),
+            PathBuf::from("/tmp/my keys/a.pem")
+        );
+    }
 
     #[test]
     fn manifests_are_escaped_into_the_form() {

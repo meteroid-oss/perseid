@@ -39,6 +39,7 @@ pub struct Step {
 
 pub(super) enum Action {
     App(Box<AppPlan>),
+    AppKey(Box<app::NewKey>),
     /// Writes `file` in the checkout at `top`, leaving the commit to the user.
     Write {
         top: PathBuf,
@@ -119,6 +120,11 @@ impl Plan {
                 Action::App(app) => Some(format!(
                     "create a GitHub App with Contents, Pull requests and Workflows read and write, install it on {}, and set its ID as the SDK_APP_ID variable and a private key as the SDK_APP_PRIVATE_KEY secret of each (https://github.com/meteroid-oss/perseid/blob/main/docs/ci.md#tokens)",
                     app.repos.join(", ")
+                )),
+                Action::AppKey(new) => Some(format!(
+                    "generate a private key at {}, then `gh secret set SDK_APP_PRIVATE_KEY -R <repo> < <downloaded>.private-key.pem` for {}",
+                    app::settings_url(new.slug.as_deref(), &new.owner),
+                    new.repos.join(", ")
                 )),
                 Action::Write { file, .. } => Some(format!("write {}", file.path)),
                 Action::DeployKey { .. } => None,
@@ -426,8 +432,13 @@ fn plan_app(
         (Some(id), true) => (
             Mark::Keep,
             format!(
-                "GitHub App {}: SDK_APP_ID and SDK_APP_PRIVATE_KEY on {list}",
-                slug.as_deref().unwrap_or(id)
+                "GitHub App {}: SDK_APP_ID{} on {list}",
+                slug.as_deref().unwrap_or(id),
+                if keyless.is_empty() {
+                    " and SDK_APP_PRIVATE_KEY"
+                } else {
+                    ""
+                }
             ),
         ),
         (Some(id), false) => (
@@ -439,12 +450,15 @@ fn plan_app(
             ),
         ),
     };
-    if id.is_some() && !keyless.is_empty() {
-        plan.warnings.push(format!(
-            "Add a private key of the App (generated on its settings page) as the SDK_APP_PRIVATE_KEY secret of {}",
-            keyless.join(", ")
-        ));
-    }
+    let new_key = match (&id, keyless.is_empty()) {
+        (Some(id), false) => Some(app::NewKey {
+            id: id.clone(),
+            slug: slug.clone(),
+            owner: owner.clone(),
+            repos: keyless,
+        }),
+        _ => None,
+    };
     let action = (mark != Mark::Keep).then(|| {
         Action::App(Box::new(AppPlan {
             hub: hub.to_owned(),
@@ -459,6 +473,16 @@ fn plan_app(
         }))
     });
     plan.add(mark, text, action);
+    if let Some(new) = new_key {
+        plan.add(
+            Mark::Add,
+            format!(
+                "SDK_APP_PRIVATE_KEY on {}: a new key of the App, generated in your browser",
+                new.repos.join(", ")
+            ),
+            Some(Action::AppKey(Box::new(new))),
+        );
+    }
     Ok(())
 }
 
@@ -535,6 +559,7 @@ pub fn apply(api: &GitHub, plan: &mut Plan, ui: &Ui) -> Result<()> {
         };
         match action {
             Action::App(app) => apply_app(api, *app, ui)?,
+            Action::AppKey(new) => app::add_key(api, &new, ui)?,
             Action::Write { top, file } => {
                 crate::fsx::write(&top.join(&file.path), &file.content)?;
                 ui.ok(&format!("Wrote {}", file.path));
