@@ -345,6 +345,23 @@ pub fn collision(name: &str) -> Option<String> {
     None
 }
 
+/// `name`, written in any case, as the UpperCamelCase identifier the client is named after, kept
+/// as written when it already is one (`AcmeAPI`).
+pub fn parse(name: &str) -> Result<String, String> {
+    let camel = match name.chars().all(|c| c.is_ascii_alphanumeric()) {
+        true if name.starts_with(|c: char| c.is_ascii_uppercase()) => name.to_owned(),
+        _ => name.to_upper_camel_case(),
+    };
+    match camel.starts_with(|c: char| c.is_ascii_alphabetic())
+        && camel.chars().all(|c| c.is_ascii_alphanumeric())
+    {
+        true => check(&camel).map(|()| camel),
+        false => Err(format!(
+            "`name = {name:?}` must start with a letter and hold ASCII letters, digits, spaces, `-` or `_`"
+        )),
+    }
+}
+
 /// Rejects an explicit `name` that [`collision`] reports, suggesting the suffixed one.
 pub fn check(name: &str) -> Result<(), String> {
     match collision(name) {

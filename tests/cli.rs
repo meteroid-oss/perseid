@@ -118,6 +118,18 @@ fn init_writes_perseid_toml_and_the_workflows_and_asks_for_the_sdks() {
 }
 
 #[test]
+fn init_takes_the_name_in_any_case_and_writes_nothing_for_an_invalid_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "go", "--name", "2fa"]);
+    assert!(!ok && out.contains("must start with a letter"), "{out}");
+    assert!(!dir.path().join("perseid.toml").exists());
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "go", "--name", "acme pay"]);
+    assert!(ok && out.contains("AcmePay SDKs: go/ here"), "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(config.contains("name = \"AcmePay\"\n"), "{config}");
+}
+
+#[test]
 fn without_a_spec_init_points_to_connect_and_generate_previews() {
     let dir = tempfile::tempdir().unwrap();
     let (ok, out) = perseid(dir.path(), &["init", "--sdks", "go", "--name", "Petstore"]);
