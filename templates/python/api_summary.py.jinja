@@ -10,6 +10,11 @@
 {%- set client = sdk.client_name %}
 {%- set error_names = ["APIStatusError", "AuthenticationError", "BadRequestError", "ConflictError", "ErrorBody", "InternalServerError", "NotFoundError", "PermissionDeniedError", "RateLimitError", "UnprocessableEntityError"] %}
 
+from __future__ import annotations
+
+import importlib
+import typing as t
+
 from .._exceptions import (
     APIConnectionError,
     APIError,
@@ -26,11 +31,44 @@ from ._pagination import AsyncPage, AsyncPaginator, SyncPage
 from ._response import APIResponse
 from ._streaming import AsyncEventStream, AsyncStream, EventStream, SseEvent, Stream, Upload
 from .client import Async{{ client }}, {{ client }}
-{% for resource in api.resources -%}
-    {% set cls = resource.name | to_upper_camel_case -%}
-    from .{{ resource_module(resource.name) }} import Async{{ cls }}, {{ cls }}
-    {%- for op in resource.operations if op.request_body_kind == "multipart" %}, {{ cls }}{{ op.name | to_upper_camel_case }}Body{% endfor %}
-{% endfor %}
+{%- set lazy = namespace(pairs=[]) %}
+{%- for resource in api.resources %}
+{%- set cls = resource.name | to_upper_camel_case %}
+{%- set module = resource_module(resource.name) %}
+{%- set lazy.pairs = lazy.pairs + [("Async" ~ cls, module), (cls, module)] %}
+{%- for op in resource.operations if op.request_body_kind == "multipart" %}
+{%- set lazy.pairs = lazy.pairs + [(cls ~ (op.name | to_upper_camel_case) ~ "Body", module)] %}
+{%- endfor %}
+{%- endfor %}
+{%- if lazy.pairs %}
+
+if t.TYPE_CHECKING:
+{%- for name, module in lazy.pairs %}
+    from .{{ module }} import {{ name }}
+{%- endfor %}
+{%- endif %}
+
+# Each resource's module is imported the first time it is used.
+_MODULES: dict[str, str] = {
+{%- for name, module in lazy.pairs %}
+    "{{ name }}": "{{ module }}",
+{%- endfor %}
+}
+
+
+def __getattr__(name: str) -> t.Any:
+    module = _MODULES.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(f".{module}", __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_MODULES})
+
+
 __all__ = [
     "APIConnectionError",
     "APIError",
@@ -238,6 +276,8 @@ class {{ cls }}:
     @property
     def {{ py_ident(resource.name) }}(self) -> {{ rcls }}:
         """The {{ resource.name | to_snake_case | replace("_", " ") }} API."""
+        from .{{ resource_module(resource.name) }} import {{ rcls }}
+
         return {{ rcls }}(self._cfg, self._httpx_client)
 {% endfor %}
 
@@ -251,6 +291,8 @@ class {{ cls }}WithRawResponse:
     @property
     def {{ py_ident(resource.name) }}(self) -> {{ rcls }}WithRawResponse:
         """The {{ resource.name | to_snake_case | replace("_", " ") }} API."""
+        from .{{ resource_module(resource.name) }} import {{ rcls }}WithRawResponse
+
         return {{ rcls }}WithRawResponse(self._client.{{ py_ident(resource.name) }})
 {% endfor %}
 {%- endmacro %}
@@ -269,15 +311,21 @@ from ..serialization import UNSET, {{ client }}Error, Unset
 from ._auth import {% if oauth %}OAuthTokens, {% endif %}SecurityScheme{% if "bearer" in kinds %}, TokenProvider{% endif %}
 from .common import DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, Configuration, Timeout
 from .middleware import AsyncMiddleware, SyncMiddleware
-{% for resource in api.resources -%}
-    {% set cls = resource.name | to_upper_camel_case -%}
+{%- if api.resources %}
+
+# Each resource's module is imported the first time it is used.
+if t.TYPE_CHECKING:
+{%- for resource in api.resources %}
+{%- set cls = resource.name | to_upper_camel_case %}
     from .{{ resource_module(resource.name) }} import (
         Async{{ cls }},
         Async{{ cls }}WithRawResponse,
         {{ cls }},
         {{ cls }}WithRawResponse,
     )
-{% endfor %}
+{%- endfor %}
+{%- endif %}
+
 __all__ = [
     "Async{{ client }}",
     "Async{{ client }}WithRawResponse",

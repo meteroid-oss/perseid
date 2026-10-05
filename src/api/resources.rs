@@ -696,6 +696,11 @@ pub(crate) struct Operation {
 }
 
 impl Operation {
+    /// Whether the request carries a body.
+    pub(crate) fn has_body(&self) -> bool {
+        self.request_body_kind != RequestBodyKind::None
+    }
+
     /// The schema of the JSON success body, if it is a named one.
     pub(crate) fn response_schema(&self) -> Option<&str> {
         self.response_body_schema_name.as_deref()

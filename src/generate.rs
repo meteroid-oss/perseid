@@ -185,6 +185,7 @@ fn render(
     if language == "go" {
         api.hoist_inline_variants();
     }
+    api.drop_unsendable(language);
     let (best_match, untyped) = api.settle_object_unions(context);
     if best_match > 0 {
         tracing::warn!(

@@ -185,3 +185,7 @@ own, or set the base URL when creating the client.
 
 An operation using a construct perseid does not support is skipped, with a warning naming it.
 See [spec support](configuration.md#spec-support).
+
+Java and TypeScript also skip, with a warning, the operations their HTTP client cannot send:
+a body on a GET or HEAD (OkHttp and `fetch` refuse it), and TRACE in TypeScript. The other
+SDKs keep them.

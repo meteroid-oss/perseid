@@ -329,17 +329,26 @@ def _type_hints(cls: type) -> dict[str, t.Any]:
     return hints
 
 
-_namespaces: dict[str, dict[str, t.Any]] = {}
+class _Namespace(dict[str, t.Any]):
+    """The names of a model's module, then the models, each imported when first looked up."""
 
-
-def _namespace(cls: type) -> dict[str, t.Any]:
-    namespace = _namespaces.get(cls.__module__)
-    if namespace is None:
-        namespace = {}
+    def __missing__(self, name: str) -> t.Any:
         if __package__:
             models = importlib.import_module(".models", __package__)
-            namespace.update({name: getattr(models, name) for name in models.__all__})
-        namespace.update(vars(sys.modules[cls.__module__]))
+            if name in models._MODULES:
+                value = getattr(models, name)
+                self[name] = value
+                return value
+        raise KeyError(name)
+
+
+_namespaces: dict[str, _Namespace] = {}
+
+
+def _namespace(cls: type) -> _Namespace:
+    namespace = _namespaces.get(cls.__module__)
+    if namespace is None:
+        namespace = _Namespace(vars(sys.modules[cls.__module__]))
         _namespaces[cls.__module__] = namespace
     return namespace
 

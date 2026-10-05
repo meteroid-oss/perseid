@@ -1,20 +1,55 @@
 {% from "types/macros.py.jinja" import literal_alias, module_name -%}
 # this file is @generated
-"""Models for the {{ sdk.client_name }} API."""
+"""Models for the {{ sdk.client_name }} API.
+
+Each model's module is imported the first time the model is used.
+"""
 {%- set names = api.types | items | map("last") | map(attribute="name") | map("to_upper_camel_case") | list %}
-{%- set exports = namespace(names=[]) %}
+{%- set exports = namespace(pairs=[]) %}
+{%- for _, type in api.types | items %}
+{%- set alias = literal_alias(type, names) if type.kind in ["string_enum", "integer_enum"] else "" %}
+{%- set exports.pairs = exports.pairs + [(type.name | to_upper_camel_case, module_name(type.name))] + ([(alias, module_name(type.name))] if alias else []) %}
+{%- endfor %}
+
+from __future__ import annotations
+
+import importlib
+import typing as t
 
 from ..serialization import UNSET, Unset, UnknownVariant
-{% for _, type in api.types | items -%}
-{%- set alias = literal_alias(type, names) if type.kind in ["string_enum", "integer_enum"] else "" -%}
-from .{{ module_name(type.name) }} import {{ type.name | to_upper_camel_case }}{% if alias %}, {{ alias }}{% endif %}
-{% set exports.names = exports.names + [type.name | to_upper_camel_case] + ([alias] if alias else []) -%}
-{% endfor %}
+{%- if exports.pairs %}
+
+if t.TYPE_CHECKING:
+{%- for name, module in exports.pairs %}
+    from .{{ module }} import {{ name }}
+{%- endfor %}
+{%- endif %}
+
+_MODULES: dict[str, str] = {
+{%- for name, module in exports.pairs %}
+    "{{ name }}": "{{ module }}",
+{%- endfor %}
+}
+
+
+def __getattr__(name: str) -> t.Any:
+    module = _MODULES.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(f".{module}", __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_MODULES})
+
+
 __all__ = [
     "UNSET",
     "Unset",
     "UnknownVariant",
-    {% for name in exports.names -%}
+    {% for name, _ in exports.pairs -%}
         "{{ name }}",
     {% endfor -%}
 ]

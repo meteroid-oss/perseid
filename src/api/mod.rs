@@ -170,6 +170,44 @@ impl Api {
         counts
     }
 
+    /// Removes the operations the HTTP client of `language` cannot send, with a warning: a body
+    /// on a GET or HEAD in Java (OkHttp) and TypeScript (fetch), TRACE in TypeScript.
+    pub(crate) fn drop_unsendable(&mut self, language: &str) {
+        let unsendable = |op: &resources::Operation| {
+            let method = op.method.to_ascii_uppercase();
+            match language {
+                "java" => op.has_body() && matches!(method.as_str(), "GET" | "HEAD"),
+                "typescript" => {
+                    (op.has_body() && matches!(method.as_str(), "GET" | "HEAD"))
+                        || matches!(method.as_str(), "TRACE" | "CONNECT")
+                }
+                _ => false,
+            }
+        };
+        let mut stack: Vec<&mut Resource> = self.resources.values_mut().collect();
+        while let Some(resource) = stack.pop() {
+            resource.operations.retain(|op| {
+                let keep = !unsendable(op);
+                if !keep {
+                    tracing::warn!(
+                        "{language}: skipping `{}`, whose HTTP client cannot send a {} {}",
+                        op.id,
+                        op.method.to_ascii_uppercase(),
+                        if op.has_body() {
+                            "with a body"
+                        } else {
+                            "request"
+                        },
+                    );
+                }
+                keep
+            });
+            stack.extend(resource.subresources.values_mut());
+        }
+        self.resources
+            .retain(|_, r| !r.operations.is_empty() || !r.subresources.is_empty());
+    }
+
     /// Declares the inline object variants of tagged unions as structs, for Go.
     pub(crate) fn hoist_inline_variants(&mut self) {
         types::hoist_inline_variants(&mut self.types);

@@ -52,8 +52,6 @@ fn case(types: &Types, op: &Value) -> Option<Value> {
     let method = op["method"].as_str()?.to_uppercase();
     let body = match op["request_body_kind"].as_str()? {
         "none" => Value::Null,
-        // OkHttp and fetch refuse to send them.
-        _ if method == "GET" || method == "HEAD" => return None,
         "json" | "form" if op["request_body_is_list"] != true => {
             let schema = op["request_body_schema_name"].as_str()?;
             json!({ "schema": schema, "json": ascii_json(&samples::minimal(types, schema)) })

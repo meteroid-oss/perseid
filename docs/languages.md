@@ -53,7 +53,7 @@ decodes.
 | C# | `Acme.Tests/` | `dotnet test`, with xUnit |
 
 - Some operations get no test: those with required query or header parameters, multipart,
-  binary or list bodies, non-scalar path parameters, or a body on a GET or HEAD.
+  binary or list bodies, or non-scalar path parameters.
 - The manifests perseid writes on the first generation set up the runner.
 - `tests = false`, at the top level or in a language table, leaves them out and deletes the
   generated ones.
@@ -377,6 +377,8 @@ The message quotes the start of the body: `Error code: 404 - {"error": ...}`.
 ### Notes
 
 - `errors.py`, which re-exports the error types, is yours after the first generation.
+- Models and resources are imported the first time they are used, so importing the package
+  stays fast on large APIs.
 
 ## Go
 

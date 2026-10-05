@@ -25,6 +25,7 @@ const PROPERTY_ANNOTATIONS: [&str; 5] = [
 ];
 
 pub(super) fn normalize(doc: &mut Value) -> Result<()> {
+    trim_descriptions(doc);
     let renames = canonicalize_refs(doc);
     upgrade::type_unions(doc);
     let root = doc.clone();
@@ -39,6 +40,30 @@ pub(super) fn normalize(doc: &mut Value) -> Result<()> {
     let tags = renames.into_iter().map(|(old, new)| (new, old)).collect();
     pin_implicit_tags(doc, &tags);
     Ok(())
+}
+
+/// Strips the trailing whitespace of each line of the descriptions, which linters reject in
+/// the doc comments they become.
+fn trim_descriptions(value: &mut Value) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(trim_descriptions),
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                match (key.as_str(), child) {
+                    ("example" | "examples" | "default" | "enum" | "const", _) => {}
+                    ("description" | "summary", Value::String(text)) => {
+                        *text = text
+                            .lines()
+                            .map(str::trim_end)
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                    }
+                    (_, child) => trim_descriptions(child),
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Gives each `$ref` variant of a discriminated union that targets a schema in `tags` (by its

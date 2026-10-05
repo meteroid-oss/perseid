@@ -41,7 +41,10 @@ pub fn bootstrap(
         return Ok(vec![]);
     }
     let examples = tracing::subscriber::with_default(tracing_subscriber::registry(), || {
-        crate::spec::api(spec, &config.filters_for(sdk)).map(|api| crate::docs::examples(&api))
+        crate::spec::api(spec, &config.filters_for(sdk)).map(|mut api| {
+            api.drop_unsendable(sdk.language);
+            crate::docs::examples(&api)
+        })
     })
     .unwrap_or(Value::Null);
     let docs = Docs {
