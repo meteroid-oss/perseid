@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/meteroid-oss/perseid/compare/v0.7.1...v0.7.2) (2026-10-05)
+
+
+### Features
+
+* Improve init flow and next steps messaging ([#68](https://github.com/meteroid-oss/perseid/issues/68)) ([bcd3e83](https://github.com/meteroid-oss/perseid/commit/bcd3e838540f27daa32246f0bb2a2e0d070cf79d))
+
 ## [0.7.1](https://github.com/meteroid-oss/perseid/compare/v0.7.0...v0.7.1) (2026-10-03)
 
 
