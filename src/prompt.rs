@@ -23,6 +23,13 @@ pub fn text(question: &str, default: &str) -> Result<String> {
         .interact()?)
 }
 
+/// A free answer, with `placeholder` as an example rather than a default.
+pub fn ask(question: &str, placeholder: &str) -> Result<String> {
+    Ok(cliclack::input(question)
+        .placeholder(placeholder)
+        .interact()?)
+}
+
 pub fn confirm(question: &str, default: bool) -> Result<bool> {
     Ok(cliclack::confirm(question)
         .initial_value(default)
@@ -31,4 +38,8 @@ pub fn confirm(question: &str, default: bool) -> Result<bool> {
 
 pub fn intro(title: &str) -> Result<()> {
     Ok(cliclack::intro(title)?)
+}
+
+pub fn outro(message: &str) -> Result<()> {
+    Ok(cliclack::outro(message)?)
 }

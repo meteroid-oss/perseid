@@ -326,22 +326,21 @@ pub fn publishing(config: &Config, hub: &str) -> Result<Vec<String>> {
         let repo = sdk.remote().unwrap_or(hub);
         let context = config.context(&sdk, Path::new("/nonexistent"));
         let text = |key: &str| context[key].as_str().unwrap_or_default().to_owned();
-        let publisher = format!("repository {repo}, workflow sdk-release.yml, environment release");
         steps.push(match sdk.language {
             "typescript" => {
                 let name = text("npm_package");
                 format!(
-                    "npm: publish {name} once with an NPM_TOKEN secret on {repo}, then add a trusted publisher ({publisher}) at https://www.npmjs.com/package/{name}/access and delete the token"
+                    "npm: publish {name} once with an NPM_TOKEN secret on {repo}, then add {repo} as its trusted publisher at https://www.npmjs.com/package/{name}/access and delete the token"
                 )
             }
             "python" => format!(
-                "PyPI: add a pending publisher for {} ({publisher}) at https://pypi.org/manage/account/publishing/",
+                "PyPI: add {repo} as the pending publisher of {} at https://pypi.org/manage/account/publishing/",
                 text("package_name")
             ),
             "rust" => {
                 let name = text("rust_crate");
                 format!(
-                    "crates.io: publish {name} once with a CARGO_REGISTRY_TOKEN secret on {repo}, then add a trusted publisher ({publisher}) at https://crates.io/crates/{name}/settings and delete the token"
+                    "crates.io: publish {name} once with a CARGO_REGISTRY_TOKEN secret on {repo}, then add {repo} as its trusted publisher at https://crates.io/crates/{name}/settings and delete the token"
                 )
             }
             "java" => format!(
@@ -351,7 +350,7 @@ pub fn publishing(config: &Config, hub: &str) -> Result<Vec<String>> {
             "csharp" => format!(
                 "NuGet: add a NUGET_API_KEY secret to {repo}, from https://www.nuget.org/account/apikeys"
             ),
-            _ => format!("Go: nothing to set up, {repo} tags publish through the module proxy"),
+            _ => format!("Go: nothing, the tags of {repo} publish through the module proxy"),
         });
     }
     Ok(steps)

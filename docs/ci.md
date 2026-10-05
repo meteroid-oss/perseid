@@ -92,8 +92,11 @@ their release files in their first pull request.
 - Run `init` again after editing `perseid.toml`. It rewrites the workflows it wrote, except one
   whose first line, ``# Written by `perseid init` ``, you removed.
 - Without a terminal, pass `--sdks`, and optionally `--repo`, `--spec`, `--name` and `--base-url`.
-- Without a spec in the repository, `spec` defaults to `openapi.json`, where `perseid connect`
-  pushes it. `perseid generate --spec <path|url>` previews the SDKs meanwhile.
+- Without a spec in the repository, it asks where the spec is: at a URL, in a file, or in another
+  repository. For the last, `spec` defaults to `openapi.json`, where `perseid connect` pushes it.
+  `perseid generate --spec <path|url> --out /tmp/sdks` previews the SDKs meanwhile.
+- It ends with the next steps: SDK repositories to create, a GitHub App or a token, the
+  `perseid connect` to run, and what each registry needs before the first release.
 
 ### `perseid generate`
 

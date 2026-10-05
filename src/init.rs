@@ -42,10 +42,13 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             config::FILE
         );
         let (config, _) = Config::load(&path)?;
-        if !write_files(&config, root)? {
-            println!("✓ the workflows match {}", config::FILE);
+        match write_files(&config, root)? {
+            true => next_steps(&config, root),
+            false => println!(
+                "✓ the workflows match {}: `perseid status` checks the setup on GitHub",
+                config::FILE
+            ),
         }
-        next_steps(&config, root);
         return Ok(());
     }
     let interactive = std::io::stdin().is_terminal();
@@ -57,7 +60,10 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     }
     let spec = match &init.spec {
         Some(spec) => Some(spec.clone()),
-        None => pick_spec(root, interactive)?,
+        None => match pick_spec(root, interactive)? {
+            None if interactive => ask_spec()?,
+            found => found,
+        },
     };
     let readable = spec.as_deref().is_some_and(|s| match Source::parse(s) {
         Source::Url(_) => true,
@@ -90,9 +96,10 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         });
     let name = match (&init.name, interactive) {
         (Some(name), _) => name.clone(),
-        (None, true) => {
-            crate::prompt::text("Client name, as the SDKs' class names start", &derived)?
-        }
+        (None, true) => crate::prompt::text(
+            "Client name, which the SDKs' class names start with",
+            &derived,
+        )?,
         (None, false) => derived,
     };
     let sdks = match init.sdks.is_empty() {
@@ -116,6 +123,9 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             "! the spec has no absolute server URL: until you set `base_url`, clients need one passed in or from {}_BASE_URL",
             name.to_shouty_snake_case()
         );
+    }
+    if interactive {
+        crate::prompt::outro(&format!("Writing {}", config::FILE))?;
     }
     let quote = |v: &str| toml::Value::String(v.to_owned()).to_string();
     let spec_path = spec.clone().unwrap_or_else(|| "openapi.json".into());
@@ -157,13 +167,18 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         Some(repo) => format!("{repo} ({})", folders(&sdks)),
         None => format!("{} here", folders(&sdks)),
     };
-    println!("\n  {name} SDKs: {where_}");
-    if readable {
-        println!("  from {spec_path}");
-    }
+    let from = match config.source() {
+        Source::Url(_) => format!("{spec_path}, fetched daily"),
+        Source::File(file) if !root.join(file).exists() => {
+            format!("{file}, once `perseid connect` pushes it here")
+        }
+        Source::File(_) => spec_path,
+    };
+    println!("\n{name} SDKs: {where_}");
+    println!("  Spec: {from}");
     println!("  Packages: {}", packages(&config)?);
     println!(
-        "  (rename one with `package = \"…\"` under its [language] in {}, before its first release)",
+        "  Rename a package with `package = \"…\"` under its [language] in {}, before its first release",
         config::FILE
     );
     next_steps(&config, root);
@@ -206,51 +221,61 @@ fn packages(config: &Config) -> Result<String> {
 fn next_steps(config: &Config, root: &Path) {
     let here = crate::github::origin_repo(root);
     let hub = here.as_deref().unwrap_or("<owner/this-repository>");
-    let spec = match config.source() {
+    let awaited = match config.source() {
         Source::File(file) if !root.join(file).exists() => Some(file),
         _ => None,
     };
-    if let Some(file) = spec {
-        println!(
-            "\nNo OpenAPI spec here yet: perseid reads {file}, which `npx perseid connect {hub}`, run in the repository holding the spec, pushes here."
-        );
-    }
-    println!("\nNext steps");
-    let mut steps = vec![
-        "Review and commit what perseid wrote, then push: the workflows run from the default branch".to_owned(),
-        match spec {
-            Some(_) => "`perseid generate --spec <path|url>` previews the SDKs meanwhile".to_owned(),
-            None => "`perseid generate` previews the SDKs (`--out <dir>` for those living in other repositories)".to_owned(),
-        },
-    ];
     let sdks = config.sdks(&[]).unwrap_or_default();
     let remote: BTreeSet<&str> = sdks.iter().filter_map(|s| s.remote()).collect();
+    let repos: Vec<&str> = std::iter::once(hub).chain(remote.iter().copied()).collect();
+    let mut steps = vec![match awaited {
+        Some(_) => {
+            "Preview the SDKs from any spec: `perseid generate --spec <path|url> --out /tmp/sdks`"
+                .to_owned()
+        }
+        None => "Preview the SDKs: `perseid generate --out /tmp/sdks`".to_owned(),
+    }];
     if !remote.is_empty() {
         let create: Vec<String> = remote
             .iter()
-            .map(|r| format!("`gh repo create {r}`"))
+            .map(|r| format!("`gh repo create {r} --public`"))
             .collect();
-        steps.push(format!(
-            "Create the SDK repositories: {}. sdks.yml opens their first pull request",
-            create.join(", ")
-        ));
+        let noun = match create.len() {
+            1 => "repository",
+            _ => "repositories",
+        };
+        steps.push(format!("Create the SDK {noun}: {}", create.join(", ")));
     }
-    let repos: Vec<&str> = std::iter::once(hub).chain(remote.iter().copied()).collect();
+    let secret = match repos.as_slice() {
+        [one] => format!("`gh secret set {} -R {one}`", crate::github::TOKEN),
+        _ => format!("`gh secret set {} -R <repo>` on each", crate::github::TOKEN),
+    };
     steps.push(format!(
-        "Add the {} secret to {}: a fine-grained token (https://github.com/settings/personal-access-tokens/new) with Contents, Pull requests and Workflows read and write. Or `perseid app` sets up a GitHub App, which doesn't expire",
-        crate::github::TOKEN,
+        "Let the workflows open pull requests, with either:
+       - a GitHub App, which doesn't expire: `perseid app` creates it in your browser and stores its key
+       - a fine-grained token, which expires: https://github.com/settings/personal-access-tokens/new
+         with access to {} and Contents, Pull requests and Workflows read and write,
+         then {secret}",
         repos.join(", ")
     ));
-    if spec.is_some() {
+    steps.push(match awaited {
+        Some(_) => "Commit and push what perseid wrote to the default branch".to_owned(),
+        None => "Commit and push what perseid wrote to the default branch: sdks.yml then opens the SDK pull requests".to_owned(),
+    });
+    if let Some(file) = awaited {
         steps.push(format!(
-            "In the repository holding the spec: `npx perseid connect {hub}`. It writes a workflow there and, once you agree, a deploy key letting that repository push its spec here, and nothing else"
+            "In the repository holding the spec, run `npx perseid connect {hub}`: it writes a workflow pushing the spec here as {file}, with a deploy key that can write to {hub} only"
         ));
     }
+    steps.push("`perseid status` checks the setup on GitHub".to_owned());
+    println!("\nNext steps");
     for (i, step) in steps.iter().enumerate() {
         println!("  {}. {step}", i + 1);
     }
     if config.release != Some(false) {
-        println!("\nTo publish, once per registry:");
+        println!(
+            "\nBefore the first release, on each registry (trusted publisher: workflow sdk-release.yml, environment release):"
+        );
         for step in crate::github::publishing(config, hub).unwrap_or_default() {
             println!("  - {step}");
         }
@@ -304,11 +329,13 @@ fn ask_layout(sdks: &[String], name: &str, here: Option<&str>) -> Result<Option<
     let pattern = format!("{owner}/{}-{{lang}}", name.to_kebab_case());
     let repos: Vec<String> = sdks.iter().map(|s| pattern.replace("{lang}", s)).collect();
     let shared = format!("{owner}/{}-sdks", name.to_kebab_case());
-    let choices = [
+    let mut choices = vec![
         format!("Here, a folder each: {}", folders(sdks)),
         format!("A repository each: {}", repos.join(", ")),
-        format!("One other repository, a folder each: {shared}"),
     ];
+    if !here.is_some_and(|h| h.eq_ignore_ascii_case(&shared)) {
+        choices.push(format!("One other repository, a folder each: {shared}"));
+    }
     match crate::prompt::pick_one("Where do the SDKs live?", &choices, 0)? {
         0 => Ok(None),
         1 => Ok(Some(crate::prompt::text(
@@ -318,6 +345,26 @@ fn ask_layout(sdks: &[String], name: &str, here: Option<&str>) -> Result<Option<
         _ => Ok(Some(crate::prompt::text(
             "Repository of the SDKs",
             &shared,
+        )?)),
+    }
+}
+
+/// Where the spec comes from, when none is found here.
+fn ask_spec() -> Result<Option<String>> {
+    let choices = [
+        "In another repository, which `perseid connect` sets up to push it here".to_owned(),
+        "At a URL, fetched daily".to_owned(),
+        "In a file here".to_owned(),
+    ];
+    match crate::prompt::pick_one("No OpenAPI spec found here: where is it?", &choices, 0)? {
+        0 => Ok(None),
+        1 => Ok(Some(crate::prompt::ask(
+            "URL of the spec",
+            "https://api.acme.com/openapi.json",
+        )?)),
+        _ => Ok(Some(crate::prompt::ask(
+            "Path of the spec",
+            "api/openapi.yaml",
         )?)),
     }
 }

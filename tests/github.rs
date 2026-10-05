@@ -669,10 +669,10 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
     for line in [
         "+ perseid.toml\n+ .github/workflows/sdks.yml\n",
         "Packages: npm petstore, PyPI petstore, Go github.com/acme/petstore-go",
-        "Create the SDK repositories: `gh repo create acme/petstore-go`, `gh repo create acme/petstore-python`, `gh repo create acme/petstore-typescript`",
-        "Add the PERSEID_TOKEN secret to acme/petstore, acme/petstore-go, acme/petstore-python, acme/petstore-typescript",
-        "Or `perseid app` sets up a GitHub App",
-        "PyPI: add a pending publisher for petstore",
+        "Create the SDK repositories: `gh repo create acme/petstore-go --public`, `gh repo create acme/petstore-python --public`, `gh repo create acme/petstore-typescript --public`",
+        "with access to acme/petstore, acme/petstore-go, acme/petstore-python, acme/petstore-typescript",
+        "`perseid app` creates it in your browser",
+        "PyPI: add acme/petstore-python as the pending publisher of petstore",
     ] {
         assert!(out.contains(line), "{line}\n{out}");
     }
@@ -852,7 +852,7 @@ fn set_up_sdks_repository(
     let (code, out) = perseid(dir.path(), bin.path(), port, args, "", &[]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("No OpenAPI spec here yet")
+        out.contains("Spec: openapi.json, once `perseid connect` pushes it here")
             && out.contains("`npx perseid connect acme/petstore-sdks`"),
         "{out}"
     );
