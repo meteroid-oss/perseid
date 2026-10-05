@@ -54,8 +54,7 @@ decodes.
 
 - Some operations get no test: those with required query or header parameters, multipart,
   binary or list bodies, non-scalar path parameters, or a body on a GET or HEAD.
-- The manifests perseid writes on the first generation set up the runner. A Java SDK whose
-  build has no JUnit gets no tests, and neither does a C# SDK without its `Acme.Tests` project.
+- The manifests perseid writes on the first generation set up the runner.
 - `tests = false`, at the top level or in a language table, leaves them out and deletes the
   generated ones.
 

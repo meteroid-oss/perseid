@@ -681,7 +681,7 @@ impl Config {
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
             "env_prefix": self.name.to_shouty_snake_case(),
             "webhooks": target.webhooks.or(self.webhooks).unwrap_or(false),
-            "tests": target.tests.or(self.tests).unwrap_or(true) && tests_run(language, &package, dir),
+            "tests": target.tests.or(self.tests).unwrap_or(true),
             "int64": match target.int64.unwrap_or_default() {
                 Int64::Number => "number",
                 Int64::Bigint => "bigint",
@@ -710,19 +710,6 @@ impl Config {
         map.extend(self.context.clone());
         map.extend(target.context.clone());
         context
-    }
-}
-
-/// Whether the SDK at `dir` runs the generated tests: Java needs JUnit in its build, C# a test
-/// project. The skeletons of new SDKs have both.
-fn tests_run(language: &str, package: &str, dir: &Path) -> bool {
-    let read = |file: &str| std::fs::read_to_string(dir.join(file)).unwrap_or_default();
-    match language {
-        "java" => (read("build.gradle") + &read("build.gradle.kts")).contains("junit"),
-        "csharp" => dir
-            .join(format!("{package}.Tests/{package}.Tests.csproj"))
-            .exists(),
-        _ => true,
     }
 }
 
