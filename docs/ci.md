@@ -77,6 +77,23 @@ You need:
 - For `perseid connect`: admin rights on the API repository, and ideally on the SDKs repository.
 - An account on each registry you publish to: npm, PyPI, crates.io, Maven Central, NuGet.
 
+### Who can write where
+
+Each workflow gets a credential reaching only the repositories it writes to. The credential is
+stored in the repository the workflow runs in.
+
+| Workflow | Runs in | Writes to | Credential |
+|---|---|---|---|
+| `sdks.yml`, `sdk-release.yml` | the repository holding `perseid.toml`, each SDK repository | those repositories: contents, pull requests, workflows | the [`perseid app`](#perseid-app) App, else [`PERSEID_TOKEN`](#tokens) |
+| `perseid-push.yml` | the API repository | the SDKs repository: contents | a deploy key, else a token or an App, see [`--auth`](#perseid-connect) |
+| the publish job of `sdk-release.yml` | the SDK repository, `release` environment | the registries | [trusted publishing](#publishing), else a registry token |
+
+- Anyone who can run workflows in a repository can use its secrets: `connect` gives the API
+  repository a key to the SDKs repository only, never one to the SDK repositories.
+- The `perseid app` App could push the spec too (`connect --auth app` with its ID and a new
+  key), but its key would let the API repository write workflows to every SDK repository. Use a
+  separate App installed on the SDKs repository only.
+
 ### `perseid init`
 
 `init` works in your clone only. It finds the spec (a tracked `openapi` or `swagger` file, JSON or
