@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0](https://github.com/meteroid-oss/perseid/compare/v0.7.2...v0.8.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **connect:** push the spec as the SDKs' GitHub App or with a token ([#71](https://github.com/meteroid-oss/perseid/issues/71))
+
+### Features
+
+* **connect:** push the spec as the SDKs' GitHub App or with a token ([#71](https://github.com/meteroid-oss/perseid/issues/71)) ([482708a](https://github.com/meteroid-oss/perseid/commit/482708a17cce89e2a469d44dd38b1d3b4c352b8c))
+
+
+### Bug Fixes
+
+* **init:** ask for the API name in any case, checked before anything is written ([#70](https://github.com/meteroid-oss/perseid/issues/70)) ([409faa5](https://github.com/meteroid-oss/perseid/commit/409faa5e9e202fb879ee7ff24aafa5f5b10a63da))
+
 ## [0.7.2](https://github.com/meteroid-oss/perseid/compare/v0.7.1...v0.7.2) (2026-10-05)
 
 
