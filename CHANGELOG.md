@@ -12,11 +12,11 @@
 
 ### ⚠ BREAKING CHANGES
 
-* SDKs on par with Stainless in all six languages ([#61](https://github.com/meteroid-oss/perseid/issues/61))
+* Full-featured SDKs in all six languages ([#61](https://github.com/meteroid-oss/perseid/issues/61))
 
 ### Features
 
-* SDKs on par with Stainless in all six languages ([#61](https://github.com/meteroid-oss/perseid/issues/61)) ([e6cfc1e](https://github.com/meteroid-oss/perseid/commit/e6cfc1ea8e95e690a8aa545ed86f9a25174c2188))
+* Full-featured SDKs in all six languages ([#61](https://github.com/meteroid-oss/perseid/issues/61)) ([e6cfc1e](https://github.com/meteroid-oss/perseid/commit/e6cfc1ea8e95e690a8aa545ed86f9a25174c2188))
 * support parameter styles and JSON content parameters, skip unsupported operations ([4132afc](https://github.com/meteroid-oss/perseid/commit/4132afc4dde12f385769c1bc71552741923ce058))
 
 ## [0.6.0](https://github.com/meteroid-oss/perseid/compare/v0.5.1...v0.6.0) (2026-10-01)

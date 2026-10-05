@@ -134,6 +134,10 @@
       "default": "openapi.json",
       "type": "string"
     },
+    "tests": {
+      "description": "`false` leaves out the tests generated with each SDK, one per operation.",
+      "type": "boolean"
+    },
     "timeout": {
       "description": "Default request timeout, in seconds: 60 by default.",
       "type": "integer",
@@ -212,6 +216,10 @@
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
         },
+        "tests": {
+          "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
+          "type": "boolean"
+        },
         "timeout": {
           "description": "Default request timeout in seconds, over the top-level one.",
           "type": "integer",
@@ -286,6 +294,10 @@
         "repo": {
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
+        },
+        "tests": {
+          "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
+          "type": "boolean"
         },
         "timeout": {
           "description": "Default request timeout in seconds, over the top-level one.",
@@ -382,6 +394,10 @@
         "repo": {
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
+        },
+        "tests": {
+          "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
+          "type": "boolean"
         },
         "timeout": {
           "description": "Default request timeout in seconds, over the top-level one.",
@@ -566,6 +582,10 @@
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
         },
+        "tests": {
+          "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
+          "type": "boolean"
+        },
         "timeout": {
           "description": "Default request timeout in seconds, over the top-level one.",
           "type": "integer",
@@ -635,6 +655,10 @@
         "repo": {
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
+        },
+        "tests": {
+          "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
+          "type": "boolean"
         },
         "timeout": {
           "description": "Default request timeout in seconds, over the top-level one.",
@@ -721,6 +745,10 @@
         "repo": {
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
+        },
+        "tests": {
+          "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
+          "type": "boolean"
         },
         "timeout": {
           "description": "Default request timeout in seconds, over the top-level one.",

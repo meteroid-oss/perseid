@@ -1,0 +1,47 @@
+{% import "docs.jinja" as docs -%}
+{% set _ = set_summary_filename("perseid_mock.py") -%}
+# this file is @generated
+"""The mock client of the generated tests: every request gets the same canned response."""
+
+from __future__ import annotations
+
+import dataclasses
+import inspect
+import json
+import typing as t
+
+import httpx
+
+from {{ docs.package() }} import {{ sdk.client_name }}
+from {{ docs.package() }}.serialization import from_json_value
+
+
+def mock(status: int, content_type: str | None, body: str) -> tuple[{{ sdk.client_name }}, list[str]]:
+    """A client answering every request with this response, and the method and path of each."""
+    requests: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(f"{request.method} {request.url.path}")
+        headers = {"content-type": content_type} if content_type else {}
+        return httpx.Response(status, headers=headers, content=body.encode())
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handle))
+    client = {{ sdk.client_name }}(base_url="http://localhost", http_client=http_client, max_retries=0)
+    return client, requests
+
+
+def decode(model: t.Any, text: str) -> t.Any:
+    """The `model` that JSON `text` holds."""
+    return from_json_value(model, json.loads(text))
+
+
+def call(method: t.Callable[..., t.Any], *args: t.Any, body: t.Any = None) -> t.Any:
+    """Calls `method` with `body`, as its argument or as keyword arguments of its fields."""
+    if body is None:
+        return method(*args)
+    params = inspect.signature(method).parameters
+    positional = [p for p in params.values() if p.kind is p.POSITIONAL_OR_KEYWORD]
+    if len(positional) > len(args):
+        return method(*args, body)
+    fields = {f.name: getattr(body, f.name) for f in dataclasses.fields(body) if f.name in params}
+    return method(*args, **fields)

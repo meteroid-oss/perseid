@@ -51,6 +51,8 @@ pub struct Config {
     pub user_agent: Option<String>,
     /// Installs the Standard Webhooks signature verifier in every SDK.
     pub webhooks: Option<bool>,
+    /// `false` leaves out the tests generated with each SDK, one per operation.
+    pub tests: Option<bool>,
     /// Default request timeout, in seconds: 60 by default.
     pub timeout: Option<u64>,
     /// How unions decode objects that no rule tells apart.
@@ -186,6 +188,7 @@ pub struct Target {
     pub header_prefix: Option<String>,
     pub user_agent: Option<String>,
     pub webhooks: Option<bool>,
+    pub tests: Option<bool>,
     pub timeout: Option<u64>,
     pub untagged_unions: Option<UntaggedUnions>,
     pub names: BTreeMap<String, String>,
@@ -217,6 +220,8 @@ macro_rules! language {
             user_agent: Option<String>,
             /// Installs the Standard Webhooks signature verifier, over the top-level setting.
             webhooks: Option<bool>,
+            /// `false` leaves out the tests generated with this SDK, over the top-level setting.
+            tests: Option<bool>,
             /// Default request timeout in seconds, over the top-level one.
             timeout: Option<u64>,
             /// How unions decode objects that no rule tells apart, over the top-level setting.
@@ -243,6 +248,7 @@ macro_rules! language {
                     header_prefix: t.header_prefix,
                     user_agent: t.user_agent,
                     webhooks: t.webhooks,
+                    tests: t.tests,
                     timeout: t.timeout,
                     untagged_unions: t.untagged_unions,
                     names: t.names,
@@ -675,6 +681,7 @@ impl Config {
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
             "env_prefix": self.name.to_shouty_snake_case(),
             "webhooks": target.webhooks.or(self.webhooks).unwrap_or(false),
+            "tests": target.tests.or(self.tests).unwrap_or(true) && tests_run(language, &package, dir),
             "int64": match target.int64.unwrap_or_default() {
                 Int64::Number => "number",
                 Int64::Bigint => "bigint",
@@ -703,6 +710,19 @@ impl Config {
         map.extend(self.context.clone());
         map.extend(target.context.clone());
         context
+    }
+}
+
+/// Whether the SDK at `dir` runs the generated tests: Java needs JUnit in its build, C# a test
+/// project. The skeletons of new SDKs have both.
+fn tests_run(language: &str, package: &str, dir: &Path) -> bool {
+    let read = |file: &str| std::fs::read_to_string(dir.join(file)).unwrap_or_default();
+    match language {
+        "java" => (read("build.gradle") + &read("build.gradle.kts")).contains("junit"),
+        "csharp" => dir
+            .join(format!("{package}.Tests/{package}.Tests.csproj"))
+            .exists(),
+        _ => true,
     }
 }
 

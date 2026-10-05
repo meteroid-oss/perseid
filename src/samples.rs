@@ -72,12 +72,7 @@ pub fn run(spec: &str, base: &Filters, languages: &[(&str, Filters)]) -> Result<
         let (_, renamed) = spec::api_with_renames(spec, filters)?;
         renames.push((*language, renamed));
     }
-    let mut generator = Gen {
-        types: &api.types,
-        stack: Vec::new(),
-        nulls: 0,
-        budget: BUDGET,
-    };
+    let mut generator = Gen::new(&api.types, false);
     let mut out = Map::new();
     for (name, ty) in &api.types {
         let (kind, samples) = generator.samples(name, ty);
@@ -122,6 +117,28 @@ struct Gen<'a> {
     /// How many `null`s the current sample holds.
     nulls: usize,
     budget: usize,
+    /// Strings are all `sample`, for samples embedded in source code.
+    plain: bool,
+}
+
+/// The minimal instance of schema `name`, with plain strings: the request bodies and responses
+/// of the generated tests.
+pub(crate) fn minimal<'a>(types: &'a Types, name: &'a str) -> Value {
+    Gen::new(types, true).run(name, Mode::Minimal, 0, 0).0
+}
+
+/// The minimal instance of `ty`, with plain strings.
+pub(crate) fn minimal_of<'a>(types: &'a Types, ty: &'a FieldType) -> Value {
+    let mut generator = Gen::new(types, true);
+    generator.value(
+        ty,
+        0,
+        Cx {
+            mode: Mode::Minimal,
+            pick: 0,
+        },
+        false,
+    )
 }
 
 fn mix(a: u64, b: u64) -> u64 {
@@ -202,6 +219,16 @@ fn width(ty: &Type) -> usize {
 }
 
 impl<'a> Gen<'a> {
+    fn new(types: &'a Types, plain: bool) -> Self {
+        Self {
+            types,
+            stack: Vec::new(),
+            nulls: 0,
+            budget: BUDGET,
+            plain,
+        }
+    }
+
     /// The kind and the samples of the model `name`.
     fn samples(&mut self, name: &'a str, ty: &'a Type) -> (&'static str, Vec<Value>) {
         let mut out = Vec::new();
@@ -482,6 +509,7 @@ impl<'a> Gen<'a> {
                 &[12_345.678_901_234_5f64, -0.000_123_456_789, 0.1],
                 seed,
             )),
+            FieldType::String if self.plain => Value::from("sample"),
             FieldType::String => Value::from(*choose(
                 &[
                     "sample",

@@ -26,8 +26,9 @@ OpenAPI 3.2) pile up constructs that are hard to generate:
 - recursive aliases, boolean schemas, nullable items;
 - cookie parameters, webhook-only specs.
 
-CI generates an SDK from each in every language, then compiles and type-checks it, alongside
-`petstore`, `features`, `torture` and `realworld`.
+CI generates an SDK from each in every language, then compiles and type-checks it and runs its
+[generated tests](languages.md#tests), alongside `petstore`, `features`, `torture` and
+`realworld`.
 
 ## Mock server scenarios
 

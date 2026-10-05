@@ -116,10 +116,11 @@ impl Response {
         Ok((self.status, self.headers, bytes))
     }
 
-    pub(crate) fn into_upstream(self) -> Option<Incoming> {
+    /// The body left open from the server, or the bytes a middleware buffered.
+    pub(crate) fn into_events(self) -> (Option<Incoming>, Bytes) {
         match self.body {
-            Body::Upstream(body) => Some(body),
-            Body::Buffered(_) => None,
+            Body::Upstream(body) => (Some(body), Bytes::new()),
+            Body::Buffered(bytes) => (None, bytes),
         }
     }
 }

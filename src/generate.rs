@@ -84,7 +84,27 @@ fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathB
         _ => tasks.push(("component_type_summary", models)),
     }
     tasks.push((API_REFERENCE, PathBuf::from(".")));
+    if context["tests"] == true {
+        let tests = tests_dir(language, context);
+        tasks.push(("api_test", tests.clone()));
+        tasks.push(("api_test_summary", tests));
+    }
     (runtime, tasks)
+}
+
+/// Where the generated tests go, relative to the SDK root.
+fn tests_dir(language: &str, context: &Value) -> PathBuf {
+    let package = context["package_name"].as_str().unwrap();
+    PathBuf::from(match language {
+        "rust" | "typescript" => "tests/api".to_owned(),
+        "python" => "tests".to_owned(),
+        "java" => format!(
+            "src/test/java/{}/api",
+            context["java_package"].as_str().unwrap().replace('.', "/")
+        ),
+        "csharp" => format!("{package}.Tests"),
+        _ => ".".to_owned(),
+    })
 }
 
 fn extension(language: &str) -> &str {
@@ -356,6 +376,13 @@ pub fn sdk(
     }
     let (runtime, _) = layout(sdk.language, &context);
     scan_sources(dir, &runtime, extension(sdk.language), &mut candidates)?;
+    // Tests left over after `tests = false`.
+    scan_sources(
+        dir,
+        &tests_dir(sdk.language, &context),
+        extension(sdk.language),
+        &mut candidates,
+    )?;
     for path in candidates {
         if dir.join(&path).is_file() && !produced.contains(&path) && generated(&dir.join(&path)) {
             changes.push((Change::Removed(path), None));

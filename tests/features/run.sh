@@ -42,7 +42,7 @@ GRADLE
     cargo test -q --test smoke ;;
   csharp)
     mkdir -p smoke && cp "$here/Smoke.cs" smoke/
-    project=$(ls ./*/*.csproj | grep -v '^./smoke/' | head -n 1)
+    project=$(ls ./*/*.csproj | grep -v -e '^./smoke/' -e '\.Tests/' | head -n 1)
     cat > smoke/Smoke.csproj <<CSPROJ
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>

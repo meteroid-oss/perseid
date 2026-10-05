@@ -30,8 +30,8 @@ jobs:
           bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
           ./actionlint scaffold/release/.github/workflows/*.yml target/tmp/*.yml
 
-  # A fresh `init` + `generate` must give SDKs that build and type-check, for a toy spec, the
-  # torture fixture (unions, recursion, reserved words...) and a real API.
+  # A fresh `init` + `generate` must give SDKs that build, type-check and pass their generated
+  # tests, for a toy spec, the torture fixture (unions, recursion, reserved words...) and a real API.
   sdks:
     runs-on: ubuntu-24.04
     strategy:
@@ -81,21 +81,22 @@ jobs:
           perseid generate
           perseid generate --check
       - working-directory: ${{ runner.temp }}/sdk/rust
-        run: cargo check
+        run: cargo check && if [ -d tests/api ]; then cargo test --test api; fi
       - working-directory: ${{ runner.temp }}/sdk/typescript
-        run: npm install --no-audit --no-fund && npx tsc --noEmit
+        run: npm install --no-audit --no-fund && npx tsc --noEmit && npm test
       - working-directory: ${{ runner.temp }}/sdk/python
         run: |
           package=$(sed -n 's/^name = "\(.*\)"/\1/p' pyproject.toml | tr - _)
           uv venv && uv pip install -e . mypy
           uv run python -c "import $package"
           uv run mypy --strict "$package"
+          if [ -d tests ]; then uv run python -m unittest discover -s tests; fi
       - working-directory: ${{ runner.temp }}/sdk/go
-        run: go vet ./...
+        run: go vet ./... && go test ./...
       - working-directory: ${{ runner.temp }}/sdk/java
         run: gradle build --no-daemon
       - working-directory: ${{ runner.temp }}/sdk/csharp
-        run: dotnet build -warnaserror
+        run: dotnet build -warnaserror && dotnet test --no-build
       - if: endsWith(matrix.spec, 'petstore.yaml')
         run: dotnet run --project tests/csharp -p:SdkProject="$RUNNER_TEMP/sdk/csharp/Petstore/Petstore.csproj"
       - name: Smoke tests against a mock server

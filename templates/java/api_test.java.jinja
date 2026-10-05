@@ -1,0 +1,33 @@
+{% import "docs.jinja" as docs -%}
+{% set test_class = (resource.name | to_upper_camel_case) ~ "Test" -%}
+{% set _ = set_summary_filename(test_class ~ ".java") -%}
+// this file is @generated
+package {{ sdk.java_package }}.api;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import java.util.List;
+import org.junit.jupiter.api.Test;
+
+class {{ test_class }} {
+{%- for case in cases %}
+{%- set op = resource.operations[case.index] %}
+{%- set args = namespace(list=[]) %}
+{%- for arg in case.path_args %}{% set args.list = args.list + [arg.value | tojson] %}{% endfor %}
+{%- if case.body %}{% set args.list = args.list + ["PerseidMock.decode(" ~ sdk.java_package ~ ".models." ~ (case.body.schema | to_upper_camel_case) ~ ".class, " ~ (case.body.json | tojson) ~ ")"] %}{% endif %}
+{%- set call = "mock.client." ~ docs.accessor(resource.name) ~ "()." ~ docs.method(op) ~ "(" ~ (args.list | join(", ")) ~ ")" %}
+
+    @Test
+    void {{ docs.method(op) }}() throws Exception {
+        PerseidMock mock = new PerseidMock({{ case.response.status }}, {{ case.response.content_type | tojson if case.response.content_type else "null" }}, {{ case.response.body | tojson }});
+{%- if op.response_is_event_stream %}
+        try (var stream = {{ call }}) {
+            stream.forEach(event -> { });
+        }
+{%- else %}
+        {{ call }};
+{%- endif %}
+        assertEquals(List.of({{ (case.method ~ " " ~ case.path) | tojson }}), mock.requests);
+    }
+{%- endfor %}
+}

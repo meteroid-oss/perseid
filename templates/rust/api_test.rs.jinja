@@ -1,0 +1,33 @@
+{% import "docs.jinja" as docs -%}
+{% set bodies = cases | selectattr("body") | list -%}
+{#- A string literal, raw when it can be. -#}
+{% macro text(s) %}{% if "\"#" in s or "\n" in s or "\r" in s %}{{ s | rust_str }}{% else %}r#"{{ s }}"#{% endif %}{% endmacro -%}
+// this file is @generated
+{% if bodies %}use crate::{decode, mock};
+{%- else %}use crate::mock;
+{%- endif %}
+{% for case in cases %}
+{%- set op = resource.operations[case.index] %}
+{%- set args = namespace(list=[]) %}
+{%- for arg in case.path_args %}{% set args.list = args.list + [arg.value | rust_str] %}{% endfor %}
+{%- if case.body %}
+{%- set body = "decode::<" ~ sdk.rust_crate ~ "::models::" ~ (case.body.schema | to_upper_camel_case) ~ ">(" ~ text(case.body.json) ~ ")" %}
+{%- set args.list = args.list + (["Some(" ~ body ~ ")"] if op.request_body_optional else [body]) %}
+{%- endif %}
+{%- if op | has_query_or_header_params %}{% set args.list = args.list + ["None"] %}{% endif %}
+{%- set call = docs.resource(resource.name) ~ "." ~ docs.method(op) ~ "(" ~ (args.list | join(", ")) ~ ").await.unwrap()" %}
+
+#[tokio::test]
+async fn {{ docs.method(op) }}() {
+    let (client, requests) = mock({{ case.response.status }}, {{ "Some(" ~ (case.response.content_type | rust_str) ~ ")" if case.response.content_type else "None" }}, {{ text(case.response.body) }});
+{%- if op.response_is_event_stream %}
+    let mut stream = {{ call }};
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+{%- else %}
+    {{ call }};
+{%- endif %}
+    assert_eq!(*requests.lock().unwrap(), [{{ (case.method ~ " " ~ case.path) | rust_str }}]);
+}
+{%- endfor %}

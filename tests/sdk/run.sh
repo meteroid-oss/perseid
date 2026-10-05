@@ -161,7 +161,7 @@ GRADLE
       perseid generate csharp > /dev/null
       perseid samples --out samples.json > /dev/null
       grep -q '"type_name"' samples.json || { echo "$1 has no models"; exit 0; }
-      sdk=$(basename "$(ls csharp/*/*.csproj | head -n 1)" .csproj)
+      sdk=$(basename "$(ls csharp/*/*.csproj | grep -v '\.Tests/' | head -n 1)" .csproj)
       if [ "$name" = torture ]; then
         cp -r "$here/csharp/_torture/." csharp/
       else

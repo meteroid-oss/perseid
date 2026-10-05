@@ -78,14 +78,14 @@ pub(crate) fn decode_error(error: impl Into<BoxError>) -> Error {
 /// The body of a successful response: read whole, or left open for an event stream.
 pub(crate) enum ResponseBody {
     Buffered(Bytes),
-    Events(hyper::body::Incoming),
+    Events(Option<hyper::body::Incoming>, Bytes),
 }
 
 impl ResponseBody {
     fn bytes(self) -> Result<Bytes, Error> {
         match self {
             Self::Buffered(bytes) => Ok(bytes),
-            Self::Events(_) => Err(decode_error("expected a buffered body")),
+            Self::Events(..) => Err(decode_error("expected a buffered body")),
         }
     }
 }
@@ -120,7 +120,7 @@ fn text(body: ResponseBody) -> Result<String, Error> {
 
 fn events(body: ResponseBody) -> Result<EventStream, Error> {
     match body {
-        ResponseBody::Events(body) => Ok(EventStream::new(body)),
+        ResponseBody::Events(body, buffered) => Ok(EventStream::new(body, buffered)),
         ResponseBody::Buffered(_) => Err(decode_error("expected an event stream")),
     }
 }
@@ -905,12 +905,8 @@ fn open_event_stream(response: Response) -> Result<Attempt, Failure> {
         ));
     }
     let (status, headers) = (response.status(), response.headers().clone());
-    match response.into_upstream() {
-        Some(body) => Ok(Attempt::Done(status, headers, ResponseBody::Events(body))),
-        None => Err(Failure::Transport(
-            "middleware cannot buffer an event stream".into(),
-        )),
-    }
+    let (body, buffered) = response.into_events();
+    Ok(Attempt::Done(status, headers, ResponseBody::Events(body, buffered)))
 }
 
 /// Exponential backoff from 500ms up to 8s with jitter.

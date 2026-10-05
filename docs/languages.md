@@ -19,6 +19,7 @@ Examples use an API named `Acme` with a `customers` resource. Names follow the `
 | Per-call options | Headers, timeout, max retries and idempotency key |
 | `api.md` | Every method by resource, in the language's syntax, with its HTTP method, path and models. Regenerated with the code |
 | `README.md` | Written on the first generation, with examples calling the API's own operations. Yours afterwards |
+| Tests | A [test per operation](#tests), regenerated with the code |
 
 Generated files carry an `@generated` marker. perseid never overwrites or deletes the others.
 See [features](features.md) for auth, pagination and encoding, and
@@ -34,6 +35,29 @@ See [features](features.md) for auth, pagination and encoding, and
 | Go | Go 1.23+ | `acme.New(token, opts)` | `SDKError` | `ListAutoPaging(...)` | `WithResponseInto(&resp)` |
 | Java | Java 11+ | `new Acme(AcmeOptions...)` | `AcmeException` | `listIter()` | `client.withRawResponse()` |
 | C# | .NET 8 | `new AcmeClient(token)` | `AcmeException` | `ListAutoPagingAsync()` | `.WithRawResponse` |
+
+## Tests
+
+Each operation gets a test calling it with sample arguments. A mock transport answers it in
+process with a sample of the declared response, so no server or extra tool is needed. Samples
+come from the spec's schemas. The test checks the method and path sent, and that the response
+decodes.
+
+| | Tests | Run |
+|---|---|---|
+| Rust | `tests/api/` | `cargo test` |
+| TypeScript | `tests/api/*.test.ts` | `npm test` |
+| Python | `tests/test_*.py` | `python -m unittest discover -s tests`, or `pytest` |
+| Go | `*_test.go` | `go test ./...` |
+| Java | `src/test/java/.../api/` | `gradle test`, with JUnit 5 |
+| C# | `Acme.Tests/` | `dotnet test`, with xUnit |
+
+- Some operations get no test: those with required query or header parameters, multipart,
+  binary or list bodies, non-scalar path parameters, or a body on a GET or HEAD.
+- The manifests perseid writes on the first generation set up the runner. A Java SDK whose
+  build has no JUnit gets no tests, and neither does a C# SDK without its `Acme.Tests` project.
+- `tests = false`, at the top level or in a language table, leaves them out and deletes the
+  generated ones.
 
 ## Rust
 

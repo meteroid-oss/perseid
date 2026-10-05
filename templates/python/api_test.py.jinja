@@ -1,0 +1,29 @@
+{% import "docs.jinja" as docs -%}
+{% from "types/macros.py.jinja" import module_name -%}
+{% set _ = set_summary_filename("test_" ~ module_name(resource.name) ~ ".py") -%}
+{% set bodies = cases | selectattr("body") | map(attribute="body.schema") | map("to_upper_camel_case") | unique | list -%}
+# this file is @generated
+import unittest
+
+from perseid_mock import call, {% if bodies %}decode, {% endif %}mock
+{% if bodies %}
+from {{ docs.package() }}.models import {{ bodies | join(", ") }}
+{% endif %}
+
+class {{ resource.name | to_upper_camel_case }}Test(unittest.TestCase):
+{%- for case in cases %}
+{%- set op = resource.operations[case.index] %}
+{%- set args = namespace(list=[docs.resource(resource.name) ~ "." ~ docs.method(op)]) %}
+{%- for arg in case.path_args %}{% set args.list = args.list + [arg.value | tojson] %}{% endfor %}
+{%- if case.body %}{% set args.list = args.list + ["body=decode(" ~ (case.body.schema | to_upper_camel_case) ~ ", " ~ (case.body.json | tojson) ~ ")"] %}{% endif %}
+
+    def test_{{ op.name | to_snake_case }}(self) -> None:
+        client, requests = mock({{ case.response.status }}, {{ case.response.content_type | tojson if case.response.content_type else "None" }}, {{ case.response.body | tojson }})
+{%- if op.response_is_event_stream %}
+        for _ in call({{ args.list | join(", ") }}):
+            pass
+{%- else %}
+        call({{ args.list | join(", ") }})
+{%- endif %}
+        self.assertEqual(requests, [{{ (case.method ~ " " ~ case.path) | tojson }}])
+{%- endfor %}

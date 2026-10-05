@@ -100,10 +100,11 @@ pub struct EventStream<T = SseEvent> {
 }
 
 impl EventStream<SseEvent> {
-    pub(crate) fn new(body: Incoming) -> Self {
+    /// The stream of `pending` bytes, then of `body` when the server left it open.
+    pub(crate) fn new(body: Option<Incoming>, pending: Bytes) -> Self {
         Self {
-            body: Some(body),
-            pending: Bytes::new(),
+            body,
+            pending,
             parser: Parser::default(),
             last: None,
             decode: raw,

@@ -331,6 +331,53 @@ fn webhooks_verifier_is_opt_in() {
 }
 
 #[test]
+fn tests_are_generated_where_the_sdk_runs_them_and_can_be_left_out() {
+    let dir = project_from("petstore.yaml", &["go", "java", "csharp"]);
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let java = dir
+        .path()
+        .join("java/src/test/java/com/petstore/api/PetsTest.java");
+    for path in [
+        "go/pets_test.go",
+        "go/perseid_mock_test.go",
+        "csharp/Petstore.Tests/PetsTests.cs",
+    ] {
+        assert!(dir.path().join(path).exists(), "{path}");
+    }
+    let go = fs::read_to_string(dir.path().join("go/pets_test.go")).unwrap();
+    assert!(
+        go.contains(r#"expect(t, requests, "DELETE /pets/pet_id")"#),
+        "{go}"
+    );
+    assert!(java.exists());
+
+    let gradle = dir.path().join("java/build.gradle");
+    let without_junit: String = fs::read_to_string(&gradle)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.contains("junit") && !l.contains("useJUnitPlatform"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    fs::write(&gradle, without_junit).unwrap();
+    edit_config(dir.path(), |text| {
+        text.replacen("[go]", "[go]\ntests = false", 1)
+    });
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(
+        !java.exists(),
+        "a build without JUnit would fail to compile them"
+    );
+    assert!(!dir.path().join("go/pets_test.go").exists());
+    assert!(
+        dir.path()
+            .join("csharp/Petstore.Tests/PetsTests.cs")
+            .exists()
+    );
+}
+
+#[test]
 fn handwritten_files_are_never_overwritten() {
     let dir = project();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);

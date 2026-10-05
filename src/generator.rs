@@ -25,6 +25,8 @@ enum TemplateKind {
     OperationOptions,
     Type,
     Summary,
+    Test,
+    TestSummary,
 }
 
 /// Renders `tpl_name` with the API model as the SDK of `language` (`rs`, `ts`, `py`...) sees it,
@@ -66,10 +68,13 @@ pub(crate) fn generate_with_output_context(
         "api_summary" | "component_type_summary" | "api_reference" | "summary" => {
             TemplateKind::Summary
         }
+        "api_test" => TemplateKind::Test,
+        "api_test_summary" => TemplateKind::TestSummary,
         "component_type" => TemplateKind::Type,
         _ => bail!(
             "template file basename must be one of 'api_resource', 'api_summary', \
-             'api_reference', 'component_type', 'component_type_summary', 'summary'",
+             'api_reference', 'api_test', 'api_test_summary', 'component_type', \
+             'component_type_summary', 'summary'",
         ),
     };
 
@@ -102,6 +107,18 @@ pub(crate) fn generate_with_output_context(
         TemplateKind::ApiResource => generator.generate_api_resources(api)?,
         TemplateKind::Type => generator.generate_types(api, output_dir)?,
         TemplateKind::Summary => generator.generate_summary(api)?,
+        TemplateKind::Test => generator.generate_api_tests(api)?,
+        TemplateKind::TestSummary => {
+            // The resources with a test file, which some languages declare.
+            let tested: Vec<&str> = (api.resources.values())
+                .filter(|r| !crate::testcases::cases(&api.types, r).is_empty())
+                .map(|r| r.name.as_str())
+                .collect();
+            match tested.is_empty() {
+                true => vec![],
+                false => generator.render_tpl(None, context! { api, tested })?,
+            }
+        }
     };
 
     if !no_postprocess {
@@ -174,6 +191,19 @@ impl Generator<'_> {
             );
         }
 
+        Ok(generated_paths)
+    }
+
+    fn generate_api_tests(self, api: Api) -> anyhow::Result<Vec<Utf8PathBuf>> {
+        let mut generated_paths = vec![];
+        for resource in api.resources.values() {
+            let cases = crate::testcases::cases(&api.types, resource);
+            if !cases.is_empty() {
+                generated_paths.extend_from_slice(
+                    &self.render_tpl(Some(&resource.name), context! { resource, cases })?,
+                );
+            }
+        }
         Ok(generated_paths)
     }
 

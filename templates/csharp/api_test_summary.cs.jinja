@@ -1,0 +1,53 @@
+{% set _ = set_summary_filename("PerseidMock.cs") -%}
+// this file is @generated
+using System;
+using System.Collections.Generic;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace {{ sdk.package_name }}.Tests;
+
+/// <summary>The mock client of the generated tests: every request gets the same canned response.</summary>
+internal sealed class PerseidMock : HttpMessageHandler
+{
+    private readonly int _status;
+    private readonly string? _contentType;
+    private readonly string _body;
+
+    /// <summary>The method and path of each request.</summary>
+    public List<string> Requests { get; } = new();
+
+    /// <summary>A client answering every request with this response.</summary>
+    public {{ sdk.client_name }}Client Client { get; }
+
+    public PerseidMock(int status, string? contentType, string body)
+    {
+        _status = status;
+        _contentType = contentType;
+        _body = body;
+        Client = new {{ sdk.client_name }}Client(
+            null,
+            new {{ sdk.client_name }}ClientOptions { BaseUrl = "http://localhost", MaxRetries = 0, HttpMessageHandler = this }
+        );
+    }
+
+    /// <summary>The <typeparamref name="T"/> that JSON <paramref name="text"/> holds.</summary>
+    public static T Decode<T>(string text) =>
+        JsonSerializer.Deserialize<T>(text, global::{{ sdk.package_name }}.Models.{{ sdk.client_name }}JsonContext.Default.Options)!;
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Requests.Add($"{request.Method} {request.RequestUri!.AbsolutePath}");
+        var content = new ByteArrayContent(Encoding.UTF8.GetBytes(_body));
+        if (_contentType is not null)
+        {
+            content.Headers.ContentType = MediaTypeHeaderValue.Parse(_contentType);
+        }
+        return Task.FromResult(new HttpResponseMessage((HttpStatusCode)_status) { Content = content, RequestMessage = request });
+    }
+}

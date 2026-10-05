@@ -20,6 +20,7 @@ pub mod scaffold;
 pub mod sizing;
 pub mod spec;
 mod template;
+mod testcases;
 pub mod tools;
 mod value_vec;
 

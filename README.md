@@ -71,6 +71,7 @@ var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.
 | Data | Cursor, page and offset pagination, server-sent events, file uploads |
 | Models | Enums and unions that keep values the SDK does not know, unknown properties sent back |
 | Webhooks | An opt-in [Standard Webhooks](https://www.standardwebhooks.com) verifier in every language |
+| Tests | A test per operation in every SDK, run in process against the response the spec declares |
 | Docs | An `api.md` per SDK, regenerated with the code, and a README calling your API's own operations |
 | Specs | OpenAPI 3.0, 3.1 and 3.2, external `$ref`s, parameter styles, nullable and recursive schemas, webhook-only specs |
 | Customizing | Middleware, resource snippets, ejectable templates |
