@@ -3,12 +3,12 @@
 {% set _ = set_summary_filename("test_" ~ module_name(resource.name) ~ ".py") -%}
 {% set bodies = cases | selectattr("body") | map(attribute="body.schema") | map("to_upper_camel_case") | unique | list -%}
 # this file is @generated
+# ruff: noqa: I001  (where the package sorts depends on whether it is generated yet)
 import unittest
-
-from perseid_mock import call, {% if bodies %}decode, {% endif %}mock
 {% if bodies %}
 from {{ docs.package() }}.models import {{ bodies | join(", ") }}
 {% endif %}
+from perseid_mock import call, {% if bodies %}decode, {% endif %}mock
 
 class {{ resource.name | to_upper_camel_case }}Test(unittest.TestCase):
 {%- for case in cases %}

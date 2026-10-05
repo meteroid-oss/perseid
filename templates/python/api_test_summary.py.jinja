@@ -1,6 +1,7 @@
 {% import "docs.jinja" as docs -%}
 {% set _ = set_summary_filename("perseid_mock.py") -%}
 # this file is @generated
+# ruff: noqa: I001  (where the package sorts depends on whether it is generated yet)
 """The mock client of the generated tests: every request gets the same canned response."""
 
 from __future__ import annotations
