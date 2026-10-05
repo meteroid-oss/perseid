@@ -12,8 +12,10 @@ inputs:
     description: SDKs repository, owner/name
     required: true
   token:
-    description: Token that can write to `to`, such as a GitHub App token for it only
-    required: true
+    description: >-
+      Token that can write to `to`. Without it, the hosted perseid App's, when the job has
+      `id-token: write` and the perseid.toml of `to` names this repository as its `source`
+    default: ''
   private:
     description: Leave this repository's name out of what the SDKs repository records
     default: 'false'
@@ -33,12 +35,21 @@ runs:
         export PERSEID_VERSION="${PERSEID_VERSION:-$(jq -r '."."' "$GITHUB_ACTION_PATH/../.release-please-manifest.json")}"
         sh "$GITHUB_ACTION_PATH/../install.sh"
 
+    # Without a token, the hosted perseid App's: `to` names this repository as its source.
+    - id: hosted
+      if: inputs.token == ''
+      shell: bash
+      env:
+        REPOSITORIES: ${{ inputs.to }}
+        PERMISSIONS: '{"contents":"write"}'
+      run: '"$GITHUB_ACTION_PATH/../hosted-token.sh"'
+
     - name: Push the spec
       shell: bash
       env:
         SPEC: ${{ inputs.spec }}
         TO: ${{ inputs.to }}
         PRIVATE: ${{ inputs.private }}
-        PERSEID_SDKS_TOKEN: ${{ inputs.token }}
+        PERSEID_SDKS_TOKEN: ${{ inputs.token || steps.hosted.outputs.token }}
       run: |
         "$RUNNER_TEMP/perseid/perseid" push-spec "$SPEC" --to "$TO" $([ "$PRIVATE" = true ] && echo --private)

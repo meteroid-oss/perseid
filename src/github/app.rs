@@ -57,7 +57,6 @@ pub fn create(owner: &Owner, spec: &str, name: &str, ui: &Ui) -> Result<App> {
         "default_permissions": {
             "contents": "write",
             "pull_requests": "write",
-            "workflows": "write",
             "metadata": "read",
         },
     });

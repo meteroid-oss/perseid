@@ -1340,8 +1340,12 @@ fn empty_sdk_repositories_get_a_skeleton() {
     assert!(checkout.join("client.go").exists());
     assert!(checkout.join("release-please-config.json").exists());
     assert!(
-        checkout.join(".github/workflows/sdk-release.yml").exists(),
-        "the SDK pull request carries its release workflow"
+        !checkout.join(".github/workflows/sdk-release.yml").exists(),
+        "CI tokens can't write workflows: `perseid sync` commits it"
+    );
+    assert!(
+        out.contains("sdk-release.yml is missing: run `perseid sync`"),
+        "{out}"
     );
 
     let (ok, out) = perseid(dir.path(), &["generate", "go", "--no-format"]);

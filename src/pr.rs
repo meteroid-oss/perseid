@@ -346,9 +346,10 @@ fn token() -> Result<String> {
     let env = |name: &str| std::env::var(name).unwrap_or_default();
     ensure!(
         env("GITHUB_ACTIONS") != "true",
-        "no token to open the SDK pull requests: add the {TOKEN} secret (a fine-grained token \
-         with Contents, Pull requests and Workflows read and write on the SDK repositories), or \
-         run `perseid app`"
+        "no token to open the SDK pull requests: run `perseid sync` to install the perseid App \
+         (the job needs `permissions: id-token: write`), or `perseid app` for an App of your own, \
+         or add the {TOKEN} secret (a fine-grained token with Contents and Pull requests read and \
+         write on the SDK repositories)"
     );
     ensure!(
         std::io::stdin().is_terminal() && env("CI").is_empty(),

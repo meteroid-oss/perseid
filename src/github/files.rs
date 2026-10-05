@@ -94,8 +94,9 @@ pub fn write(config: &Config, root: &Path) -> Result<Vec<Written>> {
     Ok(written)
 }
 
-/// Writes the release files of `sdks` into `top`, a checkout of the repository holding them, so
-/// the SDK pull request carries them: the paths written. A release workflow the user wrote stays.
+/// Writes the release-please files of `sdks` into `top`, a checkout of the repository holding
+/// them, so the SDK pull request carries them: the paths written. The release workflow is never
+/// written there, since CI tokens can't write workflows: `perseid sync` commits it.
 pub fn write_release_files(
     config: &Config,
     sdks: &[&config::Sdk],
@@ -110,8 +111,22 @@ pub fn write_release_files(
         if current.as_deref() == Some(content.as_slice()) {
             continue;
         }
-        if path == RELEASE_WORKFLOW && !owned(current.as_deref()) {
-            println!("! {}: {}", top.display(), kept(&path, &branch));
+        if path == RELEASE_WORKFLOW {
+            if owned(current.as_deref()) {
+                let repo = super::origin_repo(top).unwrap_or_else(|| top.display().to_string());
+                let state = if current.is_some() {
+                    "outdated"
+                } else {
+                    "missing"
+                };
+                let message = format!(
+                    "{repo}: {RELEASE_WORKFLOW} is {state}: run `perseid sync` in the repository holding perseid.toml"
+                );
+                match std::env::var("GITHUB_ACTIONS").as_deref() {
+                    Ok("true") => println!("::warning::{message}"),
+                    _ => println!("! {message}"),
+                }
+            }
             continue;
         }
         crate::fsx::write(&target, &content)?;

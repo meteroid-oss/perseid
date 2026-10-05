@@ -1,5 +1,5 @@
 //! `perseid connect`: in the repository holding the spec, the workflow pushing it to the SDKs
-//! repository, and the credentials it pushes with: the SDKs' GitHub App, or a token.
+//! repository, and what it pushes with: the hosted perseid App, the SDKs' GitHub App, or a token.
 
 use std::{
     io::IsTerminal,
@@ -16,7 +16,7 @@ use super::{
     app::{self, APP_ID, APP_KEY},
     auth,
     bootstrap::{self, File},
-    git, join, layout,
+    git, hosted, join, layout,
     link::{self, Auth, Push, PushOn, Pushed},
     plan::{self, Action, Mark, Plan, Session, TOKEN},
     secrets, toplevel,
@@ -101,7 +101,7 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
         (None, Some(pushed)) => pushed.auth,
         (None, None) => match secrets::variable(&api, &hub, APP_ID).ok().flatten() {
             Some(_) => Auth::App,
-            None => Auth::Token,
+            None => Auth::Perseid,
         },
     };
     let tags = connect
@@ -133,6 +133,9 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
     let here = &settings.here;
     println!("\n{}\n", plan.diagram);
     ui.say(&match settings.pushed.auth {
+        Auth::Perseid => format!(
+            "perseid-push.yml pushes as the perseid App, installed on {hub}, whose perseid.toml names {here} as its source.\nNothing is stored in {here}, and nothing gets access to it. `--auth app` or `--auth token` push otherwise."
+        ),
         Auth::App => format!(
             "perseid-push.yml pushes as the GitHub App of {hub}, with a token for {hub} only minted on each run.\nThe App's key, stored in {here}, reaches every repository the App is installed on. `--auth token` uses a token instead."
         ),
@@ -156,7 +159,11 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
             .is_some_and(|a| !matches!(a, Action::Write { .. }))
     };
     let remote = plan.steps.iter().any(on_github);
-    let consent = !remote || ui.confirm(&format!("Store the credentials on {here}?"), true)?;
+    let question = match settings.pushed.auth {
+        Auth::Perseid => format!("Open the pull request on {hub}?"),
+        _ => format!("Store the credentials on {here}?"),
+    };
+    let consent = !remote || ui.confirm(&question, true)?;
     let manual = plan.manual();
     if !consent {
         plan.steps.retain(|s| !on_github(s));
@@ -170,14 +177,22 @@ pub fn connect(cwd: &Path, connect: Connect, options: &Options) -> Result<ExitCo
         }
     }
     println!("\nNext steps");
-    ui.info(&format!(
-        "1. Review {}, then commit and push it to the default branch",
+    let mut steps = vec![format!(
+        "Review {}, then commit and push it to the default branch",
         link::WORKFLOW
-    ));
-    ui.info(&format!(
-        "2. The spec then reaches {hub} {}: run the Spec workflow (`gh workflow run perseid-push.yml`) to push it now",
+    )];
+    if settings.pushed.auth == Auth::Perseid {
+        steps.push(format!(
+            "Merge the pull request adding `source` to the perseid.toml of {hub}"
+        ));
+    }
+    steps.push(format!(
+        "The spec then reaches {hub} {}: run the Spec workflow (`gh workflow run perseid-push.yml`) to push it now",
         when(*on)
     ));
+    for (n, step) in steps.iter().enumerate() {
+        ui.info(&format!("{}. {step}", n + 1));
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -230,8 +245,8 @@ fn ask_on(proposed: PushOn) -> Result<PushOn> {
     Ok(options[picked])
 }
 
-/// The perseid.toml of `hub`, and its path: at the root, or the only one.
-fn hub_config(api: &GitHub, hub: &str, branch: &str) -> Result<Option<(Config, String)>> {
+/// The perseid.toml of `hub`, its path and text: at the root, or the only one.
+fn hub_config(api: &GitHub, hub: &str, branch: &str) -> Result<Option<(Config, String, String)>> {
     let path = match bootstrap::read(api, hub, branch, config::FILE)? {
         Some(_) => config::FILE.to_owned(),
         None => {
@@ -250,7 +265,7 @@ fn hub_config(api: &GitHub, hub: &str, branch: &str) -> Result<Option<(Config, S
     let text = bootstrap::read(api, hub, branch, &path)?.unwrap_or_default();
     let mut config = Config::parse(&text, &format!("{hub}/{path}"))?;
     config.home = config::Home::github(hub, &path);
-    Ok(Some((config, path)))
+    Ok(Some((config, path, text)))
 }
 
 fn admin(info: &Value) -> bool {
@@ -265,7 +280,7 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
     let hub = pushed.hub.as_str();
     let here_info = api.get(&format!("/repos/{here}"))?;
     ensure!(
-        admin(&here_info),
+        pushed.auth == Auth::Perseid || admin(&here_info),
         "{} isn't an admin of {here}, which stores the credentials: ask an admin of {here} to run `npx perseid connect {hub}` there",
         cx.login
     );
@@ -278,8 +293,9 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
     let hub_base = bootstrap::default_branch(&hub_info);
     let mut plan = Plan::new();
     plan.hub = hub.to_owned();
-    match hub_config(api, hub, &hub_base)? {
-        Some((config, config_path)) => {
+    let found = hub_config(api, hub, &hub_base)?;
+    match &found {
+        Some((config, config_path, _)) => {
             let dir = config_path
                 .strip_suffix(config::FILE)
                 .unwrap_or_default()
@@ -308,6 +324,7 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
     }
 
     match pushed.auth {
+        Auth::Perseid => plan_source(api, &mut plan, &here_info, &hub_info, found, pushed.private)?,
         Auth::App => plan_app(api, &mut plan, here, hub)?,
         Auth::Token => plan_token(api, &mut plan, here, hub)?,
     }
@@ -352,6 +369,78 @@ pub(super) fn plan_connect(cx: &Session, settings: &Settings) -> Result<Plan> {
         ));
     }
     Ok(plan)
+}
+
+/// The `source` of the hub's perseid.toml naming `here`, added through a pull request: the
+/// hosted perseid App then lets `here` push there, and nothing else.
+fn plan_source(
+    api: &GitHub,
+    plan: &mut Plan,
+    here_info: &Value,
+    hub_info: &Value,
+    found: Option<(Config, String, String)>,
+    private: bool,
+) -> Result<()> {
+    let here = here_info["full_name"].as_str().unwrap_or_default();
+    let hub = hub_info["full_name"].as_str().unwrap_or_default();
+    let (Some(id), Some(target_id)) = (here_info["id"].as_u64(), hub_info["id"].as_u64()) else {
+        bail!("GitHub sent no id for {here} or {hub}");
+    };
+    if hosted::missing(api, &[hub.to_owned()])?.is_some_and(|m| !m.is_empty()) {
+        plan.warnings.push(format!(
+            "the perseid App isn't installed on {hub}: run `npx perseid sync` in a clone of it"
+        ));
+        plan.attention = true;
+    }
+    let Some((config, path, text)) = found else {
+        plan.warnings.push(format!(
+            "run `perseid connect {hub}` again once perseid.toml is there: it adds its `source`"
+        ));
+        return Ok(());
+    };
+    let line = hosted::source_line(here, id, target_id, private);
+    let named = config
+        .pushed_from
+        .as_ref()
+        .is_some_and(|s| s.id == id && s.target_id == target_id);
+    if named {
+        plan.add(
+            Mark::Keep,
+            format!("{hub}/{path} names {here} as its source"),
+            None,
+        );
+        return Ok(());
+    }
+    if hub_info["permissions"]["push"] == false {
+        plan.warnings.push(format!(
+            "ask a maintainer of {hub} to add to its {path}, at the top level: {line}"
+        ));
+        plan.attention = true;
+        return Ok(());
+    }
+    plan.add(
+        match config.pushed_from {
+            Some(_) => Mark::Change,
+            None => Mark::Add,
+        },
+        format!("{hub}/{path}: `{line}`, through a pull request"),
+        Some(Action::Commit(Box::new(hosted::Commit {
+            repo: hub.to_owned(),
+            base: bootstrap::default_branch(hub_info),
+            path: path.clone(),
+            content: hosted::with_source(&text, &line).into_bytes(),
+            message: match private {
+                true => "ci: let the API repository push the spec".to_owned(),
+                false => format!("ci: let {here} push the spec"),
+            },
+            branch: "perseid/source".to_owned(),
+            body: format!(
+                "Written by `perseid connect`: the perseid App lets the repository of id {id} push the spec here, with Contents write on this repository only. A copy of this file elsewhere grants nothing: `target_id` is this repository's id."
+            ),
+            direct: false,
+        }))),
+    );
+    Ok(())
 }
 
 /// The ID and a key of the GitHub App of `hub` in `here`: the ID copied, the key new.

@@ -1,5 +1,5 @@
-//! What `perseid app` and `perseid connect` change on GitHub for perseid.toml to hold, computed
-//! without writing, then applied.
+//! What `perseid sync`, `perseid app` and `perseid connect` change on GitHub for perseid.toml to
+//! hold, computed without writing, then applied.
 
 use std::{
     collections::BTreeSet,
@@ -15,7 +15,7 @@ use super::{
     api::GitHub,
     app,
     bootstrap::{self, File},
-    files, git, join,
+    files, git, hosted, join,
     layout::{self, SDKS_WORKFLOW},
     link, relative, secrets, toplevel,
 };
@@ -55,6 +55,13 @@ pub(super) enum Action {
         repo: String,
         hub: String,
     },
+    /// Sends the user to install the hosted perseid App on `repos`, of `owner`.
+    Install {
+        owner: String,
+        repos: Vec<String>,
+    },
+    /// Commits a file with the user's credentials, directly or through a pull request.
+    Commit(Box<hosted::Commit>),
 }
 
 pub(super) struct AppPlan {
@@ -122,7 +129,7 @@ impl Plan {
             .filter(|s| s.mark != Mark::Keep)
             .filter_map(|s| match s.action.as_ref()? {
                 Action::App(app) => Some(format!(
-                    "create a GitHub App with Contents, Pull requests and Workflows read and write, install it on {}, and set its ID as the SDK_APP_ID variable and a private key as the SDK_APP_PRIVATE_KEY secret of each (https://github.com/meteroid-oss/perseid/blob/main/docs/ci.md#tokens)",
+                    "create a GitHub App with Contents and Pull requests read and write, install it on {}, and set its ID as the SDK_APP_ID variable and a private key as the SDK_APP_PRIVATE_KEY secret of each (https://github.com/meteroid-oss/perseid/blob/main/docs/ci.md#tokens)",
                     app.repos.join(", ")
                 )),
                 Action::AppKey(new) => Some(format!(
@@ -136,6 +143,16 @@ impl Plan {
                 }
                 Action::Token { repo, hub } => Some(format!(
                     "create a fine-grained token with Contents read and write on {hub} at https://github.com/settings/personal-access-tokens/new, then `gh secret set {TOKEN} -R {repo}`"
+                )),
+                Action::Install { owner, repos } => Some(format!(
+                    "install the perseid App on {owner}, on {} only: {}/apps/{}/installations/new",
+                    repos.join(", "),
+                    super::api::web_base(),
+                    hosted::SLUG
+                )),
+                Action::Commit(commit) => Some(format!(
+                    "commit {} to {} (`{}`)",
+                    commit.path, commit.repo, commit.base
                 )),
             })
             .collect()
@@ -335,28 +352,27 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
             );
         }
         let name = hub.config.name.to_kebab_case();
-        plan_app(cx, plan, &hub.repo, repos, installed, who, name)?;
+        plan_app(cx, plan, &hub.repo, repos.clone(), installed, who, name)?;
+    } else if repos
+        .iter()
+        .all(|r| secrets::has_secret(api, r, TOKEN).unwrap_or(false))
+    {
+        plan.add(
+            Mark::Keep,
+            format!("{}: {TOKEN} set", repos.join(", ")),
+            None,
+        );
     } else {
-        let missing: Vec<&String> = repos
-            .iter()
-            .filter(|r| !secrets::has_secret(api, r, TOKEN).unwrap_or(false))
-            .collect();
-        match missing.as_slice() {
-            [] => plan.add(
-                Mark::Keep,
-                format!("{}: {TOKEN} set", repos.join(", ")),
-                None,
-            ),
-            missing => {
-                let list: Vec<&str> = missing.iter().map(|r| r.as_str()).collect();
-                plan.warnings.push(format!(
-                    "add the {TOKEN} secret to {}: a fine-grained token at https://github.com/settings/personal-access-tokens/new for {} with Contents, Pull requests and Workflows read and write. It expires: `perseid app` sets up a GitHub App instead",
-                    list.join(", "),
-                    repos.join(", ")
-                ));
-                plan.attention = true;
-            }
+        if !same(&owner, &hub_owner) {
+            bail!(
+                "the perseid App opens pull requests within one account, but {} isn't owned by {owner}: move it, or run `perseid app` for a GitHub App of your own",
+                hub.repo
+            );
         }
+        plan_hosted(api, plan, &owner, &repos)?;
+    }
+    if hub.config.release != Some(false) {
+        plan_release_workflows(api, plan, &sdks, &repos)?;
     }
     let expected = super::files::expected(&hub.config, &hub.local.1)?;
     if expected.branch != hub_base {
@@ -403,6 +419,97 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
     plan.hub_dir = hub.dir.clone();
     plan.hub = hub.repo;
     plan.hub_config = Some(hub.config);
+    Ok(())
+}
+
+/// The hosted perseid App on `repos`, installed by the user in their browser.
+fn plan_hosted(api: &GitHub, plan: &mut Plan, owner: &str, repos: &[String]) -> Result<()> {
+    if hosted::everywhere(api, owner)? {
+        plan.warnings.push(format!(
+            "the perseid App is installed on all of {owner}'s repositories, which it refuses since each could write to all the others: choose \"Only select repositories\" in its settings, with {}",
+            short(repos)
+        ));
+        plan.attention = true;
+        return Ok(());
+    }
+    let install = Action::Install {
+        owner: owner.to_owned(),
+        repos: repos.to_vec(),
+    };
+    match hosted::missing(api, repos)? {
+        Some(missing) if missing.is_empty() => plan.add(
+            Mark::Keep,
+            format!("perseid App installed on {}", short(repos)),
+            None,
+        ),
+        Some(missing) => plan.add(
+            Mark::Add,
+            format!(
+                "perseid App installed on {}, in your browser",
+                short(&missing)
+            ),
+            Some(install),
+        ),
+        None => plan.add(
+            Mark::Add,
+            format!(
+                "perseid App installed on {}, checked in your browser: GitHub doesn't tell this token",
+                short(repos)
+            ),
+            Some(install),
+        ),
+    }
+    Ok(())
+}
+
+/// sdk-release.yml in each SDK repository among `repos`, committed with the user's credentials:
+/// the SDK pull requests never write workflows.
+fn plan_release_workflows(
+    api: &GitHub,
+    plan: &mut Plan,
+    sdks: &[crate::config::Sdk],
+    repos: &[String],
+) -> Result<()> {
+    for repo in repos {
+        if !sdks.iter().any(|s| s.remote() == Some(repo.as_str())) {
+            continue;
+        }
+        let info = api.get(&format!("/repos/{repo}"))?;
+        let base = bootstrap::default_branch(&info);
+        let expected = crate::scaffold::release_workflow(&base);
+        let current = api.raw(repo, &base, RELEASE_WORKFLOW)?;
+        if current.as_deref() == Some(expected.as_slice()) {
+            plan.add(
+                Mark::Keep,
+                format!("{repo}: {RELEASE_WORKFLOW} up to date"),
+                None,
+            );
+            continue;
+        }
+        if current.is_some() && !files::owned(current.as_deref()) {
+            plan.warnings
+                .push(format!("{repo}: {}", files::kept(RELEASE_WORKFLOW, &base)));
+            continue;
+        }
+        let (mark, message) = match current {
+            Some(_) => (Mark::Change, "ci: update the perseid release workflow"),
+            None => (Mark::Add, "ci: release the SDK with perseid"),
+        };
+        plan.add(
+            mark,
+            format!("{repo}: {RELEASE_WORKFLOW}, committed with your credentials"),
+            Some(Action::Commit(Box::new(hosted::Commit {
+                repo: repo.clone(),
+                base,
+                path: RELEASE_WORKFLOW.to_owned(),
+                content: expected,
+                message: message.to_owned(),
+                branch: "perseid/release-workflow".to_owned(),
+                body: "Written by `perseid sync`: runs release-please on the SDKs, then publishes the released ones.".to_owned(),
+                direct: true,
+            }))),
+        );
+    }
     Ok(())
 }
 
@@ -578,6 +685,8 @@ pub fn apply(api: &GitHub, plan: &mut Plan, ui: &Ui) -> Result<()> {
                 ui.ok(&format!("{name} is set on {repo}"));
             }
             Action::Token { repo, hub } => link::add_token(api, &repo, &hub, ui)?,
+            Action::Install { owner, repos } => hosted::install(api, &owner, &repos, ui)?,
+            Action::Commit(commit) => hosted::commit(api, &commit, ui)?,
         }
     }
     Ok(())

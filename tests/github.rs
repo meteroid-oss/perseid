@@ -1,5 +1,5 @@
-//! `perseid app`, `perseid connect` and `perseid status` against a fake GitHub serving the REST
-//! API, OAuth and App pages, for each repository layout.
+//! `perseid sync`, `perseid app`, `perseid connect` and `perseid status` against a fake GitHub
+//! serving the REST API, OAuth and App pages, for each repository layout.
 
 use std::{
     collections::{BTreeMap, hash_map::DefaultHasher},
@@ -31,6 +31,8 @@ struct Repo {
     key: Option<SecretKey>,
     released: bool,
     default_branch: Option<String>,
+    /// The default branch takes no direct push.
+    protected: bool,
 }
 
 #[derive(Default)]
@@ -44,6 +46,12 @@ struct GitHub {
     token_polls: usize,
     installation_checks: usize,
     app_created: bool,
+    /// Repositories of the hosted perseid App's installation, once listed `hosted_after` times.
+    hosted: Vec<String>,
+    hosted_after: usize,
+    hosted_lists: usize,
+    /// The hosted App's installation covers all of acme's repositories.
+    hosted_everywhere: bool,
 }
 
 fn digest(value: impl Hash) -> String {
@@ -162,9 +170,29 @@ impl GitHub {
                 (401, json!({ "message": "Requires authentication" }))
             }
             ("GET", ["api", "user"]) => (200, json!({ "login": "octo" })),
-            ("GET", ["api", "users", login]) => {
-                (200, json!({ "login": login, "type": "Organization" }))
+            ("GET", ["api", "user", "installations"]) => {
+                self.hosted_lists += 1;
+                let installations = match self.hosted_lists > self.hosted_after {
+                    true => json!([{
+                        "id": 99, "app_slug": "perseid", "account": { "login": "acme" },
+                        "repository_selection": if self.hosted_everywhere { "all" } else { "selected" },
+                    }]),
+                    false => json!([]),
+                };
+                (200, json!({ "installations": installations }))
             }
+            ("GET", ["api", "user", "installations", "99", "repositories"]) => {
+                let listed: Vec<Value> = self
+                    .hosted
+                    .iter()
+                    .map(|r| json!({ "full_name": r }))
+                    .collect();
+                (200, json!({ "repositories": listed }))
+            }
+            ("GET", ["api", "users", login]) => (
+                200,
+                json!({ "login": login, "type": "Organization", "id": id_of(login) }),
+            ),
             ("GET", ["api", "orgs", _, "installations"]) => {
                 let installations = match self.app_created {
                     true => json!([{ "app_id": 42, "repository_selection": "selected" }]),
@@ -232,6 +260,7 @@ impl GitHub {
                 (
                     200,
                     json!({
+                        "id": id_of(name),
                         "full_name": name, "private": repo.private, "visibility": visibility,
                         "default_branch": repo.default_branch.as_deref().unwrap_or("main"),
                         "permissions": { "admin": !repo.readonly, "push": true },
@@ -251,13 +280,69 @@ impl GitHub {
                     _ => (200, json!({ "id": 7, "app_id": 42 })),
                 }
             }
+            ("PUT", ["contents", path @ ..]) => {
+                let repo = &self.repos[name];
+                let default = repo.default_branch.clone().unwrap_or_else(|| "main".into());
+                let branch = body["branch"].as_str().unwrap_or(&default).to_owned();
+                if repo.protected && branch == default {
+                    return (
+                        409,
+                        json!({ "message": "Changes must be made through a pull request." }),
+                    );
+                }
+                let mut tree = match repo.refs.contains_key(&branch) {
+                    true => self.files(name, &branch),
+                    false if repo.refs.is_empty() => BTreeMap::new(),
+                    false => return (404, json!({ "message": "Branch not found" })),
+                };
+                let path = path.join("/");
+                assert_eq!(
+                    body["sha"].is_string(),
+                    tree.contains_key(&path),
+                    "a sha updates an existing file only"
+                );
+                let content = BASE64.decode(body["content"].as_str().unwrap()).unwrap();
+                tree.insert(path, String::from_utf8(content).unwrap());
+                let tree = tree
+                    .into_iter()
+                    .map(|(path, text)| (path, self.blob(text.as_bytes())))
+                    .collect();
+                let commit = self.commit(tree, body["message"].as_str().unwrap());
+                self.repos
+                    .get_mut(name)
+                    .unwrap()
+                    .refs
+                    .insert(branch, commit);
+                (201, json!({}))
+            }
+            ("POST", ["git", "refs"]) => {
+                let branch = body["ref"]
+                    .as_str()
+                    .unwrap()
+                    .strip_prefix("refs/heads/")
+                    .unwrap();
+                let refs = &mut self.repos.get_mut(name).unwrap().refs;
+                if refs.contains_key(branch) {
+                    return (422, json!({ "message": "Reference already exists" }));
+                }
+                refs.insert(branch.into(), body["sha"].as_str().unwrap().into());
+                (201, json!({}))
+            }
+            ("PATCH", ["git", "refs", "heads", branch @ ..]) => {
+                let refs = &mut self.repos.get_mut(name).unwrap().refs;
+                refs.insert(branch.join("/"), body["sha"].as_str().unwrap().into());
+                (200, json!({}))
+            }
             ("GET", ["contents", path @ ..]) => {
                 let branch = param("ref").unwrap();
                 match self.repos[name].refs.get(&branch) {
                     None => (404, json!({ "message": "No commit found for the ref" })),
                     Some(_) => match self.files(name, &branch).get(&path.join("/")) {
                         Some(text) if raw => (200, Value::String(text.clone())),
-                        Some(text) => (200, json!({ "content": BASE64.encode(text) })),
+                        Some(text) => (
+                            200,
+                            json!({ "content": BASE64.encode(text), "sha": digest(text) }),
+                        ),
                         None => (404, json!({ "message": "Not Found" })),
                     },
                 }
@@ -371,6 +456,11 @@ impl GitHub {
             ),
         }
     }
+}
+
+/// A stable numeric id for a repository or an account.
+fn id_of(name: &str) -> u64 {
+    u64::from_str_radix(&digest(name.to_lowercase())[..8], 16).unwrap()
 }
 
 fn serve(github: Arc<Mutex<GitHub>>) -> u16 {
@@ -623,7 +713,7 @@ fn browser(local: &str, port: u16) {
     assert_eq!(manifest["hook_attributes"]["active"], false);
     assert_eq!(
         manifest["default_permissions"],
-        json!({ "contents": "write", "pull_requests": "write", "workflows": "write", "metadata": "read" })
+        json!({ "contents": "write", "pull_requests": "write", "metadata": "read" })
     );
     let redirect = manifest["redirect_url"].as_str().unwrap();
     assert!(redirect.starts_with("http://127.0.0.1:") && redirect.ends_with("/callback"));
@@ -667,8 +757,8 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
         "+ perseid.toml\n+ .github/workflows/sdks.yml\n",
         "Packages: npm petstore, PyPI petstore, Go github.com/acme/petstore-go",
         "Create the SDK repositories: `gh repo create acme/petstore-go --private`, `gh repo create acme/petstore-python --private`, `gh repo create acme/petstore-typescript --private`",
-        "with access to acme/petstore, acme/petstore-go, acme/petstore-python, acme/petstore-typescript",
-        "`perseid app` creates it in your browser",
+        "Run `perseid sync`: it installs the perseid App on acme/petstore, acme/petstore-go, acme/petstore-python, acme/petstore-typescript",
+        "`perseid app` sets up a GitHub App of your own instead",
         "PyPI: add acme/petstore-python as the pending publisher of petstore",
     ] {
         assert!(out.contains(line), "{line}\n{out}");
@@ -696,7 +786,9 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
     assert_eq!(code, 2, "{out}");
     for line in [
         "! create the SDK repositories perseid.toml names: `gh repo create acme/petstore-go --private`, `gh repo create acme/petstore-python --private`",
-        "! add the SDK_GITHUB_TOKEN secret to acme/petstore, acme/petstore-typescript: a fine-grained token",
+        "    + perseid App installed on petstore, petstore-typescript, in your browser",
+        "    + acme/petstore-typescript: .github/workflows/sdk-release.yml, committed with your credentials",
+        "→ run `perseid sync`",
     ] {
         assert!(out.contains(line), "{line}\n{out}");
     }
@@ -715,8 +807,10 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
         "✓ Signed in to GitHub as octo (browser)",
         "acme/petstore ──PRs──▶ acme/petstore-typescript, acme/petstore-python, acme/petstore-go",
         "  + GitHub App petstore-sdk-bot on acme, created in your browser",
-        "? Set up the GitHub App? [Y/n]",
-        "sdks.yml and sdk-release.yml now open their pull requests as the App",
+        "  + acme/petstore-go: .github/workflows/sdk-release.yml, committed with your credentials",
+        "? Apply these changes? [Y/n]",
+        "✓ acme/petstore-go: committed .github/workflows/sdk-release.yml to `main`",
+        "sdks.yml and sdk-release.yml now open their pull requests as your App",
     ] {
         assert!(out.contains(line), "{line}\n{out}");
     }
@@ -733,12 +827,25 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
             repo.secrets["SDK_APP_PRIVATE_KEY"], PEM,
             "decrypted with the repository key"
         );
-        assert_eq!(
-            repo.refs.keys().collect::<Vec<_>>(),
-            ["main"],
-            "nothing committed"
+        assert_eq!(repo.refs.keys().collect::<Vec<_>>(), ["main"]);
+    }
+    for repo in [
+        "acme/petstore-go",
+        "acme/petstore-typescript",
+        "acme/petstore-python",
+    ] {
+        let workflow = &github.files(repo, "main")[".github/workflows/sdk-release.yml"];
+        assert!(
+            workflow.contains("uses: meteroid-oss/perseid/release@v0\n"),
+            "{workflow}"
         );
     }
+    assert!(
+        !github
+            .files("acme/petstore", "main")
+            .contains_key(".github/workflows/sdk-release.yml"),
+        "no SDK lives in the repository holding perseid.toml"
+    );
     assert_eq!(
         github.repos["acme/petstore"].variables["SDK_APP_SLUG"],
         "petstore-sdk-bot"
@@ -748,7 +855,8 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
     assert!(
         github.writes(before).iter().all(|w| w.contains("/actions/")
             || w.contains("app-manifests")
-            || w.contains("/login/")),
+            || w.contains("/login/")
+            || w.ends_with("/contents/.github/workflows/sdk-release.yml")),
         "{:?}",
         github.writes(before)
     );
@@ -757,10 +865,7 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
     let before = server.lock().unwrap().calls.len();
     let (code, out) = perseid(dir.path(), bin.path(), port, &["app", "--yes"], "", &TOKEN);
     assert_eq!(code, 0, "{out}");
-    assert!(
-        out.contains("✓ The App is set up: nothing to change"),
-        "{out}"
-    );
+    assert!(out.contains("✓ In sync: nothing to change"), "{out}");
     assert_eq!(server.lock().unwrap().writes(before), Vec::<&String>::new());
 
     server
@@ -881,8 +986,8 @@ fn connect_pushes_the_spec_to_a_repository_holding_every_sdk() {
     assert_eq!(code, 2, "{out}");
     for line in [
         "acme/petstore-sdks ──PRs──▶ acme/petstore-sdks (typescript/, python/)",
-        "! add the SDK_GITHUB_TOKEN secret to acme/petstore-sdks: a fine-grained token at https://github.com/settings/personal-access-tokens/new",
-        "`perseid app` sets up a GitHub App instead",
+        "    + perseid App installed on petstore-sdks, in your browser",
+        "→ run `perseid sync`",
     ] {
         assert!(out.contains(line), "{line}\n{out}");
     }
@@ -919,7 +1024,13 @@ fn connect_pushes_the_spec_to_a_repository_holding_every_sdk() {
 
     let (dir, bin) = api_checkout(true);
     let before = server.lock().unwrap().calls.len();
-    let connect = ["connect", "acme/petstore-sdks", "--dry-run"];
+    let connect = [
+        "connect",
+        "acme/petstore-sdks",
+        "--dry-run",
+        "--auth",
+        "token",
+    ];
     let (code, out) = perseid(dir.path(), bin.path(), port, &connect, "", &TOKEN);
     assert_eq!(code, 2, "changes pending: {out}");
     assert_eq!(server.lock().unwrap().writes(before), Vec::<&String>::new());
@@ -933,7 +1044,7 @@ fn connect_pushes_the_spec_to_a_repository_holding_every_sdk() {
         assert!(out.contains(line), "{line}\n{out}");
     }
 
-    let connect = ["connect", "acme/petstore-sdks", "--yes"];
+    let connect = ["connect", "acme/petstore-sdks", "--yes", "--auth", "token"];
     let (code, out) = perseid(dir.path(), bin.path(), port, &connect, "", &TOKEN);
     assert_ne!(code, 0);
     assert!(
@@ -1046,6 +1157,163 @@ fn connect_pushes_the_spec_to_a_repository_holding_every_sdk() {
         out.contains("→ run `perseid connect acme/petstore-sdks`"),
         "{out}"
     );
+}
+
+#[test]
+fn the_perseid_app_needs_no_secret_anywhere() {
+    let server = Arc::new(Mutex::new(GitHub::with_spec_repo()));
+    let port = serve(server.clone());
+    let args = [
+        "init",
+        "--sdks",
+        "typescript,python",
+        "--repo",
+        "acme/petstore-{lang}",
+        "--name",
+        "Petstore",
+    ];
+    let (sdks, sdks_bin) = set_up_sdks_repository(&server, port, &args);
+    {
+        let mut github = server.lock().unwrap();
+        github.add_repo(
+            "acme/petstore-typescript",
+            &[("README.md", "# TypeScript\n")],
+        );
+        github.add_repo("acme/petstore-python", &[("README.md", "# Python\n")]);
+        github
+            .repos
+            .get_mut("acme/petstore-python")
+            .unwrap()
+            .protected = true;
+        github.hosted = [
+            "acme/petstore-sdks",
+            "acme/petstore-python",
+            "acme/petstore-typescript",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        github.hosted_after = 2;
+    }
+
+    let sync = ["sync", "--no-browser"];
+    let (code, out) = perseid(sdks.path(), sdks_bin.path(), port, &sync, "\n\n", &TOKEN);
+    assert_eq!(code, 0, "{out}");
+    for line in [
+        "  + perseid App installed on petstore-sdks, petstore-python, petstore-typescript, in your browser",
+        "  + acme/petstore-python: .github/workflows/sdk-release.yml, committed with your credentials",
+        "→ Install the perseid App on acme, choosing \"Only select repositories\": petstore-sdks, petstore-python, petstore-typescript",
+        &format!(
+            "/web/apps/perseid/installations/new/permissions?suggested_target_id={}&repository_ids[]={}",
+            id_of("acme"),
+            id_of("acme/petstore-sdks")
+        ),
+        "✓ The perseid App is installed on petstore-sdks, petstore-python, petstore-typescript",
+        "✓ acme/petstore-typescript: committed .github/workflows/sdk-release.yml to `main`",
+        "✓ acme/petstore-python: .github/workflows/sdk-release.yml is in a pull request, to merge: https://github.com/acme/petstore-python/pull/1",
+    ] {
+        assert!(out.contains(line), "{line}\n{out}");
+    }
+    {
+        let github = server.lock().unwrap();
+        for repo in github.repos.values() {
+            assert!(repo.secrets.is_empty() && repo.variables.is_empty());
+        }
+        let release = ".github/workflows/sdk-release.yml";
+        assert!(
+            github
+                .files("acme/petstore-typescript", "main")
+                .contains_key(release)
+        );
+        assert!(
+            !github
+                .files("acme/petstore-python", "main")
+                .contains_key(release)
+        );
+        let proposed = &github.files("acme/petstore-python", "perseid/release-workflow")[release];
+        assert!(proposed.contains("      id-token: write\n"), "{proposed}");
+        assert_eq!(github.pulls[0]["base"], "main");
+    }
+    let (code, out) = perseid(
+        sdks.path(),
+        sdks_bin.path(),
+        port,
+        &["sync", "--yes"],
+        "",
+        &TOKEN,
+    );
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(
+            "  = perseid App installed on petstore-sdks, petstore-python, petstore-typescript"
+        ) && out.contains(
+            "is in a pull request, to merge: https://github.com/acme/petstore-python/pull/1"
+        ),
+        "the pull request is updated, not opened again: {out}"
+    );
+    assert_eq!(server.lock().unwrap().pulls.len(), 1);
+
+    server.lock().unwrap().hosted_everywhere = true;
+    let (code, out) = perseid(sdks.path(), sdks_bin.path(), port, &["status"], "", &TOKEN);
+    assert_eq!(code, 2, "{out}");
+    assert!(
+        out.contains(
+            "! the perseid App is installed on all of acme's repositories, which it refuses"
+        ),
+        "{out}"
+    );
+    server.lock().unwrap().hosted_everywhere = false;
+
+    let (dir, bin) = api_checkout(true);
+    let connect = ["connect", "acme/petstore-sdks", "--yes"];
+    let (code, out) = perseid(dir.path(), bin.path(), port, &connect, "", &TOKEN);
+    assert_eq!(code, 0, "{out}");
+    let line = format!(
+        "source = {{ repo = \"acme/petstore\", id = {}, target_id = {} }}",
+        id_of("acme/petstore"),
+        id_of("acme/petstore-sdks")
+    );
+    for expected in [
+        "→ perseid-push.yml pushes as the perseid App, installed on acme/petstore-sdks, whose perseid.toml names acme/petstore as its source.",
+        &format!("  + acme/petstore-sdks/perseid.toml: `{line}`, through a pull request"),
+        "✓ acme/petstore-sdks: perseid.toml is in a pull request, to merge: https://github.com/acme/petstore-sdks/pull/2",
+        "2. Merge the pull request adding `source` to the perseid.toml of acme/petstore-sdks",
+    ] {
+        assert!(out.contains(expected), "{expected}\n{out}");
+    }
+    {
+        let mut github = server.lock().unwrap();
+        let api = &github.repos["acme/petstore"];
+        assert!(api.secrets.is_empty() && api.variables.is_empty());
+        let config = &github.files("acme/petstore-sdks", "perseid/source")["perseid.toml"];
+        assert!(config.contains(&format!("{line}\n")), "{config}");
+        assert!(
+            perseid::config::Config::parse(config, "perseid.toml").is_ok(),
+            "{config}"
+        );
+        let merged = github.repos["acme/petstore-sdks"].refs["perseid/source"].clone();
+        github
+            .repos
+            .get_mut("acme/petstore-sdks")
+            .unwrap()
+            .refs
+            .insert("main".into(), merged);
+    }
+    let push = fs::read_to_string(dir.path().join(".github/workflows/perseid-push.yml")).unwrap();
+    keep("perseid-push-perseid-app.yml", &push);
+    assert!(
+        push.contains("  id-token: write\n")
+            && !push.contains("          token:")
+            && !push.contains("secrets."),
+        "{push}"
+    );
+    let (code, out) = perseid(dir.path(), bin.path(), port, &connect, "", &TOKEN);
+    assert_eq!(code, 0, "{out}");
+    for expected in [
+        "  = acme/petstore-sdks/perseid.toml names acme/petstore as its source",
+        "✓ In sync: nothing to change",
+    ] {
+        assert!(out.contains(expected), "{expected}\n{out}");
+    }
 }
 
 #[test]
@@ -1173,7 +1441,14 @@ fn connect_declined_writes_the_workflow_only_and_says_how_to_add_the_token() {
     set_up_sdks_repository(&server, port, &["init", "--sdks", "go"]);
     let (dir, bin) = api_checkout(true);
     let before = server.lock().unwrap().calls.len();
-    let connect = ["connect", "acme/petstore-sdks", "--on", "change"];
+    let connect = [
+        "connect",
+        "acme/petstore-sdks",
+        "--on",
+        "change",
+        "--auth",
+        "token",
+    ];
     let (code, out) = perseid(dir.path(), bin.path(), port, &connect, "n\n", &TOKEN);
     assert_eq!(code, 0, "{out}");
     assert_eq!(server.lock().unwrap().writes(before), Vec::<&String>::new());
@@ -1223,7 +1498,7 @@ fn connect_warns_until_the_sdks_repository_is_set_up_and_needs_admin_rights_here
     ] {
         assert!(out.contains(line), "{line}\n{out}");
     }
-    let connect = ["connect", "acme/petstore-sdks", "--yes"];
+    let connect = ["connect", "acme/petstore-sdks", "--yes", "--auth", "token"];
     let (code, out) = perseid(
         dir.path(),
         bin.path(),

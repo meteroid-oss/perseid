@@ -1,5 +1,6 @@
 //! The one-way link from the repository holding the spec to the SDKs repository receiving it: a
-//! workflow running `perseid push-spec`, as the GitHub App of the SDKs or with a token.
+//! workflow running `perseid push-spec`, as the hosted perseid App, the GitHub App of the SDKs or
+//! with a token.
 
 use std::path::Path;
 
@@ -59,6 +60,9 @@ impl PushOn {
 /// How perseid-push.yml authenticates to the SDKs repository.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Auth {
+    /// The hosted perseid App, installed on the SDKs repository, whose perseid.toml names this
+    /// repository as its `source`. Nothing to store here.
+    Perseid,
     /// The GitHub App `perseid app` set up for the SDKs, with a new key of it.
     App,
     /// A fine-grained token with Contents read and write on the SDKs repository.
@@ -148,9 +152,10 @@ pub fn pushed(yaml: &str) -> Option<Pushed> {
             .is_some_and(|u| u.starts_with("meteroid-oss/perseid/push@"))
     });
     let with = &action?["with"];
-    let auth = match with["token"].as_str()? {
-        token if token.contains("steps.app") => Auth::App,
-        _ => Auth::Token,
+    let auth = match with["token"].as_str() {
+        None => Auth::Perseid,
+        Some(token) if token.contains("steps.app") => Auth::App,
+        Some(_) => Auth::Token,
     };
     Some(Pushed {
         hub,
@@ -202,15 +207,22 @@ pub fn push_workflow(push: &Push) -> String {
         ),
     };
     let private = match push.private {
-        true => "\n          private: true",
+        true => "          private: true\n",
         false => "",
     };
     let hub = push.hub;
     let (who, app, credential) = match push.auth {
+        Auth::Perseid => (
+            format!(
+                "It pushes as the perseid App, installed on {hub}, whose perseid.toml names this repository as its source."
+            ),
+            String::new(),
+            String::new(),
+        ),
         Auth::Token => (
             format!("{TOKEN} is a fine-grained token that can write to {hub}."),
             String::new(),
-            format!("token: ${{{{ secrets.{TOKEN} }}}}"),
+            format!("          token: ${{{{ secrets.{TOKEN} }}}}\n"),
         ),
         Auth::App => {
             let (owner, name) = hub.split_once('/').unwrap_or((hub, hub));
@@ -221,7 +233,7 @@ pub fn push_workflow(push: &Push) -> String {
                 format!(
                     "      - id: app\n        uses: actions/create-github-app-token@v2\n        with:\n          app-id: ${{{{ vars.{APP_ID} }}}}\n          private-key: ${{{{ secrets.{APP_KEY} }}}}\n          owner: {owner}\n          repositories: {name}\n          permission-contents: write\n"
                 ),
-                "token: ${{ steps.app.outputs.token }}".to_owned(),
+                "          token: ${{ steps.app.outputs.token }}\n".to_owned(),
             )
         }
     };
@@ -236,7 +248,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: read{id_token}
 
 concurrency: perseid-push
 
@@ -249,8 +261,11 @@ jobs:
         with:
           spec: {spec:?}
           to: {hub}
-          {credential}{private}
-"#,
+{credential}{private}"#,
+        id_token = match push.auth {
+            Auth::Perseid => "\n  id-token: write",
+            _ => "",
+        },
         spec = push.spec,
         action = super::uses("push"),
     )
@@ -296,6 +311,7 @@ mod tests {
             (PushOn::Change, None, Auth::Token, false),
             (PushOn::Release, Some("make spec"), Auth::Token, true),
             (PushOn::Tag, None, Auth::App, false),
+            (PushOn::Change, None, Auth::Perseid, true),
         ] {
             let read = pushed(&push_workflow(&push(on, build, auth, private))).unwrap();
             assert_eq!(
@@ -323,5 +339,17 @@ mod tests {
         assert_eq!(steps[1]["with"]["owner"], "acme");
         assert_eq!(steps[1]["with"]["repositories"], "api-sdks");
         assert_eq!(steps[2]["with"]["token"], "${{ steps.app.outputs.token }}");
+    }
+
+    #[test]
+    fn the_perseid_app_needs_no_secret_but_an_oidc_token() {
+        let yaml = push_workflow(&push(PushOn::Change, None, Auth::Perseid, false));
+        let parsed: Value = serde_norway::from_str(&yaml).unwrap();
+        assert_eq!(parsed["permissions"]["id-token"], "write");
+        let with = &parsed["jobs"]["push"]["steps"][1]["with"];
+        assert_eq!(with["to"], "acme/api-sdks");
+        assert!(with.get("token").is_none(), "{yaml}");
+        assert!(!yaml.contains("secrets."), "{yaml}");
+        assert!(yaml.ends_with("          to: acme/api-sdks\n"), "{yaml}");
     }
 }

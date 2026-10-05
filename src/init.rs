@@ -247,17 +247,14 @@ fn next_steps(config: &Config, root: &Path) {
         };
         steps.push(format!("Create the SDK {noun}: {}", create.join(", ")));
     }
-    let secret = match repos.as_slice() {
-        [one] => format!("`gh secret set {} -R {one}`", crate::github::TOKEN),
-        _ => format!("`gh secret set {} -R <repo>` on each", crate::github::TOKEN),
-    };
     steps.push(format!(
-        "Let the workflows open pull requests, with either:
-       - a GitHub App, which doesn't expire: `perseid app` creates it in your browser and stores its key
-       - a fine-grained token, which expires: https://github.com/settings/personal-access-tokens/new
-         with access to {} and Contents, Pull requests and Workflows read and write,
-         then {secret}",
-        repos.join(", ")
+        "Run `perseid sync`: it installs the perseid App on {}, so the workflows open pull requests with nothing stored{}.
+       `perseid app` sets up a GitHub App of your own instead",
+        repos.join(", "),
+        match remote.is_empty() {
+            true => "",
+            false => ", and commits the release workflow of each SDK repository",
+        }
     ));
     steps.push(match awaited {
         Some(_) => "Commit and push what perseid wrote to the default branch".to_owned(),
@@ -265,7 +262,7 @@ fn next_steps(config: &Config, root: &Path) {
     });
     if let Some(file) = awaited {
         steps.push(format!(
-            "In the repository holding the spec, run `npx perseid connect {hub}`: it writes a workflow pushing the spec here as {file}, as the GitHub App above or with a token"
+            "In the repository holding the spec, run `npx perseid connect {hub}`: it writes a workflow pushing the spec here as {file}, and adds that repository as the `source` of perseid.toml"
         ));
     }
     steps.push("`perseid status` checks the setup on GitHub".to_owned());

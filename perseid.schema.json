@@ -129,6 +129,14 @@
         "$ref": "#/definitions/Language"
       }
     },
+    "source": {
+      "description": "The repository pushing the spec here with the hosted perseid App, which `perseid connect` adds: it gets Contents write on this repository, and needs no App itself.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/PushedFrom"
+        }
+      ]
+    },
     "spec": {
       "description": "The OpenAPI document (3.0 or 3.1, JSON or YAML) generated from: a path relative to perseid.toml, where `perseid connect` pushes it from another repository, or an http(s) URL.",
       "default": "openapi.json",
@@ -533,6 +541,33 @@
         "total_pages": {
           "description": "Number of pages.",
           "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PushedFrom": {
+      "description": "A repository allowed to push the spec, by id: a repository recreated under its name has another.",
+      "type": "object",
+      "required": [
+        "id",
+        "target_id"
+      ],
+      "properties": {
+        "id": {
+          "description": "Its repository id.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "repo": {
+          "description": "`owner/name` of the repository pushing the spec, for people: left out with `perseid connect --private`.",
+          "type": "string"
+        },
+        "target_id": {
+          "description": "The id of the repository holding this file: a copy of it elsewhere grants nothing.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         }
       },
       "additionalProperties": false

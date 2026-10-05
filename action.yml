@@ -13,14 +13,15 @@ inputs:
     default: ''
   token:
     description: >-
-      GitHub token opening the pull requests, with Contents, Pull requests and Workflows write on
-      every target repository, such as the SDK_GITHUB_TOKEN secret. Unused with `app-id`
+      GitHub token opening the pull requests, with Contents and Pull requests write on every
+      target repository, such as the SDK_GITHUB_TOKEN secret. Unused with `app-id`. Without either,
+      the hosted perseid App's, when the job has `id-token: write`
     default: ''
 
   app-id:
     description: >-
       ID of a GitHub App installed on the repository holding perseid.toml and the SDK repositories:
-      the Action mints a token of it for them, with contents, pull-requests and workflows write
+      the Action mints a token of it for them, with contents and pull-requests write
     default: ''
   app-private-key:
     description: Private key of the `app-id` App
@@ -102,13 +103,20 @@ runs:
         repositories: ${{ steps.setup.outputs.repositories }}
         permission-contents: write
         permission-pull-requests: write
-        permission-workflows: write
+
+    - id: hosted
+      if: inputs.app-id == '' && inputs.token == ''
+      shell: bash
+      env:
+        OWNER: ${{ steps.setup.outputs.owner }}
+        REPOSITORIES: ${{ steps.setup.outputs.repositories }}
+      run: '"$GITHUB_ACTION_PATH/hosted-token.sh"'
 
     - name: Run perseid
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        GH_TOKEN: ${{ steps.app.outputs.token || inputs.token }}
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.token || steps.hosted.outputs.token }}
         COMMAND: ${{ inputs.command }}
         GITHUB_EVENT_BEFORE: ${{ github.event.before }}
         PERSEID_BUMP: ${{ inputs.bump }}

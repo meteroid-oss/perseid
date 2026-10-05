@@ -158,18 +158,15 @@ fn package_path(dir: &str, path: &str) -> String {
 
 pub const RELEASE_WORKFLOW: &str = ".github/workflows/sdk-release.yml";
 
-/// The release workflow of a repository whose default branch is `branch`.
+/// The release workflow of a repository whose default branch is `branch`. Its actions follow `@v0`,
+/// so perseid releases don't change it: it is only written with the user's own credentials.
 pub fn release_workflow(branch: &str) -> Vec<u8> {
     let (_, template) = assets::under("scaffold/release")
         .find(|(path, _)| *path == RELEASE_WORKFLOW)
         .expect("the embedded release workflow");
-    let mut workflow = String::from_utf8_lossy(template)
-        .replace("\"@@BRANCH@@\"", &Value::from(branch).to_string());
-    for action in ["release", "publish"] {
-        let pinned = crate::github::uses(action);
-        workflow = workflow.replace(&format!("meteroid-oss/perseid/{action}@v0"), &pinned);
-    }
-    workflow.into_bytes()
+    String::from_utf8_lossy(template)
+        .replace("\"@@BRANCH@@\"", &Value::from(branch).to_string())
+        .into_bytes()
 }
 
 /// The release workflow, and the release-please files `read` lacks or holds without some of
@@ -432,10 +429,10 @@ mod tests {
         let workflow = String::from_utf8_lossy(&files[RELEASE_WORKFLOW]);
         assert!(workflow.contains("branches: [\"main\"]\n"), "{workflow}");
         for action in ["release", "publish"] {
-            let step = format!("uses: {}\n", crate::github::uses(action));
+            let step = format!("uses: meteroid-oss/perseid/{action}@v0\n");
             assert!(workflow.contains(&step), "{workflow}");
         }
-        assert!(!workflow.contains("@v0\n"), "{workflow}");
+        assert!(workflow.contains("      id-token: write\n"), "{workflow}");
 
         let root = "name = \"Petstore\"\nsdks = [\"go\"]\nrepo = \"acme/petstore-{lang}\"\n";
         let config: Config = toml::from_str(root).unwrap();

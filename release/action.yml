@@ -6,7 +6,9 @@ branding:
 
 inputs:
   token:
-    description: GitHub token for release-please, unused with `app-id` or `release-token`
+    description: >-
+      GitHub token for release-please, unused with `app-id` or `release-token`, or when the job
+      has `id-token: write` and the hosted perseid App is installed here
     default: ${{ github.token }}
   release-token:
     description: Token for release-please instead of `token`, such as a fine-grained personal access token
@@ -44,9 +46,23 @@ outputs:
 runs:
   using: composite
   steps:
+    # `perseid sync` commits sdk-release.yml before the first SDK pull request adds the
+    # release-please files: until then, there is nothing to release.
+    - id: configured
+      if: inputs.path == ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if gh api "repos/$GITHUB_REPOSITORY/contents/release-please-config.json?ref=$GITHUB_SHA" --silent 2> /dev/null; then
+          echo "found=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "::notice::No release-please-config.json yet: the first SDK pull request adds it"
+        fi
+
     # App installation tokens expire after an hour, so they are minted on each run.
     - id: app
-      if: inputs.path == '' && inputs.app-id != ''
+      if: steps.configured.outputs.found && inputs.app-id != ''
       uses: actions/create-github-app-token@v2
       with:
         app-id: ${{ inputs.app-id }}
@@ -56,13 +72,21 @@ runs:
         permission-contents: write
         permission-pull-requests: write
 
+    - id: hosted
+      if: steps.configured.outputs.found && inputs.app-id == '' && inputs.release-token == ''
+      shell: bash
+      env:
+        REPOSITORIES: ${{ github.repository }}
+        OPTIONAL: 'true'
+      run: '"$GITHUB_ACTION_PATH/../hosted-token.sh"'
+
     - id: please
-      if: inputs.path == ''
+      if: steps.configured.outputs.found
       uses: googleapis/release-please-action@v5
       with:
-        token: ${{ steps.app.outputs.token || inputs.release-token || inputs.token }}
+        token: ${{ steps.app.outputs.token || inputs.release-token || steps.hosted.outputs.token || inputs.token }}
 
-    - if: steps.please.outputs.pr && inputs.ci-workflows != '' && (steps.app.outputs.token || inputs.release-token || inputs.token) == github.token
+    - if: steps.please.outputs.pr && inputs.ci-workflows != '' && (steps.app.outputs.token || inputs.release-token || steps.hosted.outputs.token || inputs.token) == github.token
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -79,7 +103,7 @@ runs:
     - if: steps.please.outputs.pr
       shell: bash
       env:
-        GH_TOKEN: ${{ steps.app.outputs.token || inputs.release-token || inputs.token }}
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.release-token || steps.hosted.outputs.token || inputs.token }}
         PR: ${{ steps.please.outputs.pr }}
       run: |
         labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[].labels[].name] | join(" ")')

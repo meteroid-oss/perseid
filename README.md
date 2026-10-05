@@ -6,7 +6,8 @@
 
 perseid generates Rust, TypeScript, Python, Go, Java and C# SDKs. When the spec changes, a GitHub
 Action regenerates them, opens a pull request, and releases them to their registries once you
-merge. It is one static binary. There is no hosted service, no account and no subscription.
+merge. It is one static binary, run in your CI. No account and no subscription: the perseid
+GitHub App only lends the workflows short-lived tokens, so no secret is stored.
 
 ## Why perseid
 
@@ -23,17 +24,17 @@ merge. It is one static binary. There is no hosted service, no account and no su
 In the repository that holds your OpenAPI spec:
 
 ```sh
-npx perseid init              # pick the languages and where the SDKs live
-gh secret set SDK_GITHUB_TOKEN   # paste a fine-grained token, see below
+npx perseid init   # pick the languages and where the SDKs live
+npx perseid sync   # install the perseid App on this repository and the SDK repositories
 git add -A && git commit -m "ci: generate SDKs with perseid" && git push
 ```
 
 The push runs the `SDKs` workflow, which opens a pull request with every SDK.
 
-`SDK_GITHUB_TOKEN` is a [fine-grained token](https://github.com/settings/personal-access-tokens/new)
-with **Contents**, **Pull requests** and **Workflows** set to read and write, on this repository
-and the SDK repositories. Fine-grained tokens expire, and perseid warns 30 days before.
-`npx perseid app` sets up a GitHub App instead, which doesn't expire.
+The perseid App has Contents and Pull requests access to the repositories you select. Each run
+trades its GitHub OIDC token for an App token covering its repositories for an hour, so nothing
+is stored. Rather keep the key yourself? `npx perseid app` creates a GitHub App of your own, or
+set a [fine-grained token](docs/ci.md#tokens) as the `SDK_GITHUB_TOKEN` secret.
 
 To see the SDKs before pushing anything:
 
@@ -92,16 +93,17 @@ var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.
  sdk-release.yml ─ release-please PR ← you merge ─ tag ─ publish to npm, PyPI, crates.io…
 ```
 
-`perseid init` writes two workflows for you to commit:
+`perseid init` and `perseid sync` write two workflows, with your own credentials:
 
 - `sdks.yml` runs the `meteroid-oss/perseid` Action when the spec changes. It installs perseid
   and the pinned formatters, then runs `perseid generate --pr`, which commits the SDKs to the
   `perseid/update` branch and opens or updates one pull request per repository.
-- `sdk-release.yml` runs release-please on merge and publishes each released SDK from the
-  `release` environment.
+- `sdk-release.yml`, in each repository holding SDKs, runs release-please on merge and publishes
+  each released SDK from the `release` environment.
 
-The Actions are pinned to the release line of the perseid that wrote them, such as
-`meteroid-oss/perseid@v0.6`. Run `perseid init` again to refresh them.
+`sdks.yml` is pinned to the release line of the perseid that wrote it, such as
+`meteroid-oss/perseid@v0.6`: run `perseid init` again to refresh it. `sdk-release.yml` follows
+`@v0`, so it rarely changes.
 
 ## Where the SDKs live
 
@@ -113,11 +115,12 @@ The Actions are pinned to the release line of the perseid that wrote them, such 
 | One repository per language | `repo = "acme/api-{lang}"` | `acme/api-typescript`, `acme/api-python` |
 | One SDKs repository | `repo = "acme/api-sdks"` | `acme/api-sdks`, a folder per language |
 
-- perseid never creates repositories: `gh repo create acme/api-typescript`.
-- Add `SDK_GITHUB_TOKEN` to each SDK repository too: its release workflow uses it.
-- Spec in another repository? Run `perseid init` in the SDKs repository, then
+- perseid never creates repositories: `gh repo create acme/api-typescript`, then `perseid sync`
+  installs the App there and commits its release workflow.
+- Spec in another repository? Run `perseid init` and `perseid sync` in the SDKs repository, then
   `npx perseid connect acme/api-sdks` in the API repository. It writes a workflow pushing the
-  spec, as the App of `perseid app` or with a token.
+  spec, and opens a pull request naming the API repository as the `source` of `perseid.toml`:
+  the API repository needs no App and no secret.
 - A spec served at a URL needs no `connect`: `sdks.yml` fetches it daily.
 
 See [repository layouts](docs/ci.md#repository-layouts).
@@ -128,8 +131,9 @@ See [repository layouts](docs/ci.md#repository-layouts).
 |---|---|
 | `init` | Write `perseid.toml` and the workflows. Local only: nothing is sent to GitHub. |
 | `generate` | Write the SDKs. `--out <dir>` previews, `--check` fails on drift, `--pr` opens pull requests. |
+| `sync` | Install the perseid App on the repositories `perseid.toml` names, and commit their release workflow. |
 | `connect <owner/repo>` | In the API repository: push the spec to the SDKs repository. |
-| `app` | Set up a GitHub App to open the pull requests instead of `SDK_GITHUB_TOKEN`. |
+| `app` | Set up a GitHub App of your own instead of the perseid App. |
 | `status` | Check the setup: secrets, workflows, last spec pushed, open pull requests, last runs. |
 | `inspect` | Print the model the templates receive, as JSON. |
 | `eject <lang>` | Copy the built-in templates and runtime of a language to `.perseid/` to edit them. |

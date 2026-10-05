@@ -142,7 +142,14 @@ pub fn status(config_path: &Path) -> Result<ExitCode> {
         }
         None => return Ok(exit(&report)),
     };
-    report.pending(&plan, "perseid app");
+    report.pending(
+        &plan,
+        if plan.app {
+            "perseid app"
+        } else {
+            "perseid sync"
+        },
+    );
     if let Source::File(_) = config.source() {
         last_spec(&mut report, api, &plan, plan.awaits_spec)?;
     }

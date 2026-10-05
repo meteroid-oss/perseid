@@ -120,8 +120,14 @@ enum Command {
         #[arg(long)]
         no_format: bool,
     },
-    /// Create or reuse the GitHub App that opens the SDK pull requests, install it and store its
-    /// credentials, once you agree: an alternative to the expiring `SDK_GITHUB_TOKEN` secret.
+    /// Set up the repositories perseid.toml names, once you agree: install the perseid App on
+    /// them, and commit the release workflow to each SDK repository.
+    Sync {
+        #[command(flatten)]
+        apply: Apply,
+    },
+    /// Create or reuse a GitHub App of your own that opens the SDK pull requests, install it and
+    /// store its credentials, once you agree: the alternative to the hosted perseid App.
     App {
         #[command(flatten)]
         apply: Apply,
@@ -264,6 +270,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             };
             init::run(init, &root)?;
         }
+        Command::Sync { apply } => return perseid::github::sync(&config_path, &apply.options()),
         Command::App { apply } => return perseid::github::app(&config_path, &apply.options()),
         Command::Connect {
             hub,

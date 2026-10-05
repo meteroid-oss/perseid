@@ -25,6 +25,10 @@ pub struct Config {
     /// perseid.toml, where `perseid connect` pushes it from another repository, or an http(s) URL.
     #[serde(default = "default_spec")]
     pub spec: String,
+    /// The repository pushing the spec here with the hosted perseid App, which `perseid connect`
+    /// adds: it gets Contents write on this repository, and needs no App itself.
+    #[serde(rename = "source")]
+    pub pushed_from: Option<PushedFrom>,
     /// Client name, in any form (`Acme`, `acme-api`, `Acme API`): the `AcmeApi` client, the
     /// `acme_api` and `acme-api` packages.
     #[serde(deserialize_with = "client_name")]
@@ -136,6 +140,19 @@ impl Home {
     pub fn repo(&self) -> Option<&str> {
         self.url.as_deref()?.strip_prefix("https://github.com/")
     }
+}
+
+/// A repository allowed to push the spec, by id: a repository recreated under its name has another.
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PushedFrom {
+    /// `owner/name` of the repository pushing the spec, for people: left out with
+    /// `perseid connect --private`.
+    pub repo: Option<String>,
+    /// Its repository id.
+    pub id: u64,
+    /// The id of the repository holding this file: a copy of it elsewhere grants nothing.
+    pub target_id: u64,
 }
 
 /// Package metadata written into the manifests `perseid generate` creates.
