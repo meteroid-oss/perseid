@@ -1,0 +1,164 @@
+{% set _ = set_summary_filename("RoundTripsTests.cs") -%}
+// this file is @generated
+#pragma warning disable CS0612, CS0618 // the API may deprecate models
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Xunit;
+
+namespace {{ sdk.package_name }}.Tests;
+
+/// <summary>
+/// Decodes sample JSON of every model and encodes it back, from round_trips.json. Date-times compare
+/// as instants, numbers by value (integers exactly), and a <c>null</c> optional property may be left
+/// out: the models cannot tell it from an unset one. Everything else must come back exactly.
+/// </summary>
+public class RoundTripsTests
+{
+    private static readonly JsonSerializerOptions Options = global::{{ sdk.package_name }}.Models.{{ sdk.client_name }}JsonContext.Default.Options;
+
+    private static readonly Dictionary<string, Type> Models = new()
+    {
+{%- for name in types | sort %}
+{%- set type = types[name] %}
+{%- if type.kind in ["struct", "string_enum", "integer_enum", "struct_enum"] %}
+        [{{ name | tojson }}] = typeof(global::{{ sdk.package_name }}.Models.{{ type.name | to_upper_camel_case }}),
+{%- endif %}
+{%- endfor %}
+    };
+
+    private static readonly Lazy<JsonDocument> Data = new(() => JsonDocument.Parse(File.ReadAllText(DataPath())));
+
+    private static readonly Regex Instant = new(@"^\d{4}-\d\d-\d\d[Tt]\d\d:\d\d:\d\d(\.\d+)?([Zz]|[+-]\d\d:\d\d)$");
+
+    public static TheoryData<string> Schemas => new(Models.Keys);
+
+    /// <summary>Next to this source when it was built here, else up from the test binaries.</summary>
+    private static string DataPath([CallerFilePath] string source = "")
+    {
+        var candidates = new List<string> { Path.Combine(Path.GetDirectoryName(source) ?? "", "round_trips.json") };
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            candidates.Add(Path.Combine(dir.FullName, "round_trips.json"));
+            candidates.Add(Path.Combine(dir.FullName, "{{ sdk.package_name }}.Tests", "round_trips.json"));
+        }
+        return candidates.FirstOrDefault(File.Exists)
+            ?? throw new FileNotFoundException($"round_trips.json is in none of {string.Join(", ", candidates)}");
+    }
+
+    /// <summary>As decimals when both fit, which keeps every int64 and uint64 exact.</summary>
+    private static bool SameNumber(string a, string b)
+    {
+        const NumberStyles style = NumberStyles.Float;
+        var invariant = CultureInfo.InvariantCulture;
+        if (decimal.TryParse(a, style, invariant, out var x) && decimal.TryParse(b, style, invariant, out var y))
+        {
+            return x == y;
+        }
+        return a == b
+            || (double.TryParse(a, style, invariant, out var d) && double.TryParse(b, style, invariant, out var e) && d == e);
+    }
+
+    private static bool SameInstant(string a, string b) =>
+        Instant.IsMatch(a)
+        && Instant.IsMatch(b)
+        && DateTimeOffset.TryParse(a, CultureInfo.InvariantCulture, DateTimeStyles.None, out var x)
+        && DateTimeOffset.TryParse(b, CultureInfo.InvariantCulture, DateTimeStyles.None, out var y)
+        && x.UtcTicks == y.UtcTicks;
+
+    /// <summary>The first difference between the sample and what came back, if any.</summary>
+    private static string? Difference(JsonElement expected, JsonElement actual, string path)
+    {
+        var changed = $"{path}: {expected.GetRawText()} became {actual.GetRawText()}";
+        switch (expected.ValueKind, actual.ValueKind)
+        {
+            case (JsonValueKind.Object, JsonValueKind.Object):
+                foreach (var property in expected.EnumerateObject())
+                {
+                    if (actual.TryGetProperty(property.Name, out var other))
+                    {
+                        if (Difference(property.Value, other, $"{path}/{property.Name}") is { } found)
+                        {
+                            return found;
+                        }
+                    }
+                    else if (property.Value.ValueKind != JsonValueKind.Null)
+                    {
+                        return $"{path}/{property.Name}: lost, was {property.Value.GetRawText()}";
+                    }
+                }
+                return actual
+                    .EnumerateObject()
+                    .Where(property => !expected.TryGetProperty(property.Name, out _))
+                    .Select(property => $"{path}/{property.Name}: added, is {property.Value.GetRawText()}")
+                    .FirstOrDefault();
+            case (JsonValueKind.Array, JsonValueKind.Array):
+            {
+                var (want, got) = (expected.EnumerateArray().ToList(), actual.EnumerateArray().ToList());
+                if (want.Count != got.Count)
+                {
+                    return $"{path}: {want.Count} items became {got.Count}";
+                }
+                return want.Select((item, i) => Difference(item, got[i], $"{path}/{i}")).FirstOrDefault(found => found is not null);
+            }
+            case (JsonValueKind.String, JsonValueKind.String):
+            {
+                var (a, b) = (expected.GetString()!, actual.GetString()!);
+                return a == b || SameInstant(a, b) ? null : changed;
+            }
+            case (JsonValueKind.Number, JsonValueKind.Number):
+                return SameNumber(expected.GetRawText(), actual.GetRawText()) ? null : changed;
+            default:
+                return expected.ValueKind == actual.ValueKind ? null : changed;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(Schemas))]
+    public void EverySampleRoundTrips(string schema)
+    {
+        Assert.True(Options.TryGetTypeInfo(Models[schema], out var info), $"{schema}: {Models[schema]} is missing from the JSON context");
+        Assert.True(Data.Value.RootElement.GetProperty("models").TryGetProperty(schema, out var samples), $"{schema}: no samples");
+        var failures = new List<string>();
+        foreach (var sample in samples.EnumerateArray())
+        {
+            var (name, json) = (sample.GetProperty("name").GetString(), sample.GetProperty("json"));
+            var fail = (string why) => $"{schema} sample `{name}`: {why}\n    input: {json.GetRawText()}";
+            string encoded;
+            try
+            {
+                var model = JsonSerializer.Deserialize(json.GetRawText(), info) ?? throw new InvalidOperationException("decoded to null");
+                encoded = JsonSerializer.Serialize(model, info);
+            }
+            catch (Exception e)
+            {
+                failures.Add(fail($"{e.GetType().Name}: {e.Message}"));
+                continue;
+            }
+            using var output = JsonDocument.Parse(encoded);
+            if (Difference(json, output.RootElement, "") is { } reason)
+            {
+                failures.Add(fail($"{reason}\n    output: {encoded}"));
+                continue;
+            }
+            try
+            {
+                var again = JsonSerializer.Serialize(JsonSerializer.Deserialize(encoded, info), info);
+                if (again != encoded)
+                {
+                    failures.Add(fail($"not stable, re-encoded as {again}"));
+                }
+            }
+            catch (Exception e)
+            {
+                failures.Add(fail($"own output: {e.GetType().Name}: {e.Message}"));
+            }
+        }
+        Assert.True(failures.Count == 0, $"{failures.Count} samples differ:\n{string.Join("\n", failures)}");
+    }
+}
