@@ -1293,6 +1293,10 @@ impl Type {
             }
             Some(InstanceType::String) => match s.enum_values {
                 Some(values) => TypeData::from_string_enum(values)?,
+                // A `format` types the alias like an inline schema of it: a date, a decimal...
+                None if !matches!(FieldType::from_schema_object(s.clone())?, FieldType::String) => {
+                    return alias(s);
+                }
                 None => TypeData::StringAlias,
             },
             Some(_) => return alias(s),
@@ -3491,6 +3495,17 @@ mod tests {
             let ty = Type::from_schema(name.into(), schema(value)).unwrap();
             assert!(matches!(ty.data, TypeData::Alias { .. }), "{name}");
         }
+    }
+
+    #[test]
+    fn formatted_string_components_alias_their_format() {
+        let ty = |value| Type::from_schema("T".into(), schema(value)).unwrap().data;
+        let at = ty(json!({"type": "string", "format": "date-time"}));
+        assert!(matches!(at, TypeData::Alias { target } if *target == FieldType::DateTime));
+        let day = ty(json!({"type": "string", "format": "date"}));
+        assert!(matches!(day, TypeData::Alias { target } if *target == FieldType::Date));
+        let plain = ty(json!({"type": "string", "format": "password"}));
+        assert!(matches!(plain, TypeData::StringAlias));
     }
 
     #[test]
