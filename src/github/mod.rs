@@ -369,7 +369,7 @@ pub fn publishing(config: &Config, hub: &str) -> Result<Vec<String>> {
                 text("java_package")
             ),
             "csharp" => format!(
-                "NuGet: add a NUGET_API_KEY secret to {repo}, from https://www.nuget.org/account/apikeys"
+                "NuGet: add {repo} as a trusted publisher at https://www.nuget.org/account/trustedpublishing, then a NUGET_USER variable to {repo} naming the nuget.org user or organization owning that policy"
             ),
             _ => format!("Go: nothing, the tags of {repo} publish through the module proxy"),
         });

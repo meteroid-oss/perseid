@@ -537,8 +537,8 @@ folder, such as `api/go/v0.4.0`, as the module proxy expects.
 | Registry | Credential |
 |---|---|
 | npm, PyPI, crates.io | Trusted publishing (OIDC) |
+| NuGet | Trusted publishing (OIDC), with a `NUGET_USER` variable naming the policy's owner, or a `NUGET_API_KEY` secret |
 | Maven Central | A Central Portal token and a GPG key |
-| NuGet | An API key |
 | Go | The module proxy, nothing to set up |
 
 Versions already on the registry are skipped, so re-running a failed job is safe. `perseid init`

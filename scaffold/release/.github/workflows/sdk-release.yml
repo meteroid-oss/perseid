@@ -58,6 +58,8 @@ jobs:
         with:
           path: ${{ matrix.path }}
           tag: ${{ fromJSON(needs.release.outputs.tags)[matrix.path] }}
+          # The nuget.org user or organization whose trusted publishing policy names this repository.
+          nuget-user: ${{ vars.NUGET_USER }}
           # Registries without trusted publishing, or before their first release enables it.
           cargo-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
           npm-token: ${{ secrets.NPM_TOKEN }}

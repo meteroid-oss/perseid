@@ -32,8 +32,11 @@ inputs:
   gpg-password:
     description: Passphrase of the GPG key
     default: ''
+  nuget-user:
+    description: nuget.org user or organization owning the trusted publishing policy of this repository
+    default: ''
   nuget-api-key:
-    description: nuget.org API key
+    description: nuget.org API key, only needed without NuGet trusted publishing
     default: ''
 
 outputs:
@@ -170,10 +173,23 @@ runs:
     - if: steps.detect.outputs.language == 'csharp'
       shell: bash
       working-directory: ${{ inputs.path }}
+      run: dotnet pack -c Release -o "$RUNNER_TEMP/nupkg"
+    # Trades the job's OIDC token for an API key valid one hour, after packing so it doesn't expire.
+    - if: steps.detect.outputs.language == 'csharp' && inputs.nuget-api-key == '' && inputs.nuget-user != ''
+      id: nuget
+      uses: NuGet/login@v1
+      with:
+        user: ${{ inputs.nuget-user }}
+    - if: steps.detect.outputs.language == 'csharp'
+      shell: bash
+      working-directory: ${{ inputs.path }}
       env:
-        NUGET_API_KEY: ${{ inputs.nuget-api-key }}
+        NUGET_API_KEY: ${{ inputs.nuget-api-key || steps.nuget.outputs.NUGET_API_KEY }}
       run: |
-        dotnet pack -c Release -o "$RUNNER_TEMP/nupkg"
+        if [ -z "$NUGET_API_KEY" ]; then
+          echo "::error::no NuGet credential: set the nuget-user input for trusted publishing, or nuget-api-key"
+          exit 1
+        fi
         # --skip-duplicate makes re-running a release safe.
         dotnet nuget push "$RUNNER_TEMP"/nupkg/*.nupkg --api-key "$NUGET_API_KEY" \
           --source https://api.nuget.org/v3/index.json --skip-duplicate
