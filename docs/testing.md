@@ -46,7 +46,7 @@ method, raw path and query, percent-encoding, headers, content type, body and cr
 CI generates every fixture with [`round_trips = true`](languages.md#round-trips): each SDK decodes
 and re-encodes JSON instances of every model, derived from its schema (full, minimal, nulls, one
 per union variant and enum value), and compares the JSON. Models agree with the spec without
-handwritten cases. TypeScript also runs them with `int64 = "bigint"`, in `tests/sdk/run.sh`.
+handwritten cases. TypeScript also runs them with `int64 = "bigint"` and `"string"`, in `tests/sdk/run.sh`.
 
 The hidden `perseid samples --out samples.json` writes the same samples, to inspect them.
 

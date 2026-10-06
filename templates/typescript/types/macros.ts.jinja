@@ -13,7 +13,7 @@
         {{ js_type(type.inner_type()) }} | null
     {%- elif type.is_union() -%}
         {%- for v in type.union_variants() -%}
-            {% if not loop.first %} | {% endif %}{% if v.empty %}""{% elif untyped_int64(v) %}number{% else %}{{ js_type(v.type) }}{% endif %}
+            {% if not loop.first %} | {% endif %}{% if v.empty %}""{% elif untyped_int64(v) %}{{ untyped_js_type(v.type) }}{% else %}{{ js_type(v.type) }}{% endif %}
         {%- endfor -%}
     {%- elif type.is_json_object() -%}
         unknown
@@ -45,10 +45,22 @@
     {{ doc(field.description, field.deprecated) }}{{ field.name | ident("camel") }}{% if not field.required %}?{% endif %}: {{ field_type(field) }}{% if not field.required %} | undefined{% endif %};
 {%- endmacro %}
 
-{#- An int64 union variant stays a number when int64 values are strings, which would be
-    indistinguishable from a string variant. -#}
+{#- The int64 values of a union variant, alone or in lists and maps, stay numbers, or `bigint`
+    beyond 2^53, when int64 values are strings, which would read as a string variant. -#}
 {% macro untyped_int64(variant) -%}
-    {%- if sdk.int64 | default("number") == "string" and is_int64(variant.type) %}yes{% endif -%}
+    {%- if sdk.int64 | default("number") == "string" and int64_leaf(variant.type) %}yes{% endif -%}
+{%- endmacro %}
+
+{% macro int64_leaf(type) -%}
+    {%- if type.is_list() or type.is_set() -%}{{ int64_leaf(type.inner_type()) }}
+    {%- elif type.is_map() -%}{{ int64_leaf(type.value_type()) }}
+    {%- else -%}{{ is_int64(type) }}{%- endif -%}
+{%- endmacro %}
+
+{% macro untyped_js_type(type) -%}
+    {%- if type.is_list() or type.is_set() -%}({{ untyped_js_type(type.inner_type()) }})[]
+    {%- elif type.is_map() -%}{ [key: string]: {{ untyped_js_type(type.value_type()) }} }
+    {%- else -%}number | bigint{%- endif -%}
 {%- endmacro %}
 
 {% macro variant_converted(variant, outgoing) -%}
@@ -62,7 +74,7 @@
         Array.isArray({{ expr }})
     {%- elif json_type == "object" -%}
         isJsonObject({{ expr }})
-    {%- elif json_type == "integer" and sdk.int64 | default("number") == "bigint" -%}
+    {%- elif json_type == "integer" and sdk.int64 | default("number") != "number" -%}
         {#- `parseJson` reads the integers beyond `Number.MAX_SAFE_INTEGER` as `bigint`. -#}
         (typeof {{ expr }} === "number" || typeof {{ expr }} === "bigint")
     {%- else -%}

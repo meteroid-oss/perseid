@@ -11,8 +11,8 @@ const BIGINT_MARKED = /"\\u0000bigint:(-?\d+)"/g;
 
 /**
  * `JSON.parse`, except that when int64 values are `bigint` or `string`, integers beyond
- * `Number.MAX_SAFE_INTEGER` keep every digit: read as `bigint` values in `bigint` mode (so that
- * they stay apart from strings), as strings in `string` mode.
+ * `Number.MAX_SAFE_INTEGER` keep every digit, read as `bigint` values: the serializers turn
+ * those of int64 fields into strings in `string` mode, and `stringifyJson` writes them back.
  */
 export function parseJson(text: string): any {
   if (INT64 === "number" || !/\d{16}/.test(text)) {
@@ -20,14 +20,9 @@ export function parseJson(text: string): any {
   }
   const marked = text.replace(TOKEN, (token) =>
     token[0] !== '"' && /^-?\d+$/.test(token) && !Number.isSafeInteger(Number(token))
-      ? INT64 === "bigint"
-        ? `"${BIGINT_MARK_JSON}${token}"`
-        : `"${token}"`
+      ? `"${BIGINT_MARK_JSON}${token}"`
       : token
   );
-  if (INT64 !== "bigint") {
-    return JSON.parse(marked);
-  }
   return JSON.parse(marked, (_key, item) =>
     typeof item === "string" && item.startsWith(BIGINT_MARK) ? BigInt(item.slice(BIGINT_MARK.length)) : item
   );

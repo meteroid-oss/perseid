@@ -1,6 +1,6 @@
-// The generated round trips of torture and every edge fixture, with `int64 = "bigint"`: CI runs
-// them in the default `number` mode on every fixture, and here every digit of an int64 must
-// come back.
+// The generated round trips of torture and every edge fixture, with `int64 = "bigint"` and
+// `"string"`: CI runs them in the default `number` mode on every fixture, and here every digit of
+// an int64 must come back.
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
@@ -11,16 +11,18 @@ const SPECS = readdirSync(fixtures)
   .filter((file) => file === "torture.yaml" || /^edge-.*\.yaml$/.test(file))
   .sort();
 
+const MODES = ["bigint", "string"];
+const variants = SPECS.flatMap((spec) => MODES.map((mode) => ({ spec, mode })));
 const built = await pool(
-  SPECS.map((spec) => () =>
-    generate(spec, { name: `Rt${spec.replace(/\W|yaml$/g, "")}`, int64: "bigint", roundTrips: true, build: false })
+  variants.map(({ spec, mode }) => () =>
+    generate(spec, { name: `Rt${spec.replace(/\W|yaml$/g, "")}${mode}`, int64: mode, roundTrips: true, build: false })
   ),
   3
 );
 after(() => built.forEach((result) => result.cleanup()));
 
-SPECS.forEach((spec, index) => {
-  it(`round-trips the models of ${spec} with int64 = "bigint"`, async () => {
+variants.forEach(({ spec, mode }, index) => {
+  it(`round-trips the models of ${spec} with int64 = "${mode}"`, async () => {
     const { sdkDir } = built[index];
     if (!existsSync(join(sdkDir, "tests/api/roundTrips.test.ts"))) {
       assert.notEqual(spec, "torture.yaml", "torture has models");

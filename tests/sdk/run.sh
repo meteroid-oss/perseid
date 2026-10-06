@@ -43,7 +43,7 @@ case "$lang" in
       && cd rust && cargo test --test models --test client) ;;
   typescript)
     # The tests generate more SDKs themselves (features, torture, realworld and, with
-    # `int64 = "bigint"`, the round trips of torture and every edge fixture).
+    # `int64 = "bigint"` and `"string"`, the round trips of torture and every edge fixture).
     npm install --no-audit --no-fund && npm run build
     FIXTURES="$here/../fixtures" node --test test/*.test.mjs ;;
   python)
