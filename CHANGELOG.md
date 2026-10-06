@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.4](https://github.com/meteroid-oss/perseid/compare/v0.11.3...v0.11.4) (2026-10-06)
+
+
+### Features
+
+* **config:** auto_merge writes auto-merge into sdks.yml ([#89](https://github.com/meteroid-oss/perseid/issues/89)) ([b86df32](https://github.com/meteroid-oss/perseid/commit/b86df324ce2f3c18f5ef2ed9efe54450c9ddfb8f))
+
 ## [0.11.3](https://github.com/meteroid-oss/perseid/compare/v0.11.2...v0.11.3) (2026-10-06)
 
 
