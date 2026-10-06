@@ -176,31 +176,43 @@ pub fn with_source(text: &str, line: &str) -> String {
     lines.join("\n") + "\n"
 }
 
-/// A file to commit to `repo` with the user's credentials: on `base` directly when `direct` and
-/// allowed, else through a pull request from `branch`.
+/// Files to commit to `repo` with the user's credentials: on `base` directly when `direct` and
+/// allowed, else through one pull request from `branch`.
 pub struct Commit {
     pub repo: String,
     pub base: String,
-    pub path: String,
-    pub content: Vec<u8>,
+    pub files: Vec<(String, Vec<u8>)>,
     pub message: String,
     pub branch: String,
     pub body: String,
     pub direct: bool,
 }
 
+impl Commit {
+    pub fn paths(&self) -> String {
+        let paths: Vec<&str> = self.files.iter().map(|(path, _)| path.as_str()).collect();
+        paths.join(", ")
+    }
+}
+
 pub fn commit(api: &GitHub, commit: &Commit, ui: &Ui) -> Result<()> {
-    let Commit {
-        repo, base, path, ..
-    } = commit;
+    let Commit { repo, base, .. } = commit;
+    let paths = commit.paths();
     if commit.direct {
-        let reply = put(api, commit, base)?;
-        if (200..300).contains(&reply.status) {
-            ui.ok(&format!("{repo}: committed {path} to `{base}`"));
-            return Ok(());
+        let mut committed = 0;
+        for (path, content) in &commit.files {
+            let reply = put(api, commit, base, path, content)?;
+            if !(200..300).contains(&reply.status) {
+                if !matches!(reply.status, 403 | 409 | 422) {
+                    super::api::check("PUT", &format!("/repos/{repo}/contents/{path}"), reply)?;
+                }
+                break;
+            }
+            committed += 1;
         }
-        if !matches!(reply.status, 403 | 409 | 422) {
-            super::api::check("PUT", &format!("/repos/{repo}/contents/{path}"), reply)?;
+        if committed == commit.files.len() {
+            ui.ok(&format!("{repo}: committed {paths} to `{base}`"));
+            return Ok(());
         }
     }
     let head = api.get(&format!("/repos/{repo}/git/ref/heads/{base}"))?;
@@ -219,8 +231,10 @@ pub fn commit(api: &GitHub, commit: &Commit, ui: &Ui) -> Result<()> {
     } else {
         super::api::check("POST", &format!("/repos/{repo}/git/refs"), created)?;
     }
-    let reply = put(api, commit, branch)?;
-    super::api::check("PUT", &format!("/repos/{repo}/contents/{path}"), reply)?;
+    for (path, content) in &commit.files {
+        let reply = put(api, commit, branch, path, content)?;
+        super::api::check("PUT", &format!("/repos/{repo}/contents/{path}"), reply)?;
+    }
     let owner = repo.split('/').next().unwrap_or_default();
     let open = api.get(&format!(
         "/repos/{repo}/pulls?state=open&head={owner}:{branch}&base={base}"
@@ -234,18 +248,25 @@ pub fn commit(api: &GitHub, commit: &Commit, ui: &Ui) -> Result<()> {
             .clone(),
     };
     ui.ok(&format!(
-        "{repo}: {path} is in a pull request, to merge: {}",
+        "{repo}: {paths} {} in a pull request, to merge: {}",
+        if commit.files.len() == 1 { "is" } else { "are" },
         url.as_str().unwrap_or_default()
     ));
     Ok(())
 }
 
-fn put(api: &GitHub, commit: &Commit, branch: &str) -> Result<super::api::Reply> {
-    let path = format!("/repos/{}/contents/{}", commit.repo, commit.path);
+fn put(
+    api: &GitHub,
+    commit: &Commit,
+    branch: &str,
+    path: &str,
+    content: &[u8],
+) -> Result<super::api::Reply> {
+    let path = format!("/repos/{}/contents/{path}", commit.repo);
     let current = api.send("GET", &format!("{path}?ref={branch}"), None)?;
     let mut body = json!({
         "message": commit.message,
-        "content": BASE64.encode(&commit.content),
+        "content": BASE64.encode(content),
         "branch": branch,
     });
     if let Some(sha) = current.body.get("sha").and_then(Value::as_str) {

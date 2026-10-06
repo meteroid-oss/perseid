@@ -427,8 +427,7 @@ fn plan_source(
         Some(Action::Commit(Box::new(hosted::Commit {
             repo: hub.to_owned(),
             base: bootstrap::default_branch(hub_info),
-            path: path.clone(),
-            content: hosted::with_source(&text, &line).into_bytes(),
+            files: vec![(path.clone(), hosted::with_source(&text, &line).into_bytes())],
             message: match private {
                 true => "ci: let the API repository push the spec".to_owned(),
                 false => format!("ci: let {here} push the spec"),

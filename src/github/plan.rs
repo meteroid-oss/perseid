@@ -150,7 +150,9 @@ impl Plan {
                 )),
                 Action::Commit(commit) => Some(format!(
                     "commit {} to {} (`{}`)",
-                    commit.path, commit.repo, commit.base
+                    commit.paths(),
+                    commit.repo,
+                    commit.base
                 )),
             })
             .collect()
@@ -482,53 +484,85 @@ fn plan_repository_workflows(
         if release {
             workflows.push((RELEASE_WORKFLOW, crate::scaffold::release_workflow(&base)));
         }
+        let mut changed = Vec::new();
         for (path, expected) in workflows {
-            let (kind, purpose, body) = match path {
-                CI_WORKFLOW => (
-                    "ci",
-                    "test",
-                    "builds the SDKs and runs their tests on pull requests.",
-                ),
-                _ => (
-                    "release",
-                    "release",
-                    "runs release-please on the SDKs, then publishes the released ones.",
-                ),
-            };
             let current = api.raw(repo, &base, path)?;
             if current.as_deref() == Some(expected.as_slice()) {
                 plan.add(Mark::Keep, format!("{repo}: {path} up to date"), None);
-                continue;
-            }
-            if current.is_some() && !files::owned(current.as_deref()) {
+            } else if current.is_some() && !files::owned(current.as_deref()) {
                 plan.warnings
                     .push(format!("{repo}: {}", files::kept(path, &base)));
-                continue;
+            } else {
+                changed.push((path, expected, current.is_some()));
             }
-            let (mark, message) = match current {
-                Some(_) => (
-                    Mark::Change,
-                    format!("ci: update the perseid {kind} workflow"),
-                ),
-                None => (Mark::Add, format!("ci: {purpose} the SDK with perseid")),
-            };
-            plan.add(
-                mark,
-                format!("{repo}: {path}, committed with your credentials"),
-                Some(Action::Commit(Box::new(hosted::Commit {
-                    repo: repo.clone(),
-                    base: base.clone(),
-                    path: path.to_owned(),
-                    content: expected,
-                    message,
-                    branch: format!("perseid/{kind}-workflow"),
-                    body: format!("Written by `perseid sync`: {body}"),
-                    direct: true,
-                }))),
-            );
         }
+        if changed.is_empty() {
+            continue;
+        }
+        let about: Vec<_> = changed
+            .iter()
+            .map(|(path, ..)| workflow_role(path))
+            .collect();
+        let list = |pick: fn(&(&'static str, &'static str, &'static str)) -> &'static str| {
+            about.iter().map(pick).collect::<Vec<_>>().join(" and ")
+        };
+        let (mark, message) = match changed.iter().any(|(.., existed)| *existed) {
+            false => (
+                Mark::Add,
+                format!("ci: {} the SDK with perseid", list(|a| a.1)),
+            ),
+            true => (
+                Mark::Change,
+                format!(
+                    "ci: update the perseid {} workflow{}",
+                    list(|a| a.0),
+                    if changed.len() > 1 { "s" } else { "" }
+                ),
+            ),
+        };
+        let notes: String = changed
+            .iter()
+            .zip(&about)
+            .map(|((path, ..), (.., note))| format!("\n- `{path}` {note}."))
+            .collect();
+        let commit = hosted::Commit {
+            repo: repo.clone(),
+            base,
+            files: changed
+                .into_iter()
+                .map(|(path, content, _)| (path.to_owned(), content))
+                .collect(),
+            message,
+            branch: "perseid/workflows".to_owned(),
+            body: format!("Written by `perseid sync`:\n{notes}"),
+            direct: true,
+        };
+        plan.add(
+            mark,
+            format!(
+                "{repo}: {}, committed with your credentials",
+                commit.paths()
+            ),
+            Some(Action::Commit(Box::new(commit))),
+        );
     }
     Ok(())
+}
+
+/// What a workflow of the SDK repositories is, what it does to the SDKs, and how.
+fn workflow_role(path: &str) -> (&'static str, &'static str, &'static str) {
+    match path {
+        CI_WORKFLOW => (
+            "CI",
+            "test",
+            "builds the SDKs and runs their tests on pull requests",
+        ),
+        _ => (
+            "release",
+            "release",
+            "runs release-please on the SDKs, then publishes the released ones",
+        ),
+    }
 }
 
 fn plan_app(

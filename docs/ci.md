@@ -153,7 +153,7 @@ GitHub with `perseid.toml`, prints the plan and applies it once you agree:
    Skipped when they have `SDK_GITHUB_TOKEN`, or your own App (`SDK_APP_ID`), which `perseid app`
    manages.
 2. `sdk-ci.yml` and `sdk-release.yml` in each SDK repository, committed with your credentials to
-   the default branch, or through a pull request when the branch takes no direct push. One whose
+   the default branch, or through one pull request when the branch takes no direct push. One whose
    first line you removed stays yours.
 
 | Flag | |
