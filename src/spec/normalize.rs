@@ -66,6 +66,27 @@ fn trim_descriptions(value: &mut Value) {
     }
 }
 
+/// Removes `format: <format>` from every schema, which types its values as plain strings.
+pub(super) fn drop_format(value: &mut Value, format: &str) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(|item| drop_format(item, format)),
+        Value::Object(map) => {
+            if map.get("format").and_then(Value::as_str) == Some(format) {
+                map.remove("format");
+            }
+            for (key, child) in map.iter_mut() {
+                if !matches!(
+                    key.as_str(),
+                    "example" | "examples" | "default" | "enum" | "const"
+                ) {
+                    drop_format(child, format);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Gives each `$ref` variant of a discriminated union that targets a schema in `tags` (by its
 /// current name) and that no `mapping` entry names an explicit entry keyed by the tag given
 /// there: the implicit tag is the schema name as the spec spells it, and renaming the schema
@@ -2262,6 +2283,19 @@ mod tests {
     fn normalized(mut doc: Value) -> Value {
         normalize(&mut doc).unwrap();
         doc
+    }
+
+    #[test]
+    fn dropped_formats_leave_examples_alone() {
+        let mut doc = json!({ "properties": {
+            "id": { "type": "string", "format": "uuid", "example": { "format": "uuid" } },
+            "at": { "type": "string", "format": "date-time" } } });
+        drop_format(&mut doc, "uuid");
+        assert_eq!(
+            doc["properties"]["id"],
+            json!({ "type": "string", "example": { "format": "uuid" } })
+        );
+        assert_eq!(doc["properties"]["at"]["format"], "date-time");
     }
 
     fn op(responses: Value) -> Value {

@@ -1100,7 +1100,7 @@ macro_rules! impl_query_param_value {
     };
 }
 
-impl_query_param_value!(bool, i16, u16, i32, u32, i64, u64, f32, f64, String, &str);
+impl_query_param_value!(bool, i16, u16, i32, u32, i64, u64, f32, f64, String, &str, uuid::Uuid);
 
 impl QueryParamValue for rust_decimal::Decimal {
     fn encode(&self) -> String {

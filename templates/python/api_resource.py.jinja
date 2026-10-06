@@ -76,6 +76,7 @@ import builtins
 import datetime as _datetime
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID
 {%- set error_types = namespace(used=false) %}
 {%- if error_schemas | length > 0 %}
 {%- for op in resource.operations if op.errors | length > 0 or default_error %}

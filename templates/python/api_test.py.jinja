@@ -5,7 +5,7 @@
 # this file is @generated
 # ruff: noqa: I001  (where the package sorts depends on whether it is generated yet)
 import unittest
-{% if bodies %}
+{{ docs.imports(cases) }}{% if bodies %}
 from {{ docs.package() }}.models import {{ bodies | join(", ") }}
 {% endif %}
 from perseid_mock import call, {% if bodies %}decode, {% endif %}mock

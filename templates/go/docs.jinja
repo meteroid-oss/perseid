@@ -26,7 +26,15 @@
 {#- The page type of a paginated example, `WidgetsListPage`. -#}
 {% macro page_type(ex) %}{{ (go_ident(ex.resource) ~ (ex.operation.name | ident("pascal", "go")) ~ "Page") | go_name }}{% endmacro %}
 
-{% macro literal(arg) %}{{ arg.value | tojson }}{% endmacro %}
+{% macro literal(arg) %}{% if arg.kind == "uuid" %}uuid.MustParse({{ arg.value | tojson }}){% else %}{{ arg.value | tojson }}{% endif %}{% endmacro %}
+
+{#- The imports the literals of the examples `exs` need, each on its line. -#}
+{% macro imports(exs) -%}
+    {%- set ns = namespace(uuid=false) -%}
+    {%- for ex in exs if ex %}{% for a in ex.path_args if a.kind == "uuid" %}{% set ns.uuid = true %}{% endfor %}{% endfor -%}
+    {%- if ns.uuid %}import "github.com/google/uuid"
+{% endif -%}
+{%- endmacro %}
 
 {#- Whether `op` takes an options struct, of its optional query and header parameters. -#}
 {% macro has_options(op) -%}

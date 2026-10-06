@@ -1,4 +1,4 @@
-{% from "types/macros.go.jinja" import go_deprecated, go_ident, go_export, go_const, go_field_type, go_json_tag, go_union_name, go_union, go_article -%}
+{% from "types/macros.go.jinja" import go_deprecated, go_ident, go_export, go_const, go_field_type, go_imports, go_json_tag, go_union_name, go_union, go_article -%}
 {% set type_name = go_ident(type.name) -%}
 {% set disc_field = go_export(type.discriminator_field) -%}
 {% set ns_tag = namespace(consts=[]) -%}
@@ -35,12 +35,8 @@
 {% set rendered_types %}{% for field in shared %}{{ shared_type(field) }} {% endfor %}{{ unions }}{% endset -%}
 package {{ sdk.package_name }}
 
-{% if "time.Time" in rendered_types %}import (
-	"encoding/json"
-	"time"
-)
-{% else %}import "encoding/json"
-{% endif %}
+{{ go_imports(rendered_types, ["encoding/json"]) }}
+
 
 {% if named %}{{ doc_comment }}
 //

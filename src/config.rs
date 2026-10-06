@@ -61,6 +61,9 @@ pub struct Config {
     pub timeout: Option<u64>,
     /// How unions decode objects that no rule tells apart.
     pub untagged_unions: Option<UntaggedUnions>,
+    /// How values of some `format`s are typed, in every SDK.
+    #[serde(default)]
+    pub types: Types,
     /// Method names by operation id, over the resource-style names.
     #[serde(default, rename = "methods")]
     pub names: BTreeMap<String, String>,
@@ -328,6 +331,25 @@ pub enum UntaggedUnions {
     BestMatch,
 }
 
+/// How values of some `format`s are typed.
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Types {
+    /// `format: uuid` values: `uuid::Uuid`, `UUID`, `Guid`... (`typed`, the default), or
+    /// strings, for an API whose "uuid" values are not all UUIDs, as one would fail decoding.
+    pub uuid: Option<UuidType>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum UuidType {
+    /// The language's UUID type, TypeScript's `string` aside.
+    #[default]
+    Typed,
+    /// Strings.
+    String,
+}
+
 /// How a list operation pages, as `x-pagination` on an operation or `[pagination]` in perseid.toml.
 /// Exactly one of `cursor`, `page` or `offset` names the query parameter selecting the page;
 /// response values are dotted paths of JSON property names.
@@ -572,6 +594,7 @@ impl Config {
             pagination: self.pagination.clone(),
             reserved: BTreeSet::new(),
             names: self.names.clone(),
+            uuid_strings: self.types.uuid == Some(UuidType::String),
         }
     }
 

@@ -152,6 +152,14 @@
       "format": "uint64",
       "minimum": 0.0
     },
+    "types": {
+      "description": "How values of some `format`s are typed, in every SDK.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Types"
+        }
+      ]
+    },
     "typescript": {
       "description": "The TypeScript SDK, an npm package.",
       "allOf": [
@@ -810,6 +818,21 @@
       },
       "additionalProperties": false
     },
+    "Types": {
+      "description": "How values of some `format`s are typed.",
+      "type": "object",
+      "properties": {
+        "uuid": {
+          "description": "`format: uuid` values: `uuid::Uuid`, `UUID`, `Guid`... (`typed`, the default), or strings, for an API whose \"uuid\" values are not all UUIDs, as one would fail decoding.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/UuidType"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "UntaggedUnions": {
       "description": "How a union decodes an object when several variants are objects that neither a discriminator nor the constants and required properties they declare tell apart.",
       "oneOf": [
@@ -825,6 +848,24 @@
           "type": "string",
           "enum": [
             "best-match"
+          ]
+        }
+      ]
+    },
+    "UuidType": {
+      "oneOf": [
+        {
+          "description": "The language's UUID type, TypeScript's `string` aside.",
+          "type": "string",
+          "enum": [
+            "typed"
+          ]
+        },
+        {
+          "description": "Strings.",
+          "type": "string",
+          "enum": [
+            "string"
           ]
         }
       ]

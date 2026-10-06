@@ -50,6 +50,7 @@ pub fn without_config(location: &str, root: &std::path::Path) -> Result<SpecWith
         pagination: Vec::new(),
         reserved,
         names: BTreeMap::new(),
+        uuid_strings: false,
     };
     let targets = LANGUAGES
         .into_iter()
@@ -527,6 +528,13 @@ impl<'a> Gen<'a> {
                 seed,
             )),
             FieldType::Date => Value::from(*choose(&["2024-02-29", "1999-12-31"], seed)),
+            FieldType::Uuid => Value::from(*choose(
+                &[
+                    "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "00000000-0000-0000-0000-000000000000",
+                ],
+                seed,
+            )),
             FieldType::Uri => Value::from(*choose(
                 &[
                     "https://example.com/a/b?q=1&r=%C3%A9#frag",

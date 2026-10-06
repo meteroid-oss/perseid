@@ -49,6 +49,8 @@ pub struct Filters {
     pub reserved: BTreeSet<String>,
     /// Method names by operation id.
     pub names: BTreeMap<String, String>,
+    /// Types `format: uuid` values as strings.
+    pub uuid_strings: bool,
 }
 
 /// Largest spec read from a URL: GitHub's REST description is over 10 MB, ureq's default.
@@ -116,6 +118,9 @@ pub(crate) fn api_with_renames(
     }
     upgrade::boolean_schemas(&mut doc);
     normalize::normalize(&mut doc)?;
+    if filters.uuid_strings {
+        normalize::drop_format(&mut doc, "uuid");
+    }
     let renames = normalize::rename_reserved_schemas(&mut doc, &filters.reserved);
     warn_ignored_servers(&doc);
     let raw = doc;

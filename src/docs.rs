@@ -171,6 +171,7 @@ pub(crate) fn path_literal(op: &Value, name: &str, id: &str) -> Option<Value> {
         "Int16" | "UInt16" | "Int32" | "Int64" | "UInt64" => json!(1),
         "Float" | "Double" => json!(1.5),
         "Bool" => json!(true),
+        "Uuid" => json!("3fa85f64-5717-4562-b3fc-2c963f66afa6"),
         _ => return None,
     };
     literal(name, id, value)
@@ -184,6 +185,7 @@ pub(crate) fn literal(name: &str, id: &str, value: Value) -> Option<Value> {
         "Int16" | "UInt16" | "Int32" | "Int64" | "UInt64" => "integer",
         "Float" | "Double" => "number",
         "Bool" => "boolean",
+        "Uuid" => "uuid",
         _ => return None,
     };
     let mut map = Map::new();
@@ -225,6 +227,7 @@ mod tests {
             pagination: vec![],
             reserved: Default::default(),
             names: Default::default(),
+            uuid_strings: false,
         };
         let api = crate::spec::api(&spec, &filters).unwrap();
         examples(&api)

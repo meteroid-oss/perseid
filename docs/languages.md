@@ -46,10 +46,13 @@ and named schemas of it.
 | `date-time` | `chrono::DateTime<Utc>` | `Date` | `datetime` | `time.Time` | `OffsetDateTime` | `DateTimeOffset` |
 | `date` | `chrono::NaiveDate` | `string` | `date` | `Date` | `LocalDate` | `DateOnly` |
 | `decimal` | `rust_decimal::Decimal` | `string` | `Decimal` | `string` | `BigDecimal` | `decimal` |
+| `uuid` | `uuid::Uuid` | `string` | `UUID` | `uuid.UUID` | `UUID` | `Guid` |
 | `uri` | `String` | `string` | `str` | `string` | `URI` | `string` |
 
 - TypeScript keeps dates as `"2024-01-31"` strings: a `Date` is an instant, which time zones
   would shift to another day.
+- `uuid` is `github.com/google/uuid` in Go. `[types] uuid = "string"` in
+  [perseid.toml](configuration.md#sdk-defaults) keeps UUIDs strings everywhere.
 - Go's `Date` (`Year`, `Month`, `Day`) is in the SDK package: `DateOf(t)` and `ParseDate(s)`
   build one, `In(loc)` turns it back into a `time.Time`.
 

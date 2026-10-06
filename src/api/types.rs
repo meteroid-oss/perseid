@@ -1138,6 +1138,7 @@ fn promote_field_type(
         | FieldType::Decimal
         | FieldType::DateTime
         | FieldType::Uri
+        | FieldType::Uuid
         | FieldType::JsonObject
         | FieldType::Union { .. }
         | FieldType::SchemaRef { .. }
@@ -2117,6 +2118,7 @@ impl UnionVariant {
             FieldType::Float | FieldType::Double => "number".into(),
             FieldType::String | FieldType::Uri => "string".into(),
             FieldType::Date => "date".into(),
+            FieldType::Uuid => "uuid".into(),
             FieldType::DateTime => "date_time".into(),
             FieldType::Decimal => "decimal".into(),
             FieldType::List { inner } | FieldType::Set { inner } => {
@@ -2186,6 +2188,7 @@ impl UnionVariant {
             FieldType::Float | FieldType::Double => "number",
             FieldType::String
             | FieldType::Uri
+            | FieldType::Uuid
             | FieldType::Date
             | FieldType::DateTime
             | FieldType::Decimal
@@ -2235,6 +2238,8 @@ pub(crate) enum FieldType {
     /// A calendar date (`format: date`), a string in TypeScript, where `Date` is an instant.
     Date,
     Uri,
+    /// A `format: uuid` string, unless `[types] uuid = "string"` untypes them.
+    Uuid,
     /// A JSON object with arbitrary field values.
     JsonObject,
     /// A regular old list.
@@ -2478,6 +2483,7 @@ impl FieldType {
                     Some("date-time") => Self::DateTime,
                     Some("date") => Self::Date,
                     Some("uri") => Self::Uri,
+                    Some("uuid") => Self::Uuid,
                     _ => Self::String,
                 }
             }
@@ -2537,6 +2543,7 @@ impl FieldType {
             Self::Float => "float".into(),
             Self::Double => "double".into(),
             Self::String | Self::Uri => "string".into(),
+            Self::Uuid => "Guid".into(),
             Self::Decimal => "decimal".into(),
             Self::DateTime => "DateTimeOffset".into(),
             Self::JsonObject | Self::Union { .. } => "JsonNode".into(),
@@ -2567,6 +2574,7 @@ impl FieldType {
             Self::Float => "float32".into(),
             Self::Double => "float64".into(),
             Self::Uri | Self::String | Self::Decimal => "string".into(),
+            Self::Uuid => "uuid.UUID".into(),
             Self::DateTime => "time.Time".into(),
             Self::JsonObject | Self::Union { .. } => "map[string]any".into(),
             // Slices, maps and untyped JSON are nil already.
@@ -2599,6 +2607,7 @@ impl FieldType {
             Self::Float => "Float".into(),
             Self::Double => "Double".into(),
             Self::Uri | Self::String => "String".into(),
+            Self::Uuid => "String".into(),
             Self::Decimal => "java.math.BigDecimal".into(),
             Self::DateTime => "Instant".into(),
             Self::Nullable { inner } => format!("{}?", inner.to_kotlin_typename()).into(),
@@ -2629,6 +2638,7 @@ impl FieldType {
             // the TypeScript SDK surfaces them as strings.
             Self::Decimal => "string".into(),
             Self::String | Self::Uri => "string".into(),
+            Self::Uuid => "string".into(),
             Self::DateTime => "Date".into(),
             Self::JsonObject | Self::Union { .. } => "any".into(),
             Self::Nullable { inner } => format!("{} | null", inner.to_js_typename()).into(),
@@ -2661,6 +2671,7 @@ impl FieldType {
             Self::Double => "f64".into(),
             // FIXME: Do we want a separate type for Uri?
             Self::Uri | Self::String => "String".into(),
+            Self::Uuid => "uuid::Uuid".into(),
             Self::Decimal => "rust_decimal::Decimal".into(),
             // FIXME: Depends on those chrono imports being in scope, not that great..
             Self::DateTime => "DateTime<Utc>".into(),
@@ -2811,6 +2822,7 @@ impl FieldType {
             Self::DateTime => "datetime".into(),
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
             Self::Uri => "str".into(),
+            Self::Uuid => "UUID".into(),
             Self::JsonObject | Self::Union { .. } => "t.Dict[str, t.Any]".into(),
             Self::Nullable { inner } => {
                 format!("t.Optional[{}]", inner.to_python_typename()).into()
@@ -2841,6 +2853,7 @@ impl FieldType {
             FieldType::Decimal => "BigDecimal".into(),
             FieldType::DateTime => "OffsetDateTime".into(),
             FieldType::Uri => "URI".into(),
+            FieldType::Uuid => "UUID".into(),
             FieldType::JsonObject | FieldType::Union { .. } => "Object".into(),
             FieldType::Nullable { inner } => inner.to_java_typename(),
             FieldType::List { inner } => format!("List<{}>", inner.to_java_typename()).into(),
@@ -2880,6 +2893,7 @@ impl FieldType {
             | FieldType::Decimal
             | FieldType::DateTime
             | FieldType::Uri
+            | FieldType::Uuid
             | FieldType::JsonObject
             | FieldType::Union { .. }
             | FieldType::Date => false,
@@ -2921,6 +2935,7 @@ impl FieldType {
             | FieldType::Decimal
             | FieldType::DateTime
             | FieldType::Uri
+            | FieldType::Uuid
             | FieldType::JsonObject
             | FieldType::Union { .. }
             | FieldType::Date
@@ -2946,6 +2961,7 @@ impl FieldType {
             | FieldType::Int64 => "int".into(),
             FieldType::Float | FieldType::Double | FieldType::Decimal => "float".into(),
             FieldType::Uri | FieldType::Date | FieldType::String => "string".into(),
+            FieldType::Uuid => "string".into(),
             FieldType::StringEnum { .. } => "string".into(),
             FieldType::DateTime => r#"\DateTimeImmutable"#.into(),
 
@@ -3065,6 +3081,7 @@ impl minijinja::value::Object for FieldType {
                     | F::Decimal
                     | F::DateTime
                     | F::Uri
+                    | F::Uuid
                     | F::JsonObject
                     | F::Union { .. }
                     | F::List { .. }

@@ -4,7 +4,8 @@
 {% set _ = set_summary_filename(test_class ~ ".cs") -%}
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // the API may deprecate operations
-using System.Threading.Tasks;
+{% if cases | map(attribute="path_args") | map("selectattr", "kind", "equalto", "uuid") | map("list") | select | list %}using System;
+{% endif %}using System.Threading.Tasks;
 using Xunit;
 
 namespace {{ sdk.package_name }}.Tests;

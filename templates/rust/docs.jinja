@@ -25,7 +25,7 @@
     {{ fallback if id in ["client", "page", "stream", "response", "error"] or id is startingwith("r#") else id }}
 {%- endmacro %}
 
-{% macro literal(arg) %}{% if arg.kind == "string" %}{{ arg.value | rust_str }}{% else %}{{ arg.value | tojson }}{% endif %}{% endmacro %}
+{% macro literal(arg) %}{% if arg.kind == "string" %}{{ arg.value | rust_str }}{% elif arg.kind == "uuid" %}{{ arg.value | rust_str }}.parse().unwrap(){% else %}{{ arg.value | tojson }}{% endif %}{% endmacro %}
 
 {#- The `use` of the model an example's body needs, with its line break. -#}
 {% macro uses(ex) %}{% if ex.body %}use {{ sdk.rust_crate }}::models::{{ ex.body.schema | to_upper_camel_case }};

@@ -148,7 +148,7 @@
 {% set op_types.list = op_types.list + [v.type.to_csharp()] -%}
 {% endfor -%}
 {% endfor -%}
-{% set scalars = ["string", "bool", "int", "long", "short", "ushort", "ulong", "float", "double", "decimal", "DateTimeOffset", "DateOnly"] -%}
+{% set scalars = ["string", "bool", "int", "long", "short", "ushort", "ulong", "float", "double", "decimal", "DateTimeOffset", "DateOnly", "Guid"] -%}
 {% for ty in op_types.list if ("<" in ty or ty in scalars) and ty not in generic.types -%}
 {% set generic.types = generic.types + [ty] -%}
 [JsonSerializable(typeof({{ ty }}), TypeInfoPropertyName = "{{ m.type_info(ty) }}")]
@@ -160,7 +160,7 @@ public sealed partial class {{ sdk.client_name }}JsonContext : JsonSerializerCon
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // generated code may use deprecated API
 #pragma warning disable CA1707, CA1711, CA1716, CA1720 // identifiers follow the API's own names
-{% if bodies.aliases or "DateTimeOffset" in context_class or "DateOnly" in context_class -%}
+{% if bodies.aliases or "DateTimeOffset" in context_class or "DateOnly" in context_class or "Guid" in context_class -%}
 using System;
 {% endif -%}
 using System.Collections.Generic;

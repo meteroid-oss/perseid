@@ -35,24 +35,32 @@
 
 package {{ sdk.package_name }}
 
-{% set ns = namespace(json=false, time=false, io=false) -%}
+{% set ns = namespace(json=false, time=false, uuid=false, io=false) -%}
 {% for op in resource.operations -%}
 {% if op.request_body_kind == "binary" %}{% set ns.io = true %}{% endif -%}
 {% for field in op.multipart_fields | default([]) if not field.is_file -%}
 {% if "json." in go_field_type(field) %}{% set ns.json = true %}{% endif -%}
 {% if "time." in go_field_type(field) %}{% set ns.time = true %}{% endif -%}
+{% if "uuid." in go_field_type(field) %}{% set ns.uuid = true %}{% endif -%}
 {% endfor -%}
 {% if op.request_body_json_type is defined and "json." in req_type(op, types) %}{% set ns.json = true %}{% endif -%}
 {% if op.response_body_json_type is defined and "json." in resp_type(op, types) %}{% set ns.json = true %}{% endif -%}
 {% if op.request_body_json_type is defined and "time." in req_type(op, types) %}{% set ns.time = true %}{% endif -%}
+{% if op.request_body_json_type is defined and "uuid." in req_type(op, types) %}{% set ns.uuid = true %}{% endif -%}
 {% if op.response_body_json_type is defined and "time." in resp_type(op, types) %}{% set ns.time = true %}{% endif -%}
+{% if op.response_body_json_type is defined and "uuid." in resp_type(op, types) %}{% set ns.uuid = true %}{% endif -%}
 {% if op.request_body_union is defined and op.request_body_union not in types and not (op.stream | default(false)) %}{% set ns.json = true %}{% if "time.Time" in go_union(go_ident(op.request_body_union), op.request_body_json_type) %}{% set ns.time = true %}{% endif %}{% endif -%}
+{% if op.request_body_union is defined and op.request_body_union not in types and not (op.stream | default(false)) %}{% if "uuid.UUID" in go_union(go_ident(op.request_body_union), op.request_body_json_type) %}{% set ns.uuid = true %}{% endif %}{% endif -%}
 {% if op.response_body_union is defined and op.response_body_union not in types %}{% set ns.json = true %}{% if "time.Time" in go_union(go_ident(op.response_body_union), op.response_body_json_type) %}{% set ns.time = true %}{% endif %}{% endif -%}
+{% if op.response_body_union is defined and op.response_body_union not in types %}{% if "uuid.UUID" in go_union(go_ident(op.response_body_union), op.response_body_json_type) %}{% set ns.uuid = true %}{% endif %}{% endif -%}
 {% for p in op.query_params if "time.Time" in p.type.to_go() %}{% set ns.time = true %}{% endfor -%}
+{% for p in op.query_params if "uuid.UUID" in p.type.to_go() %}{% set ns.uuid = true %}{% endfor -%}
 {% for p in op.query_params if "json." in param_type(op, p) or param_union(op, p) %}{% set ns.json = true %}{% endfor -%}
 {% for p in op.header_params if p.json and "json." in go_header_type(p) %}{% set ns.json = true %}{% endfor -%}
 {% for p in op.header_params if p.json and "time." in go_header_type(p) %}{% set ns.time = true %}{% endfor -%}
+{% for p in op.header_params if p.json and "uuid." in go_header_type(p) %}{% set ns.uuid = true %}{% endfor -%}
 {% for p in op.path_params if p in op.path_styles and op.path_styles[p].type is defined %}{% if "json." in go_type(op.path_styles[p].type) %}{% set ns.json = true %}{% endif %}{% if "time." in go_type(op.path_styles[p].type) %}{% set ns.time = true %}{% endif %}{% endfor -%}
+{% for p in op.path_params if p in op.path_styles and op.path_styles[p].type is defined %}{% if "uuid." in go_type(op.path_styles[p].type) %}{% set ns.uuid = true %}{% endif %}{% endfor -%}
 {% endfor -%}
 import (
 	"context"
@@ -60,6 +68,8 @@ import (
 {% endif %}{% if ns.json %}	"encoding/json"
 {% endif %}	"net/http"
 {% if ns.time %}	"time"
+{% endif %}{% if ns.uuid %}
+	"github.com/google/uuid"
 {% endif %})
 
 {% for op in resource.operations if op.request_body_kind == "multipart" %}

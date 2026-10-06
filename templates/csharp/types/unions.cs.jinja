@@ -29,6 +29,7 @@
     else "bool" if ty == "bool"
     else "date_time" if ty == "DateTimeOffset"
     else "date" if ty == "DateOnly"
+    else "guid" if ty == "Guid"
     else "decimal" if ty == "decimal"
     else "number" if ty in ["short", "int", "long", "ushort", "ulong", "float", "double"]
     else "node" if ty == "JsonNode"
@@ -224,6 +225,11 @@ internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
         {
             return {{ create }}(dateTime{{ n }});
         }
+{%- elif v.kind == "guid" %}
+        if (root.ValueKind == JsonValueKind.String && root.TryGetGuid(out var guid{{ n }}))
+        {
+            return {{ create }}(guid{{ n }});
+        }
 {%- elif v.kind == "date" %}
         if (
             root.ValueKind == JsonValueKind.String
@@ -281,7 +287,7 @@ internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
                 break;
 {%- else %}
             case {{ name }}.{{ v.class }} variant:
-{%- if v.kind in ["string", "date_time"] %}
+{%- if v.kind in ["string", "date_time", "guid"] %}
                 writer.WriteStringValue(variant.Value);
 {%- elif v.kind == "date" %}
                 writer.WriteStringValue(variant.Value.ToString("yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture));

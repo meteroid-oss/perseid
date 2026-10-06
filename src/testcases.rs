@@ -138,6 +138,7 @@ mod tests {
             pagination: vec![],
             reserved: Default::default(),
             names: Default::default(),
+            uuid_strings: false,
         };
         let api = crate::spec::api(&spec, &filters).unwrap();
         api.resources

@@ -21,7 +21,7 @@ Every method of the API is listed in [api.md](api.md).
 ## Usage
 
 ```go
-import @@PACKAGE_NAME@@ "@@GO_MODULE@@"
+{{ docs.imports([call]) }}import @@PACKAGE_NAME@@ "@@GO_MODULE@@"
 
 client := @@PACKAGE_NAME@@.New("your-api-key", {% if sdk.has_default_base_url %}nil{% else %}&@@PACKAGE_NAME@@.Options{ServerURL: "https://api.example.com"}{% endif %})
 

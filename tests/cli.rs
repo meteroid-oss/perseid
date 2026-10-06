@@ -1747,7 +1747,7 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/Token" } } }
 components:
   schemas:
-    Token: { type: string, format: uuid }
+    Token: { type: string }
 "##;
     fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
     let (ok, out) = perseid(dir.path(), &["init", "--sdks", "java"]);

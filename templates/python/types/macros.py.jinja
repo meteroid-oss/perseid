@@ -224,6 +224,7 @@ import datetime as _datetime
 import typing as t
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID
 
 from ..serialization import {{ runtime_names | reject("equalto", "ObjectUnion") | sort | join(", ") }}
 {%- if "ObjectUnion" in runtime_names %}

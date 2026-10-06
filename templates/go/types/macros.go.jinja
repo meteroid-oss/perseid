@@ -371,7 +371,7 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
         formatFloat(float64({{ expr }}))
     {%- elif ty.is_datetime() -%}
         formatTime({{ expr }})
-    {%- elif ty.is_date() -%}
+    {%- elif ty.is_date() or gt == "uuid.UUID" -%}
         {{ "(" ~ expr ~ ")" if expr is startingwith("*") else expr }}.String()
     {%- elif ty.is_schema_ref() -%}
         formatValue({{ expr }})
@@ -410,4 +410,19 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
 
 {% macro go_article(word) -%}
     {{ "an" if word[0] in "AEIOU" else "a" }}
+{%- endmacro %}
+
+{#- The imports of a model file: `std` packages, and those `rendered` code uses. -#}
+{% macro go_imports(rendered, std=[]) -%}
+    {%- set std = std + (["time"] if "time.Time" in rendered else []) -%}
+    {%- set ext = ["github.com/google/uuid"] if "uuid.UUID" in rendered else [] -%}
+    {%- if (std | length) + (ext | length) == 1 -%}
+import "{{ (std + ext) | first }}"
+    {%- elif std or ext -%}
+import (
+{% for p in std %}	"{{ p }}"
+{% endfor %}{% if std and ext %}
+{% endif %}{% for p in ext %}	"{{ p }}"
+{% endfor %})
+    {%- endif -%}
 {%- endmacro %}

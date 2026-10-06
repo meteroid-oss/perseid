@@ -26,7 +26,17 @@
 {%- endmacro %}
 
 {% macro literal(arg) -%}
-    {%- if arg.kind == "boolean" %}{{ "True" if arg.value else "False" }}{% else %}{{ arg.value | tojson }}{% endif -%}
+    {%- if arg.kind == "boolean" %}{{ "True" if arg.value else "False" }}
+    {%- elif arg.kind == "uuid" %}UUID({{ arg.value | tojson }})
+    {%- else %}{{ arg.value | tojson }}{% endif -%}
+{%- endmacro %}
+
+{#- The imports the literals of the examples `exs` need, each on its line. -#}
+{% macro imports(exs) -%}
+    {%- set ns = namespace(uuid=false) -%}
+    {%- for ex in exs if ex %}{% for a in ex.path_args if a.kind == "uuid" %}{% set ns.uuid = true %}{% endfor %}{% endfor -%}
+    {%- if ns.uuid %}from uuid import UUID
+{% endif -%}
 {%- endmacro %}
 
 {#- The call of an example, `kwargs` (`name=value, ...`) closing its arguments. -#}

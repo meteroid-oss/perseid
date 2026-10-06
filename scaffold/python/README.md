@@ -21,7 +21,7 @@ is listed in [api.md](api.md).
 ## Usage
 
 ```python
-from @@PACKAGE_NAME@@ import @@CLIENT_NAME@@
+{{ docs.imports([call]) }}from @@PACKAGE_NAME@@ import @@CLIENT_NAME@@
 
 client = @@CLIENT_NAME@@(api_key="your-api-key"{% if not sdk.has_default_base_url %}, base_url="https://api.example.com"{% endif %})
 
@@ -39,7 +39,7 @@ or use it as a context manager, to release its connections.
 `Async@@CLIENT_NAME@@` has the same resources for asyncio:
 
 ```python
-from @@PACKAGE_NAME@@ import Async@@CLIENT_NAME@@
+{{ docs.imports([call]) }}from @@PACKAGE_NAME@@ import Async@@CLIENT_NAME@@
 
 async with Async@@CLIENT_NAME@@() as client:
     {% if call and call.result %}{{ result }} = await {{ call_of() }}{% else %}await {{ call_of() }}{% endif %}

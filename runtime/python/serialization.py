@@ -28,6 +28,7 @@ import json
 import re
 import sys
 import types
+import uuid as _uuid
 import typing as t
 from decimal import Decimal
 
@@ -226,6 +227,8 @@ def to_json_value(value: t.Any, annotation: t.Any = t.Any) -> t.Any:
         return format_datetime(value)
     if isinstance(value, _datetime.date):
         return value.isoformat()
+    if isinstance(value, _uuid.UUID):
+        return str(value)
     args = t.get_args(annotation)
     if isinstance(value, (list, tuple, set, frozenset)):
         inner = args[0] if origin in (list, set, frozenset) and args else t.Any
@@ -427,6 +430,13 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
                 return _datetime.date.fromisoformat(str(value))
             except ValueError as exc:
                 raise ModelParseError(f"{ctx}: invalid date {value!r}") from exc
+        if annotation is _uuid.UUID:
+            if isinstance(value, _uuid.UUID):
+                return value
+            try:
+                return _uuid.UUID(str(value))
+            except ValueError as exc:
+                raise ModelParseError(f"{ctx}: invalid UUID {value!r}") from exc
         if annotation is Decimal:
             try:
                 return parse_decimal(value)
@@ -452,7 +462,7 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
     return value
 
 
-_STRING_TYPES = (str, _datetime.datetime, _datetime.date, Decimal)
+_STRING_TYPES = (str, _datetime.datetime, _datetime.date, _uuid.UUID, Decimal)
 
 
 def _json_kind(annotation: t.Any) -> str | None:

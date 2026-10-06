@@ -28,7 +28,8 @@
 {%- endmacro %}
 
 {% macro literal(arg) -%}
-    {%- if arg.kind == "boolean" %}{{ "true" if arg.value else "false" }}{% else %}{{ arg.value | tojson }}{% if arg.type == "Float" %}f{% endif %}{% endif -%}
+    {%- if arg.kind == "boolean" %}{{ "true" if arg.value else "false" }}
+    {%- elif arg.kind == "uuid" %}Guid.Parse({{ arg.value | tojson }}){% else %}{{ arg.value | tojson }}{% if arg.type == "Float" %}f{% endif %}{% endif -%}
 {%- endmacro %}
 
 {#- The call of an example: of its `...AutoPagingAsync` twin with `auto_paging`, through

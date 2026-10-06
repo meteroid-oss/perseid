@@ -37,6 +37,9 @@ homepage = "https://acme.com"
 # repository = "https://git.acme.dev/api" # SDKs without `repo`: the `origin` remote by default
 authors = ["Acme <dev@acme.com>"]
 
+[types]                             # how values of some formats are typed, in every SDK
+uuid = "typed"                      # or "string" for `format: uuid` values that are not all UUIDs
+
 [methods]                           # method names by operation id
 listWidgetEvents = "events"
 
@@ -106,6 +109,12 @@ Each key is also a key of the [language tables](#language-tables), which overrid
 | `user_agent` | kebab-case `name` | Prefix of the `User-Agent` header |
 | `[methods]` | | Method names by operation id, over the [resource-style names](#method-names) |
 | `[context]` | | Values exposed to templates as `sdk.*` |
+
+`[types]` holds settings of every SDK only:
+
+| Key | Default | |
+|---|---|---|
+| `uuid` | `"typed"` | `format: uuid` values are the [language's UUID type](languages.md#formats). `"string"` keeps them strings, for an API whose "uuid" values are not all UUIDs: one would fail decoding the whole response |
 
 ## Operations
 

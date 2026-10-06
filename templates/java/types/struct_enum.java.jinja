@@ -13,7 +13,7 @@
 {% for cls in (ns.names + ["unrecognized"]) | idents("pascal", "java", owner) -%}
 {% set shadowed = cls in ["String", "Object", "Override", "Deprecated", "Utils", "Objects", "List",
     "Map", "Set", "Optional", "ArrayList", "HashMap", "LinkedHashMap", "LinkedHashSet", "BigDecimal", "BigInteger",
-    "LocalDate", "OffsetDateTime", "URI", "Visibility", "JsonAnyGetter", "JsonAnySetter", "JsonAutoDetect",
+    "LocalDate", "OffsetDateTime", "URI", "UUID", "Visibility", "JsonAnyGetter", "JsonAnySetter", "JsonAutoDetect",
     "JsonIgnoreProperties", "JsonInclude", "JsonProperty", "JsonSubTypes", "JsonTypeInfo",
     "JsonTypeName", "JsonUnwrapped", "JsonProcessingException", "JsonValue", "TypeReference",
     "DeserializationContext", "JsonNode", "JsonDeserialize", "IOException", "Builder", "Content",
@@ -73,6 +73,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.UUID;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;

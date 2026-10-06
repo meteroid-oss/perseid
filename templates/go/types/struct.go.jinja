@@ -1,4 +1,4 @@
-{% from "types/macros.go.jinja" import go_field_type, go_json_tag, go_deprecated, go_ident, go_export, go_type, go_union_name, go_union -%}
+{% from "types/macros.go.jinja" import go_field_type, go_imports, go_json_tag, go_deprecated, go_ident, go_export, go_type, go_union_name, go_union -%}
 {% set type_name = go_ident(type.name) -%}
 {% set patch = patch_body -%}
 {% macro field_type(field) %}{{ go_field_type(field, patch, go_union_name(type.name, field.name, field.type, type_names)) }}{% endmacro -%}
@@ -25,14 +25,9 @@
 {% set untagged = type.fields | rejectattr("name", "go_taggable") | list -%}
 {% set rendered_types %}{% for field in type.fields %}{{ field_type(field) }} {% endfor %}{{ extra_type }} {{ unions }}{% endset -%}
 package {{ sdk.package_name }}
-{% if "time.Time" in rendered_types %}
-import (
-	"encoding/json"
-	"time"
-)
-{% else %}
-import "encoding/json"
-{% endif %}
+
+{{ go_imports(rendered_types, ["encoding/json"]) }}
+
 {% if not named %}// {{ type_name }} is the {{ type.name }} object of the {{ sdk.client_name }} API.
 {% if doc_comment %}//
 {% endif %}{% endif %}{% if doc_comment %}{{ doc_comment }}
