@@ -1138,9 +1138,19 @@ fn promote_field_type(
         | FieldType::Uri
         | FieldType::Uuid
         | FieldType::JsonObject
-        | FieldType::Union { .. }
         | FieldType::SchemaRef { .. }
         | FieldType::Date => {}
+        FieldType::Union { variants, .. } => {
+            let base_name = base_name.strip_suffix("_value").unwrap_or(base_name);
+            for variant in variants {
+                let inline = matches!(variant.r#type, FieldType::StringEnum { .. });
+                let base = format!("{base_name}_{}", variant.name);
+                promote_field_type(&mut variant.r#type, &base, existing, new_types)?;
+                if let (true, FieldType::SchemaRef { name, .. }) = (inline, &variant.r#type) {
+                    variant.name = name.to_snake_case();
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -2067,14 +2077,16 @@ impl UnionVariant {
         }
         let explicit_object = obj.instance_type == Some(InstanceType::Object.into());
         let r#type = match FieldType::from_schema_object(obj.clone()).ok()? {
-            FieldType::StringEnum { .. } => FieldType::String,
             FieldType::JsonObject if !explicit_object => return None,
             ty => ty,
         };
+        // An inline enum is named after the type `promote_inline_enums` gives it.
         let (name, json_type) = match &r#type {
             FieldType::SchemaRef { name, .. } => (name.to_snake_case(), String::new()),
+            FieldType::StringEnum { .. } => ("enum".to_owned(), "string".to_owned()),
             ty => (Self::name_of(ty)?, Self::json_type_of(ty)?.to_owned()),
         };
+        let loose = matches!(r#type, FieldType::StringEnum { .. });
         Some(Self {
             name,
             json_type,
@@ -2086,7 +2098,7 @@ impl UnionVariant {
             required: Vec::new(),
             properties: Vec::new(),
             id: None,
-            loose: false,
+            loose,
         })
     }
 
@@ -3510,6 +3522,26 @@ mod tests {
             let ty = Type::from_schema(name.into(), schema(value)).unwrap();
             assert!(matches!(ty.data, TypeData::Alias { .. }), "{name}");
         }
+    }
+
+    #[test]
+    fn inline_enum_variants_are_promoted_and_named_after_their_type() {
+        let mut ty = FieldType::from_schema_object(schema(json!({"anyOf": [
+            {"type": "string", "enum": ["small", "large"]}, {"type": "integer"}]})))
+        .unwrap();
+        let existing = ExistingTypes {
+            by_values: BTreeMap::new(),
+            type_names: BTreeSet::new(),
+            reserved: BTreeSet::new(),
+        };
+        let mut new_types = BTreeMap::new();
+        promote_field_type(&mut ty, "Request_size", &existing, &mut new_types).unwrap();
+        let FieldType::Union { variants, .. } = ty else {
+            panic!("{ty:?}")
+        };
+        assert_eq!(variants[0].name, "request_size_enum");
+        assert!(variants[0].loose);
+        assert!(new_types.contains_key("RequestSizeEnum"), "{new_types:?}");
     }
 
     #[test]

@@ -178,7 +178,7 @@ public class UnionsTests
                 Context.Response
             )!;
 
-        Assert.Equal("auto", Assert.IsType<ResponseToolChoice.StringValue>(Read("\"auto\"").ToolChoice).Value);
+        Assert.Equal("auto", Assert.IsType<ResponseToolChoice.ToolChoiceEnum>(Read("\"auto\"").ToolChoice).Value.Value);
         Assert.Equal(
             "f",
             Assert.IsType<ResponseToolChoice.FunctionTool>(Read("""{"name":"f","arguments":"{}"}""").ToolChoice).Value.Name

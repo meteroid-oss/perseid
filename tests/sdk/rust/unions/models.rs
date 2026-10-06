@@ -96,7 +96,7 @@ fn object_unions_pick_the_best_matching_variant() {
         .iter()
         .map(|case| serde_json::from_value(case.clone()).unwrap())
         .collect();
-    assert!(matches!(&picked[0], ToolChoice::String(s) if s == "auto"));
+    assert!(matches!(&picked[0], ToolChoice::ToolChoiceEnum(s) if s.as_str() == "auto"));
     assert!(matches!(&picked[1], ToolChoice::AllowedTools(t) if t.mode.as_str() == "auto"));
     assert!(matches!(&picked[2], ToolChoice::HostedTool(_)));
     assert!(matches!(&picked[3], ToolChoice::FunctionTool(f) if f.name == "f"));

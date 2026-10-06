@@ -175,7 +175,7 @@ class UnionsTest {
             picked[i] = ResponseModel.fromJson("{\"id\":\"r\",\"model\":\"alpha-1\",\"tool_choice\":" + cases[i] + "}");
             assertJson(cases[i], PLAIN.readTree(picked[i].toJson()).get("tool_choice").toString());
         }
-        assertTrue(picked[0].toolChoice().get().isString());
+        assertTrue(picked[0].toolChoice().get().isToolChoiceEnum());
         assertTrue(picked[1].toolChoice().get().isAllowedTools());
         assertTrue(picked[2].toolChoice().get().isHostedTool());
         assertTrue(picked[3].toolChoice().get().isFunctionTool());
