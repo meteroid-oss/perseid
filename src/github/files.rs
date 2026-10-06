@@ -164,7 +164,8 @@ pub(super) fn kept(path: &str, branch: &str) -> String {
     }
 }
 
-/// The branch the workflows run on: the remote's default branch, else the current one.
+/// The branch the workflows run on: the remote's default branch, else its `main` or `master`,
+/// else the current one.
 fn default_branch(top: &Path) -> String {
     let read = |args: &[&str]| {
         git(top, args)
@@ -175,6 +176,43 @@ fn default_branch(top: &Path) -> String {
     };
     read(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
         .map(|b| b.trim_start_matches("origin/").to_owned())
+        .or_else(|| {
+            ["main", "master"].into_iter().map(str::to_owned).find(|b| {
+                read(&[
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    &format!("refs/remotes/origin/{b}"),
+                ])
+                .is_some()
+            })
+        })
         .or_else(|| read(&["symbolic-ref", "--short", "HEAD"]))
         .unwrap_or_else(|| "main".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workflows_run_on_main_from_a_feature_branch_without_origin_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| git(dir.path(), args).unwrap();
+        run(&["init", "-q", "-b", "main"]);
+        run(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "a",
+        ]);
+        run(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        run(&["checkout", "-q", "-b", "feat/x"]);
+        assert_eq!(default_branch(dir.path()), "main");
+    }
 }
