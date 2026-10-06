@@ -1,0 +1,153 @@
+{% set _ = set_summary_filename("roundTrips.test.ts") -%}
+// this file is @generated
+// Decodes sample JSON of every model and encodes it back, from round_trips.json.
+//
+// Date-times compare as instants (the SDK keeps milliseconds and writes `Z`), and with
+// `int64 = "number"` integers compare as numbers. Everything else must come back exactly.
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { test } from "node:test";
+import { isDeepStrictEqual } from "node:util";
+import * as sdk from "../../src/index.js";
+{% for _, type in types | items if type.kind == "alias" -%}
+import { {{ type.name | to_upper_camel_case }}Serializer } from "../../src/models/{{ type.name | to_lower_camel_case }}.js";
+{% endfor %}
+interface Codec {
+  parse(json: any): unknown;
+  serialize(value: any): unknown;
+}
+
+interface Sample {
+  name: string;
+  json: unknown;
+}
+
+const INT64: string = {{ sdk.int64 | default("number") | tojson }};
+
+// Aliases are exported as types only: their serializer comes from their module.
+const CODECS: [string, Codec][] = [
+{%- for name, type in types | items %}
+  [{{ name | tojson }}, {% if type.kind != "alias" %}sdk.{% endif %}{{ type.name | to_upper_camel_case }}Serializer],
+{%- endfor %}
+];
+
+const TOKEN = /"(?:[^"\\]|\\.)*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g;
+const MARK = "\u0000int:";
+
+/** `JSON.parse` that keeps every digit of an integer, as a `bigint`; floats stay numbers. */
+function readExact(text: string): unknown {
+  const marked = text.replace(TOKEN, (token) => (/^-?\d+$/.test(token) ? `"\\u0000int:${token}"` : token));
+  return JSON.parse(marked, (_key, item) =>
+    typeof item === "string" && item.startsWith(MARK) ? BigInt(item.slice(MARK.length)) : item
+  );
+}
+
+/** The JSON text of a value read by `readExact`, its `bigint`s as integer literals. */
+function writeExact(value: unknown): string {
+  const json = JSON.stringify(value, (_key, item) => (typeof item === "bigint" ? `${MARK}${item}` : item));
+  return json.replace(/"\\u0000int:(-?\d+)"/g, "$1");
+}
+
+const DATE_TIME = /^(\d{4}-\d{2}-\d{2})[Tt ](\d{2}:\d{2})(?::(\d{2}))?(?:\.(\d+))?([Zz]|[+-]\d{2}(?::?\d{2})?)?$/;
+
+/** A JSON scalar with the documented normalizations applied. */
+function normalize(value: unknown): unknown {
+  if (typeof value === "string") {
+    const match = DATE_TIME.exec(value);
+    if (match === null) {
+      return value;
+    }
+    const [, date, time, seconds = "00", fraction = "", offset = "Z"] = match;
+    const digits = offset.slice(1).replace(":", "");
+    const zone = /^[Zz]$/.test(offset) ? "Z" : `${offset[0]}${digits.slice(0, 2)}:${digits.slice(2, 4) || "00"}`;
+    const instant = Date.parse(`${date}T${time}:${seconds}.${fraction.slice(0, 3).padEnd(3, "0")}${zone}`);
+    return Number.isNaN(instant) ? value : { instant };
+  }
+  if (typeof value === "bigint" && INT64 === "number") {
+    return Number(value);
+  }
+  // `5.0` and `5` are the same JSON number.
+  if (typeof value === "number" && INT64 !== "number" && Number.isInteger(value)) {
+    return BigInt(value);
+  }
+  return value;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** The first difference between the sample and what came back, if any. */
+function difference(expected: unknown, actual: unknown, path: string): string | undefined {
+  if (Array.isArray(expected) && Array.isArray(actual)) {
+    if (expected.length !== actual.length) {
+      return `${path}: ${expected.length} items became ${actual.length}`;
+    }
+    for (const [i, item] of expected.entries()) {
+      const found = difference(item, actual[i], `${path}/${i}`);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+  if (isObject(expected) && isObject(actual)) {
+    for (const [key, value] of Object.entries(expected)) {
+      if (!Object.hasOwn(actual, key)) {
+        return `${path}/${key}: lost, was ${writeExact(value)}`;
+      }
+      const found = difference(value, actual[key], `${path}/${key}`);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    const added = Object.keys(actual).find((key) => !Object.hasOwn(expected, key));
+    return added === undefined ? undefined : `${path}/${added}: added, is ${writeExact(actual[added])}`;
+  }
+  return isDeepStrictEqual(normalize(expected), normalize(actual))
+    ? undefined
+    : `${path}: ${writeExact(expected)} became ${writeExact(actual)}`;
+}
+
+/** Decodes the JSON text like the client does, then encodes it again. */
+function roundTrip(codec: Codec, text: string): string {
+  return sdk.stringifyJson(codec.serialize(codec.parse(sdk.parseJson(text))));
+}
+
+const data = readExact(
+  readFileSync(new URL("../../../tests/api/round_trips.json", import.meta.url), "utf8")
+) as { models: Record<string, Sample[]> };
+
+for (const [schema, codec] of CODECS) {
+  test(`${schema} round-trips`, () => {
+    const samples = data.models[schema];
+    assert.ok(samples !== undefined && samples.length > 0, `${schema}: no samples`);
+    const failures: string[] = [];
+    for (const sample of samples) {
+      const input = writeExact(sample.json);
+      const fail = (reason: string) =>
+        failures.push(`${schema} sample \`${sample.name}\`: ${reason}\n    input: ${input}`);
+      let output: string;
+      try {
+        output = roundTrip(codec, input);
+      } catch (error) {
+        fail(`decode failed: ${error}`);
+        continue;
+      }
+      const reason = difference(sample.json, readExact(output), "");
+      if (reason !== undefined) {
+        fail(`${reason}\n    output: ${output}`);
+        continue;
+      }
+      try {
+        const again = roundTrip(codec, output);
+        if (!isDeepStrictEqual(readExact(again), readExact(output))) {
+          fail(`not stable, re-encoded as ${again}\n    output: ${output}`);
+        }
+      } catch (error) {
+        fail(`own output: ${error}\n    output: ${output}`);
+      }
+    }
+    assert.ok(failures.length === 0, `${failures.length} samples differ:\n${failures.join("\n")}`);
+  });
+}
