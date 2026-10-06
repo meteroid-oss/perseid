@@ -174,7 +174,7 @@ impl GitHub {
                 self.hosted_lists += 1;
                 let installations = match self.hosted_lists > self.hosted_after {
                     true => json!([{
-                        "id": 99, "app_slug": "perseid", "account": { "login": "acme" },
+                        "id": 99, "app_slug": "perseid-sdks", "account": { "login": "acme" },
                         "repository_selection": if self.hosted_everywhere { "all" } else { "selected" },
                     }]),
                     false => json!([]),
@@ -1203,7 +1203,7 @@ fn the_perseid_app_needs_no_secret_anywhere() {
         "  + acme/petstore-python: .github/workflows/sdk-release.yml, committed with your credentials",
         "→ Install the perseid App on acme, choosing \"Only select repositories\": petstore-sdks, petstore-python, petstore-typescript",
         &format!(
-            "/web/apps/perseid/installations/new/permissions?suggested_target_id={}&repository_ids[]={}",
+            "/web/apps/perseid-sdks/installations/new/permissions?suggested_target_id={}&repository_ids[]={}",
             id_of("acme"),
             id_of("acme/petstore-sdks")
         ),

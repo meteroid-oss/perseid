@@ -93,7 +93,7 @@ setup:
 |---|---|---|---|
 | A GitHub App of your own | [`perseid app`](#perseid-app) | `SDK_APP_ID` variable, `SDK_APP_PRIVATE_KEY` secret | Each run mints a token for an hour. You keep the key |
 | A [fine-grained token](#tokens) | You | `SDK_GITHUB_TOKEN` secret | It expires and acts as you |
-| The perseid App | [`perseid sync`](#perseid-sync) | Nothing | Each run trades its GitHub OIDC token for a token of the App, for an hour |
+| The [perseid App](https://github.com/apps/perseid-sdks) | [`perseid sync`](#perseid-sync) | Nothing | Each run trades its GitHub OIDC token for a token of the App, for an hour |
 
 | Workflow | Runs in | Writes to |
 |---|---|---|

@@ -31,7 +31,8 @@ git add -A && git commit -m "ci: generate SDKs with perseid" && git push
 
 The push runs the `SDKs` workflow, which opens a pull request with every SDK.
 
-The perseid App has Contents and Pull requests access to the repositories you select. Each run
+The [perseid App](https://github.com/apps/perseid-sdks) has Contents and Pull requests access to
+the repositories you select. Each run
 trades its GitHub OIDC token for an App token covering its repositories for an hour, so nothing
 is stored. Rather keep the key yourself? `npx perseid app` creates a GitHub App of your own, or
 set a [fine-grained token](docs/ci.md#tokens) as the `SDK_GITHUB_TOKEN` secret.

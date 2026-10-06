@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::{Ui, api::GitHub, api::web_base};
 
-pub const SLUG: &str = "perseid";
+pub const SLUG: &str = "perseid-sdks";
 
 /// Whether the hosted App is installed on all of `owner`'s repositories, which its broker refuses:
 /// each repository could then write to all the others.
