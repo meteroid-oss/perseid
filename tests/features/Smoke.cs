@@ -668,7 +668,7 @@ internal static class Scenarios
         {
             var capture = new Capture();
             using var counted = Make(url, capture);
-            var error = await Throws<ApiException>(() => counted.Errors.RetrieveScenarioStatusAsync($"{code}"));
+            var error = await Throws<ApiException>(() => counted.Errors.RetrieveScenarioStatusAsync(code));
             Equal(kind, error.GetType());
             Equal(code, (int)error.StatusCode);
             var body = Declared(error);

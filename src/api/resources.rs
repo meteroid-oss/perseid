@@ -574,8 +574,8 @@ pub(crate) struct Operation {
     ///
     /// SDKs take them as strings, unless `path_styles` types them.
     path_params: Vec<String>,
-    /// The path parameters that are not plain `simple` scalars, by name: other styles, lists,
-    /// objects and `content` values.
+    /// The path parameters that are not plain `simple` text, by name: other styles, typed
+    /// scalars (numbers, booleans, dates, enums), lists, objects and `content` values.
     #[serde(default)]
     pub(crate) path_styles: BTreeMap<String, PathStyle>,
     /// Path parameters with their types, in `path_params` order.
@@ -1460,8 +1460,8 @@ fn is_collection_schema(
     false
 }
 
-/// How a path parameter is serialized, or `None` for a plain `simple` scalar, which SDKs take
-/// as a string.
+/// How a path parameter is serialized, or `None` for a plain `simple` text scalar, which SDKs
+/// take as a string. Other scalars keep their type, like the fields they are read from.
 fn path_parameter_style(
     parameter_data: &openapi::ParameterData,
     style: openapi::PathStyle,
@@ -1481,10 +1481,13 @@ fn path_parameter_style(
     };
     let explode = parameter_data.explode.unwrap_or(false);
     if scalar {
-        return Ok((style != "simple").then(|| PathStyle {
+        let r#type = FieldType::from_openapi(parameter_data.format.clone())
+            .ok()
+            .filter(|ty| !is_text_type(ty, schemas));
+        return Ok((style != "simple" || r#type.is_some()).then(|| PathStyle {
             style: style.to_owned(),
             explode,
-            r#type: None,
+            r#type,
         }));
     }
     let (ty, json) = parameter_value(parameter_data.format.clone(), true)?;
@@ -1493,6 +1496,30 @@ fn path_parameter_style(
         explode,
         r#type: Some(ty),
     }))
+}
+
+/// Whether a scalar parameter is plain text: a string, a union, or a `$ref` to a string.
+fn is_text_type(ty: &FieldType, schemas: &IndexMap<String, openapi::SchemaObject>) -> bool {
+    let mut ty = ty.clone();
+    for _ in 0..16 {
+        let FieldType::SchemaRef { name, .. } = &ty else {
+            break;
+        };
+        let Some(Schema::Object(target)) = schemas.get(name).map(|s| &s.json_schema) else {
+            return true;
+        };
+        let Ok(target) = FieldType::from_schema_object(target.clone()) else {
+            return true;
+        };
+        ty = target;
+    }
+    matches!(
+        ty,
+        FieldType::String
+            | FieldType::Union { .. }
+            | FieldType::JsonObject
+            | FieldType::SchemaRef { .. }
+    )
 }
 
 /// Path and header parameters are sent as text: scalars, unions of them and, in headers, lists
@@ -1868,14 +1895,14 @@ pub(crate) struct QueryParam {
     typed_union: Option<FieldType>,
 }
 
-/// How a path parameter is serialized, when it is not a plain `simple` scalar.
+/// How a path parameter is serialized, when it is not plain `simple` text.
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct PathStyle {
     /// `simple`, `label`, `matrix`, or `json` for a `content: application/json` parameter.
     style: String,
     /// Whether lists and objects are exploded: `a.b.c` instead of `a,b,c`.
     explode: bool,
-    /// The type of a list, object or JSON value; scalars are strings and have none.
+    /// The type of the value; plain text has none.
     #[serde(
         default,
         serialize_with = "serialize_optional_field_type",
@@ -2465,8 +2492,19 @@ mod tests {
     #[test]
     fn path_parameters_keep_their_style() {
         let plain = json!({ "name": "id", "in": "path", "required": true,
-            "schema": { "type": "integer" } });
+            "schema": { "type": "string" } });
         assert!(parameter(plain).unwrap().path_styles.is_empty());
+        let int = json!({ "name": "id", "in": "path", "required": true,
+            "schema": { "type": "integer" } });
+        let op = parameter(int).unwrap();
+        assert_eq!(op.path_styles["id"].style, "simple");
+        assert!(matches!(
+            op.path_styles["id"].r#type,
+            Some(FieldType::Int64)
+        ));
+        let union = json!({ "name": "id", "in": "path", "required": true,
+            "schema": { "anyOf": [{ "type": "integer" }, { "type": "string" }] } });
+        assert!(parameter(union).unwrap().path_styles.is_empty());
         let label = json!({ "name": "id", "in": "path", "required": true, "style": "label",
             "schema": { "type": "string" } });
         let op = parameter(label).unwrap();

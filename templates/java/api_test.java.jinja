@@ -13,7 +13,7 @@ class {{ test_class }} {
 {%- for case in cases %}
 {%- set op = resource.operations[case.index] %}
 {%- set args = namespace(list=[]) %}
-{%- for arg in case.path_args %}{% set args.list = args.list + [arg.value | tojson] %}{% endfor %}
+{%- for arg in case.path_args %}{% set args.list = args.list + [docs.literal(arg)] %}{% endfor %}
 {%- if case.body %}{% set args.list = args.list + ["PerseidMock.decode(" ~ sdk.java_package ~ ".models." ~ (case.body.schema | to_upper_camel_case) ~ ".class, " ~ (case.body.json | tojson) ~ ")"] %}{% endif %}
 {%- set call = "mock.client." ~ docs.accessor(resource.name) ~ "()." ~ docs.method(op) ~ "(" ~ (args.list | join(", ")) ~ ")" %}
 

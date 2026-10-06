@@ -341,7 +341,7 @@ def count_requests(request, call_next):
 counted = Features(api_key="tok", base_url=URL, middleware=[count_requests])
 for code, kind in STATUS_ERRORS.items():
     sent.clear()
-    status_error = raises(kind, lambda: counted.errors.retrieve_scenario_status(str(code)))
+    status_error = raises(kind, lambda: counted.errors.retrieve_scenario_status(code))
     assert type(status_error) is kind and status_error.status_code == code, status_error
     assert status_error.body == Error(error=f"status {code}", code=code), status_error.body
     assert status_error.request_id == "req_mock" and len(sent) == 1, (code, len(sent))
@@ -412,7 +412,7 @@ async def main():
         )
         assert created.status == "attempts=2;key=idem-1" and server_state(idempotent)["keys"] == ["idem-1"] * 2
         for code, kind in {403: PermissionDeniedError, 404: NotFoundError, 422: UnprocessableEntityError}.items():
-            status_error = await araises(kind, client.errors.retrieve_scenario_status(str(code)))
+            status_error = await araises(kind, client.errors.retrieve_scenario_status(code))
             assert status_error.status_code == code and field(status_error.body, "code") == code, status_error
         seen = []
         try:

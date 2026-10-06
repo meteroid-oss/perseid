@@ -83,11 +83,8 @@ fn example(types: &Value, resource: &str, op: &Value) -> Option<Value> {
     }
     let mut path_args = Vec::new();
     for param in op["typed_path_params"].as_array().into_iter().flatten() {
-        if !matches!(param["type"]["id"].as_str(), Some("String" | "SchemaRef")) {
-            return None;
-        }
         let name = param["name"].as_str()?;
-        path_args.push(literal(name, "string", false, text(name)));
+        path_args.push(path_literal(op, name, param["type"]["id"].as_str()?)?);
     }
     let body = match op["request_body_kind"].as_str() {
         Some("none") => Value::Null,
@@ -146,35 +143,58 @@ fn json_body(types: &Value, op: &Value) -> Option<Value> {
         }
         let example = &field["example"];
         let id = field["type"]["id"].as_str()?;
-        let (kind, int64, value) = match id {
+        let value = match id {
             "String" => match example.as_str().filter(|s| plain_text(s)) {
-                Some(example) => ("string", false, json!(example)),
-                None => ("string", false, text(name)),
+                Some(example) => json!(example),
+                None => text(name),
             },
-            id @ ("Int16" | "UInt16" | "Int32" | "Int64" | "UInt64") => {
-                let value = example.as_i64().filter(|n| *n >= 0).unwrap_or(1);
-                ("integer", matches!(id, "Int64" | "UInt64"), json!(value))
+            "Int16" | "UInt16" | "Int32" | "Int64" | "UInt64" => {
+                json!(example.as_i64().filter(|n| *n >= 0).unwrap_or(1))
             }
-            "Bool" => ("boolean", false, json!(example.as_bool().unwrap_or(true))),
+            "Bool" => json!(example.as_bool().unwrap_or(true)),
             _ => return None,
         };
-        let mut lit = literal(name, kind, int64, value);
-        if id == "UInt64" {
-            // Java holds an unsigned 64-bit integer in a `BigInteger`.
-            lit["unsigned64"] = json!(true);
-        }
-        fields.push(lit);
+        fields.push(literal(name, id, value)?);
     }
     Some(json!({ "schema": name, "fields": fields }))
 }
 
-fn literal(name: &str, kind: &str, int64: bool, value: Value) -> Value {
+/// The argument for the path parameter `name` of type `id`, when every language can write
+/// it as a literal: text, or a scalar sent in the `simple` style.
+pub(crate) fn path_literal(op: &Value, name: &str, id: &str) -> Option<Value> {
+    let style = &op["path_styles"][name];
+    if style["type"].is_object() && style["style"] != "simple" {
+        return None;
+    }
+    let value = match id {
+        "String" | "SchemaRef" if !style["type"].is_object() => text(name),
+        "Int16" | "UInt16" | "Int32" | "Int64" | "UInt64" => json!(1),
+        "Float" | "Double" => json!(1.5),
+        "Bool" => json!(true),
+        _ => return None,
+    };
+    literal(name, id, value)
+}
+
+/// `{name, kind, type, int64, unsigned64, value}`: `kind` is the JSON type of `value`, `type`
+/// the `FieldType` id it is passed as.
+pub(crate) fn literal(name: &str, id: &str, value: Value) -> Option<Value> {
+    let kind = match id {
+        "String" | "SchemaRef" => "string",
+        "Int16" | "UInt16" | "Int32" | "Int64" | "UInt64" => "integer",
+        "Float" | "Double" => "number",
+        "Bool" => "boolean",
+        _ => return None,
+    };
     let mut map = Map::new();
     map.insert("name".into(), name.into());
     map.insert("kind".into(), kind.into());
-    map.insert("int64".into(), int64.into());
+    map.insert("type".into(), id.into());
+    map.insert("int64".into(), matches!(id, "Int64" | "UInt64").into());
+    // Java holds an unsigned 64-bit integer in a `BigInteger`.
+    map.insert("unsigned64".into(), (id == "UInt64").into());
     map.insert("value".into(), value);
-    Value::Object(map)
+    Some(Value::Object(map))
 }
 
 /// The example value of a string named `name`: its name, when a literal can hold it as is.
@@ -239,7 +259,8 @@ mod tests {
         assert_eq!(stream["body"]["schema"], "CompletionRequest");
         assert_eq!(
             stream["body"]["fields"],
-            json!([{ "name": "prompt", "kind": "string", "int64": false, "value": "prompt" }])
+            json!([{ "name": "prompt", "kind": "string", "type": "String", "int64": false,
+                "unsigned64": false, "value": "prompt" }])
         );
     }
 

@@ -675,7 +675,7 @@ func TestScenarioErrors(t *testing.T) {
 		for _, code := range []int{400, 401, 403, 404, 409, 422} {
 			var requests atomic.Int32
 			client := scenarioClient(Options{Middleware: []Middleware{countRequests(&requests)}})
-			health, err := client.ErrorsAPI().RetrieveScenarioStatus(ctx, strconv.Itoa(code))
+			health, err := client.ErrorsAPI().RetrieveScenarioStatus(ctx, int32(code))
 			expect(t, health == nil, true)
 			apiErr := apiError(t, err)
 			expect(t, apiErr.StatusCode, code)

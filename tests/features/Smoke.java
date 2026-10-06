@@ -480,7 +480,7 @@ public class Smoke {
             for (Map.Entry<Integer, Class<? extends ApiException>> entry : statusErrors.entrySet()) {
                 sentRequests.clear();
                 int code = entry.getKey();
-                ApiException error = raises(ApiException.class, () -> counted.errors().retrieveScenarioStatus(String.valueOf(code)));
+                ApiException error = raises(ApiException.class, () -> counted.errors().retrieveScenarioStatus(code));
                 expect(error.getClass(), entry.getValue());
                 expect(error.statusCode(), code);
                 JsonNode body = errorJson(error, true);
@@ -552,9 +552,9 @@ public class Smoke {
             String idempotent = scenarioId("async-idempotent");
             expect(client.retries().scenariosIdempotent(idempotent, "idem-1", Payment.builder().amount(5).build()).get().status(), "attempts=2;key=idem-1");
             expect(serverState(idempotent).get("keys"), MAPPER.readTree("[\"idem-1\",\"idem-1\"]"));
-            expect(asyncCause(client.errors().retrieveScenarioStatus("403")) instanceof PermissionDeniedException, true);
-            expect(asyncCause(client.errors().retrieveScenarioStatus("404")) instanceof NotFoundException, true);
-            expect(asyncCause(client.errors().retrieveScenarioStatus("422")) instanceof UnprocessableEntityException, true);
+            expect(asyncCause(client.errors().retrieveScenarioStatus(403)) instanceof PermissionDeniedException, true);
+            expect(asyncCause(client.errors().retrieveScenarioStatus(404)) instanceof NotFoundException, true);
+            expect(asyncCause(client.errors().retrieveScenarioStatus(422)) instanceof UnprocessableEntityException, true);
             List<String> seen = new ArrayList<>();
             Throwable gone = asyncCause(client.errors().listScenariosPagesIter().forEach(widget -> seen.add(widget.id())));
             expect(gone instanceof ConflictException, true);

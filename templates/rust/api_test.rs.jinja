@@ -9,7 +9,7 @@
 {% for case in cases %}
 {%- set op = resource.operations[case.index] %}
 {%- set args = namespace(list=[]) %}
-{%- for arg in case.path_args %}{% set args.list = args.list + [arg.value | rust_str] %}{% endfor %}
+{%- for arg in case.path_args %}{% set args.list = args.list + [docs.literal(arg)] %}{% endfor %}
 {%- if case.body %}
 {%- set body = "decode::<" ~ sdk.rust_crate ~ "::models::" ~ (case.body.schema | to_upper_camel_case) ~ ">(" ~ text(case.body.json) ~ ")" %}
 {%- set args.list = args.list + (["Some(" ~ body ~ ")"] if op.request_body_optional else [body]) %}

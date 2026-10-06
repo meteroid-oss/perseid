@@ -174,7 +174,7 @@ impl {{ resource_type_name }} {
             {% if p in op.path_styles and op.path_styles[p].type is defined -%}
             {{ p | to_rust_ident }}: {{ rust_type(op.path_styles[p].type) }},
             {% else -%}
-            {{ p | to_rust_ident }}: impl std::fmt::Display,
+            {{ p | to_rust_ident }}: &str,
             {% endif -%}
         {% endfor -%}
 
@@ -340,7 +340,7 @@ impl {{ resource_type_name }} {
             {% if p in op.path_styles and op.path_styles[p].type is defined -%}
             {{ p | to_rust_ident }}: {{ rust_type(op.path_styles[p].type) }},
             {% else -%}
-            {{ p | to_rust_ident }}: impl std::fmt::Display,
+            {{ p | to_rust_ident }}: &str,
             {% endif -%}
         {% endfor -%}
         {% if op.request_body_schema_name is defined -%}

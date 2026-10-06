@@ -237,7 +237,7 @@ async fn wire() {
         overridden.beta_search(Some(beta)).await.unwrap().status,
         "beta=true&limit=2|features=z"
     );
-    let image = wire.update_image(42, Upload::bytes("png")).await.unwrap();
+    let image = wire.update_image("42", Upload::bytes("png")).await.unwrap();
     assert_eq!(image.status, "42:image/png:png");
 }
 
@@ -669,7 +669,7 @@ async fn status_errors_are_typed_and_not_retried() {
     ];
     for (code, kind) in cases {
         let (client, tap) = tapped(builder().token("tok").max_retries(2));
-        let error = client.errors().retrieve_scenario_status(code).await.unwrap_err();
+        let error = client.errors().retrieve_scenario_status(i32::from(code)).await.unwrap_err();
         assert_eq!(error.status().map(|status| status.as_u16()), Some(code));
         assert_eq!(error.kind(), Some(kind));
         let api = error.api().unwrap();

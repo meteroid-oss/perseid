@@ -33,7 +33,8 @@
 
 {% macro literal(arg) -%}
     {%- if arg.unsigned64 -%}java.math.BigInteger.valueOf({{ arg.value | tojson }}L)
-    {%- else -%}{{ arg.value | tojson }}{% if arg.kind == "integer" and arg.int64 %}L{% endif %}{% endif %}
+    {%- elif arg.type == "Int16" -%}(short) {{ arg.value | tojson }}
+    {%- else -%}{{ arg.value | tojson }}{% if arg.type in ["Int64", "UInt16"] %}L{% elif arg.type == "Float" %}f{% endif %}{% endif %}
 {%- endmacro %}
 
 {#- The `import` of the model an example's body needs, with its line break. -#}

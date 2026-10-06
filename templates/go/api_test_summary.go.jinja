@@ -51,8 +51,9 @@ func decode[T any](t *testing.T, text string) T {
 	return value
 }
 
-// call calls method with a background context and args, nil standing for a zero value, then
-// reads the stream it returns, if any, and fails on any error.
+// call calls method with a background context and args, nil standing for a zero value and
+// untyped constants converted to the parameter's type, then reads the stream it returns, if
+// any, and fails on any error.
 func call(t *testing.T, method any, args ...any) {
 	t.Helper()
 	fn := reflect.ValueOf(method)
@@ -61,7 +62,7 @@ func call(t *testing.T, method any, args ...any) {
 		if arg == nil {
 			in = append(in, reflect.Zero(fn.Type().In(i+1)))
 		} else {
-			in = append(in, reflect.ValueOf(arg))
+			in = append(in, reflect.ValueOf(arg).Convert(fn.Type().In(i+1)))
 		}
 	}
 	out := fn.Call(in)

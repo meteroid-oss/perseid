@@ -161,7 +161,9 @@ expand[]=a&expand[]=b                         # lists with `style: deepObject`
 
 ### Path parameters
 
-- Plain path parameters are strings. Unions of scalars are accepted.
+- A path parameter is typed like a field of the same schema: integers, numbers, booleans,
+  dates and enums (named or inline) keep their type, so a value read off a response can be
+  passed back as is. Strings and unions of scalars are text.
 - Others follow their `style` and `explode`: `label` (`.a.b`), `matrix` (`;id=a,b`), lists and
   objects (`a,b,c`, `k,v,k2,v2`, or `k=v,k2=v2` exploded).
 - Path variables the path uses without declaring them are strings.

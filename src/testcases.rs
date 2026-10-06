@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::{
     api::{FieldType, Resource, Types},
-    samples,
+    docs, samples,
 };
 
 /// `{index, method, path, path_args, body, response}` for each operation of `resource` the
@@ -37,17 +37,16 @@ fn case(types: &Types, op: &Value) -> Option<Value> {
     let mut path_args = Vec::new();
     for param in op["typed_path_params"].as_array()? {
         let name = param["name"].as_str()?;
-        if op["path_styles"][name]["type"].is_object() {
-            return None;
+        let mut arg = docs::path_literal(op, name, param["type"]["id"].as_str()?)?;
+        if arg["kind"] == "string" {
+            arg["value"] = segment(name).into();
         }
-        let (kind, value) = match param["type"]["id"].as_str()? {
-            "Int16" | "UInt16" | "Int32" | "Int64" | "UInt64" => ("integer", "1".to_owned()),
-            "Float" | "Double" => ("number", "1.5".to_owned()),
-            "Bool" => ("boolean", "true".to_owned()),
-            _ => ("string", segment(name)),
+        let value = match &arg["value"] {
+            Value::String(text) => text.clone(),
+            value => value.to_string(),
         };
         path = path.replace(&format!("{{{name}}}"), &value);
-        path_args.push(json!({ "name": name, "kind": kind, "value": value }));
+        path_args.push(arg);
     }
     let method = op["method"].as_str()?.to_uppercase();
     let body = match op["request_body_kind"].as_str()? {

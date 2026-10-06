@@ -280,7 +280,7 @@ class ErrorTest(unittest.TestCase):
         """The error of `retrieve_scenario_status` answered with `response`."""
         with sync_client(Recorder(response), max_retries=0, **options) as api:
             with self.assertRaises(features.APIStatusError) as raised:
-                api.errors.retrieve_scenario_status("400")
+                api.errors.retrieve_scenario_status(400)
         return raised.exception
 
     def test_request_id_of_an_error(self) -> None:
@@ -300,7 +300,7 @@ class ErrorTest(unittest.TestCase):
         response = httpx.Response(503, json={"error": "down"}, headers={"x-request-id": "req_last"})
         with sync_client(Recorder(response), max_retries=2) as api:
             with self.assertRaises(features.InternalServerError) as raised:
-                api.errors.retrieve_scenario_status("400")
+                api.errors.retrieve_scenario_status(400)
         self.assertEqual(raised.exception.request_id, "req_last")
 
     def test_the_declared_error_body_is_decoded(self) -> None:
@@ -540,7 +540,7 @@ class RetryTest(unittest.TestCase):
                 handler = Recorder(httpx.Response(status, json={"error": "x", "code": status}))
                 with sync_client(handler) as api:
                     with self.assertRaises(features.APIStatusError):
-                        api.errors.retrieve_scenario_status(str(status))
+                        api.errors.retrieve_scenario_status(status)
                 self.assertEqual(len(handler.requests), 1)
 
 

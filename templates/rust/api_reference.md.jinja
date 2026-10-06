@@ -12,7 +12,7 @@
     {%- set args = namespace(list=[]) -%}
     {%- for p in op.path_params -%}
         {%- set typed = p in op.path_styles and op.path_styles[p].type is defined -%}
-        {%- set args.list = args.list + [(p | to_rust_ident) ~ ": " ~ (short(rust_type(op.path_styles[p].type)) if typed else "impl Display")] -%}
+        {%- set args.list = args.list + [(p | to_rust_ident) ~ ": " ~ (short(rust_type(op.path_styles[p].type)) if typed else "&str")] -%}
     {%- endfor -%}
     {%- if op.request_body_kind == "binary" -%}
         {%- set args.list = args.list + ["body: " ~ option("Upload", op.request_body_optional)] -%}
