@@ -470,12 +470,12 @@ internal static class Scenarios
         };
         foreach (var at in spellings)
         {
-            var queried = await encoding.RetrieveScenariosDatetimeAsync(new() { Since = at, Day = "2024-01-02" });
+            var queried = await encoding.RetrieveScenariosDatetimeAsync(new() { Since = at, Day = new DateOnly(2024, 1, 2) });
             Equal(instant, queried.At);
-            Equal("2024-01-02", queried.Day);
-            var posted = await encoding.ScenariosDatetimeAsync(new DateBox { At = at, Day = "2024-01-02" });
+            Equal(new DateOnly(2024, 1, 2), queried.Day);
+            var posted = await encoding.ScenariosDatetimeAsync(new DateBox { At = at, Day = new DateOnly(2024, 1, 2) });
             Equal(instant, posted.At);
-            Equal("2024-01-02", posted.Day);
+            Equal(new DateOnly(2024, 1, 2), posted.Day);
         }
 
         foreach (

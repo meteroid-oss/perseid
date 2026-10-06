@@ -466,15 +466,16 @@ func TestScenarioEncoding(t *testing.T) {
 	t.Run("dates and times", func(t *testing.T) {
 		instant := time.Date(2024, 1, 2, 3, 4, 5, 250_000_000, time.UTC)
 		offset := instant.In(time.FixedZone("plus2", 2*3600))
+		day := Date{Year: 2024, Month: time.January, Day: 2}
 		for _, at := range []time.Time{instant, offset} {
-			box, err := encoding.RetrieveScenariosDatetime(ctx, at, "2024-01-02")
+			box, err := encoding.RetrieveScenariosDatetime(ctx, at, day)
 			must(t, err)
 			expect(t, box.At.Equal(instant), true)
-			expect(t, box.Day, "2024-01-02")
-			box, err = encoding.ScenariosDatetime(ctx, DateBox{At: at, Day: "2024-01-02"})
+			expect(t, box.Day, day)
+			box, err = encoding.ScenariosDatetime(ctx, DateBox{At: at, Day: day})
 			must(t, err)
 			expect(t, box.At.Equal(instant), true)
-			expect(t, box.Day, "2024-01-02")
+			expect(t, box.Day, day)
 		}
 	})
 	t.Run("path segments", func(t *testing.T) {

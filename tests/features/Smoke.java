@@ -60,6 +60,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -399,12 +400,12 @@ public class Smoke {
         expect(Arrays.equals(Base64.getDecoder().decode(client.encoding().listScenariosBytes().data()), HELLO), true);
         for (ZoneOffset zone : List.of(ZoneOffset.UTC, ZoneOffset.ofHours(2), ZoneOffset.ofHoursMinutes(-5, -30))) {
             OffsetDateTime at = INSTANT.withOffsetSameInstant(zone);
-            DateBox queried = client.encoding().retrieveScenariosDatetime(at, "2024-01-02");
+            DateBox queried = client.encoding().retrieveScenariosDatetime(at, LocalDate.of(2024, 1, 2));
             expect(queried.at().toInstant(), INSTANT.toInstant());
-            expect(queried.day(), "2024-01-02");
-            DateBox posted = client.encoding().scenariosDatetime(DateBox.builder().at(at).day("2024-01-02").build());
+            expect(queried.day(), LocalDate.of(2024, 1, 2));
+            DateBox posted = client.encoding().scenariosDatetime(DateBox.builder().at(at).day(LocalDate.of(2024, 1, 2)).build());
             expect(posted.at().toInstant(), INSTANT.toInstant());
-            expect(posted.day(), "2024-01-02");
+            expect(posted.day(), LocalDate.of(2024, 1, 2));
         }
         for (String value : List.of("plain", "sp ace", "sl/ash", "q?mark", "per%cent", "ha#sh", "lit%25eral", "a+b", "héllo wörld ✓")) {
             expect(client.encoding().retrieveScenarioPath(value).status(), value);

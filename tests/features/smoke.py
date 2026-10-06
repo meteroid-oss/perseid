@@ -7,7 +7,7 @@ import os
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from features import (
     APIConnectionError,
@@ -252,10 +252,10 @@ assert raw_bytes(client.encoding.list_scenarios_bytes().data) == HELLO
 INSTANT = datetime(2024, 1, 2, 3, 4, 5, 250000, tzinfo=timezone.utc)
 for zone in (timezone.utc, timezone(timedelta(hours=2)), timezone(timedelta(hours=-5, minutes=-30))):
     at = INSTANT.astimezone(zone)
-    stamped = client.encoding.retrieve_scenarios_datetime(since=at, day="2024-01-02")
-    assert stamped.at == INSTANT and str(stamped.day) == "2024-01-02", (zone, stamped)
-    posted = client.encoding.scenarios_datetime(at=at, day="2024-01-02")
-    assert posted.at == INSTANT and str(posted.day) == "2024-01-02", (zone, posted)
+    stamped = client.encoding.retrieve_scenarios_datetime(since=at, day=date(2024, 1, 2))
+    assert stamped.at == INSTANT and stamped.day == date(2024, 1, 2), (zone, stamped)
+    posted = client.encoding.scenarios_datetime(at=at, day=date(2024, 1, 2))
+    assert posted.at == INSTANT and posted.day == date(2024, 1, 2), (zone, posted)
 for value in ("plain", "sp ace", "sl/ash", "q?mark", "per%cent", "ha#sh", "lit%25eral", "a+b", "héllo wörld ✓"):
     assert client.encoding.retrieve_scenario_path(value).status == value, value
 for value in ("plain", "sp ace", "a&b=c+d", "100%", "slash/qm?", "héllo wörld ✓"):

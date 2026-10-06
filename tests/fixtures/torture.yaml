@@ -125,7 +125,6 @@ paths:
         required: true
         schema:
           type: string
-          format: uuid
       responses:
         '200':
           description: ok
@@ -143,7 +142,6 @@ paths:
         required: true
         schema:
           type: string
-          format: uuid
       requestBody:
         required: true
         content:
@@ -167,7 +165,6 @@ paths:
         required: true
         schema:
           type: string
-          format: uuid
       responses:
         '204':
           description: deleted
@@ -552,7 +549,6 @@ components:
       properties:
         id:
           type: string
-          format: uuid
           readOnly: true
         name:
           type: string
