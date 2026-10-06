@@ -91,6 +91,7 @@ See [repository layouts](ci.md#repository-layouts) for the trade-offs.
 |---|---|
 | `repo` | `"acme/api-{lang}"`: a repository per SDK. `"acme/api-sdks"`: one repository, a folder per SDK. Unset: next to `perseid.toml` |
 | `release` | `false` leaves out the release-please files and `sdk-release.yml` |
+| `auto_merge` | `true` writes `auto-merge: true` into `sdks.yml`: SDKs whose tests pass are merged and released unattended. See [auto-merge](ci.md#auto-merge) |
 
 `{lang}` is the language as `sdks` names it. `perseid init` writes the release files for SDKs
 kept next to `perseid.toml`. The first pull request in each SDK repository carries them.

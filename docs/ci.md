@@ -579,7 +579,8 @@ no CI unless dispatched, and auto-merged release PRs publish nothing.
 
 `--auto-merge` (`auto-merge: true`) enables GitHub auto-merge (squash) on the SDK pull requests.
 It also labels them `perseid:auto-release`, so the release action auto-merges the release PR they
-lead to. It needs:
+lead to. `auto_merge = true` in `perseid.toml` makes `perseid init` write it into `sdks.yml`. It
+needs:
 
 - "Allow auto-merge" in the repository settings;
 - required status checks, through branch protection or rulesets. Without any, GitHub merges at

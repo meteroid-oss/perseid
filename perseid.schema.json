@@ -7,6 +7,10 @@
     "name"
   ],
   "properties": {
+    "auto_merge": {
+      "description": "`true` makes `sdks.yml` enable auto-merge on the SDK pull requests, and on the release PRs they lead to: SDKs whose tests pass are merged and released unattended.",
+      "type": "boolean"
+    },
     "base_url": {
       "description": "API base URL the clients default to.",
       "type": "string"

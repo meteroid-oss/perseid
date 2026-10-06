@@ -43,6 +43,9 @@ pub struct Config {
     pub repo: Option<String>,
     /// `false` leaves out the release-please files and the release workflow `perseid init` writes.
     pub release: Option<bool>,
+    /// `true` makes `sdks.yml` enable auto-merge on the SDK pull requests, and on the release PRs
+    /// they lead to: SDKs whose tests pass are merged and released unattended.
+    pub auto_merge: Option<bool>,
     /// Package metadata written into the manifests `perseid generate` creates.
     #[serde(default, rename = "metadata")]
     pub package: Package,
