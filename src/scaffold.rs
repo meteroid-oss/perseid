@@ -602,6 +602,32 @@ mod tests {
     }
 
     #[test]
+    fn the_csharp_readme_shows_dependency_injection_only_when_generated() {
+        let readme = |toml: &str| {
+            let config: Config = toml::from_str(toml).unwrap();
+            let sdk = config.sdks(&["csharp".to_owned()]).unwrap().remove(0);
+            let docs = Docs {
+                overrides: None,
+                examples: Value::Null,
+            };
+            let files = skeleton(&config, &sdk, Path::new("/nonexistent"), &docs).unwrap();
+            let (_, content) = files.into_iter().find(|(p, _)| p == "README.md").unwrap();
+            String::from_utf8(content).unwrap()
+        };
+        let plain = readme("name = \"Acme\"\nsdks = [\"csharp\"]\n");
+        assert!(!plain.contains("AddAcmeClient"), "{plain}");
+        assert!(!plain.contains("perseid.toml"), "{plain}");
+        let injected = readme(
+            "name = \"Acme\"\nsdks = [\"csharp\"]\n[csharp.context]\ndependency_injection = true\n",
+        );
+        assert!(injected.contains("## Dependency injection"), "{injected}");
+        assert!(
+            injected.contains("builder.Services.AddAcmeClient("),
+            "{injected}"
+        );
+    }
+
+    #[test]
     fn unset_metadata_lines_are_dropped() {
         let context = serde_json::json!({ "license": null, "repository": "https://x.dev/r" });
         let source = "a\nlicense = \"@@LICENSE@@\"\nrepository = \"@@REPOSITORY@@\"\n";
