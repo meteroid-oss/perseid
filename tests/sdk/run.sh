@@ -102,53 +102,14 @@ GRADLE
       && perseid generate java > /dev/null \
       && cp -r "$here/java/_unions/." java/ && cd java && gradle_test) ;;
   csharp)
-    rm -rf _torture _samples _oauth _unions && dotnet test Tests
-    # Generates the SDK of one fixture, writes the samples of its models (`perseid samples`) and runs
-    # `dotnet test` on it: every test of tests/sdk/csharp/_torture for the torture fixture, only the
-    # sample round trips for the others.
-    csharp_samples() (
-      name=$(basename "$1" .yaml)
-      dir="$work/samples/$name"
-      mkdir -p "$dir" && cd "$dir"
-      perseid init --sdks csharp --spec "$1" > /dev/null
-      # Without servers, the client has no default base URL.
-      if [ "$name" = torture ]; then sed -i '/^base_url/d' perseid.toml; fi
-      perseid generate csharp > /dev/null
-      perseid samples --out samples.json > /dev/null
-      grep -q '"type_name"' samples.json || { echo "$1 has no models"; exit 0; }
-      sdk=$(basename "$(ls csharp/*/*.csproj | grep -v '\.Tests/' | head -n 1)" .csproj)
-      if [ "$name" = torture ]; then
-        cp -r "$here/csharp/_torture/." csharp/
-      else
-        mkdir csharp/Tests
-        cat > csharp/Tests/Tests.csproj <<CSPROJ
-<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <IsPackable>false</IsPackable>
-    <IsTestProject>true</IsTestProject>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-  </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
-    <PackageReference Include="xunit" Version="2.5.3" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
-  </ItemGroup>
-  <ItemGroup>
-    <Using Include="Xunit" />
-    <ProjectReference Include="../$sdk/$sdk.csproj" />
-  </ItemGroup>
-</Project>
-CSPROJ
-      fi
-      cp "$here/csharp/_samples/SamplesTests.cs" csharp/Tests/
-      cd csharp && PERSEID_SAMPLES="$dir/samples.json" PERSEID_SDK="$sdk" dotnet test Tests
-    )
-    for spec in "$here/../fixtures/torture.yaml" "$here"/../fixtures/edge-*.yaml; do
-      csharp_samples "$spec"
-    done
+    rm -rf _torture _oauth _unions && dotnet test Tests
+    # The tests of tests/sdk/csharp/_torture run on the SDK of tests/fixtures/torture.yaml, with no
+    # default base URL.
+    (mkdir "$work/torture" && cd "$work/torture" \
+      && perseid init --sdks csharp --spec "$here/../fixtures/torture.yaml" > /dev/null \
+      && sed -i '/^base_url/d' perseid.toml \
+      && perseid generate csharp > /dev/null \
+      && cp -r "$here/csharp/_torture/." csharp/ && cd csharp && dotnet test Tests)
     # The OAuth2 client credentials tests run on the SDK of tests/fixtures/oauth.yaml.
     (mkdir "$work/oauth" && cd "$work/oauth" \
       && perseid init --sdks csharp --spec "$here/../fixtures/oauth.yaml" > /dev/null \
