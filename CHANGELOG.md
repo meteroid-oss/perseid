@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/meteroid-oss/perseid/compare/v0.11.0...v0.11.1) (2026-10-06)
+
+
+### Bug Fixes
+
+* keep the Rust crate name as written, run workflows on origin/main without origin/HEAD ([#81](https://github.com/meteroid-oss/perseid/issues/81)) ([3c16174](https://github.com/meteroid-oss/perseid/commit/3c16174b55a7de6e2d6e49d00935caf7a6e0cbc0))
+
 ## [0.11.0](https://github.com/meteroid-oss/perseid/compare/v0.10.0...v0.11.0) (2026-10-06)
 
 
