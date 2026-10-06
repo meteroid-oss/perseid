@@ -29,7 +29,8 @@
 
 {% macro literal(arg) -%}
     {%- if arg.kind == "boolean" %}{{ "true" if arg.value else "false" }}
-    {%- elif arg.kind == "uuid" %}Guid.Parse({{ arg.value | tojson }}){% else %}{{ arg.value | tojson }}{% if arg.type == "Float" %}f{% endif %}{% endif -%}
+    {%- elif arg.kind == "uuid" %}Guid.Parse({{ arg.value | tojson }})
+    {%- elif arg.kind == "date" %}{% set parts = arg.value | split("-") | list %}new DateOnly({{ parts[0] | int }}, {{ parts[1] | int }}, {{ parts[2] | int }}){% else %}{{ arg.value | tojson }}{% if arg.type == "Float" %}f{% endif %}{% endif -%}
 {%- endmacro %}
 
 {#- The call of an example: of its `...AutoPagingAsync` twin with `auto_paging`, through

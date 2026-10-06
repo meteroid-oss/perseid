@@ -35,6 +35,8 @@
     {%- if arg.unsigned64 -%}java.math.BigInteger.valueOf({{ arg.value | tojson }}L)
     {%- elif arg.type == "Int16" -%}(short) {{ arg.value | tojson }}
     {%- elif arg.kind == "uuid" -%}java.util.UUID.fromString({{ arg.value | tojson }})
+    {%- elif arg.kind == "date" -%}java.time.LocalDate.parse({{ arg.value | tojson }})
+    {%- elif arg.kind == "enum" -%}{{ sdk.java_package }}.models.{{ arg.schema | to_upper_camel_case }}.of({{ arg.value | tojson }})
     {%- else -%}{{ arg.value | tojson }}{% if arg.type in ["Int64", "UInt16"] %}L{% elif arg.type == "Float" %}f{% endif %}{% endif %}
 {%- endmacro %}
 

@@ -574,7 +574,7 @@ pub(crate) struct Operation {
     pub(crate) path_styles: BTreeMap<String, PathStyle>,
     /// Path parameters with their types, in `path_params` order.
     #[serde(default)]
-    typed_path_params: Vec<TypedParam>,
+    pub(crate) typed_path_params: Vec<TypedParam>,
     /// Header and cookie parameters.
     pub(crate) header_params: Vec<HeaderParam>,
     /// Query parameters.
@@ -1844,10 +1844,10 @@ pub(crate) struct HeaderParam {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-struct TypedParam {
-    name: String,
+pub(crate) struct TypedParam {
+    pub(crate) name: String,
     #[serde(serialize_with = "serialize_field_type")]
-    r#type: FieldType,
+    pub(crate) r#type: FieldType,
 }
 
 #[derive(Clone, Deserialize, Serialize)]

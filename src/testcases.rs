@@ -11,19 +11,20 @@ use crate::{
 /// `{index, method, path, path_args, body, response}` for each operation of `resource` the
 /// tests call; `index` is the operation's position in `resource.operations`.
 pub(crate) fn cases(types: &Types, resource: &Resource) -> Vec<Value> {
+    let models = serde_json::to_value(types).unwrap_or_default();
     resource
         .operations
         .iter()
         .enumerate()
         .filter_map(|(index, op)| {
-            let mut case = case(types, &serde_json::to_value(op).ok()?)?;
+            let mut case = case(types, &models, &serde_json::to_value(op).ok()?)?;
             case["index"] = index.into();
             Some(case)
         })
         .collect()
 }
 
-fn case(types: &Types, op: &Value) -> Option<Value> {
+fn case(types: &Types, models: &Value, op: &Value) -> Option<Value> {
     let required = |key: &str| {
         op[key]
             .as_array()
@@ -37,7 +38,7 @@ fn case(types: &Types, op: &Value) -> Option<Value> {
     let mut path_args = Vec::new();
     for param in op["typed_path_params"].as_array()? {
         let name = param["name"].as_str()?;
-        let mut arg = docs::path_literal(op, name, param["type"]["id"].as_str()?)?;
+        let mut arg = docs::path_literal(op, models, name, &param["type"])?;
         if arg["kind"] == "string" {
             arg["value"] = segment(name).into();
         }

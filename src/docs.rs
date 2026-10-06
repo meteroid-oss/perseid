@@ -84,7 +84,7 @@ fn example(types: &Value, resource: &str, op: &Value) -> Option<Value> {
     let mut path_args = Vec::new();
     for param in op["typed_path_params"].as_array().into_iter().flatten() {
         let name = param["name"].as_str()?;
-        path_args.push(path_literal(op, name, param["type"]["id"].as_str()?)?);
+        path_args.push(path_literal(op, types, name, &param["type"])?);
     }
     let body = match op["request_body_kind"].as_str() {
         Some("none") => Value::Null,
@@ -159,19 +159,31 @@ fn json_body(types: &Value, op: &Value) -> Option<Value> {
     Some(json!({ "schema": name, "fields": fields }))
 }
 
-/// The argument for the path parameter `name` of type `id`, when every language can write
-/// it as a literal: text, or a scalar sent in the `simple` style.
-pub(crate) fn path_literal(op: &Value, name: &str, id: &str) -> Option<Value> {
+/// The argument for the path parameter `name` of type `ty`, when every language can write
+/// it as a literal: text, or a scalar sent in the `simple` style, among which the first
+/// value of a string enum of `types`.
+pub(crate) fn path_literal(op: &Value, types: &Value, name: &str, ty: &Value) -> Option<Value> {
     let style = &op["path_styles"][name];
     if style["type"].is_object() && style["style"] != "simple" {
         return None;
     }
+    let id = ty["id"].as_str()?;
+    let schema = &types[ty["name"].as_str().unwrap_or_default()];
     let value = match id {
         "String" | "SchemaRef" if !style["type"].is_object() => text(name),
+        "SchemaRef" if schema["kind"] == "string_enum" => {
+            let value = schema["values"]
+                .get(0)
+                .filter(|v| v.as_str().is_some_and(plain_text))?;
+            let mut lit = literal(name, "Enum", value.clone())?;
+            lit["schema"] = ty["name"].clone();
+            return Some(lit);
+        }
         "Int16" | "UInt16" | "Int32" | "Int64" | "UInt64" => json!(1),
         "Float" | "Double" => json!(1.5),
         "Bool" => json!(true),
         "Uuid" => json!("3fa85f64-5717-4562-b3fc-2c963f66afa6"),
+        "Date" => json!("2024-01-02"),
         _ => return None,
     };
     literal(name, id, value)
@@ -186,6 +198,8 @@ pub(crate) fn literal(name: &str, id: &str, value: Value) -> Option<Value> {
         "Float" | "Double" => "number",
         "Bool" => "boolean",
         "Uuid" => "uuid",
+        "Date" => "date",
+        "Enum" => "enum",
         _ => return None,
     };
     let mut map = Map::new();

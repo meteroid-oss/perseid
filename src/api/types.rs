@@ -1081,6 +1081,10 @@ fn promote_inline_enums_in_resource(
                 promote_field_type(ty, &base, existing, new_types)?;
             }
         }
+        for param in &mut op.typed_path_params {
+            let base = format!("{}_{}", op_id, param.name);
+            promote_field_type(&mut param.r#type, &base, existing, new_types)?;
+        }
     }
     Ok(())
 }

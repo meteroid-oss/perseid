@@ -9,7 +9,9 @@ package {{ sdk.package_name }}_test
 
 import (
 	"testing"
-{%- if cases | selectattr("body") | list %}
+{%- set kinds = namespace(list=[]) %}
+{%- for case in cases %}{% for a in case.path_args %}{% set kinds.list = kinds.list + [a.kind] %}{% endfor %}{% endfor %}
+{%- if cases | selectattr("body") | list or "date" in kinds.list or "enum" in kinds.list %}
 
 	"{{ sdk.go_module }}"
 {%- endif %}

@@ -26,7 +26,12 @@
 {#- The page type of a paginated example, `WidgetsListPage`. -#}
 {% macro page_type(ex) %}{{ (go_ident(ex.resource) ~ (ex.operation.name | ident("pascal", "go")) ~ "Page") | go_name }}{% endmacro %}
 
-{% macro literal(arg) %}{% if arg.kind == "uuid" %}uuid.MustParse({{ arg.value | tojson }}){% else %}{{ arg.value | tojson }}{% endif %}{% endmacro %}
+{% macro literal(arg) -%}
+    {%- if arg.kind == "uuid" %}uuid.MustParse({{ arg.value | tojson }})
+    {%- elif arg.kind == "date" %}{% set parts = arg.value | split("-") | list %}{{ sdk.package_name }}.Date{Year: {{ parts[0] | int }}, Month: {{ parts[1] | int }}, Day: {{ parts[2] | int }}}
+    {%- elif arg.kind == "enum" %}{{ sdk.package_name }}.{{ go_ident(arg.schema) }}({{ arg.value | tojson }})
+    {%- else %}{{ arg.value | tojson }}{% endif -%}
+{%- endmacro %}
 
 {#- The imports the literals of the examples `exs` need, each on its line. -#}
 {% macro imports(exs) -%}

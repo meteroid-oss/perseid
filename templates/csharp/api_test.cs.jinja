@@ -4,7 +4,8 @@
 {% set _ = set_summary_filename(test_class ~ ".cs") -%}
 // this file is @generated
 #pragma warning disable CS0612, CS0618 // the API may deprecate operations
-{% if cases | map(attribute="path_args") | map("selectattr", "kind", "equalto", "uuid") | map("list") | select | list %}using System;
+{% set kinds = namespace(list=[]) %}{% for case in cases %}{% for a in case.path_args %}{% set kinds.list = kinds.list + [a.kind] %}{% endfor %}{% endfor -%}
+{% if "uuid" in kinds.list or "date" in kinds.list %}using System;
 {% endif %}using System.Threading.Tasks;
 using Xunit;
 
