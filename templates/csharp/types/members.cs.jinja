@@ -11,6 +11,21 @@
 /// <summary>The properties of the JSON object this SDK version does not know, sent back as they came.</summary>
 [JsonExtensionData]
 public IDictionary<string, JsonElement>? {{ extra }} { get; set; }
+{%- if extra_type | default(none) %}
+
+/// <summary>The properties beyond the declared ones, as the values the schema's <c>additionalProperties</c> declares.</summary>
+/// <returns>The properties by name.</returns>
+/// <exception cref="JsonException">When one of them is not such a value.</exception>
+public IReadOnlyDictionary<string, {{ extra_type }}> Typed{{ extra }}()
+{
+    var typed = new Dictionary<string, {{ extra_type }}>();
+    foreach (var property in {{ extra }} ?? new Dictionary<string, JsonElement>())
+    {
+        typed[property.Key] = global::{{ sdk.package_name }}.Json.Deserialize<{{ extra_type }}>(property.Value, {{ sdk.client_name }}JsonContext.Default.Options);
+    }
+    return typed;
+}
+{%- endif %}
 {%- set names.list = names.list + [extra] %}
 {%- endif %}
 {%- if names.list %}

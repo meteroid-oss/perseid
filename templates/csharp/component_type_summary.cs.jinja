@@ -107,6 +107,13 @@
 {% endfor -%}
 {% endfor -%}
 {% endfor -%}
+{% for _, type in api.types | items if type.kind == "struct" and type.additional_properties is defined and not type.additional_properties.value_type().is_json_object() -%}
+{% set ty = type.additional_properties.value_type().to_csharp() -%}
+{% if ("<" in ty or ty in ["string", "bool", "int", "long", "short", "ushort", "ulong", "float", "double", "decimal", "DateTimeOffset", "DateOnly", "Guid"]) and ty not in generic.types -%}
+{% set generic.types = generic.types + [ty] -%}
+[JsonSerializable(typeof({{ ty }}), TypeInfoPropertyName = "{{ m.type_info(ty) }}")]
+{% endif -%}
+{% endfor -%}
 {% set registered = namespace(unions=[]) -%}
 {% for resource in all.resources -%}
 {% for op in resource.operations -%}

@@ -16,7 +16,8 @@ public sealed partial record {{ type_name }}
 {
 {%- filter indent(4) %}
 {%- with fields = type.fields, owner = type_name, union_owner = type_name, lead = false %}{% include "types/fields.cs.jinja" %}{% endwith %}
-{%- with fields = type.fields, owner = type_name, extension = true, sealed = true, lead = type.fields | length > 0 %}{% include "types/members.cs.jinja" %}{% endwith %}
+{%- set extra_value = type.additional_properties.value_type() if type.additional_properties is defined else none %}
+{%- with fields = type.fields, owner = type_name, extension = true, sealed = true, lead = type.fields | length > 0, extra_type = extra_value.to_csharp() if extra_value is not none and not extra_value.is_json_object() else none %}{% include "types/members.cs.jinja" %}{% endwith %}
 {%- endfilter %}
 }
 {%- with fields = type.fields, union_owner = type_name %}{% include "types/unions.cs.jinja" %}{% endwith %}

@@ -28,6 +28,16 @@ export interface {{ type_name }}{% if base_names %} extends {{ ns.parents | join
     {% for field in type.fields if not field.flatten -%}
     {{ m.field_decl(field) }}
     {% endfor -%}
+    {% set extra_value = type.additional_properties.value_type() if type.additional_properties is defined else none -%}
+    {% if extra_value is not none and not extra_value.is_json_object() and not base_names -%}
+    {#- An index signature takes the types of the declared properties too. -#}
+    {% set index = namespace(types=[m.js_type(extra_value)]) -%}
+    {% for field in type.fields -%}
+    {% set index.types = index.types + [m.field_type(field)] + ([] if field.required else ["undefined"]) -%}
+    {% endfor -%}
+    /** The properties beyond the declared ones, as the schema's `additionalProperties` types them. */
+    [key: string]: {{ index.types | unique | join(" | ") }};
+    {% endif -%}
 }{% if intersect %};{% endif %}
 
 {# Properties this SDK version does not know are kept as received, under their JSON names, and

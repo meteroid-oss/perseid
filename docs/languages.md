@@ -272,7 +272,8 @@ Methods return an `APIPromise`. `.withResponse()` gives `{ data, response, reque
 
 - Models are plain objects with camelCase properties.
 - `CustomerSerializer.parse(json)` and `.serialize(value)` convert them, keeping unknown
-  properties under their JSON names.
+  properties under their JSON names. A typed `additionalProperties` gives the model an index
+  signature.
 - With a non-default `int64`, `parseJson` and `stringifyJson` do the same for webhook payloads.
 - Enums are `const` objects with a union type of their values.
 - Tagged unions are unions of interfaces keyed by the discriminator.
@@ -684,10 +685,12 @@ with `StatusCode`, `Headers`, `RequestId` and `Value`.
 ### Models and unions
 
 - Models are `sealed record`s with `init` properties and read-only collections, compared by
-  value. Unknown properties are kept in `AdditionalProperties`.
+  value. Unknown properties are kept in `AdditionalProperties`, and read as the values a typed
+  `additionalProperties` declares with `TypedAdditionalProperties()`.
+- Dates are `DateTimeOffset`s (`DateOnly` for `format: date`): fractions beyond 100 nanoseconds
+  are rounded.
 - Nullable optional PATCH fields are `MaybeUnset<T>`: assign `null` to send `null`, leave unset
   to omit.
-- Dates are `DateTimeOffset`s: fractions beyond 100 nanoseconds are rounded.
 - Enums expose `IsKnown`. Known values are static properties (`Status.Active`) and constants in
   `Status.Values`, to `switch` on `status.Value`. A string converts to any value.
 - A union is an abstract record with a nested record per variant (`StringValue`, `Customer`,
