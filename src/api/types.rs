@@ -3183,6 +3183,13 @@ impl minijinja::value::Object for FieldType {
                 ensure_no_args(args, "is_schema_ref")?;
                 Ok(matches!(**self, Self::SchemaRef { .. }).into())
             }
+            "schema_name" => {
+                ensure_no_args(args, "schema_name")?;
+                Ok(match &**self {
+                    Self::SchemaRef { name, .. } => name.as_str().into(),
+                    _ => minijinja::Value::from(()),
+                })
+            }
             "is_list" => {
                 ensure_no_args(args, "is_list")?;
                 Ok(matches!(**self, Self::List { .. }).into())

@@ -168,7 +168,7 @@
 {% macro schema_kind(ty, types={}) -%}
 {% if ty.is_schema_ref() -%}
 {% set inner = ty.inner_schema_ref_ty() -%}
-{% set target = inner or types[ty.to_csharp()] -%}
+{% set target = inner or types[ty.schema_name()] -%}
 {{ target.kind if target else "" }}
 {%- endif %}
 {%- endmacro %}
