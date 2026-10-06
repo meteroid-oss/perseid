@@ -47,10 +47,13 @@ pub(crate) struct Candidate<'a> {
 }
 
 impl Pagination {
+    /// Unless `strict`, `has_more`, `total_pages` and `total` are left out when the response
+    /// has no such property, so that one perseid.toml rule fits responses giving either.
     pub(crate) fn resolve(
         spec: &config::Pagination,
         op: &Candidate<'_>,
         types: &Types,
+        strict: bool,
     ) -> anyhow::Result<Self> {
         let (style, param) = match (&spec.cursor, &spec.page, &spec.offset) {
             (Some(p), None, None) => (Style::Cursor, p),
@@ -94,7 +97,10 @@ impl Pagination {
         );
 
         let response = op.response.context("no JSON response body")?;
-        let items = split(spec.items.as_deref().unwrap_or("data"));
+        let items = match &spec.items {
+            Some(items) => split(items),
+            None => vec![default_items(types, response)?],
+        };
         let item_schema = match field(types, response, &items)? {
             FieldType::List { inner } => match &**inner {
                 FieldType::SchemaRef { name, .. } => name.clone(),
@@ -102,23 +108,33 @@ impl Pagination {
             },
             _ => bail!("`{}` is not an array", items.join(".")),
         };
-        let path = |value: &Option<String>, check: fn(&FieldType, &Types) -> bool, what: &str| {
-            value
-                .as_deref()
-                .map(|value| {
-                    let path = split(value);
-                    ensure!(
-                        check(field(types, response, &path)?, types),
-                        "`{value}` must be {what}"
-                    );
-                    Ok(path)
-                })
-                .transpose()
+        let path = |value: &Option<String>,
+                    check: fn(&FieldType, &Types) -> bool,
+                    what: &str,
+                    if_present: bool| {
+            let Some(value) = value.as_deref() else {
+                return Ok(None);
+            };
+            let path = split(value);
+            if if_present && fields(types, response, &path).is_err() {
+                return Ok(None);
+            }
+            ensure!(
+                check(field(types, response, &path)?, types),
+                "`{value}` must be {what}"
+            );
+            Ok(Some(path))
         };
-        let next_cursor = path(&spec.next_cursor, is_string, "a string")?;
-        let has_more = path(&spec.has_more, |t, _| *t == FieldType::Bool, "a boolean")?;
-        let total_pages = path(&spec.total_pages, |t, _| is_integer(t), "an integer")?;
-        let total = path(&spec.total, |t, _| is_integer(t), "an integer")?;
+        let next_cursor = path(&spec.next_cursor, is_string, "a string", false)?;
+        let is_bool = |t: &FieldType, _: &Types| *t == FieldType::Bool;
+        let has_more = path(&spec.has_more, is_bool, "a boolean", !strict)?;
+        let total_pages = path(
+            &spec.total_pages,
+            |t, _| is_integer(t),
+            "an integer",
+            !strict,
+        )?;
+        let total = path(&spec.total, |t, _| is_integer(t), "an integer", !strict)?;
         if let Some(name) = &spec.item_cursor {
             ensure!(
                 is_string(
@@ -157,6 +173,30 @@ impl Pagination {
             first_page: spec.first_page.unwrap_or(1),
             optional,
         })
+    }
+}
+
+/// `data`, else the response's only array of component schemas.
+fn default_items(types: &Types, response: &str) -> anyhow::Result<String> {
+    let fields = match types.get(response).map(|t| &t.data) {
+        Some(TypeData::Struct { fields, .. }) => fields,
+        _ => bail!("`{response}` is not an object schema"),
+    };
+    if fields.iter().any(|f| f.name == "data") {
+        return Ok("data".to_owned());
+    }
+    let arrays: Vec<&str> = fields
+        .iter()
+        .filter(|f| match &f.r#type {
+            FieldType::List { inner } => matches!(**inner, FieldType::SchemaRef { .. }),
+            _ => false,
+        })
+        .map(|f| f.name.as_str())
+        .collect();
+    match arrays[..] {
+        [one] => Ok(one.to_owned()),
+        [] => bail!("`{response}` has no array of items"),
+        _ => bail!("`items` must name one of `{}`", arrays.join("`, `")),
     }
 }
 

@@ -1090,7 +1090,7 @@ impl Operation {
                     spec.operations.is_empty(),
                     "`operations` only applies to perseid.toml"
                 );
-                Some(Pagination::resolve(&spec, &candidate, types)?)
+                Some(Pagination::resolve(&spec, &candidate, types, true)?)
             }
             None => {
                 let mut found = None;
@@ -1099,7 +1099,7 @@ impl Operation {
                     if !rule.operations.is_empty() && !listed {
                         continue;
                     }
-                    match Pagination::resolve(rule, &candidate, types) {
+                    match Pagination::resolve(rule, &candidate, types, listed) {
                         Ok(pagination) => {
                             found = Some(pagination);
                             break;

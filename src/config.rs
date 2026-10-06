@@ -358,7 +358,8 @@ pub enum UuidType {
 
 /// How a list operation pages, as `x-pagination` on an operation or `[pagination]` in perseid.toml.
 /// Exactly one of `cursor`, `page` or `offset` names the query parameter selecting the page;
-/// response values are dotted paths of JSON property names.
+/// response values are dotted paths of JSON property names. A perseid.toml rule without
+/// `operations` uses `has_more`, `total_pages` and `total` only in responses that have them.
 #[derive(Clone, Debug, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Pagination {
@@ -368,7 +369,7 @@ pub struct Pagination {
     pub page: Option<String>,
     /// Query parameter taking the index of the first item.
     pub offset: Option<String>,
-    /// The array of items, `data` by default.
+    /// The array of items: `data` by default, else the response's only array of objects.
     pub items: Option<String>,
     /// Cursor of the next page in the response.
     pub next_cursor: Option<String>,

@@ -1503,6 +1503,13 @@ paths:
         - { name: page, in: query, schema: { type: integer } }
       responses:
         '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/ItemPage' } } } }
+  /entries:
+    get:
+      operationId: list_entries
+      parameters:
+        - { name: offset, in: query, schema: { type: integer } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/EntryPage' } } } }
   /items/{id}:
     get:
       operationId: get_item
@@ -1520,6 +1527,13 @@ components:
         data: { type: array, items: { $ref: '#/components/schemas/Item' } }
         meta: { $ref: '#/components/schemas/Meta' }
     Meta: { type: object, required: [pages], properties: { pages: { type: integer } } }
+    EntryPage:
+      type: object
+      required: [entries, labels, total]
+      properties:
+        entries: { type: array, items: { $ref: '#/components/schemas/Item' } }
+        labels: { type: array, items: { type: string } }
+        total: { type: integer }
 "##;
 
 fn inspect_with(pagination: &str) -> (bool, String) {
@@ -1536,13 +1550,7 @@ fn pagination_rules_apply_to_matching_operations() {
     let (ok, out) = inspect_with("[pagination]\npage = \"page\"\nfirst_page = 0\n");
     assert!(ok, "{out}");
     let api: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let ops = &api["resources"][0]["operations"];
-    let list = ops
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|o| o["id"] == "list_items");
-    let pagination = &list.unwrap()["pagination"];
+    let pagination = &operation(&api, "list_items")["pagination"];
     assert_eq!(pagination["style"], "page");
     assert_eq!(pagination["item_schema"], "Item");
     assert_eq!(pagination["first_page"], 0);
@@ -1550,10 +1558,35 @@ fn pagination_rules_apply_to_matching_operations() {
 
     let (ok, out) = inspect_with("[pagination]\npage = \"page\"\noperations = [\"get_item\"]\n");
     assert!(!ok && out.contains("no `page` query parameter"), "{out}");
-    let (ok, out) = inspect_with("[pagination]\npage = \"page\"\ntotal_pages = \"meta.nope\"\n");
-    assert!(ok && !out.contains("\"pagination\""), "{out}");
     let (ok, out) = inspect_with("[pagination]\ncursor = \"page\"\n");
     assert!(ok && !out.contains("\"pagination\""), "{out}");
+}
+
+#[test]
+fn pagination_rules_use_the_response_values_it_has() {
+    let pagination = |out: &str, id: &str| {
+        let api: serde_json::Value = serde_json::from_str(out).unwrap();
+        operation(&api, id)["pagination"].clone()
+    };
+    let (ok, out) = inspect_with(
+        "[pagination]\noffset = \"offset\"\nhas_more = \"has_more\"\ntotal = \"total\"\n",
+    );
+    assert!(ok, "{out}");
+    let entries = pagination(&out, "list_entries");
+    assert_eq!(entries["items"], serde_json::json!(["entries"]));
+    assert_eq!(entries["total"], serde_json::json!(["total"]));
+    assert!(entries.get("has_more").is_none(), "{entries}");
+
+    let (ok, out) = inspect_with("[pagination]\npage = \"page\"\ntotal_pages = \"meta.nope\"\n");
+    assert!(ok, "{out}");
+    assert!(
+        pagination(&out, "list_items").get("total_pages").is_none(),
+        "{out}"
+    );
+
+    let scoped = "[pagination]\noffset = \"offset\"\nhas_more = \"has_more\"\noperations = [\"list_entries\"]\n";
+    let (ok, out) = inspect_with(scoped);
+    assert!(!ok && out.contains("has no `has_more` property"), "{out}");
 }
 
 fn operation<'a>(model: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {

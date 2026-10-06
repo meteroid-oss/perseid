@@ -514,7 +514,7 @@
       "additionalProperties": false
     },
     "Pagination": {
-      "description": "How a list operation pages, as `x-pagination` on an operation or `[pagination]` in perseid.toml. Exactly one of `cursor`, `page` or `offset` names the query parameter selecting the page; response values are dotted paths of JSON property names.",
+      "description": "How a list operation pages, as `x-pagination` on an operation or `[pagination]` in perseid.toml. Exactly one of `cursor`, `page` or `offset` names the query parameter selecting the page; response values are dotted paths of JSON property names. A perseid.toml rule without `operations` uses `has_more`, `total_pages` and `total` only in responses that have them.",
       "type": "object",
       "properties": {
         "cursor": {
@@ -535,7 +535,7 @@
           "type": "string"
         },
         "items": {
-          "description": "The array of items, `data` by default.",
+          "description": "The array of items: `data` by default, else the response's only array of objects.",
           "type": "string"
         },
         "next_cursor": {

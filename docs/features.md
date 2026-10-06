@@ -50,18 +50,26 @@ x-pagination:
   cursor: starting_after        # or `page: page`, or `offset: offset`
   item_cursor: id               # next cursor from the last item, or `next_cursor: <path>`
   has_more: has_more            # optional, as are `total_pages`, `total` and `first_page`
-  items: data                   # the default
+  items: data                   # `data` by default, else the response's only array of objects
 ```
 
 Or describe them once in `perseid.toml`, to match every operation with that query parameter and
 response shape:
 
 ```toml
-[pagination]                    # or [[pagination]] with `operations = [...]` to scope rules
+[[pagination]]                  # `operations = [...]` scopes a rule
 page = "page"
 total_pages = "pagination_meta.total_pages"
 first_page = 0
+
+[[pagination]]
+offset = "offset"
+has_more = "has_more"           # each used where the response has it
+total = "total"
 ```
+
+A rule without `operations` uses `has_more`, `total_pages` and `total` only where the response
+has them; without any, paging stops at the first empty page.
 
 `x-pagination: false` opts an operation out of the `perseid.toml` rules.
 
