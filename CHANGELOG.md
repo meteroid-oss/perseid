@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.9.0](https://github.com/meteroid-oss/perseid/compare/v0.8.0...v0.9.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* SDK pull requests no longer add or update sdk-release.yml: run perseid sync. connect defaults to the perseid App.
+
+### Features
+
+* hosted perseid App ([#73](https://github.com/meteroid-oss/perseid/issues/73)) ([7c1b93f](https://github.com/meteroid-oss/perseid/commit/7c1b93ffde5b240abe6f959245c52c4b2ebf123f))
+
 ## [0.8.0](https://github.com/meteroid-oss/perseid/compare/v0.7.2...v0.8.0) (2026-10-05)
 
 
