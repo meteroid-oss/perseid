@@ -7,7 +7,7 @@ perseid is tested in layers, from the generator to SDKs running against a server
 | [Cargo tests](#cargo-tests) | `src/`, `tests/cli.rs` | `cargo test` |
 | [Edge fixtures](#edge-fixtures) | `tests/fixtures/` | CI, every language |
 | [Mock server scenarios](#mock-server-scenarios) | `tests/features/` | `tests/features/run.sh <language> <sdk-dir>` |
-| [Schema-derived round trips](#schema-derived-round-trips) | `perseid samples` | CI, every language |
+| [Schema-derived round trips](#schema-derived-round-trips) | `round_trips = true` | CI, every language |
 | [Runtime tests](#runtime-tests) | `tests/sdk/<language>` | `tests/sdk/run.sh <language>` |
 | [Real-world specs](#real-world-specs) | `real-world.yml` | Weekly, and on pull requests touching `src/`, `templates/` or `runtime/` |
 
@@ -43,12 +43,12 @@ method, raw path and query, percent-encoding, headers, content type, body and cr
 
 ## Schema-derived round trips
 
-The hidden `perseid samples --out samples.json` writes JSON instances of every model, derived
-from its schema: full, minimal, nulls, one per union variant and enum value. Each carries the
-type name each language generates.
+CI generates every fixture with [`round_trips = true`](languages.md#round-trips): each SDK decodes
+and re-encodes JSON instances of every model, derived from its schema (full, minimal, nulls, one
+per union variant and enum value), and compares the JSON. Models agree with the spec without
+handwritten cases. TypeScript also runs them with `int64 = "bigint"`, in `tests/sdk/run.sh`.
 
-Each SDK decodes and re-encodes them and compares the JSON, so models agree with the spec without
-handwritten cases.
+The hidden `perseid samples --out samples.json` writes the same samples, to inspect them.
 
 ## Runtime tests
 
