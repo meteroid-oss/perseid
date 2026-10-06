@@ -952,6 +952,15 @@ pub(crate) fn promote_inline_enums(
                 _ => None,
             })
             .collect(),
+        by_integers: types
+            .iter()
+            .filter_map(|(name, ty)| match &ty.data {
+                TypeData::IntegerEnum { variants } => {
+                    Some((variants.iter().map(|(_, v)| *v).collect(), name.clone()))
+                }
+                _ => None,
+            })
+            .collect(),
         type_names: types.keys().map(|n| n.to_upper_camel_case()).collect(),
         reserved: reserved.clone(),
     };
@@ -1062,9 +1071,37 @@ fn promote_inline_enums_in_resource(
 struct ExistingTypes {
     /// String enums by their values, reused instead of promoting a copy.
     by_values: BTreeMap<Vec<String>, String>,
+    /// Integer enums by their values.
+    by_integers: BTreeMap<Vec<i64>, String>,
     type_names: BTreeSet<String>,
     /// Names the SDK already uses, suffixed with `Model` as schemas named so are.
     reserved: BTreeSet<String>,
+}
+
+/// Adds `data` to `new_types` under a free name derived from `base`, or finds it there.
+fn add_promoted(
+    base: &str,
+    data: TypeData,
+    existing: &ExistingTypes,
+    new_types: &mut BTreeMap<String, Type>,
+) -> String {
+    let base = crate::reserved::safe_type_name(base, &existing.reserved);
+    let mut name = base.clone();
+    for n in 2.. {
+        match new_types.get(&name) {
+            Some(promoted) if promoted.data == data => break,
+            None if !existing.type_names.contains(&name) => break,
+            _ => name = format!("{base}{n}"),
+        }
+    }
+    new_types.entry(name.clone()).or_insert_with(|| Type {
+        name: name.clone(),
+        description: None,
+        deprecated: false,
+        discriminator_defaults: BTreeMap::new(),
+        data,
+    });
+    name
 }
 
 fn promote_field_type(
@@ -1083,26 +1120,39 @@ fn promote_field_type(
                 };
                 return Ok(());
             }
-            let base = crate::reserved::safe_type_name(
-                &title.take().unwrap_or_else(|| base_name.to_owned()),
-                &existing.reserved,
-            );
+            let title = title.take();
             let data = TypeData::StringEnum { values };
-            let mut name = base.clone();
-            for n in 2.. {
-                match new_types.get(&name) {
-                    Some(promoted) if promoted.data == data => break,
-                    None if !existing.type_names.contains(&name) => break,
-                    _ => name = format!("{base}{n}"),
-                }
-            }
-            new_types.entry(name.clone()).or_insert_with(|| Type {
-                name: name.clone(),
-                description: None,
-                deprecated: false,
-                discriminator_defaults: BTreeMap::new(),
+            let name = add_promoted(
+                title.as_deref().unwrap_or(base_name),
                 data,
-            });
+                existing,
+                new_types,
+            );
+            *ft = FieldType::SchemaRef { name, inner: None };
+        }
+        FieldType::IntegerEnum {
+            values,
+            names,
+            title,
+        } => {
+            if let Some(existing_name) = existing.by_integers.get(values) {
+                *ft = FieldType::SchemaRef {
+                    name: existing_name.clone(),
+                    inner: None,
+                };
+                return Ok(());
+            }
+            let data = TypeData::from_integer_enum(
+                values.iter().map(|v| (*v).into()).collect(),
+                names.take(),
+            )?;
+            let title = title.take();
+            let name = add_promoted(
+                title.as_deref().unwrap_or(base_name),
+                data,
+                existing,
+                new_types,
+            );
             *ft = FieldType::SchemaRef { name, inner: None };
         }
         FieldType::List { inner } | FieldType::Set { inner } => {
@@ -1143,7 +1193,10 @@ fn promote_field_type(
         FieldType::Union { variants, .. } => {
             let base_name = base_name.strip_suffix("_value").unwrap_or(base_name);
             for variant in variants {
-                let inline = matches!(variant.r#type, FieldType::StringEnum { .. });
+                let inline = matches!(
+                    variant.r#type,
+                    FieldType::StringEnum { .. } | FieldType::IntegerEnum { .. }
+                );
                 let base = format!("{base_name}_{}", variant.name);
                 promote_field_type(&mut variant.r#type, &base, existing, new_types)?;
                 if let (true, FieldType::SchemaRef { name, .. }) = (inline, &variant.r#type) {
@@ -1217,6 +1270,25 @@ fn has_open_additional_properties(obj: &ObjectValidation) -> bool {
         .is_some_and(|schema| *schema != Schema::Bool(false))
 }
 
+/// The variant names `x-enum-varnames` or `x-enumNames` give an integer enum.
+fn enum_varnames(
+    extensions: &BTreeMap<String, serde_json::Value>,
+) -> anyhow::Result<Option<Vec<String>>> {
+    ["x-enum-varnames", "x-enumNames"]
+        .into_iter()
+        .find_map(|key| extensions.get(key))
+        .map(|names| {
+            names
+                .as_array()
+                .context("integer enum varnames should be a list")?
+                .iter()
+                .map(|n| n.as_str().map(ToOwned::to_owned))
+                .collect::<Option<Vec<_>>>()
+                .context("integer enum varnames should be strings")
+        })
+        .transpose()
+}
+
 impl Type {
     pub(crate) fn from_schema(name: String, mut s: SchemaObject) -> anyhow::Result<Self> {
         drop_required_only_alternatives(&mut s);
@@ -1285,20 +1357,7 @@ impl Type {
             }
             Some(InstanceType::Integer) if s.enum_values.is_some() => {
                 let values = s.enum_values.unwrap_or_default();
-                let names = ["x-enum-varnames", "x-enumNames"]
-                    .into_iter()
-                    .find_map(|key| s.extensions.get(key))
-                    .map(|names| {
-                        names
-                            .as_array()
-                            .context("integer enum varnames should be a list")?
-                            .iter()
-                            .map(|n| n.as_str().map(ToOwned::to_owned))
-                            .collect::<Option<Vec<_>>>()
-                            .context("integer enum varnames should be strings")
-                    })
-                    .transpose()?;
-                TypeData::from_integer_enum(values, names)?
+                TypeData::from_integer_enum(values, enum_varnames(&s.extensions)?)?
             }
             Some(InstanceType::String) => match s.enum_values {
                 Some(values) => TypeData::from_string_enum(values)?,
@@ -2084,6 +2143,7 @@ impl UnionVariant {
         let (name, json_type) = match &r#type {
             FieldType::SchemaRef { name, .. } => (name.to_snake_case(), String::new()),
             FieldType::StringEnum { .. } => ("enum".to_owned(), "string".to_owned()),
+            FieldType::IntegerEnum { .. } => ("enum".to_owned(), "integer".to_owned()),
             ty => (Self::name_of(ty)?, Self::json_type_of(ty)?.to_owned()),
         };
         let loose = matches!(r#type, FieldType::StringEnum { .. });
@@ -2138,6 +2198,7 @@ impl UnionVariant {
             FieldType::Map { .. } | FieldType::JsonObject => "object".into(),
             FieldType::SchemaRef { name, .. } => name.to_snake_case(),
             FieldType::Nullable { inner } => return Self::item_name_of(inner),
+            FieldType::IntegerEnum { .. } => "integer".into(),
             FieldType::Union { .. } | FieldType::StringEnum { .. } => return None,
         })
     }
@@ -2203,6 +2264,7 @@ impl UnionVariant {
             | FieldType::DateTime
             | FieldType::Decimal
             | FieldType::StringEnum { .. } => "string",
+            FieldType::IntegerEnum { .. } => "integer",
             FieldType::List { .. } | FieldType::Set { .. } => "array",
             FieldType::Map { .. } | FieldType::JsonObject => "object",
             FieldType::Nullable { inner } => return Self::json_type_of(inner),
@@ -2302,6 +2364,15 @@ pub(crate) enum FieldType {
     StringEnum {
         values: Vec<String>,
         /// Title from the OpenAPI schema, used as the promoted type name when set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+    /// An inline integer enum, promoted like a [`FieldType::StringEnum`].
+    IntegerEnum {
+        values: Vec<i64>,
+        /// The `x-enum-varnames` of the values.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        names: Option<Vec<String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
     },
@@ -2453,6 +2524,30 @@ impl FieldType {
 
         let result = match effective_type {
             Some(InstanceType::Boolean) => Self::Bool,
+            Some(InstanceType::Integer)
+                if obj
+                    .enum_values
+                    .as_ref()
+                    .is_some_and(|v| v.iter().filter(|v| !v.is_null()).unique().count() > 1) =>
+            {
+                let values = obj.enum_values.unwrap_or_default();
+                let values = (values.iter().filter(|v| !v.is_null()).unique())
+                    .map(|v| {
+                        v.as_i64()
+                            .with_context(|| format!("enum value `{v}` is not an integer"))
+                    })
+                    .collect::<anyhow::Result<_>>()?;
+                let names = enum_varnames(&obj.extensions)?;
+                let title = obj.metadata.as_ref().and_then(|m| m.title.clone());
+                return Ok((
+                    Self::IntegerEnum {
+                        values,
+                        names,
+                        title,
+                    },
+                    nullable,
+                ));
+            }
             Some(InstanceType::Integer) => match obj.format.as_deref() {
                 Some("int16" | "int8") => Self::Int16,
                 Some("uint16") => Self::UInt16,
@@ -2570,6 +2665,7 @@ impl FieldType {
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
             Self::Date => "DateOnly".into(),
             Self::StringEnum { .. } => "string".into(),
+            Self::IntegerEnum { .. } => Self::Int64.to_csharp_typename().into_owned().into(),
         }
     }
 
@@ -2603,6 +2699,7 @@ impl FieldType {
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
             Self::Date => "Date".into(),
             Self::StringEnum { .. } => "string".into(),
+            Self::IntegerEnum { .. } => Self::Int64.to_go_typename().into_owned().into(),
         }
     }
 
@@ -2630,6 +2727,7 @@ impl FieldType {
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
             Self::Date => "String".into(),
             Self::StringEnum { .. } => "String".into(),
+            Self::IntegerEnum { .. } => Self::Int64.to_kotlin_typename().into_owned().into(),
         }
     }
 
@@ -2666,6 +2764,7 @@ impl FieldType {
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
             Self::Date => "string".into(),
             Self::StringEnum { .. } => "string".into(),
+            Self::IntegerEnum { .. } => Self::Int64.to_js_typename().into_owned().into(),
         }
     }
 
@@ -2699,6 +2798,7 @@ impl FieldType {
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
             Self::Date => "String".into(),
             Self::StringEnum { .. } => "String".into(),
+            Self::IntegerEnum { .. } => Self::Int64.to_rust_typename().into_owned().into(),
         }
     }
 
@@ -2845,6 +2945,7 @@ impl FieldType {
             }
             Self::Date => "date".into(),
             Self::StringEnum { .. } => "str".into(),
+            Self::IntegerEnum { .. } => Self::Int64.to_python_typename().into_owned().into(),
         }
     }
 
@@ -2884,6 +2985,9 @@ impl FieldType {
             }
             FieldType::Date => "LocalDate".into(),
             FieldType::StringEnum { .. } => "String".into(),
+            FieldType::IntegerEnum { .. } => {
+                FieldType::Int64.to_java_typename().into_owned().into()
+            }
         }
     }
 
@@ -2907,7 +3011,7 @@ impl FieldType {
             | FieldType::JsonObject
             | FieldType::Union { .. }
             | FieldType::Date => false,
-            FieldType::StringEnum { .. } => false,
+            FieldType::StringEnum { .. } | FieldType::IntegerEnum { .. } => false,
             FieldType::List { inner }
             | FieldType::Set { inner }
             | FieldType::Nullable { inner } => inner.needs_java_import(),
@@ -2951,6 +3055,9 @@ impl FieldType {
             | FieldType::Date
             | FieldType::SchemaRef { .. } => self.to_php_typename(),
             FieldType::StringEnum { .. } => "string".into(),
+            FieldType::IntegerEnum { .. } => {
+                FieldType::Int64.to_phpdoc_typename().into_owned().into()
+            }
             FieldType::Nullable { inner } => inner.to_phpdoc_typename(),
             FieldType::Set { inner } | FieldType::List { inner } => {
                 format!("list<{}>", inner.to_phpdoc_typename()).into()
@@ -2973,6 +3080,7 @@ impl FieldType {
             FieldType::Uri | FieldType::Date | FieldType::String => "string".into(),
             FieldType::Uuid => "string".into(),
             FieldType::StringEnum { .. } => "string".into(),
+            FieldType::IntegerEnum { .. } => FieldType::Int64.to_php_typename().into_owned().into(),
             FieldType::DateTime => r#"\DateTimeImmutable"#.into(),
 
             FieldType::JsonObject
@@ -3101,6 +3209,7 @@ impl minijinja::value::Object for FieldType {
                     | F::SchemaRef { .. }
                     | F::Date => false,
                     F::StringEnum { .. } => false,
+                    F::IntegerEnum { .. } => true,
                 };
                 Ok(is_int_or_uint.into())
             }
@@ -3531,6 +3640,7 @@ mod tests {
         .unwrap();
         let existing = ExistingTypes {
             by_values: BTreeMap::new(),
+            by_integers: BTreeMap::new(),
             type_names: BTreeSet::new(),
             reserved: BTreeSet::new(),
         };
@@ -3542,6 +3652,32 @@ mod tests {
         assert_eq!(variants[0].name, "request_size_enum");
         assert!(variants[0].loose);
         assert!(new_types.contains_key("RequestSizeEnum"), "{new_types:?}");
+    }
+
+    #[test]
+    fn inline_integer_enums_are_promoted() {
+        let mut ty =
+            FieldType::from_schema_object(schema(json!({"type": "integer", "enum": [1, 2, 2]})))
+                .unwrap();
+        assert!(matches!(&ty, FieldType::IntegerEnum { values, .. } if values == &[1, 2]));
+        let existing = ExistingTypes {
+            by_values: BTreeMap::new(),
+            by_integers: BTreeMap::new(),
+            type_names: BTreeSet::new(),
+            reserved: BTreeSet::new(),
+        };
+        let mut new_types = BTreeMap::new();
+        promote_field_type(&mut ty, "Item_prio", &existing, &mut new_types).unwrap();
+        assert!(matches!(&ty, FieldType::SchemaRef { name, .. } if name == "ItemPrio"));
+        assert!(matches!(
+            new_types["ItemPrio"].data,
+            TypeData::IntegerEnum { .. }
+        ));
+        let single = schema(json!({"type": "integer", "enum": [7]}));
+        assert_eq!(
+            FieldType::from_schema_object(single).unwrap(),
+            FieldType::Int64
+        );
     }
 
     #[test]

@@ -613,6 +613,9 @@ impl<'a> Gen<'a> {
             FieldType::StringEnum { values, .. } => values
                 .get((seed % values.len().max(1) as u64) as usize)
                 .map_or_else(|| Value::from(""), |v| Value::from(v.as_str())),
+            FieldType::IntegerEnum { values, .. } => values
+                .get((seed % values.len().max(1) as u64) as usize)
+                .map_or_else(|| Value::from(0), |v| Value::from(*v)),
         }
     }
 }
