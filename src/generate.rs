@@ -428,7 +428,11 @@ pub fn sdk(
     if !options.check {
         for (change, content) in &changes {
             match (change, content) {
-                (Change::Removed(path), _) => std::fs::remove_file(dir.join(path))?,
+                (Change::Removed(path), _) => {
+                    std::fs::remove_file(dir.join(path))?;
+                    // Its directory goes too when nothing else is left in it.
+                    let _ = std::fs::remove_dir(dir.join(path).parent().unwrap());
+                }
                 (Change::Added(path) | Change::Modified(path), Some(content)) => {
                     fsx::write(&dir.join(path), content)?
                 }
