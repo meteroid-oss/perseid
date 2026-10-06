@@ -233,7 +233,7 @@ public class Smoke {
                 "application/x-www-form-urlencoded|amount=100&capture=true&codes=c1,c2&expand[]=customer"
                         + "&items[0][price]=p1&items[0][quantity]=2&items[1][price]=p2&metadata[order]=7"
                         + "&shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b");
-        WireBetaSearchOptions beta = WireBetaSearchOptions.builder().limit(2).features("x,y").build();
+        WireBetaSearchOptions beta = WireBetaSearchOptions.builder().limit(2).features(List.of("x", "y")).build();
         expect(client.wire().betaSearch(beta).status(), "beta=true&limit=2|features=x,y");
         expect(client.wire().updateImage("42", Upload.of(bytes("png"))).status(), "42:image/png:png");
     }

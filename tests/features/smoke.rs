@@ -227,7 +227,7 @@ async fn wire() {
          &shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b"
     );
     assert_eq!(wire.create_charge(None).await.unwrap().status, "|");
-    let beta = WireBetaSearchOptions::new().limit(2).features("x,y");
+    let beta = WireBetaSearchOptions::new().limit(2).features(vec!["x".to_owned(), "y".to_owned()]);
     assert_eq!(
         wire.beta_search(Some(beta.clone())).await.unwrap().status,
         "beta=true&limit=2|features=x,y"

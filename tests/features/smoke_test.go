@@ -238,7 +238,7 @@ func TestSmokeWire(t *testing.T) {
 		"application/x-www-form-urlencoded|amount=100&capture=true&codes=c1,c2&expand[]=customer"+
 			"&items[0][price]=p1&items[0][quantity]=2&items[1][price]=p2&metadata[order]=7"+
 			"&shipping[address][city]=Paris&shipping[address][line1]=1 Main&statuses=a&statuses=b")
-	beta := &WireBetaSearchOptions{Limit: Ptr[int32](2), Features: Ptr("x,y")}
+	beta := &WireBetaSearchOptions{Limit: Ptr[int32](2), Features: []string{"x", "y"}}
 	expect(t, status(wire.BetaSearch(ctx, beta)), "beta=true&limit=2|features=x,y")
 	expect(t, status(wire.UpdateImage(ctx, "42", strings.NewReader("png"))), "42:image/png:png")
 }

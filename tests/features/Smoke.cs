@@ -200,7 +200,7 @@ Equal(
 );
 Equal(
     "beta=true&limit=2|features=x,y",
-    (await client.Wire.BetaSearchAsync(new() { Limit = 2, Features = "x,y" })).Status
+    (await client.Wire.BetaSearchAsync(new() { Limit = 2, Features = ["x", "y"] })).Status
 );
 Equal(
     "42:image/png:png",

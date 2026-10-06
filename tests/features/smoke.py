@@ -202,7 +202,7 @@ assert charged.status == (
 assert client.wire.create_charge(amount=1, extra_body={"note": "n"}).status == (
     "application/x-www-form-urlencoded|amount=1&note=n"
 )
-assert client.wire.beta_search(limit=2, features="x,y").status == "beta=true&limit=2|features=x,y"
+assert client.wire.beta_search(limit=2, features=["x", "y"]).status == "beta=true&limit=2|features=x,y"
 assert client.wire.update_image("42", b"png").status == "42:image/png:png"
 
 
