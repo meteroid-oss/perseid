@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.11.2](https://github.com/meteroid-oss/perseid/compare/v0.11.1...v0.11.2) (2026-10-06)
+
+
+### Bug Fixes
+
+* **init:** suggest public SDK repositories in one copyable command ([#83](https://github.com/meteroid-oss/perseid/issues/83)) ([d6602a5](https://github.com/meteroid-oss/perseid/commit/d6602a53973c84efa009f759b59dfd0ffef86ba9))
+* keep the generated workflow headers to one line ([#84](https://github.com/meteroid-oss/perseid/issues/84)) ([93226c4](https://github.com/meteroid-oss/perseid/commit/93226c475b4086a9a1cd23f8eb2c1718a23f77be))
+* pypi token ([69b3960](https://github.com/meteroid-oss/perseid/commit/69b3960482243740230b3852ba5444605f2a6c04))
+
 ## [0.11.1](https://github.com/meteroid-oss/perseid/compare/v0.11.0...v0.11.1) (2026-10-06)
 
 
