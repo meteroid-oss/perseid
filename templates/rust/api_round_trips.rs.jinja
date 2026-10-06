@@ -1,0 +1,95 @@
+{% set _ = set_summary_filename("round_trips.rs") -%}
+// this file is @generated
+//! Decodes sample JSON of every model and encodes it back, from round_trips.json.
+//!
+//! Date-times compare as instants, and a `null` optional property may be left out: only PATCH
+//! bodies tell `null` from absent. Everything else must come back exactly.
+use chrono::DateTime;
+use serde_json::Value;
+
+type Codec = fn(&str) -> Result<Value, String>;
+
+fn codec<T: serde::de::DeserializeOwned + serde::Serialize>(text: &str) -> Result<Value, String> {
+    let model: T = serde_json::from_str(text).map_err(|error| format!("decode failed: {error}"))?;
+    serde_json::to_value(&model).map_err(|error| format!("encode failed: {error}"))
+}
+
+static CODECS: &[(&str, Codec)] = &[
+{%- for name in types | sort %}
+    ({{ name | tojson }}, codec::<{{ sdk.rust_crate }}::models::{{ name | to_upper_camel_case }}>),
+{%- endfor %}
+];
+
+/// The first difference between the sample and what came back, if any.
+fn difference(expected: &Value, actual: &Value, path: &str) -> Option<String> {
+    match (expected, actual) {
+        (Value::Object(expected), Value::Object(actual)) => {
+            for (key, value) in expected {
+                match actual.get(key) {
+                    Some(other) => {
+                        if let Some(found) = difference(value, other, &format!("{path}/{key}")) {
+                            return Some(found);
+                        }
+                    }
+                    None if value.is_null() => {}
+                    None => return Some(format!("{path}/{key}: lost, was {value}")),
+                }
+            }
+            actual
+                .iter()
+                .find(|(key, _)| !expected.contains_key(*key))
+                .map(|(key, value)| format!("{path}/{key}: added, is {value}"))
+        }
+        (Value::Array(expected), Value::Array(actual)) => {
+            if expected.len() != actual.len() {
+                return Some(format!("{path}: {} items became {}", expected.len(), actual.len()));
+            }
+            expected
+                .iter()
+                .zip(actual)
+                .enumerate()
+                .find_map(|(i, (a, b))| difference(a, b, &format!("{path}/{i}")))
+        }
+        (Value::String(a), Value::String(b)) if a != b => {
+            match (DateTime::parse_from_rfc3339(a), DateTime::parse_from_rfc3339(b)) {
+                (Ok(a), Ok(b)) if a == b => None,
+                _ => Some(format!("{path}: {a:?} became {b:?}")),
+            }
+        }
+        (a, b) if a == b => None,
+        (a, b) => Some(format!("{path}: {a} became {b}")),
+    }
+}
+
+#[test]
+fn every_sample_of_every_model_round_trips() {
+    let data: Value = serde_json::from_str(include_str!("round_trips.json")).unwrap();
+    let mut failures = Vec::new();
+    for (schema, codec) in CODECS {
+        let Some(samples) = data["models"][schema].as_array() else {
+            failures.push(format!("{schema}: no samples"));
+            continue;
+        };
+        for sample in samples {
+            let (name, json) = (sample["name"].as_str().unwrap(), &sample["json"]);
+            let fail = |reason: String| format!("{schema} sample `{name}`: {reason}\n    input: {json}");
+            let encoded = match codec(&json.to_string()) {
+                Ok(encoded) => encoded,
+                Err(error) => {
+                    failures.push(fail(error));
+                    continue;
+                }
+            };
+            if let Some(reason) = difference(json, &encoded, "") {
+                failures.push(fail(format!("{reason}\n    output: {encoded}")));
+                continue;
+            }
+            match codec(&encoded.to_string()) {
+                Ok(again) if again == encoded => {}
+                Ok(again) => failures.push(fail(format!("not stable, re-encoded as {again}"))),
+                Err(error) => failures.push(fail(format!("own output: {error}"))),
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{} samples differ:\n{}", failures.len(), failures.join("\n"));
+}

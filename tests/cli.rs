@@ -374,6 +374,66 @@ fn tests_are_generated_unless_left_out() {
 }
 
 #[test]
+fn round_trips_are_opt_in() {
+    let languages = ["rust", "typescript", "python", "go", "java", "csharp"];
+    let dir = project_from("petstore.yaml", &languages);
+    let round_trips = [
+        ("rust/tests/round_trips.rs", "rust/tests/round_trips.json"),
+        (
+            "typescript/tests/api/roundTrips.test.ts",
+            "typescript/tests/api/round_trips.json",
+        ),
+        (
+            "python/tests/test_round_trips.py",
+            "python/tests/round_trips.json",
+        ),
+        ("go/round_trips_test.go", "go/testdata/round_trips.json"),
+        (
+            "java/src/test/java/com/petstore/api/RoundTripsTest.java",
+            "java/src/test/resources/com/petstore/api/round_trips.json",
+        ),
+        (
+            "csharp/Petstore.Tests/RoundTripsTests.cs",
+            "csharp/Petstore.Tests/round_trips.json",
+        ),
+    ];
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    for (test, data) in round_trips {
+        assert!(!dir.path().join(test).exists(), "{test}");
+        assert!(!dir.path().join(data).exists(), "{data}");
+    }
+
+    edit_config(dir.path(), |text| {
+        text.replacen("\n[metadata]", "round_trips = true\n\n[metadata]", 1)
+    });
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    for (test, data) in round_trips {
+        assert!(dir.path().join(test).exists(), "{test}");
+        let data = fs::read_to_string(dir.path().join(data)).unwrap();
+        let samples: Value = serde_json::from_str(&data).unwrap();
+        assert!(
+            samples["models"]["Pet"][0]["json"]["name"].is_string(),
+            "{data}"
+        );
+    }
+
+    edit_config(dir.path(), |text| {
+        text.replacen("[go]", "[go]\nround_trips = false", 1)
+            .replacen("[java]", "[java]\ntests = false", 1)
+    });
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("`round_trips = true` needs `tests`"), "{out}");
+    for (test, data) in &round_trips[3..5] {
+        assert!(!dir.path().join(test).exists(), "stale {test} is removed");
+        assert!(!dir.path().join(data).exists(), "stale {data} is removed");
+    }
+    assert!(dir.path().join(round_trips[0].1).exists());
+}
+
+#[test]
 fn handwritten_files_are_never_overwritten() {
     let dir = project();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);

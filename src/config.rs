@@ -57,6 +57,8 @@ pub struct Config {
     pub webhooks: Option<bool>,
     /// `false` leaves out the tests generated with each SDK, one per operation.
     pub tests: Option<bool>,
+    /// Also generates a test decoding and encoding sample JSON of every model, with `tests`.
+    pub round_trips: Option<bool>,
     /// Default request timeout, in seconds: 60 by default.
     pub timeout: Option<u64>,
     /// How unions decode objects that no rule tells apart.
@@ -206,6 +208,7 @@ pub struct Target {
     pub user_agent: Option<String>,
     pub webhooks: Option<bool>,
     pub tests: Option<bool>,
+    pub round_trips: Option<bool>,
     pub timeout: Option<u64>,
     pub untagged_unions: Option<UntaggedUnions>,
     pub names: BTreeMap<String, String>,
@@ -239,6 +242,8 @@ macro_rules! language {
             webhooks: Option<bool>,
             /// `false` leaves out the tests generated with this SDK, over the top-level setting.
             tests: Option<bool>,
+            /// Also generates the round trips of every model, over the top-level setting.
+            round_trips: Option<bool>,
             /// Default request timeout in seconds, over the top-level one.
             timeout: Option<u64>,
             /// How unions decode objects that no rule tells apart, over the top-level setting.
@@ -266,6 +271,7 @@ macro_rules! language {
                     user_agent: t.user_agent,
                     webhooks: t.webhooks,
                     tests: t.tests,
+                    round_trips: t.round_trips,
                     timeout: t.timeout,
                     untagged_unions: t.untagged_unions,
                     names: t.names,
@@ -695,6 +701,7 @@ impl Config {
             "env_prefix": self.name.to_shouty_snake_case(),
             "webhooks": target.webhooks.or(self.webhooks).unwrap_or(false),
             "tests": target.tests.or(self.tests).unwrap_or(true),
+            "round_trips": target.round_trips.or(self.round_trips).unwrap_or(false),
             "int64": match target.int64.unwrap_or_default() {
                 Int64::Number => "number",
                 Int64::Bigint => "bigint",

@@ -88,8 +88,32 @@ fn layout(language: &str, context: &Value) -> (PathBuf, Vec<(&'static str, PathB
         let tests = tests_dir(language, context);
         tasks.push(("api_test", tests.clone()));
         tasks.push(("api_test_summary", tests));
+        if context["round_trips"] == true {
+            tasks.push(("api_round_trips", round_trips_dir(language, context)));
+        }
     }
     (runtime, tasks)
+}
+
+/// Where the round trips of the models go, relative to the SDK root.
+fn round_trips_dir(language: &str, context: &Value) -> PathBuf {
+    match language {
+        "rust" => PathBuf::from("tests"),
+        _ => tests_dir(language, context),
+    }
+}
+
+/// The samples the round trips decode and encode, relative to the SDK root.
+fn round_trips_data(language: &str, context: &Value) -> PathBuf {
+    let dir = match language {
+        "go" => PathBuf::from("testdata"),
+        "java" => PathBuf::from(format!(
+            "src/test/resources/{}/api",
+            context["java_package"].as_str().unwrap().replace('.', "/")
+        )),
+        _ => round_trips_dir(language, context),
+    };
+    dir.join("round_trips.json")
 }
 
 /// Where the generated tests go, relative to the SDK root.
@@ -223,6 +247,14 @@ fn render(
             produced.push(clean(path.as_std_path().strip_prefix(stage)?));
         }
     }
+    if context["tests"] == true && context["round_trips"] == true && !api.types.is_empty() {
+        let path = clean(&round_trips_data(language, context));
+        fsx::write(
+            &stage.join(&path),
+            crate::samples::round_trips(&api.types).as_bytes(),
+        )?;
+        produced.push(path);
+    }
     let runtime_dir = assets_dir.path().join("runtime").join(language);
     if runtime_dir.is_dir() {
         for file in assets::walk(&runtime_dir)? {
@@ -312,6 +344,9 @@ pub fn sdk(
 ) -> Result<Vec<Change>> {
     std::fs::create_dir_all(dir)?;
     let context = config.context(sdk, dir);
+    if context["round_trips"] == true && context["tests"] != true {
+        eprintln!("warning: `round_trips = true` needs `tests`, which is false: no round trips");
+    }
     if sdk.language == "go" && config.go_module(sdk).is_none() {
         eprintln!(
             "warning: the Go module path is `{}`, as neither a `repo` nor an `origin` remote tells where the SDK lives: set `module` under [go]",
@@ -377,13 +412,14 @@ pub fn sdk(
     }
     let (runtime, _) = layout(sdk.language, &context);
     scan_sources(dir, &runtime, extension(sdk.language), &mut candidates)?;
-    // Tests left over after `tests = false`.
-    scan_sources(
-        dir,
-        &tests_dir(sdk.language, &context),
-        extension(sdk.language),
-        &mut candidates,
-    )?;
+    // Tests left over after `tests = false` or `round_trips = false`.
+    for tests in [
+        tests_dir(sdk.language, &context),
+        round_trips_dir(sdk.language, &context),
+    ] {
+        scan_sources(dir, &tests, extension(sdk.language), &mut candidates)?;
+    }
+    candidates.insert(clean(&round_trips_data(sdk.language, &context)));
     for path in candidates {
         if dir.join(&path).is_file() && !produced.contains(&path) && generated(&dir.join(&path)) {
             changes.push((Change::Removed(path), None));

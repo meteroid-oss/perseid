@@ -114,6 +114,10 @@
       "description": "Default repository of every SDK: `owner/name-{lang}` gives each its own (`{lang}` is the language: `typescript`, `python`…), `owner/name` holds them all in folders named after their language. Without it, the SDKs live next to perseid.toml.",
       "type": "string"
     },
+    "round_trips": {
+      "description": "Also generates a test decoding and encoding sample JSON of every model, with `tests`.",
+      "type": "boolean"
+    },
     "rust": {
       "description": "The Rust SDK, a crate.",
       "allOf": [
@@ -224,6 +228,10 @@
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
         },
+        "round_trips": {
+          "description": "Also generates the round trips of every model, over the top-level setting.",
+          "type": "boolean"
+        },
         "tests": {
           "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
           "type": "boolean"
@@ -302,6 +310,10 @@
         "repo": {
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
+        },
+        "round_trips": {
+          "description": "Also generates the round trips of every model, over the top-level setting.",
+          "type": "boolean"
         },
         "tests": {
           "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
@@ -402,6 +414,10 @@
         "repo": {
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
+        },
+        "round_trips": {
+          "description": "Also generates the round trips of every model, over the top-level setting.",
+          "type": "boolean"
         },
         "tests": {
           "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
@@ -617,6 +633,10 @@
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
         },
+        "round_trips": {
+          "description": "Also generates the round trips of every model, over the top-level setting.",
+          "type": "boolean"
+        },
         "tests": {
           "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
           "type": "boolean"
@@ -690,6 +710,10 @@
         "repo": {
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
+        },
+        "round_trips": {
+          "description": "Also generates the round trips of every model, over the top-level setting.",
+          "type": "boolean"
         },
         "tests": {
           "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",
@@ -780,6 +804,10 @@
         "repo": {
           "description": "`owner/name` of a GitHub repository to generate into, over the top-level `repo`.",
           "type": "string"
+        },
+        "round_trips": {
+          "description": "Also generates the round trips of every model, over the top-level setting.",
+          "type": "boolean"
         },
         "tests": {
           "description": "`false` leaves out the tests generated with this SDK, over the top-level setting.",

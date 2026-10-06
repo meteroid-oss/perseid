@@ -19,6 +19,7 @@ base_url = "https://api.acme.com"   # first server of the spec by default
 timeout = 60                        # seconds
 webhooks = false                    # install the Standard Webhooks verifier
 tests = true                        # generate a test per operation
+round_trips = false                 # also decode and encode sample JSON of every model
 untagged_unions = "best-match"       # or "json" for untyped JSON, see "Unions of objects"
 header_prefix = "acme"              # SDK headers: acme-idempotency-key...; kebab-case name by default
 user_agent = "acme"                 # User-Agent prefix; kebab-case name by default
@@ -101,6 +102,7 @@ Each key is also a key of the [language tables](#language-tables), which overrid
 | `timeout` | `60` | Request timeout, in seconds |
 | `webhooks` | `false` | `true` installs the [webhook verifier](customizing.md#webhooks) |
 | `tests` | `true` | `false` leaves out the [generated tests](languages.md#tests) |
+| `round_trips` | `false` | `true` adds the [round trips](languages.md#round-trips) of every model to the generated tests |
 | `untagged_unions` | `"best-match"` | `"json"` types [unions no property tells apart](#unions-of-objects) as untyped JSON |
 | `header_prefix` | kebab-case `name` | Prefix of the headers the SDKs send on their own: `acme-idempotency-key` |
 | `user_agent` | kebab-case `name` | Prefix of the `User-Agent` header |
@@ -153,7 +155,7 @@ naming its package.
 | `repo` | `owner/name` of the repository to generate into, over the top-level `repo` |
 | `package` | Crate, npm package, Python package, Go package, Java package, or C# root namespace and NuGet package. Derived from `name` by default |
 | `exclude` | Operation ids left out of this SDK only |
-| `base_url`, `timeout`, `webhooks`, `tests`, `untagged_unions`, `header_prefix`, `user_agent`, `methods`, `context` | Over the [SDK defaults](#sdk-defaults) |
+| `base_url`, `timeout`, `webhooks`, `tests`, `round_trips`, `untagged_unions`, `header_prefix`, `user_agent`, `methods`, `context` | Over the [SDK defaults](#sdk-defaults) |
 
 - An SDK with a `repo` is checked out under `.perseid/repos`, at its root, or in a folder named
   after the language when several SDKs share the repository.

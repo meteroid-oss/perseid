@@ -27,6 +27,7 @@ enum TemplateKind {
     Summary,
     Test,
     TestSummary,
+    RoundTrips,
 }
 
 /// Renders `tpl_name` with the API model as the SDK of `language` (`rs`, `ts`, `py`...) sees it,
@@ -70,11 +71,12 @@ pub(crate) fn generate_with_output_context(
         }
         "api_test" => TemplateKind::Test,
         "api_test_summary" => TemplateKind::TestSummary,
+        "api_round_trips" => TemplateKind::RoundTrips,
         "component_type" => TemplateKind::Type,
         _ => bail!(
             "template file basename must be one of 'api_resource', 'api_summary', \
-             'api_reference', 'api_test', 'api_test_summary', 'component_type', \
-             'component_type_summary', 'summary'",
+             'api_reference', 'api_test', 'api_test_summary', 'api_round_trips', \
+             'component_type', 'component_type_summary', 'summary'",
         ),
     };
 
@@ -119,6 +121,10 @@ pub(crate) fn generate_with_output_context(
                 false => generator.render_tpl(None, context! { api, tested })?,
             }
         }
+        TemplateKind::RoundTrips => match api.types.is_empty() {
+            true => vec![],
+            false => generator.render_tpl(None, context! { types => api.types })?,
+        },
     };
 
     if !no_postprocess {

@@ -31,7 +31,8 @@ jobs:
           ./actionlint scaffold/release/.github/workflows/*.yml target/tmp/*.yml
 
   # A fresh `init` + `generate` must give SDKs that build, type-check and pass their generated
-  # tests, for a toy spec, the torture fixture (unions, recursion, reserved words...) and a real API.
+  # tests and round trips, for a toy spec, the torture fixture (unions, recursion, reserved
+  # words...) and a real API.
   sdks:
     runs-on: ubuntu-24.04
     strategy:
@@ -78,10 +79,14 @@ jobs:
         run: |
           mkdir sdk && cd sdk
           perseid init --sdks rust,typescript,python,go,java,csharp --spec "${{ startsWith(matrix.spec, 'https') && matrix.spec || format('{0}/{1}', github.workspace, matrix.spec) }}"
+          sed -i '/^name = /a round_trips = true' perseid.toml
           perseid generate
           perseid generate --check
       - working-directory: ${{ runner.temp }}/sdk/rust
-        run: cargo check && if [ -d tests/api ]; then cargo test --test api; fi
+        run: |
+          cargo check
+          if [ -d tests/api ]; then cargo test --test api; fi
+          if [ -f tests/round_trips.rs ]; then cargo test --test round_trips; fi
       - working-directory: ${{ runner.temp }}/sdk/typescript
         run: npm install --no-audit --no-fund && npx tsc --noEmit && npm test
       - working-directory: ${{ runner.temp }}/sdk/python

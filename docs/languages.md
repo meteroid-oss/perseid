@@ -58,6 +58,24 @@ decodes.
 - `tests = false`, at the top level or in a language table, leaves them out and deletes the
   generated ones.
 
+### Round trips
+
+`round_trips = true` adds a test decoding and encoding sample JSON of every model, from
+`round_trips.json`: every property set, required ones only, `null`s, each union variant and enum
+value. What comes back must be the same JSON, up to the spelling of date-times and decimals.
+
+| | Test | Samples |
+|---|---|---|
+| Rust | `tests/round_trips.rs` | `tests/round_trips.json` |
+| TypeScript | `tests/api/roundTrips.test.ts` | `tests/api/round_trips.json` |
+| Python | `tests/test_round_trips.py` | `tests/round_trips.json` |
+| Go | `round_trips_test.go` | `testdata/round_trips.json` |
+| Java | `src/test/java/.../api/RoundTripsTest.java` | `src/test/resources/.../api/round_trips.json` |
+| C# | `Acme.Tests/RoundTripsTests.cs` | `Acme.Tests/round_trips.json` |
+
+- It's off by default: the samples grow with the spec, to 19 MB for Stripe's and 25 MB for GitHub's.
+- It needs `tests`, and leaving it out deletes the generated round trips.
+
 ## Rust
 
 ### Install
