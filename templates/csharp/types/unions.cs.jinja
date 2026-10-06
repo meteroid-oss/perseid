@@ -28,6 +28,7 @@
     else "string" if ty == "string"
     else "bool" if ty == "bool"
     else "date_time" if ty == "DateTimeOffset"
+    else "date" if ty == "DateOnly"
     else "decimal" if ty == "decimal"
     else "number" if ty in ["short", "int", "long", "ushort", "ulong", "float", "double"]
     else "node" if ty == "JsonNode"
@@ -223,6 +224,14 @@ internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
         {
             return {{ create }}(dateTime{{ n }});
         }
+{%- elif v.kind == "date" %}
+        if (
+            root.ValueKind == JsonValueKind.String
+            && DateOnly.TryParseExact(root.GetString(), "yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture, global::System.Globalization.DateTimeStyles.None, out var date{{ n }})
+        )
+        {
+            return {{ create }}(date{{ n }});
+        }
 {%- elif v.kind == "decimal" %}
         if (
             root.ValueKind == JsonValueKind.String
@@ -274,6 +283,8 @@ internal sealed class {{ name }}Converter : JsonConverter<{{ name }}>
             case {{ name }}.{{ v.class }} variant:
 {%- if v.kind in ["string", "date_time"] %}
                 writer.WriteStringValue(variant.Value);
+{%- elif v.kind == "date" %}
+                writer.WriteStringValue(variant.Value.ToString("yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture));
 {%- elif v.kind == "decimal" %}
                 writer.WriteStringValue(variant.Value.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
 {%- elif v.kind == "bool" %}

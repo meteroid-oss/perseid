@@ -196,6 +196,12 @@ pub fn populate_env(
         "mentions_ident",
         |text: Cow<'_, str>, name: Cow<'_, str>| mentions_ident(&text, &name),
     );
+    env.add_filter(
+        "replace_ident",
+        |text: Cow<'_, str>, name: Cow<'_, str>, with: Cow<'_, str>| {
+            replace_ident(&text, &name, &with)
+        },
+    );
     env.add_filter("strip_trailing_comma", |s: Cow<'_, str>| {
         match s.trim_end().strip_suffix(",") {
             Some(stripped) => stripped.to_string(),
@@ -425,6 +431,26 @@ fn mentions_ident(text: &str, name: &str) -> bool {
         })
 }
 
+/// `text` with each identifier `name` replaced, but not attributes such as `x.name`.
+fn replace_ident(text: &str, name: &str, with: &str) -> String {
+    let is_ident = |c: char| c.is_alphanumeric() || c == '_' || c == '.';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(name) {
+        let end = start + name.len();
+        let whole = !out
+            .chars()
+            .chain(rest[..start].chars())
+            .next_back()
+            .is_some_and(is_ident)
+            && !rest[end..].chars().next().is_some_and(is_ident);
+        out.push_str(&rest[..start]);
+        out.push_str(if whole { with } else { name });
+        rest = &rest[end..];
+    }
+    out + rest
+}
+
 fn contains_required_param(value: Value) -> Result<bool, minijinja::Error> {
     for p in value.try_iter()? {
         if p.get_attr("required")?.is_true() {
@@ -437,7 +463,19 @@ fn contains_required_param(value: Value) -> Result<bool, minijinja::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{java_comment, mentions_ident, normalize_doc_text};
+    use super::{java_comment, mentions_ident, normalize_doc_text, replace_ident};
+
+    #[test]
+    fn replace_ident_skips_longer_names_and_attributes() {
+        assert_eq!(
+            replace_ident(
+                "dict[str, date] | datetime | x.date | date",
+                "date",
+                "_dt.date"
+            ),
+            "dict[str, _dt.date] | datetime | x.date | _dt.date"
+        );
+    }
 
     fn doc(text: &str, style: &str) -> String {
         let mut env = minijinja::Environment::new();

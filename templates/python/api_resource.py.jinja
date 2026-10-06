@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import arg_type, docstring, field_ident, field_type, field_decl, has_object_union, is_flat_union, named_type, py_str, py_field, py_ident, py_type, param_type, resource_module, type_refs, union_refs, union_type -%}
+{% from "types/macros.py.jinja" import arg_type, docstring, in_class, field_ident, field_type, field_decl, has_object_union, is_flat_union, named_type, py_str, py_field, py_ident, py_type, param_type, resource_module, type_refs, union_refs, union_type -%}
 # this file is @generated
 {% if resource.subresources | length > 0 -%}
     {{ panic("resource `" ~ resource.name ~ "` has subresources, which the Python templates do not support yet") }}
@@ -73,7 +73,8 @@ import typing as t
 {%- if builtin_names %}
 import builtins
 {%- endif %}
-from datetime import datetime
+import datetime as _datetime
+from datetime import date, datetime
 from decimal import Decimal
 {%- set error_types = namespace(used=false) %}
 {%- if error_schemas | length > 0 %}
@@ -169,7 +170,7 @@ class {{ resource_class_name }}{{ op.name | to_upper_camel_case }}Body:
     """Multipart form fields of `{{ op.name | to_snake_case }}`."""
 {% for required_pass in [true, false] %}
 {%- for field in op.multipart_fields if (field.required and not field.nullable) == required_pass %}
-    {{ py_field(field.name) }}: {% if field.is_file and field.is_file_list %}list[FileInput]{% elif field.is_file %}FileInput{% else %}{{ py_type(field.type) }}{% endif %}{% if not required_pass %} | None = None{% endif %}
+    {{ py_field(field.name) }}: {% if field.is_file and field.is_file_list %}list[FileInput]{% elif field.is_file %}FileInput{% else %}{{ in_class(py_type(field.type), op.multipart_fields | map(attribute="name") | map("ident", "snake", "python_field") | list) }}{% endif %}{% if not required_pass %} | None = None{% endif %}
 {%- if field.description is defined %}
     """{{ field.description }}"""
 {%- endif %}
@@ -302,10 +303,10 @@ class {{ class_name }}({{ base_class }}):
 {%- set twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("stream_property", "defined") | first %}
 {%- set skipped = op.stream_property if op.stream_property is defined else (twin.stream_property if twin else none) %}
 {%- for f in types[op.request_body_schema_name].fields if f.name == skipped and f.required %}{{ field_ident(f) }}={{ "True" if op.stream_property is defined else "False" }}, {% endfor %}){% endset %}
-{%- set json_value = "to_json_value(" ~ body_value ~ ", " ~ body_type ~ ")" %}
+{%- set json_value = "to_json_value(" ~ body_value ~ ", " ~ (body_type | replace_ident("date", "_datetime.date")) ~ ")" %}
 {%- if op.request_body_optional and op.stream_property is not defined %}{% set json_value = json_value ~ " or None" %}{% endif %}
 {%- elif body_param is not none %}
-{%- set json_value = "to_json_value(" ~ body_param ~ ", " ~ body_type ~ ")" %}
+{%- set json_value = "to_json_value(" ~ body_param ~ ", " ~ (body_type | replace_ident("date", "_datetime.date")) ~ ")" %}
 {%- endif %}
 {%- set request %}
             ApiRequest(
@@ -470,9 +471,9 @@ class {{ class_name }}({{ base_class }}):
         {% if is_async %}async {% endif %}def fetch(page_param: {{ "str" if pg.style == "cursor" else "int" }} | None) -> {{ response_type }}:
             response = {{ await }}self._request({{ request | indent(4) }}
             )
-            return decode_response(response, {{ response_type }})
+            return decode_response(response, {{ response_type | replace_ident("date", "_datetime.date") }})
 
-        paging = {{ pg.style | capitalize }}Paging[{{ response_type }}, {{ item_type }}](
+        paging = {{ pg.style | capitalize }}Paging[{{ response_type | replace_ident("date", "_datetime.date") }}, {{ item_type | replace_ident("date", "_datetime.date") }}](
             items=lambda body: {{ accessor("body", pg["items"]) }},
 {%- if pg.has_more is defined %}
             has_more=lambda body: {{ accessor("body", pg.has_more) }},
@@ -521,10 +522,10 @@ class {{ class_name }}({{ base_class }}):
 {%- set response_schema = types[op.response_body_schema_name] if op.response_body_schema_name is defined else none %}
 {%- if op.response_body_union is defined or (response_schema and (response_schema.kind == "alias" or (response_schema.kind == "struct_enum" and is_flat_union(response_schema)))) %}
         {#- A type alias (such as a union) is not a class, so `decode_response` cannot infer its type. #}
-        decoded: {{ unshadow(return_type) }} = {{ decode }}(response, {{ response_type }})
+        decoded: {{ unshadow(return_type) | replace_ident("date", "_datetime.date") }} = {{ decode }}(response, {{ response_type | replace_ident("date", "_datetime.date") }})
         return decoded
 {%- else %}
-        return {{ decode }}(response, {{ response_type }})
+        return {{ decode }}(response, {{ response_type | replace_ident("date", "_datetime.date") }})
 {%- endif %}
 {%- endif %}
 {%- endif %}

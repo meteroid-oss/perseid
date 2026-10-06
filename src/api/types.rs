@@ -2115,7 +2115,8 @@ impl UnionVariant {
             | FieldType::Int64
             | FieldType::UInt64 => "integer".into(),
             FieldType::Float | FieldType::Double => "number".into(),
-            FieldType::String | FieldType::Uri | FieldType::Date => "string".into(),
+            FieldType::String | FieldType::Uri => "string".into(),
+            FieldType::Date => "date".into(),
             FieldType::DateTime => "date_time".into(),
             FieldType::Decimal => "decimal".into(),
             FieldType::List { inner } | FieldType::Set { inner } => {
@@ -2231,7 +2232,7 @@ pub(crate) enum FieldType {
     String,
     Decimal,
     DateTime,
-    /// A calendar date (`format: date`), typed as a string until SDKs map it to a date type.
+    /// A calendar date (`format: date`), a string in TypeScript, where `Date` is an instant.
     Date,
     Uri,
     /// A JSON object with arbitrary field values.
@@ -2550,7 +2551,7 @@ impl FieldType {
                 inner: Some(ty), ..
             } if matches!(ty.data, TypeData::StringAlias) => "string".into(),
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
-            Self::Date => "string".into(),
+            Self::Date => "DateOnly".into(),
             Self::StringEnum { .. } => "string".into(),
         }
     }
@@ -2582,7 +2583,7 @@ impl FieldType {
                 format!("[]{}", inner.to_go_typename()).into()
             }
             Self::SchemaRef { name, .. } => name.to_upper_camel_case().into(),
-            Self::Date => "string".into(),
+            Self::Date => "Date".into(),
             Self::StringEnum { .. } => "string".into(),
         }
     }
@@ -2820,7 +2821,7 @@ impl FieldType {
             Self::Map { value_ty } => {
                 format!("t.Dict[str, {}]", value_ty.to_python_typename()).into()
             }
-            Self::Date => "str".into(),
+            Self::Date => "date".into(),
             Self::StringEnum { .. } => "str".into(),
         }
     }
@@ -2858,7 +2859,7 @@ impl FieldType {
                 }
                 name.to_upper_camel_case().into()
             }
-            FieldType::Date => "String".into(),
+            FieldType::Date => "LocalDate".into(),
             FieldType::StringEnum { .. } => "String".into(),
         }
     }
@@ -3040,10 +3041,9 @@ impl minijinja::value::Object for FieldType {
                 ensure_no_args(args, "is_map")?;
                 Ok(matches!(**self, Self::Map { .. }).into())
             }
-            // Dates are typed as strings, so templates treat them alike unless they check `is_date`.
             "is_string" => {
                 ensure_no_args(args, "is_string")?;
-                Ok(matches!(**self, Self::String | Self::Date).into())
+                Ok(matches!(**self, Self::String).into())
             }
             "is_uri" => {
                 ensure_no_args(args, "is_uri")?;

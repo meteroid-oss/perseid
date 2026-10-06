@@ -371,6 +371,8 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
         formatFloat(float64({{ expr }}))
     {%- elif ty.is_datetime() -%}
         formatTime({{ expr }})
+    {%- elif ty.is_date() -%}
+        {{ "(" ~ expr ~ ")" if expr is startingwith("*") else expr }}.String()
     {%- elif ty.is_schema_ref() -%}
         formatValue({{ expr }})
     {%- else -%}

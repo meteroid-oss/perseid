@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import py_str, docstring, field_decl, field_ident, has_object_union, is_flat_union, model_imports, module_name, py_field -%}
+{% from "types/macros.py.jinja" import py_str, docstring, attr_names, field_decl, field_ident, in_class, has_object_union, is_flat_union, model_imports, module_name, py_field -%}
 {#- Discriminated unions: the plain union `Circle | Square` of their variant models, or when
     variants share fields or have no model of their own, a model holding the discriminator and
     the variant (`Shape(type="circle", content=Circle(...))`). -#}
@@ -96,9 +96,10 @@ class {{ class_name }}(TaggedUnionModel):
         UnknownVariant
     )
     """The variant; an `UnknownVariant` when this SDK version does not know it."""
+    {%- set attrs = attr_names(type.fields) | split | list %}
     {%- for field in type.fields %}
 
-    {{ field_ident(field) }}: {{ field_decl(field, request_schema) }}
+    {{ field_ident(field) }}: {{ in_class(field_decl(field, request_schema), attrs) }}
         {%- if field.description is defined %}
     {{ docstring(field.description) | indent(4) }}
         {%- endif %}

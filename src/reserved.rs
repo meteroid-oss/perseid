@@ -381,6 +381,7 @@ const JAVA: &[&str] = &[
     "LinkedHashMap",
     "LinkedHashSet",
     "List",
+    "LocalDate",
     "Long",
     "Mac",
     "Map",

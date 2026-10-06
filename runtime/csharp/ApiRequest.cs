@@ -329,6 +329,7 @@ internal sealed class ApiRequest(HttpMethod method, string path, string operatio
             bool b => b ? "true" : "false",
             DateTimeOffset d => d.ToString("O", CultureInfo.InvariantCulture),
             DateTime d => d.ToString("O", CultureInfo.InvariantCulture),
+            DateOnly d => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             IFormattable f => f.ToString(null, CultureInfo.InvariantCulture),
             _ => value.ToString() ?? string.Empty,
         };

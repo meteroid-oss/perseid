@@ -36,6 +36,23 @@ See [features](features.md) for auth, pagination and encoding, and
 | Java | Java 11+ | `new Acme(AcmeOptions...)` | `AcmeException` | `listIter()` | `client.withRawResponse()` |
 | C# | .NET 8 | `new AcmeClient(token)` | `AcmeException` | `ListAutoPagingAsync()` | `.WithRawResponse` |
 
+## Formats
+
+A string `format` types the value wherever it appears: fields, list items, parameters, bodies,
+and named schemas of it.
+
+| `format` | Rust | TypeScript | Python | Go | Java | C# |
+|---|---|---|---|---|---|---|
+| `date-time` | `chrono::DateTime<Utc>` | `Date` | `datetime` | `time.Time` | `OffsetDateTime` | `DateTimeOffset` |
+| `date` | `chrono::NaiveDate` | `string` | `date` | `Date` | `LocalDate` | `DateOnly` |
+| `decimal` | `rust_decimal::Decimal` | `string` | `Decimal` | `string` | `BigDecimal` | `decimal` |
+| `uri` | `String` | `string` | `str` | `string` | `URI` | `string` |
+
+- TypeScript keeps dates as `"2024-01-31"` strings: a `Date` is an instant, which time zones
+  would shift to another day.
+- Go's `Date` (`Year`, `Month`, `Day`) is in the SDK package: `DateOf(t)` and `ParseDate(s)`
+  build one, `In(loc)` turns it back into a `time.Time`.
+
 ## Tests
 
 Each operation gets a test calling it with sample arguments. A mock transport answers it in
