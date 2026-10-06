@@ -1,0 +1,173 @@
+{% set _ = set_summary_filename("RoundTripsTest.java") -%}
+// this file is @generated
+package {{ sdk.java_package }}.api;
+
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.DynamicTest.dynamicTest;
+
+import {{ sdk.java_package }}.internal.Utils;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.InputStream;
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+import org.junit.jupiter.api.DynamicTest;
+import org.junit.jupiter.api.TestFactory;
+
+/**
+ * Decodes sample JSON of every model and encodes it back, from round_trips.json.
+ *
+ * <p>Date-times compare as instants, decimal strings and numbers by value. Everything else must
+ * come back exactly.
+ */
+class RoundTripsTest {
+    private static final Pattern DECIMAL = Pattern.compile("-?\\d+(?:\\.\\d+)?");
+    /** Reads JSON with exact numbers: no float rounds an integer or a decimal. */
+    private static final ObjectMapper EXACT = new ObjectMapper().enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS);
+    private static final Map<String, Class<?>> MODELS = new TreeMap<>();
+
+{%- set ns = namespace(models=[]) %}
+{%- for name in types | sort %}
+{%- if types[name].kind in ["struct", "string_enum", "integer_enum", "struct_enum"] %}
+{%- set ns.models = ns.models + [name] %}
+{%- endif %}
+{%- endfor %}
+{#- One method per chunk keeps each under the 64KB bytecode limit. #}
+{%- set chunks = ns.models | batch(1000) | list %}
+
+    static {
+        {%- for _ in chunks %}
+        register{{ loop.index0 }}();
+        {%- endfor %}
+    }
+{%- for chunk in chunks %}
+
+    private static void register{{ loop.index0 }}() {
+        {%- for name in chunk %}
+        MODELS.put({{ name | tojson }}, {{ sdk.java_package }}.models.{{ name | to_upper_camel_case }}.class);
+        {%- endfor %}
+    }
+{%- endfor %}
+
+    private static boolean sameInstant(String expected, String actual) {
+        try {
+            return OffsetDateTime.parse(expected).isEqual(OffsetDateTime.parse(actual));
+        } catch (DateTimeParseException e) {
+            return false;
+        }
+    }
+
+    private static boolean sameDecimal(String expected, String actual) {
+        return DECIMAL.matcher(expected).matches()
+                && DECIMAL.matcher(actual).matches()
+                && new BigDecimal(expected).compareTo(new BigDecimal(actual)) == 0;
+    }
+
+    /** Where {@code actual} differs from {@code expected}, beyond the normalizations above. */
+    private static List<String> differences(JsonNode expected, JsonNode actual, String path) {
+        List<String> out = new ArrayList<>();
+        String mismatch = path + ": " + expected + " became " + actual;
+        if (expected.isNumber() && actual.isNumber()) {
+            boolean same = expected.isIntegralNumber() && actual.isIntegralNumber()
+                    ? expected.bigIntegerValue().equals(actual.bigIntegerValue())
+                    : expected.decimalValue().compareTo(actual.decimalValue()) == 0;
+            if (!same) {
+                out.add(mismatch);
+            }
+        } else if (expected.isTextual() && actual.isTextual()) {
+            String a = expected.textValue();
+            String b = actual.textValue();
+            if (!a.equals(b) && !sameInstant(a, b) && !sameDecimal(a, b)) {
+                out.add(mismatch);
+            }
+        } else if (expected.isObject() && actual.isObject()) {
+            Set<String> keys = new TreeSet<>();
+            expected.fieldNames().forEachRemaining(keys::add);
+            actual.fieldNames().forEachRemaining(keys::add);
+            for (String key : keys) {
+                if (!actual.has(key)) {
+                    out.add(path + "/" + key + ": lost, was " + expected.get(key));
+                } else if (!expected.has(key)) {
+                    out.add(path + "/" + key + ": added, is " + actual.get(key));
+                } else {
+                    out.addAll(differences(expected.get(key), actual.get(key), path + "/" + key));
+                }
+            }
+        } else if (expected.isArray() && actual.isArray()) {
+            if (expected.size() != actual.size()) {
+                out.add(path + ": " + expected.size() + " items became " + actual.size());
+            } else {
+                for (int i = 0; i < expected.size(); i++) {
+                    out.addAll(differences(expected.get(i), actual.get(i), path + "/" + i));
+                }
+            }
+        } else if (!expected.equals(actual)) {
+            out.add(mismatch);
+        }
+        return out;
+    }
+
+    private static void roundTrip(String label, Class<?> type, JsonNode json) throws Exception {
+        ObjectMapper mapper = Utils.getObjectMapper();
+        String input = json.toString();
+        Object decoded;
+        try {
+            decoded = mapper.readValue(input, type);
+        } catch (Exception e) {
+            throw new AssertionError(label + ": decode failed: " + e + "\n    input: " + input, e);
+        }
+        assertNotNull(decoded, label + ": decoded as null\n    input: " + input);
+        String output = mapper.writeValueAsString(decoded);
+        List<String> found = differences(json, EXACT.readTree(output), "");
+        if (!found.isEmpty()) {
+            throw new AssertionError(label + ": " + String.join("\n    ", found) + "\n    input: " + input + "\n    output: " + output);
+        }
+        Object again;
+        try {
+            again = mapper.readValue(output, type);
+        } catch (Exception e) {
+            throw new AssertionError(label + ": own output: " + e + "\n    input: " + input + "\n    output: " + output, e);
+        }
+        if (!decoded.equals(again)) {
+            throw new AssertionError(label + ": not stable, re-encoded as " + mapper.writeValueAsString(again)
+                    + "\n    input: " + input + "\n    output: " + output);
+        }
+    }
+
+    @TestFactory
+    Stream<DynamicTest> everySampleOfEveryModelRoundTrips() throws Exception {
+        JsonNode data;
+        try (InputStream in = RoundTripsTest.class.getResourceAsStream("round_trips.json")) {
+            assertNotNull(in, "round_trips.json is not on the test classpath");
+            data = EXACT.readTree(in).get("models");
+        }
+        List<DynamicTest> tests = new ArrayList<>();
+        for (Map.Entry<String, Class<?>> model : MODELS.entrySet()) {
+            String schema = model.getKey();
+            JsonNode samples = data.get(schema);
+            if (samples == null || samples.isEmpty()) {
+                tests.add(dynamicTest(schema, () -> {
+                    throw new AssertionError(schema + ": no samples");
+                }));
+                continue;
+            }
+            for (Iterator<JsonNode> it = samples.elements(); it.hasNext(); ) {
+                JsonNode sample = it.next();
+                String label = schema + " sample `" + sample.get("name").asText() + "`";
+                tests.add(dynamicTest(label, () -> roundTrip(label, model.getValue(), sample.get("json"))));
+            }
+        }
+        return tests.stream();
+    }
+}
