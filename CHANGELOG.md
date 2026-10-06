@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.3](https://github.com/meteroid-oss/perseid/compare/v0.11.2...v0.11.3) (2026-10-06)
+
+
+### Features
+
+* **publish:** NuGet trusted publishing ([#87](https://github.com/meteroid-oss/perseid/issues/87)) ([da8b65c](https://github.com/meteroid-oss/perseid/commit/da8b65c3267e487b5455164734661eef9e930524))
+
+
+### Bug Fixes
+
+* list only each repository's SDKs in its pull request, credit perseid at the bottom ([#86](https://github.com/meteroid-oss/perseid/issues/86)) ([e03b7d5](https://github.com/meteroid-oss/perseid/commit/e03b7d510cea8a73ee0475f72356c771611579d3))
+
 ## [0.11.2](https://github.com/meteroid-oss/perseid/compare/v0.11.1...v0.11.2) (2026-10-06)
 
 
