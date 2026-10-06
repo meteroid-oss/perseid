@@ -756,7 +756,7 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
     for line in [
         "+ perseid.toml\n+ .github/workflows/sdks.yml\n",
         "Packages: npm petstore, PyPI petstore, Go github.com/acme/petstore-go",
-        "Create the SDK repositories: `gh repo create acme/petstore-go --private`, `gh repo create acme/petstore-python --private`, `gh repo create acme/petstore-typescript --private`",
+        "Create the SDK repositories (--private instead keeps them private):\n       echo acme/petstore-go acme/petstore-python acme/petstore-typescript | xargs -n1 gh repo create --public\n",
         "Run `perseid sync`: it installs the perseid App on acme/petstore, acme/petstore-go, acme/petstore-python, acme/petstore-typescript",
         "`perseid app` sets up a GitHub App of your own instead",
         "PyPI: add acme/petstore-python as the pending publisher of petstore",
