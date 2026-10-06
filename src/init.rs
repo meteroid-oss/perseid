@@ -237,7 +237,7 @@ fn packages(config: &Config) -> Result<String> {
         names.push(match sdk.language {
             "typescript" => format!("npm {}", text("npm_package")),
             "python" => format!("PyPI {}", text("package_name")),
-            "rust" => format!("crates.io {}", text("rust_crate")),
+            "rust" => format!("crates.io {}", text("package_name")),
             "go" => format!("Go {}", text("go_module")),
             "java" => format!("Maven {}", text("java_package")),
             _ => format!("NuGet {}", text("package_name")),

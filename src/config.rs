@@ -1128,6 +1128,14 @@ mod tests {
         let typescript = context(toml, "typescript");
         assert_eq!(typescript["npm_package"], "acme-api");
         assert_eq!(context(toml, "python")["package_name"], "acme_api");
+        let rust = context(
+            "name = \"acme\"\nsdks = [\"rust\"]\n[rust]\npackage = \"acme-rs\"\n",
+            "rust",
+        );
+        assert_eq!(
+            (&rust["package_name"], &rust["rust_crate"]),
+            (&"acme-rs".into(), &"acme_rs".into())
+        );
         let error = load("spec = \"s\"\nname = \"3d API\"\n").err().unwrap();
         assert!(
             format!("{error:#}").contains("must start with a letter"),

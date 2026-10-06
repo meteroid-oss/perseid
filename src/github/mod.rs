@@ -361,7 +361,7 @@ pub fn publishing(config: &Config, hub: &str) -> Result<Vec<String>> {
                 text("package_name")
             ),
             "rust" => {
-                let name = text("rust_crate");
+                let name = text("package_name");
                 format!(
                     "crates.io: publish {name} once with a CARGO_REGISTRY_TOKEN secret on {repo}, then add {repo} as its trusted publisher at https://crates.io/crates/{name}/settings and delete the token"
                 )

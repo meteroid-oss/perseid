@@ -10,7 +10,7 @@
 @@DESCRIPTION@@
 
 ```sh
-cargo add @@RUST_CRATE@@
+cargo add @@PACKAGE_NAME@@
 ```
 
 Calls are futures: run them on Tokio. Every method of the API is listed in [api.md](api.md).
