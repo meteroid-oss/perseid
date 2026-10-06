@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.10.0](https://github.com/meteroid-oss/perseid/compare/v0.9.0...v0.10.0) (2026-10-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* type values as precisely as the spec does, in every SDK ([#77](https://github.com/meteroid-oss/perseid/issues/77))
+
+### Features
+
+* opt-in round trips of every model in the generated tests ([#78](https://github.com/meteroid-oss/perseid/issues/78)) ([bfd4956](https://github.com/meteroid-oss/perseid/commit/bfd4956d0221be958571346c9324c68ec1df4ee9))
+* test the SDKs in CI, and ask for their license on init ([#75](https://github.com/meteroid-oss/perseid/issues/75)) ([01aa85e](https://github.com/meteroid-oss/perseid/commit/01aa85e2d638d795a98ec26851371ce4b7f6c181))
+* type values as precisely as the spec does, in every SDK ([#77](https://github.com/meteroid-oss/perseid/issues/77)) ([a407863](https://github.com/meteroid-oss/perseid/commit/a407863bbbf544e08a52dfce8c40cb98f0fccf0c))
+
 ## [0.9.0](https://github.com/meteroid-oss/perseid/compare/v0.8.0...v0.9.0) (2026-10-06)
 
 
