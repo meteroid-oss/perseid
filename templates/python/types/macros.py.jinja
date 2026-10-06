@@ -167,7 +167,7 @@
 
 {#- `t.Literal[...]` of a field of one string value, else nothing. -#}
 {% macro literal_type(field) -%}
-    {%- if field.constant is string %}t.Literal[{{ py_str(field.constant) }}]{% endif -%}
+    {%- if field.literal is defined %}t.Literal[{{ py_str(field.literal) }}]{% endif -%}
 {%- endmacro %}
 
 {#- The annotation and default of a struct field: optional ones default to `None`, or to

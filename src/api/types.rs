@@ -211,6 +211,7 @@ pub(crate) fn hoist_inline_variants(types: &mut Types) {
                     write_only: false,
                     flatten: false,
                     constant: Some(serde_json::Value::String(variant.name.clone())),
+                    literal: None,
                 });
                 discriminator_defaults.insert(discriminator_field.clone(), variant.name.clone());
             }
@@ -485,28 +486,52 @@ pub(crate) fn set_discriminator_defaults(types: &mut Types) {
             }
         }
     }
-    for ((target, field), values) in values {
-        let Some(ty) = types.get_mut(&target) else {
+    for ((target, field), values) in &values {
+        let Some(ty) = types.get_mut(target) else {
             continue;
         };
         let TypeData::Struct { fields, .. } = &ty.data else {
             continue;
         };
-        let own = fields.iter().any(|f| f.name == field && !f.flatten);
-        if let (true, [value]) = (own, &values.into_iter().collect::<Vec<_>>()[..]) {
-            ty.discriminator_defaults.insert(field, value.clone());
+        let own = fields.iter().any(|f| &f.name == field && !f.flatten);
+        if let (true, [value]) = (own, &values.iter().collect::<Vec<_>>()[..]) {
+            ty.discriminator_defaults
+                .insert(field.clone(), (*value).clone());
         }
     }
-    // A required string field of one value is filled in like a discriminator.
-    for ty in types.values_mut() {
-        let TypeData::Struct { fields, .. } = &ty.data else {
+    // A string field of one value is typed as it, and filled in like a discriminator when
+    // required, unless a union tags the struct with another value (its name, say).
+    for (name, ty) in types.iter_mut() {
+        if let TypeData::StructEnum { fields, repr, .. } = &mut ty.data {
+            let variants = match repr {
+                StructEnumRepr::AdjacentlyTagged { variants, .. }
+                | StructEnumRepr::InternallyTagged { variants } => variants,
+            };
+            let inline = variants.iter_mut().filter_map(|v| match &mut v.content {
+                EnumVariantType::Struct { fields } => Some(fields),
+                _ => None,
+            });
+            for field in fields.iter_mut().chain(inline.flatten()) {
+                field.literal = field
+                    .constant
+                    .as_ref()
+                    .and_then(|c| c.as_str().map(str::to_owned));
+            }
+        }
+        let TypeData::Struct { fields, .. } = &mut ty.data else {
             continue;
         };
-        for field in fields
-            .iter()
-            .filter(|f| f.required && !f.nullable && !f.flatten)
-        {
-            if let Some(serde_json::Value::String(value)) = &field.constant {
+        for field in fields.iter_mut() {
+            let tags = values.get(&(name.clone(), field.name.clone()));
+            field.literal = match &field.constant {
+                Some(serde_json::Value::String(value))
+                    if tags.is_none_or(|tags| tags.iter().all(|tag| tag == value)) =>
+                {
+                    Some(value.clone())
+                }
+                _ => None,
+            };
+            if let (Some(value), true) = (&field.literal, field.required && !field.nullable) {
                 (ty.discriminator_defaults)
                     .entry(field.name.clone())
                     .or_insert_with(|| value.clone());
@@ -1748,6 +1773,7 @@ impl TypeData {
                 write_only: false,
                 flatten: true,
                 constant: None,
+                literal: None,
             });
         }
         let Self::Struct {
@@ -2012,8 +2038,11 @@ pub(crate) struct Field {
     pub(crate) flatten: bool,
     /// The only value of the field (`const` or a single-value `enum`), which can tell apart
     /// the variants of a union, and which SDKs fill in.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub(crate) constant: Option<serde_json::Value>,
+    /// The string `constant` the field is typed as, unless a union tags its struct otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) literal: Option<String>,
 }
 
 impl Field {
@@ -2065,6 +2094,7 @@ impl Field {
             write_only: metadata.write_only,
             flatten: false,
             constant: constant.filter(|_| !nullable),
+            literal: None,
         })
     }
 }
