@@ -2632,7 +2632,10 @@ impl FieldType {
                     "inline objects with properties must be named schemas"
                 );
                 match obj.additional_properties.map(|s| *s) {
-                    None | Some(Schema::Bool(_)) => Self::JsonObject,
+                    // An object of any properties, unlike `{}`, which is any JSON value.
+                    None | Some(Schema::Bool(_)) => Self::Map {
+                        value_ty: Arc::new(Self::JsonObject),
+                    },
                     Some(Schema::Object(schema_object)) => {
                         let value_ty = Arc::new(Self::from_schema_object_nullable(schema_object)?);
                         Self::Map { value_ty }

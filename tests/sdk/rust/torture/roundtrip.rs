@@ -91,7 +91,7 @@ fn dates_are_chrono_types() {
 
 #[test]
 fn required_nullable_fields_are_sent_as_null() {
-    let thing = Thing::new(json!({}), 1, Default::default(), "i", Kind::Alpha, Default::default(), "n", vec![]);
+    let thing = Thing::new(Default::default(), 1, Default::default(), "i", Kind::Alpha, Default::default(), "n", vec![]);
     let value = serde_json::to_value(&thing).unwrap();
     assert_eq!(value["nullable_required"], Value::Null);
     assert!(value.get("nullable_optional").is_none());
