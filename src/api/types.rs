@@ -1046,10 +1046,8 @@ fn promote_inline_enums_in_resource(
             promote_field_type(&mut param.r#type, &base, existing, new_types)?;
         }
         for param in &mut op.header_params {
-            if let Some(ty) = &mut param.r#type {
-                let base = format!("{}_{}", op_id, param.name);
-                promote_field_type(ty, &base, existing, new_types)?;
-            }
+            let base = format!("{}_{}", op_id, param.name);
+            promote_field_type(&mut param.r#type, &base, existing, new_types)?;
         }
         for (name, param) in &mut op.path_styles {
             if let Some(ty) = &mut param.r#type {

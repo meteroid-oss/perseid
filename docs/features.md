@@ -151,8 +151,8 @@ expand[]=a&expand[]=b                         # lists with `style: deepObject`
 | List | Repeated (`?tag=a&tag=b`), comma-separated with `explode: false` |
 | `pipeDelimited`, `spaceDelimited` list | `ids=a\|b\|c`, `ids=a b c`; repeated with `explode` |
 | `content: application/json` (query, path, header) | Typed by its schema, sent as compact JSON, percent-encoded where needed |
+| Header | Typed by its schema like a query parameter: numbers, booleans, dates, enums, lists (comma-separated) |
 | Cookie | Typed like a header, sent in one `Cookie` header, percent-encoded |
-| Header list | As the caller writes it |
 | Form body property | Follows its `encoding` (`style`, `explode`) |
 
 - A path with a query of its own, such as `/responses?beta=true`, keeps it.

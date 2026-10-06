@@ -162,6 +162,15 @@ def _compact_json(value: t.Any) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
+def header_value(value: object) -> str | None:
+    """A header or cookie value as text: a list comma-separated, ``None`` for none."""
+    if value is None or value is UNSET:
+        return None
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return ",".join(_serialize_scalar(item) for item in value)
+    return _serialize_scalar(value)
+
+
 def json_header(value: t.Any) -> str | None:
     """A ``content: application/json`` header value as compact JSON text."""
     if value is None or value is UNSET:

@@ -40,7 +40,7 @@ public sealed record {{ class_name }}
 {%- else %}
     /// <summary>The <c>{{ p.name | replace("&", "&amp;") | replace("<", "&lt;") }}</c> {{ "cookie" if p.cookie else "header" }}.</summary>
 {%- endif %}
-    public {% if p.required %}required {% endif %}{% if p.json %}{{ p.type.to_csharp() }}{% else %}string{% endif %}{% if not p.required %}?{% endif %} {{ m.member(p.ident, class_name) }} { get; init; }
+    public {% if p.required %}required {% endif %}{{ p.type.to_csharp() }}{% if not p.required %}?{% endif %} {{ m.member(p.ident, class_name) }} { get; init; }
 {%- endfor %}
 }
 {%- with fields = unions.fields, union_owner = class_name, type_names = [] %}{% include "types/unions.cs.jinja" %}{% endwith %}

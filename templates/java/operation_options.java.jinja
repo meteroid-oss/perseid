@@ -18,8 +18,7 @@
 {% set ns.types = ns.types + [union_cls] -%}
 {% set ns.unions = ns.unions + [[p.typed_union, union_cls]] -%}
 {% else -%}
-{#- Headers are text, but for `content: application/json` ones, typed and sent as JSON. -#}
-{% set ns.types = ns.types + [p.type.to_java() if loop.index0 < operation.query_params | length or p.json else "String"] -%}
+{% set ns.types = ns.types + [p.type.to_java()] -%}
 {% endif -%}
 {% endif -%}
 {% endfor -%}

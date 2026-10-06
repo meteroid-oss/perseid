@@ -34,7 +34,7 @@ use crate::{error::Result, models::*, Configuration};
     {% endif -%}
     {% endfor -%}
     {% for p in op.header_params -%}
-    {% set params.all = params.all + [(p, rust_type(p.type) if p.json else "String", "cookie" if p.cookie else "header")] -%}
+    {% set params.all = params.all + [(p, rust_type(p.type), "cookie" if p.cookie else "header")] -%}
     {% endfor -%}
     /// Query and header parameters of [`{{ resource_type_name }}::{{ op.name | to_rust_ident }}`]{% if required %}, built
     /// with the required ones by [`new`](Self::new){% endif %}.

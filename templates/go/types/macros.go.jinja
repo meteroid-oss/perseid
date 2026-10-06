@@ -380,18 +380,9 @@ func (u *{{ name }}) UnmarshalJSON(data []byte) error {
     {%- endif -%}
 {%- endmacro %}
 
-{#- The Go type of a header parameter: headers are strings, and anything else must fail
-    rather than be silently retyped. -#}
+{#- The Go type of a header or cookie parameter. -#}
 {% macro go_header_type(p) -%}
-    {%- if p.json -%}
-        {{ go_type(p.type) }}
-    {%- elif p.type is not defined -%}
-        string
-    {%- elif p.type.to_go() == "string" -%}
-        string
-    {%- else -%}
-        {{ panic("go codegen: unsupported header parameter type `" ~ p.type.to_go() ~ "` for header `" ~ p.name ~ "` - add explicit support in templates/go/types/macros.go.jinja") }}
-    {%- endif -%}
+    {{ go_type(p.type) }}
 {%- endmacro %}
 
 {% macro go_security(security) -%}

@@ -104,6 +104,11 @@ func (r *request) SetHeader(name, value string) {
 	r.headers.Set(name, value)
 }
 
+// SetHeaderCSV sets a list header, comma-separated (OpenAPI style: simple).
+func (r *request) SetHeaderCSV(name string, values []string) {
+	r.headers.Set(name, strings.Join(values, ","))
+}
+
 // SetJSONHeader sets a content: application/json header as compact JSON text.
 func (r *request) SetJSONHeader(name string, v any) {
 	text, err := compactJSON(v)

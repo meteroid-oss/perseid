@@ -110,8 +110,11 @@ from .common import (
 {%- if resource.operations | selectattr("path_styles") | list | length > 0 %}
     encode_path_param,
 {%- endif %}
-{%- set uses = namespace(json_header=false) %}
-{%- for op in resource.operations %}{% for p in op.header_params if p.json %}{% set uses.json_header = true %}{% endfor %}{% endfor %}
+{%- set uses = namespace(json_header=false, header_value=false) %}
+{%- for op in resource.operations %}{% for p in op.header_params %}{% if p.json %}{% set uses.json_header = true %}{% else %}{% set uses.header_value = true %}{% endif %}{% endfor %}{% endfor %}
+{%- if uses.header_value %}
+    header_value,
+{%- endif %}
 {%- if uses.json_header %}
     json_header,
 {%- endif %}
@@ -284,8 +287,7 @@ class {{ class_name }}({{ base_class }}):
         {{ py_ident(p.ident) }}: {{ unshadow(param_type(p)) }}{% if not p.required %} | None = None{% endif %},
 {%- endfor %}
 {%- for p in op.header_params if p.required == required_pass %}
-{%- set header_type = unshadow(py_type(p.type)) if p.json else "str" %}
-        {{ py_ident(p.ident) }}: {{ header_type }}{% if not p.required %} | None = None{% endif %},
+        {{ py_ident(p.ident) }}: {{ unshadow(py_type(p.type)) }}{% if not p.required %} | None = None{% endif %},
 {%- endfor %}
 {%- endfor %}
         {{ option("extra_headers") }}: t.Mapping[str, str] | None = None,
@@ -376,14 +378,14 @@ class {{ class_name }}({{ base_class }}):
 {%- if op.header_params | rejectattr("cookie") | list | length > 0 %}
                 header_params={
 {%- for p in op.header_params if not p.cookie %}
-                    {{ py_str(p.name) }}: {% if p.json %}json_header({{ py_ident(p.ident) }}){% else %}{{ py_ident(p.ident) }}{% endif %},
+                    {{ py_str(p.name) }}: {{ "json_header" if p.json else "header_value" }}({{ py_ident(p.ident) }}),
 {%- endfor %}
                 },
 {%- endif %}
 {%- if op.header_params | selectattr("cookie") | list | length > 0 %}
                 cookie_params={
 {%- for p in op.header_params if p.cookie %}
-                    {{ py_str(p.name) }}: {{ py_ident(p.ident) }},
+                    {{ py_str(p.name) }}: header_value({{ py_ident(p.ident) }}),
 {%- endfor %}
                 },
 {%- endif %}

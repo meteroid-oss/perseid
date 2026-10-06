@@ -5,7 +5,7 @@
 {% macro runtime(name) %}{{ "Runtime" ~ name if name in imported else name }}{% endmacro -%}
 {% macro runtime_import(name) %}{{ name }}{% if name in imported %} as Runtime{{ name }}{% endif %}{% endmacro -%}
 
-{#- The type of a path or header parameter, sent as text: schemas are given as their text. -#}
+{#- The type of a path parameter sent as text: schemas are given as their text. -#}
 {% macro text_type(type) -%}
     {%- if type.is_union() -%}
         {%- for v in type.union_variants() %}{% if not loop.first %} | {% endif %}{{ text_type(v.type) }}{% endfor -%}
@@ -77,7 +77,7 @@
         {% endfor -%}
         {% for p in op.header_params -%}
             /** Sent as the `{{ p.name }}` {{ "cookie" if p.cookie else "header" }}{% if p.json %}, as compact JSON{% endif %}. */
-            {{ p.ident | ident("camel") }}{% if not p.required %}?{% endif %}: {% if p.json and p.type is defined %}{{ m.js_type(p.type) }}{% else %}{{ text_type(p.schema_type) if p.schema_type is defined else "string" }}{% endif %}{% if not p.required %} | undefined{% endif %};
+            {{ p.ident | ident("camel") }}{% if not p.required %}?{% endif %}: {{ m.js_type(p.type) }}{% if not p.required %} | undefined{% endif %};
         {% endfor -%}
     }
 
@@ -242,7 +242,7 @@ export class {{ resource_type_name }} {
             {% for p in op.header_params -%}
                 {% set accessor %}options{% if not p.required %}?{% endif %}.{{ p.ident | ident("camel") }}{% endset -%}
                 {% if p.json -%}
-                request.setJsonHeaderParam({{ p.name | tojson }}, {% if p.type is defined and m.converted(p.type, true) %}{{ accessor }} != null ? {{ m.to_json("options." ~ (p.ident | ident("camel")), p.type) }} : undefined{% else %}{{ accessor }}{% endif %});
+                request.setJsonHeaderParam({{ p.name | tojson }}, {% if m.converted(p.type, true) %}{{ accessor }} != null ? {{ m.to_json("options." ~ (p.ident | ident("camel")), p.type) }} : undefined{% else %}{{ accessor }}{% endif %});
                 {% else -%}
                 request.set{{ "Cookie" if p.cookie else "Header" }}Param({{ p.name | tojson }}, {{ accessor }});
                 {% endif -%}

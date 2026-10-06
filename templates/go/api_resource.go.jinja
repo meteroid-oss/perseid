@@ -57,8 +57,8 @@ package {{ sdk.package_name }}
 {% for p in op.query_params if "uuid.UUID" in p.type.to_go() %}{% set ns.uuid = true %}{% endfor -%}
 {% for p in op.query_params if "json." in param_type(op, p) or param_union(op, p) %}{% set ns.json = true %}{% endfor -%}
 {% for p in op.header_params if p.json and "json." in go_header_type(p) %}{% set ns.json = true %}{% endfor -%}
-{% for p in op.header_params if p.json and "time." in go_header_type(p) %}{% set ns.time = true %}{% endfor -%}
-{% for p in op.header_params if p.json and "uuid." in go_header_type(p) %}{% set ns.uuid = true %}{% endfor -%}
+{% for p in op.header_params if "time." in go_header_type(p) %}{% set ns.time = true %}{% endfor -%}
+{% for p in op.header_params if "uuid." in go_header_type(p) %}{% set ns.uuid = true %}{% endfor -%}
 {% for p in op.path_params if p in op.path_styles and op.path_styles[p].type is defined %}{% if "json." in go_type(op.path_styles[p].type) %}{% set ns.json = true %}{% endif %}{% if "time." in go_type(op.path_styles[p].type) %}{% set ns.time = true %}{% endif %}{% endfor -%}
 {% for p in op.path_params if p in op.path_styles and op.path_styles[p].type is defined %}{% if "uuid." in go_type(op.path_styles[p].type) %}{% set ns.uuid = true %}{% endif %}{% endfor -%}
 {% endfor -%}
@@ -94,7 +94,7 @@ type {{ options_type_name }} struct {
 {% endif %}{{ go_export(p.ident) }} {% if param_union(op, p) or not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}*{% endif %}{{ param_type(op, p) }}
 {% endfor %}{% for p in optional_headers %}{% if optional_query or not loop.first %}
 {% endif %}// {{ go_export(p.ident) }} is sent as the {{ p.name }} {{ "cookie" if p.cookie else "header" }}.
-{{ go_export(p.ident) }} {% if not (p.json and (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object())) %}*{% endif %}{{ go_header_type(p) }}
+{{ go_export(p.ident) }} {% if not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}*{% endif %}{{ go_header_type(p) }}
 {% endfor %}}
 {% endif %}{% endfor %}
 {% for op in resource.operations %}{% for p in op.query_params if param_union(op, p) %}
@@ -193,11 +193,26 @@ type {{ resource_type_name }} struct {
 {%- for p in op.header_params %}
 {%- set field = go_arg(p.ident) if p.required else "options." ~ go_export(p.ident) %}
 {%- set setter = "SetCookie" if p.cookie else "SetHeader" %}
-{%- set collection = p.json and (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}
-{%- if p.required and not collection %}	req.{{ "SetJSONHeader" if p.json else setter }}({{ p.name | tojson }}, {{ field }})
-{% else %}	if {% if not p.required %}options != nil && {% endif %}{{ field }} != nil {
-		req.{{ "SetJSONHeader" if p.json else setter }}({{ p.name | tojson }}, {% if not p.json %}*{% endif %}{{ field }})
-	}
+{%- set list = not p.json and (p.type.is_list() or p.type.is_set()) %}
+{%- set collection = p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object() %}
+{%- set guard = "" if p.required and not collection else ("len(" ~ field ~ ") > 0" if list else field ~ " != nil") %}
+{%- set indent = "\t\t" if guard else "\t" %}
+{%- if not p.required %}	if options != nil && {{ guard }} {
+{% elif guard %}	if {{ guard }} {
+{% endif %}
+{%- if p.json %}{{ indent }}req.SetJSONHeader({{ p.name | tojson }}, {{ field }})
+{% elif list %}
+{%- set item_expr = go_query_scalar(p.type.inner_type(), "item") %}
+{%- if item_expr == "item" %}{{ indent }}req.SetHeaderCSV({{ p.name | tojson }}, {{ field }})
+{% else %}{{ indent }}vals := make([]string, 0, len({{ field }}))
+{{ indent }}for _, item := range {{ field }} {
+{{ indent }}	vals = append(vals, {{ item_expr }})
+{{ indent }}}
+{{ indent }}req.SetHeaderCSV({{ p.name | tojson }}, vals)
+{% endif %}
+{%- else %}{{ indent }}req.{{ setter }}({{ p.name | tojson }}, {{ go_query_scalar(p.type, field if p.required else "*" ~ field) }})
+{% endif %}
+{%- if guard %}	}
 {% endif %}
 {%- endfor %}
 {%- if op.stream_property is defined %}	enableStream(&{{ body_var }}.{{ go_export(op.stream_property) }})

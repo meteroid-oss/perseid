@@ -132,7 +132,7 @@ fn resolve_schema_refs_in_resource(resource: &mut Resource, string_alias_names: 
         for ty in op
             .header_params
             .iter_mut()
-            .flat_map(|p| p.r#type.iter_mut().chain(p.schema_type.iter_mut()))
+            .map(|p| &mut p.r#type)
             .chain(op.typed_path_params.iter_mut().map(|p| &mut p.r#type))
         {
             resolve_schema_ref_in_field_type_public(ty, string_alias_names);
@@ -209,11 +209,7 @@ pub(crate) fn request_and_response_roots(
                 .chain(op.multipart_fields.iter().map(|f| &f.field.r#type))
                 .chain(op.query_params.iter().map(|p| &p.r#type))
                 .chain(op.path_styles.values().filter_map(|p| p.r#type.as_ref()))
-                .chain(
-                    op.header_params
-                        .iter()
-                        .filter_map(|p| p.r#type.as_ref().or(p.schema_type.as_ref())),
-                );
+                .chain(op.header_params.iter().map(|p| &p.r#type));
             for ty in sent {
                 requests.extend(ty.referenced_schema());
                 requests.extend(ty.union_refs());
@@ -302,7 +298,7 @@ impl Resource {
             for ty in operation
                 .header_params
                 .iter_mut()
-                .flat_map(|p| p.r#type.iter_mut().chain(p.schema_type.iter_mut()))
+                .map(|p| &mut p.r#type)
                 .chain(
                     operation
                         .typed_path_params
@@ -400,9 +396,7 @@ impl Resource {
                 }
             }
             for param in &operation.header_params {
-                if let Some(name) = param.r#type.as_ref().and_then(FieldType::referenced_schema) {
-                    res.insert(name);
-                }
+                res.extend(param.r#type.referenced_schema());
             }
             if let Some(name) = &operation.request_body_schema_name {
                 res.insert(name);
@@ -581,9 +575,7 @@ pub(crate) struct Operation {
     /// Path parameters with their types, in `path_params` order.
     #[serde(default)]
     typed_path_params: Vec<TypedParam>,
-    /// Header parameters.
-    ///
-    /// Only string-typed parameters are currently supported.
+    /// Header and cookie parameters.
     pub(crate) header_params: Vec<HeaderParam>,
     /// Query parameters.
     pub(crate) query_params: Vec<QueryParam>,
@@ -793,27 +785,24 @@ impl Operation {
                     enforce_string_parameter(&parameter_data, true)
                         .with_context(|| format!("header parameter `{name}`"))?;
                     // A JSON `content` header is typed by its schema and sent as compact JSON.
-                    let r#type = match &parameter_data.format {
+                    let json = matches!(&parameter_data.format,
                         openapi::ParameterSchemaOrContent::Content(content)
-                            if content.keys().any(|media| is_json_media_type(media)) =>
-                        {
-                            let format = parameter_data.format.clone();
-                            Some(
-                                parameter_value(format, true)
-                                    .with_context(|| format!("header parameter `{name}`"))?
-                                    .0,
-                            )
+                            if content.keys().any(|media| is_json_media_type(media)));
+                    let r#type = match json {
+                        true => {
+                            parameter_value(parameter_data.format, true)
+                                .with_context(|| format!("header parameter `{name}`"))?
+                                .0
                         }
-                        _ => None,
+                        false => header_type(parameter_data.format),
                     };
                     header_params.push(HeaderParam {
                         ident: parameter_data.name.clone(),
                         name: parameter_data.name,
                         required: parameter_data.required,
                         cookie: false,
-                        json: r#type.is_some(),
+                        json,
                         r#type,
-                        schema_type: FieldType::from_openapi(parameter_data.format).ok(),
                     });
                 }
                 // Cookie parameters are typed like headers and sent in the one `Cookie` header.
@@ -829,8 +818,7 @@ impl Operation {
                         required: parameter_data.required,
                         cookie: true,
                         json: false,
-                        r#type: None,
-                        schema_type: FieldType::from_openapi(parameter_data.format).ok(),
+                        r#type: header_type(parameter_data.format),
                     });
                 }
                 openapi::Parameter::Query {
@@ -1522,8 +1510,25 @@ fn is_text_type(ty: &FieldType, schemas: &IndexMap<String, openapi::SchemaObject
     )
 }
 
+/// The type of a header or cookie: its schema's, with unions and untyped values as text.
+fn header_type(format: openapi::ParameterSchemaOrContent) -> FieldType {
+    fn text(ty: FieldType) -> FieldType {
+        match ty {
+            FieldType::Union { .. } | FieldType::JsonObject => FieldType::String,
+            FieldType::List { inner } => FieldType::List {
+                inner: Arc::new(text((*inner).clone())),
+            },
+            FieldType::Set { inner } => FieldType::Set {
+                inner: Arc::new(text((*inner).clone())),
+            },
+            ty => ty,
+        }
+    }
+    FieldType::from_openapi(format).map_or(FieldType::String, text)
+}
+
 /// Path and header parameters are sent as text: scalars, unions of them and, in headers, lists
-/// (comma-separated by the caller) or `content` values (serialized by the caller).
+/// (comma-separated) or `content` values (compact JSON).
 fn enforce_string_parameter(
     parameter_data: &openapi::ParameterData,
     is_header: bool,
@@ -1829,25 +1834,13 @@ pub(crate) struct HeaderParam {
     /// A cookie parameter: sent in the `Cookie` header, percent-encoded, with the others.
     #[serde(default)]
     cookie: bool,
-    /// A `content: application/json` header: sent as compact JSON text, typed by `type`.
+    /// A `content: application/json` header: sent as compact JSON text.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     json: bool,
-    /// The type of a `content: application/json` header, none for a plain one, which SDKs take
-    /// as text.
-    #[serde(
-        default,
-        serialize_with = "serialize_optional_field_type",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub(crate) r#type: Option<FieldType>,
-    /// The schema's type, none for a `content` header. Not `type`, which templates read as
-    /// "not a plain string".
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "serialize_optional_field_type"
-    )]
-    schema_type: Option<FieldType>,
+    /// The type of the value, like a query parameter's: lists are comma-separated, unions are
+    /// text.
+    #[serde(serialize_with = "serialize_field_type")]
+    pub(crate) r#type: FieldType,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -2438,15 +2431,20 @@ mod tests {
             "schema": { "type": "array", "items": { "type": "string" } } });
         let op = parameter(list).unwrap();
         assert_eq!(op.header_params[0].name, "beta");
-        assert!(matches!(
-            op.header_params[0].schema_type,
-            Some(FieldType::List { .. })
-        ));
+        assert!(matches!(op.header_params[0].r#type, FieldType::List { .. }));
         let filter = json!({ "name": "X-Filter", "in": "header",
             "content": { "application/json": { "schema": { "type": "object" } } } });
         let op = parameter(filter).unwrap();
         assert_eq!(op.header_params[0].name, "X-Filter");
-        assert!(op.header_params[0].schema_type.is_none());
+        assert!(op.header_params[0].json);
+        let either = json!({ "name": "X-Either", "in": "header",
+            "schema": { "anyOf": [{ "type": "integer" }, { "type": "string" }] } });
+        let op = parameter(either).unwrap();
+        assert!(matches!(op.header_params[0].r#type, FieldType::String));
+        let limit = json!({ "name": "session", "in": "cookie", "schema": { "type": "integer" } });
+        let op = parameter(limit).unwrap();
+        assert!(op.header_params[0].cookie);
+        assert!(matches!(op.header_params[0].r#type, FieldType::Int64));
         let nested = json!({ "name": "rows", "in": "header", "schema": { "type": "array",
             "items": { "type": "array", "items": { "type": "string" } } } });
         assert!(parameter(nested).is_err());

@@ -1,7 +1,7 @@
 {% import "types/macros.ts.jinja" as m -%}
 {% import "docs.jinja" as docs -%}
 {% set _ = set_summary_filename("api.md") -%}
-{#- The type of a path or header parameter, sent as text, as the resource classes type it. -#}
+{#- The type of a path parameter sent as text, as the resource classes type it. -#}
 {% macro text_type(type) -%}
     {%- if type.is_union() -%}
         {%- for v in type.union_variants() %}{% if not loop.first %} | {% endif %}{{ text_type(v.type) }}{% endfor -%}

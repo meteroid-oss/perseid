@@ -342,8 +342,9 @@ impl Request {
         self
     }
 
-    pub fn with_header_param(mut self, name: &'static str, value: &str) -> Self {
-        match header(name, value) {
+    /// A header parameter, a list comma-separated.
+    pub fn with_header_param(mut self, name: &'static str, value: &impl QueryParamValue) -> Self {
+        match header(name, &value.encode()) {
             Ok((name, value)) => {
                 self.headers.insert(name, value);
             }
@@ -366,7 +367,11 @@ impl Request {
         self
     }
 
-    pub fn with_optional_header_param(self, name: &'static str, value: Option<String>) -> Self {
+    pub fn with_optional_header_param(
+        self,
+        name: &'static str,
+        value: Option<impl QueryParamValue>,
+    ) -> Self {
         match value {
             Some(value) => self.with_header_param(name, &value),
             None => self,
@@ -374,12 +379,16 @@ impl Request {
     }
 
     /// A cookie parameter, sent in the single `Cookie` header with the other cookies.
-    pub fn with_cookie_param(mut self, name: &'static str, value: &str) -> Self {
-        self.cookies.push((name.to_owned(), value.to_owned()));
+    pub fn with_cookie_param(mut self, name: &'static str, value: &impl QueryParamValue) -> Self {
+        self.cookies.push((name.to_owned(), value.encode()));
         self
     }
 
-    pub fn with_optional_cookie_param(self, name: &'static str, value: Option<String>) -> Self {
+    pub fn with_optional_cookie_param(
+        self,
+        name: &'static str,
+        value: Option<impl QueryParamValue>,
+    ) -> Self {
         match value {
             Some(value) => self.with_cookie_param(name, &value),
             None => self,

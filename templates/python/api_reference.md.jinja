@@ -63,7 +63,7 @@
         {%- if p.required %}{% set args.required = args.required + [py_ident(p.ident) ~ ": " ~ param_type(p)] %}{% else %}{% set args.optional = args.optional + [py_ident(p.ident) ~ "=..."] %}{% endif -%}
     {%- endfor -%}
     {%- for p in op.header_params -%}
-        {%- if p.required %}{% set args.required = args.required + [py_ident(p.ident) ~ ": " ~ (py_type(p.type) if p.json else "str")] %}{% else %}{% set args.optional = args.optional + [py_ident(p.ident) ~ "=..."] %}{% endif -%}
+        {%- if p.required %}{% set args.required = args.required + [py_ident(p.ident) ~ ": " ~ py_type(p.type)] %}{% else %}{% set args.optional = args.optional + [py_ident(p.ident) ~ "=..."] %}{% endif -%}
     {%- endfor -%}
     {%- if args.required or args.optional %}{% set args.list = args.list + ["*"] + args.required + args.optional %}{% endif -%}
     {%- if op.response_body_json_type is defined -%}
