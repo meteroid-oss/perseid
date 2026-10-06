@@ -14,7 +14,7 @@ use crate::{
 };
 
 /// Gives the SDK at `dir` its skeleton when it has no package manifest: manifest, README, error
-/// types. The README's examples call operations of `spec`.
+/// types. The README's examples call operations of `spec`. Gives it a LICENSE when it has none.
 pub fn bootstrap(
     config: &Config,
     root: &Path,
@@ -30,6 +30,14 @@ pub fn bootstrap(
         "csharp" => &[],
         _ => &["build.gradle", "build.gradle.kts", "pom.xml"],
     };
+    let mut created = Vec::new();
+    if !has_license(dir)
+        && let Some(text) = license_file(config, sdk, dir, this_year())
+    {
+        let target = dir.join("LICENSE");
+        fsx::write(&target, &text)?;
+        created.push(target);
+    }
     let dotnet = || {
         std::fs::read_dir(dir).is_ok_and(|entries| {
             entries
@@ -38,7 +46,7 @@ pub fn bootstrap(
         })
     };
     if manifests.iter().any(|m| dir.join(m).exists()) || (sdk.language == "csharp" && dotnet()) {
-        return Ok(vec![]);
+        return Ok(created);
     }
     let examples = tracing::subscriber::with_default(tracing_subscriber::registry(), || {
         crate::spec::api(spec, &config.filters_for(sdk)).map(|mut api| {
@@ -51,7 +59,6 @@ pub fn bootstrap(
         overrides: Some(config.overrides_dir(root)),
         examples,
     };
-    let mut created = Vec::new();
     for (path, content) in skeleton(config, sdk, dir, &docs)? {
         let target = dir.join(path);
         if !target.exists() {
@@ -60,6 +67,44 @@ pub fn bootstrap(
         }
     }
     Ok(created)
+}
+
+fn has_license(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            let name = e.file_name().to_string_lossy().to_uppercase();
+            ["LICENSE", "LICENCE", "COPYING"]
+                .iter()
+                .any(|l| name.starts_with(l))
+        })
+    })
+}
+
+/// The text of the license perseid.toml names, when it is one perseid ships: its copyright line
+/// names the authors, or the API.
+fn license_file(config: &Config, sdk: &Sdk, dir: &Path, year: i64) -> Option<Vec<u8>> {
+    let license = config.package.license.as_deref()?.trim();
+    let (_, text) = assets::under("scaffold/licenses").find(|(id, _)| *id == license)?;
+    let mut context = config.context(sdk, dir);
+    package_metadata(config, &mut context);
+    let holder = context["authors_names"].as_str().unwrap_or(&config.name);
+    let text = String::from_utf8_lossy(text)
+        .replace("@@YEAR@@", &year.to_string())
+        .replace("@@HOLDER@@", holder);
+    Some(text.into_bytes())
+}
+
+/// The current year, from the mean length of a Gregorian year: off by a day at most.
+fn this_year() -> i64 {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    1970 + (seconds / 31_556_952) as i64
+}
+
+/// Whether `perseid generate` writes the text of `license` as the SDKs' LICENSE.
+pub fn ships_license(license: &str) -> bool {
+    assets::under("scaffold/licenses").any(|(id, _)| id == license.trim())
 }
 
 /// What the README is rendered with: the templates overriding the built-in ones, whose
@@ -147,7 +192,7 @@ fn package(
 }
 
 /// `path` under the folder `dir`, relative to the repository root.
-fn package_path(dir: &str, path: &str) -> String {
+pub(crate) fn package_path(dir: &str, path: &str) -> String {
     let path = path.trim_start_matches("./");
     match (dir, path) {
         ("" | ".", path) => path.to_owned(),
@@ -157,15 +202,45 @@ fn package_path(dir: &str, path: &str) -> String {
 }
 
 pub const RELEASE_WORKFLOW: &str = ".github/workflows/sdk-release.yml";
+pub const CI_WORKFLOW: &str = ".github/workflows/sdk-ci.yml";
 
-/// The release workflow of a repository whose default branch is `branch`. Its actions follow `@v0`,
-/// so perseid releases don't change it: it is only written with the user's own credentials.
-pub fn release_workflow(branch: &str) -> Vec<u8> {
+/// A workflow of the repositories holding SDKs, on their default `branch`. Its actions follow
+/// `@v0`, so perseid releases don't change it: it is only written with the user's own credentials.
+fn repository_workflow(path: &str, branch: &str) -> String {
     let (_, template) = assets::under("scaffold/release")
-        .find(|(path, _)| *path == RELEASE_WORKFLOW)
-        .expect("the embedded release workflow");
-    String::from_utf8_lossy(template)
-        .replace("\"@@BRANCH@@\"", &Value::from(branch).to_string())
+        .find(|(file, _)| *file == path)
+        .expect("the embedded workflow");
+    String::from_utf8_lossy(template).replace("\"@@BRANCH@@\"", &Value::from(branch).to_string())
+}
+
+/// The release workflow of a repository whose default branch is `branch`.
+pub fn release_workflow(branch: &str) -> Vec<u8> {
+    repository_workflow(RELEASE_WORKFLOW, branch).into_bytes()
+}
+
+/// The workflow testing the SDKs at `paths` of a repository whose default branch is `branch`: on
+/// changes under them only, unless one is the whole repository.
+pub fn ci_workflow(branch: &str, paths: &[String]) -> Vec<u8> {
+    let list = |items: Vec<String>| Value::from(items).to_string().replace(',', ", ");
+    let watched = match paths.iter().any(|p| p == ".") {
+        true => None,
+        false => Some(list(
+            paths
+                .iter()
+                .map(|p| format!("{p}/**"))
+                .chain([CI_WORKFLOW.to_owned()])
+                .collect(),
+        )),
+    };
+    let mut out = String::new();
+    for line in repository_workflow(CI_WORKFLOW, branch).split_inclusive('\n') {
+        match &watched {
+            None if line.contains("\"@@PATHS@@\"") => {}
+            _ => out.push_str(line),
+        }
+    }
+    out.replace("[\"@@PATHS@@\"]", watched.as_deref().unwrap_or_default())
+        .replace("[\"@@SDKS@@\"]", &list(paths.to_vec()))
         .into_bytes()
 }
 

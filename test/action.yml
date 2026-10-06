@@ -1,0 +1,93 @@
+name: Perseid test
+description: Build one SDK and run its tests, the ones perseid generates and your own
+branding:
+  icon: check-circle
+  color: purple
+
+inputs:
+  path:
+    description: SDK directory, relative to the repository root
+    default: .
+
+outputs:
+  language:
+    description: Detected SDK language
+    value: ${{ steps.detect.outputs.language }}
+
+runs:
+  using: composite
+  steps:
+    - id: detect
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        SDK_PATH: ${{ inputs.path }}
+      run: |
+        for pair in Cargo.toml:rust package.json:typescript pyproject.toml:python go.mod:go gradle.properties:java build.gradle:java; do
+          if [ -f "${pair%%:*}" ]; then echo "language=${pair#*:}" >> "$GITHUB_OUTPUT"; exit 0; fi
+        done
+        if compgen -G '*.sln' > /dev/null; then echo "language=csharp" >> "$GITHUB_OUTPUT"; exit 0; fi
+        echo "::error::no package manifest in $SDK_PATH"
+        exit 1
+
+    - if: steps.detect.outputs.language == 'rust'
+      uses: dtolnay/rust-toolchain@stable
+    - if: steps.detect.outputs.language == 'rust'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: cargo test
+
+    - if: steps.detect.outputs.language == 'typescript'
+      uses: actions/setup-node@v5
+      with:
+        node-version: lts/*
+    - if: steps.detect.outputs.language == 'typescript'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: |
+        if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+        npx tsc --noEmit
+        npm run test --if-present
+
+    - if: steps.detect.outputs.language == 'python'
+      uses: astral-sh/setup-uv@v6
+    - if: steps.detect.outputs.language == 'python'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: |
+        uv venv && uv pip install -e .
+        if [ -d tests ]; then .venv/bin/python -m unittest discover -s tests; fi
+
+    - if: steps.detect.outputs.language == 'go'
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ inputs.path }}/go.mod
+        cache: false
+    - if: steps.detect.outputs.language == 'go'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: go vet ./... && go test ./...
+
+    - if: steps.detect.outputs.language == 'java'
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - if: steps.detect.outputs.language == 'java'
+      uses: gradle/actions/setup-gradle@v4
+    - if: steps.detect.outputs.language == 'java'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: |
+        gradle=gradle
+        [ -x gradlew ] && gradle=./gradlew
+        $gradle build --no-daemon
+
+    - if: steps.detect.outputs.language == 'csharp'
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+    - if: steps.detect.outputs.language == 'csharp'
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      run: dotnet test

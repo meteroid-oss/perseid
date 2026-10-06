@@ -834,11 +834,20 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
         "acme/petstore-typescript",
         "acme/petstore-python",
     ] {
-        let workflow = &github.files(repo, "main")[".github/workflows/sdk-release.yml"];
+        let files = github.files(repo, "main");
+        let workflow = &files[".github/workflows/sdk-release.yml"];
         assert!(
             workflow.contains("uses: meteroid-oss/perseid/release@v0\n"),
             "{workflow}"
         );
+        let ci = &files[".github/workflows/sdk-ci.yml"];
+        assert!(
+            ci.contains("uses: meteroid-oss/perseid/test@v0\n")
+                && ci.contains("path: [\".\"]\n")
+                && !ci.contains("paths:"),
+            "an SDK at the root is tested on every change: {ci}"
+        );
+        keep("root-sdk-ci.yml", ci);
     }
     assert!(
         !github
@@ -856,7 +865,8 @@ fn app_opens_the_pull_requests_of_one_repository_per_language() {
         github.writes(before).iter().all(|w| w.contains("/actions/")
             || w.contains("app-manifests")
             || w.contains("/login/")
-            || w.ends_with("/contents/.github/workflows/sdk-release.yml")),
+            || w.ends_with("/contents/.github/workflows/sdk-release.yml")
+            || w.ends_with("/contents/.github/workflows/sdk-ci.yml")),
         "{:?}",
         github.writes(before)
     );
@@ -1209,7 +1219,8 @@ fn the_perseid_app_needs_no_secret_anywhere() {
         ),
         "✓ The perseid App is installed on petstore-sdks, petstore-python, petstore-typescript",
         "✓ acme/petstore-typescript: committed .github/workflows/sdk-release.yml to `main`",
-        "✓ acme/petstore-python: .github/workflows/sdk-release.yml is in a pull request, to merge: https://github.com/acme/petstore-python/pull/1",
+        "✓ acme/petstore-python: .github/workflows/sdk-ci.yml is in a pull request, to merge: https://github.com/acme/petstore-python/pull/1",
+        "✓ acme/petstore-python: .github/workflows/sdk-release.yml is in a pull request, to merge: https://github.com/acme/petstore-python/pull/2",
     ] {
         assert!(out.contains(line), "{line}\n{out}");
     }
@@ -1248,9 +1259,9 @@ fn the_perseid_app_needs_no_secret_anywhere() {
         ) && out.contains(
             "is in a pull request, to merge: https://github.com/acme/petstore-python/pull/1"
         ),
-        "the pull request is updated, not opened again: {out}"
+        "the pull requests are updated, not opened again: {out}"
     );
-    assert_eq!(server.lock().unwrap().pulls.len(), 1);
+    assert_eq!(server.lock().unwrap().pulls.len(), 2);
 
     server.lock().unwrap().hosted_everywhere = true;
     let (code, out) = perseid(sdks.path(), sdks_bin.path(), port, &["status"], "", &TOKEN);
@@ -1275,7 +1286,7 @@ fn the_perseid_app_needs_no_secret_anywhere() {
     for expected in [
         "→ perseid-push.yml pushes as the perseid App, installed on acme/petstore-sdks, whose perseid.toml names acme/petstore as its source.",
         &format!("  + acme/petstore-sdks/perseid.toml: `{line}`, through a pull request"),
-        "✓ acme/petstore-sdks: perseid.toml is in a pull request, to merge: https://github.com/acme/petstore-sdks/pull/2",
+        "✓ acme/petstore-sdks: perseid.toml is in a pull request, to merge: https://github.com/acme/petstore-sdks/pull/3",
         "2. Merge the pull request adding `source` to the perseid.toml of acme/petstore-sdks",
     ] {
         assert!(out.contains(expected), "{expected}\n{out}");
@@ -1598,7 +1609,7 @@ fn init_completes_an_existing_sdks_repository_receiving_the_spec() {
         "acme/petstore-sdks ──PRs──▶ acme/petstore-sdks (ts/)",
         "! acme/petstore-sdks: perseid would overwrite files it didn't generate, and stops instead: ts/src/index.ts",
         "! .github/workflows/sdk-release.yml is yours: check it runs release-please on `main`",
-        "! .github/workflows/sdks.yml is not on `main` of acme/petstore-sdks yet: commit and push",
+        "! .github/workflows/sdks.yml, .github/workflows/sdk-ci.yml are not on `main` of acme/petstore-sdks yet: commit and push",
     ] {
         assert!(out.contains(line), "{line}\n{out}");
     }
@@ -1697,6 +1708,15 @@ fn init_writes_the_release_files_at_the_root_of_a_repository_holding_perseid_tom
     let workflow = read(".github/workflows/sdk-release.yml");
     keep("subfolder-sdk-release.yml", &workflow);
     assert!(workflow.contains("branches: [\"trunk\"]\n"), "{workflow}");
+    let ci = read(".github/workflows/sdk-ci.yml");
+    keep("subfolder-sdk-ci.yml", &ci);
+    assert!(
+        ci.contains("path: [\"api/typescript\", \"api/go\"]\n")
+            && ci.contains(
+                "paths: [\"api/typescript/**\", \"api/go/**\", \".github/workflows/sdk-ci.yml\"]\n"
+            ),
+        "{ci}"
+    );
     assert!(
         read(".github/workflows/sdks.yml").contains("working-directory: api\n"),
         "sdks.yml runs perseid in api/"

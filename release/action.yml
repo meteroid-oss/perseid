@@ -95,7 +95,8 @@ runs:
       run: |
         branch=$(jq -r .headBranchName <<< "$PR")
         for workflow in $WORKFLOWS; do
-          gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$branch"
+          gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$branch" ||
+            echo "::warning::$workflow wasn't dispatched on $branch: does it exist, with \`on: workflow_dispatch\`?"
         done
 
     # The pushed commit came from a pull request labeled by `perseid generate --auto-merge`. A merge

@@ -29,10 +29,6 @@ fn project_from(fixture: &str, languages: &[&str]) -> tempfile::TempDir {
     .unwrap();
     let (ok, out) = perseid(dir.path(), &["init", "--sdks", &languages.join(",")]);
     assert!(ok, "{out}");
-    let tables: String = languages.iter().map(|l| format!("\n[{l}]\n")).collect();
-    let config = dir.path().join("perseid.toml");
-    let text = fs::read_to_string(&config).unwrap();
-    fs::write(&config, text + &tables).unwrap();
     dir
 }
 
@@ -317,7 +313,7 @@ fn webhooks_verifier_is_opt_in() {
     let toml = fs::read_to_string(&config).unwrap();
     fs::write(
         &config,
-        toml.replacen("\n[rust]", "webhooks = true\n\n[rust]", 1),
+        toml.replacen("\n[metadata]", "webhooks = true\n\n[metadata]", 1),
     )
     .unwrap();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
@@ -2134,6 +2130,70 @@ fn init_fills_package_metadata_from_the_spec() {
             && csproj.contains("<Authors>Pet Team</Authors>"),
         "{csproj}"
     );
+    assert!(
+        config.contains("\n[typescript]\npackage = \"petstore\"\n")
+            && config.contains("\n[java]\npackage = \"com.example.pets.petstore\"\n"),
+        "each SDK names its package: {config}"
+    );
+    for sdk in ["rust", "typescript", "python", "java", "csharp"] {
+        let license = read(&format!("{sdk}/LICENSE"));
+        assert!(
+            license.starts_with("MIT License\n\nCopyright (c) 20")
+                && license.contains(" Pet Team\n"),
+            "{license}"
+        );
+    }
+    fs::write(dir.path().join("rust/LICENSE"), "Mine\n").unwrap();
+    fs::remove_file(dir.path().join("python/LICENSE")).unwrap();
+    fs::write(dir.path().join("python/LICENSE.md"), "Mine\n").unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    assert_eq!(read("rust/LICENSE"), "Mine\n");
+    assert!(!dir.path().join("python/LICENSE").exists());
+}
+
+#[test]
+fn init_takes_the_license_and_comments_the_metadata_it_lacks() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        "tests/fixtures/petstore.yaml",
+        dir.path().join("openapi.yaml"),
+    )
+    .unwrap();
+    let init = ["init", "--sdks", "go", "--license", "Apache-2.0"];
+    let (ok, out) = perseid(dir.path(), &init);
+    assert!(ok, "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(
+        config.contains("\n[metadata]\n# description = \"Petstore API client\"\nlicense = \"Apache-2.0\"\n# homepage = \"https://example.com\"\n")
+            && config.ends_with("\n[go]\npackage = \"petstore\"\n"),
+        "{config}"
+    );
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let license = fs::read_to_string(dir.path().join("go/LICENSE")).unwrap();
+    assert!(license.contains("Apache License\n"), "{license}");
+
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        "tests/fixtures/petstore.yaml",
+        dir.path().join("openapi.yaml"),
+    )
+    .unwrap();
+    let (ok, out) = perseid(
+        dir.path(),
+        &["init", "--sdks", "go", "--license", "\"MIT\""],
+    );
+    assert!(
+        !ok && out.contains("isn't an SPDX license expression"),
+        "{out}"
+    );
+    assert!(!dir.path().join("perseid.toml").exists());
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "go"]);
+    assert!(
+        ok && out.contains("! no license: the SDKs get no LICENSE"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -2205,10 +2265,7 @@ fn rust_timeout_stream_and_error_docs_follow_the_config() {
 fn typescript_types_unions_errors_and_the_default_timeout() {
     let dir = project_from("realworld.yaml", &["typescript"]);
     edit_config(dir.path(), |text| {
-        text.replace(
-            "[typescript]",
-            "timeout = 15\nwebhooks = true\n[typescript]",
-        )
+        text.replace("[metadata]", "timeout = 15\nwebhooks = true\n[metadata]")
     });
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
@@ -2546,7 +2603,7 @@ fn csharp_types_unions_errors_and_timeout() {
     let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
     fs::write(
         dir.path().join("perseid.toml"),
-        config.replacen("\n[csharp]", "timeout = 15\n\n[csharp]", 1),
+        config.replacen("\n[metadata]", "timeout = 15\n\n[metadata]", 1),
     )
     .unwrap();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);

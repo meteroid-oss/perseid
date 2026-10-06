@@ -15,13 +15,11 @@ use super::{
     api::GitHub,
     app,
     bootstrap::{self, File},
-    files, git, hosted, join,
-    layout::{self, SDKS_WORKFLOW},
-    link, relative, secrets, toplevel,
+    files, git, hosted, join, layout, link, relative, secrets, toplevel,
 };
 use crate::{
     config::{Config, Source},
-    scaffold::RELEASE_WORKFLOW,
+    scaffold::{CI_WORKFLOW, RELEASE_WORKFLOW},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -371,9 +369,8 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
         }
         plan_hosted(api, plan, &owner, &repos)?;
     }
-    if hub.config.release != Some(false) {
-        plan_release_workflows(api, plan, &sdks, &repos)?;
-    }
+    let release = hub.config.release != Some(false);
+    plan_repository_workflows(api, plan, &sdks, &repos, release)?;
     let expected = super::files::expected(&hub.config, &hub.local.1)?;
     if expected.branch != hub_base {
         plan.warnings.push(format!(
@@ -384,8 +381,7 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
     let (mut stale, mut unpushed) = (Vec::new(), Vec::new());
     for (path, content) in &expected.files {
         let here = std::fs::read(expected.top.join(path)).ok();
-        let workflow = path == SDKS_WORKFLOW || path == RELEASE_WORKFLOW;
-        if workflow && !files::owned(here.as_deref()) {
+        if files::is_workflow(path) && !files::owned(here.as_deref()) {
             plan.warnings.push(files::kept(path, &hub_base));
             continue;
         }
@@ -462,53 +458,75 @@ fn plan_hosted(api: &GitHub, plan: &mut Plan, owner: &str, repos: &[String]) -> 
     Ok(())
 }
 
-/// sdk-release.yml in each SDK repository among `repos`, committed with the user's credentials:
-/// the SDK pull requests never write workflows.
-fn plan_release_workflows(
+/// sdk-ci.yml, and sdk-release.yml unless `release` is off, in each SDK repository among `repos`,
+/// committed with the user's credentials: the SDK pull requests never write workflows.
+fn plan_repository_workflows(
     api: &GitHub,
     plan: &mut Plan,
     sdks: &[crate::config::Sdk],
     repos: &[String],
+    release: bool,
 ) -> Result<()> {
     for repo in repos {
-        if !sdks.iter().any(|s| s.remote() == Some(repo.as_str())) {
+        let paths: Vec<String> = sdks
+            .iter()
+            .filter(|s| s.remote() == Some(repo.as_str()))
+            .map(|s| s.path.clone())
+            .collect();
+        if paths.is_empty() {
             continue;
         }
         let info = api.get(&format!("/repos/{repo}"))?;
         let base = bootstrap::default_branch(&info);
-        let expected = crate::scaffold::release_workflow(&base);
-        let current = api.raw(repo, &base, RELEASE_WORKFLOW)?;
-        if current.as_deref() == Some(expected.as_slice()) {
+        let mut workflows = vec![(CI_WORKFLOW, crate::scaffold::ci_workflow(&base, &paths))];
+        if release {
+            workflows.push((RELEASE_WORKFLOW, crate::scaffold::release_workflow(&base)));
+        }
+        for (path, expected) in workflows {
+            let (kind, purpose, body) = match path {
+                CI_WORKFLOW => (
+                    "ci",
+                    "test",
+                    "builds the SDKs and runs their tests on pull requests.",
+                ),
+                _ => (
+                    "release",
+                    "release",
+                    "runs release-please on the SDKs, then publishes the released ones.",
+                ),
+            };
+            let current = api.raw(repo, &base, path)?;
+            if current.as_deref() == Some(expected.as_slice()) {
+                plan.add(Mark::Keep, format!("{repo}: {path} up to date"), None);
+                continue;
+            }
+            if current.is_some() && !files::owned(current.as_deref()) {
+                plan.warnings
+                    .push(format!("{repo}: {}", files::kept(path, &base)));
+                continue;
+            }
+            let (mark, message) = match current {
+                Some(_) => (
+                    Mark::Change,
+                    format!("ci: update the perseid {kind} workflow"),
+                ),
+                None => (Mark::Add, format!("ci: {purpose} the SDK with perseid")),
+            };
             plan.add(
-                Mark::Keep,
-                format!("{repo}: {RELEASE_WORKFLOW} up to date"),
-                None,
+                mark,
+                format!("{repo}: {path}, committed with your credentials"),
+                Some(Action::Commit(Box::new(hosted::Commit {
+                    repo: repo.clone(),
+                    base: base.clone(),
+                    path: path.to_owned(),
+                    content: expected,
+                    message,
+                    branch: format!("perseid/{kind}-workflow"),
+                    body: format!("Written by `perseid sync`: {body}"),
+                    direct: true,
+                }))),
             );
-            continue;
         }
-        if current.is_some() && !files::owned(current.as_deref()) {
-            plan.warnings
-                .push(format!("{repo}: {}", files::kept(RELEASE_WORKFLOW, &base)));
-            continue;
-        }
-        let (mark, message) = match current {
-            Some(_) => (Mark::Change, "ci: update the perseid release workflow"),
-            None => (Mark::Add, "ci: release the SDK with perseid"),
-        };
-        plan.add(
-            mark,
-            format!("{repo}: {RELEASE_WORKFLOW}, committed with your credentials"),
-            Some(Action::Commit(Box::new(hosted::Commit {
-                repo: repo.clone(),
-                base,
-                path: RELEASE_WORKFLOW.to_owned(),
-                content: expected,
-                message: message.to_owned(),
-                branch: "perseid/release-workflow".to_owned(),
-                body: "Written by `perseid sync`: runs release-please on the SDKs, then publishes the released ones.".to_owned(),
-                direct: true,
-            }))),
-        );
     }
     Ok(())
 }

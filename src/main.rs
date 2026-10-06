@@ -70,6 +70,9 @@ enum Command {
         /// API base URL (default: first server of the spec).
         #[arg(long)]
         base_url: Option<String>,
+        /// SPDX license of the SDKs, such as MIT or Apache-2.0 (default: the spec's, else asked).
+        #[arg(long)]
+        license: Option<String>,
     },
     /// Generate the SDKs perseid.toml lists, from its spec, starting each from its package skeleton.
     Generate {
@@ -259,6 +262,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             spec,
             name,
             base_url,
+            license,
         } => {
             let root = cli.config.parent().map(|p| cwd.join(p)).unwrap_or(cwd);
             let init = init::Init {
@@ -267,6 +271,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 sdks,
                 repo,
                 base_url,
+                license,
             };
             init::run(init, &root)?;
         }

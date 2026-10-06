@@ -25,9 +25,20 @@ pub struct Init {
     pub sdks: Vec<String>,
     pub repo: Option<String>,
     pub base_url: Option<String>,
+    pub license: Option<String>,
 }
 
-const FLAGS: &str = "--sdks <rust,typescript,python,go,java,csharp> (required), --repo <owner/name-{lang}|owner/name>, --spec <path|url>, --name <Name>, --base-url <url>";
+const FLAGS: &str = "--sdks <rust,typescript,python,go,java,csharp> (required), --repo <owner/name-{lang}|owner/name>, --spec <path|url>, --name <Name>, --base-url <url>, --license <SPDX>";
+
+/// The licenses `init` offers, all of which `perseid generate` writes the LICENSE of.
+const LICENSES: [&str; 6] = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Unlicense",
+];
 
 /// Writes perseid.toml, asking what the flags and the spec here don't tell.
 pub fn run(init: Init, root: &Path) -> Result<()> {
@@ -37,7 +48,8 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             init.spec.is_none()
                 && init.name.is_none()
                 && init.sdks.is_empty()
-                && init.repo.is_none(),
+                && init.repo.is_none()
+                && init.license.is_none(),
             "{} already exists: edit it (`sdks`, `repo`, `spec`…), then run `perseid init` again",
             config::FILE
         );
@@ -118,6 +130,12 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             "`--repo {repo}` must read owner/name, or owner/name-{{lang}} for a repository per SDK"
         );
     }
+    let from_spec = spec_license(&doc);
+    let license = match (&init.license, interactive) {
+        (Some(license), _) => Some(license_expression(license).map_err(anyhow::Error::msg)?),
+        (None, true) => ask_license(from_spec.as_deref())?,
+        (None, false) => from_spec,
+    };
     let base_url = init.base_url.clone().or_else(|| server_url(&doc));
     if base_url.is_none() && readable {
         println!(
@@ -143,17 +161,17 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     if let Some(url) = base_url {
         toml += &format!("base_url = {}\n", quote(&url));
     }
-    let package = metadata(&doc);
-    if !package.is_empty() {
-        toml += &format!("\n[metadata]\n{package}");
-    }
-    if let Some(package) = sdks
-        .iter()
-        .any(|s| s == "java")
-        .then(|| java_package(&doc, &name))
-        .flatten()
-    {
-        toml += &format!("\n[java]\npackage = {}\n", quote(&package));
+    toml += &format!(
+        "\n[metadata]\n{}",
+        metadata(&doc, &name, license.as_deref())
+    );
+    let draft = Config::parse(&toml, config::FILE)?;
+    for sdk in draft.sdks(&[])? {
+        let package = match sdk.language {
+            "java" => java_package(&doc, &name).unwrap_or_else(|| draft.package(&sdk)),
+            _ => draft.package(&sdk),
+        };
+        toml += &format!("\n[{}]\npackage = {}\n", sdk.language, quote(&package));
     }
     fsx::write(&path, toml.as_bytes())?;
     println!("+ {}", config::FILE);
@@ -179,9 +197,18 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     println!("  Spec: {from}");
     println!("  Packages: {}", packages(&config)?);
     println!(
-        "  Rename a package with `package = \"…\"` under its [language] in {}, before its first release",
+        "  Rename a package in its [language] table of {}, before its first release",
         config::FILE
     );
+    match &license {
+        None => println!(
+            "! no license: the SDKs get no LICENSE, and crates.io and Maven Central refuse packages without one. Set `license` under [metadata]"
+        ),
+        Some(license) if !crate::scaffold::ships_license(license) => println!(
+            "! perseid has no text of {license} to write as the SDKs' LICENSE: add one to each SDK"
+        ),
+        Some(_) => {}
+    }
     next_steps(&config, root);
     Ok(())
 }
@@ -253,7 +280,7 @@ fn next_steps(config: &Config, root: &Path) {
         repos.join(", "),
         match remote.is_empty() {
             true => "",
-            false => ", and commits the release workflow of each SDK repository",
+            false => ", and commits the CI and release workflows of each SDK repository",
         }
     ));
     steps.push(match awaited {
@@ -344,6 +371,52 @@ fn ask_layout(sdks: &[String], name: &str, here: Option<&str>) -> Result<Option<
             "Repository of the SDKs",
             &shared,
         )?)),
+    }
+}
+
+/// The license the SDKs are published under, the spec's offered first: none when declined.
+fn ask_license(from_spec: Option<&str>) -> Result<Option<String>> {
+    let mut choices: Vec<String> = LICENSES.iter().map(|l| (*l).to_owned()).collect();
+    let default = match from_spec {
+        Some(license) => match choices.iter().position(|c| c == license) {
+            Some(i) => i,
+            None => {
+                choices.insert(0, license.to_owned());
+                0
+            }
+        },
+        None => 0,
+    };
+    if from_spec.is_some() {
+        choices[default] += " (the spec's)";
+    }
+    let other = choices.len();
+    choices.push("Another SPDX identifier".to_owned());
+    choices.push("None yet: crates.io and Maven Central need one to publish".to_owned());
+    let picked = crate::prompt::pick_one("License of the SDKs", &choices, default)?;
+    Ok(match picked {
+        i if i < other => Some(choices[i].trim_end_matches(" (the spec's)").to_owned()),
+        i if i == other => Some(crate::prompt::text_as(
+            "SPDX license expression (https://spdx.org/licenses)",
+            "",
+            license_expression,
+        )?),
+        _ => None,
+    })
+}
+
+/// `text` as an SPDX license expression, such as `MIT` or `MIT OR Apache-2.0`.
+fn license_expression(text: &str) -> Result<String, String> {
+    let text = text.trim();
+    let valid = !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-.+:() ".contains(c));
+    match valid {
+        true => Ok(text.to_owned()),
+        false => Err(format!(
+            "`{text}` isn't an SPDX license expression, such as MIT or Apache-2.0: https://spdx.org/licenses"
+        )),
     }
 }
 
@@ -468,8 +541,9 @@ pub fn pick_spec(root: &Path, interactive: bool) -> Result<Option<String>> {
     }
 }
 
-/// The perseid.toml lines of the package metadata the spec tells.
-fn metadata(doc: &Value) -> String {
+/// The [metadata] lines of perseid.toml: what the spec tells, with `license`, and commented
+/// examples for the rest.
+fn metadata(doc: &Value, name: &str, license: Option<&str>) -> String {
     let info = &doc["info"];
     let text = |v: &Value| {
         v.as_str()
@@ -477,11 +551,13 @@ fn metadata(doc: &Value) -> String {
             .filter(|s| !s.is_empty())
             .map(str::to_owned)
     };
+    let quote = |v: &str| toml::Value::String(v.to_owned()).to_string();
     let mut out = String::new();
-    let mut line = |key: &str, value: Option<String>| {
-        if let Some(value) = value {
-            out += &format!("{key} = {}\n", toml::Value::String(value));
-        }
+    let mut line = |key: &str, value: Option<String>, example: String| {
+        out += &match value {
+            Some(value) => format!("{key} = {value}\n"),
+            None => format!("# {key} = {example}\n"),
+        };
     };
     let description = text(&info["summary"]).or_else(|| {
         let description = text(&info["description"])?;
@@ -490,22 +566,41 @@ fn metadata(doc: &Value) -> String {
         let first = first.split_inclusive(". ").next().unwrap_or(first).trim();
         (first.len() <= 200 && !first.starts_with('#')).then(|| manifest_text(first))
     });
-    line("description", description.filter(|d| !d.is_empty()));
-    let license = text(&info["license"]["identifier"])
-        .or_else(|| text(&info["license"]["name"]).and_then(|n| spdx(&n)));
-    line("license", license);
+    line(
+        "description",
+        description.filter(|d| !d.is_empty()).map(|d| quote(&d)),
+        quote(&format!("{name} API client")),
+    );
+    line("license", license.map(quote), quote("MIT"));
     line(
         "homepage",
-        text(&info["contact"]["url"]).filter(|u| u.starts_with("http")),
+        text(&info["contact"]["url"])
+            .filter(|u| u.starts_with("http"))
+            .map(|u| quote(&u)),
+        quote("https://example.com"),
     );
     let author = text(&info["contact"]["name"]).map(|name| match text(&info["contact"]["email"]) {
         Some(email) => format!("{name} <{email}>"),
         None => name,
     });
-    if let Some(author) = author {
-        out += &format!("authors = [{}]\n", toml::Value::String(author));
-    }
+    line(
+        "authors",
+        author.map(|a| format!("[{}]", quote(&a))),
+        format!("[{}]", quote(&format!("{name} <dev@example.com>"))),
+    );
     out
+}
+
+/// The SPDX license of the spec's `info.license`.
+fn spec_license(doc: &Value) -> Option<String> {
+    let license = &doc["info"]["license"];
+    let text = |v: &Value| {
+        v.as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+    };
+    text(&license["identifier"]).or_else(|| text(&license["name"]).and_then(|n| spdx(&n)))
 }
 
 fn read_spec(spec: &str, root: &Path) -> Result<Value> {
@@ -660,10 +755,27 @@ mod tests {
             "license": { "name": "Apache 2.0" },
             "contact": { "name": "Acme", "email": "dev@acme.com", "url": "https://acme.com" }
         }});
-        let toml = metadata(&doc);
+        let toml = metadata(&doc, "Acme", spec_license(&doc).as_deref());
         assert_eq!(
             toml,
             "description = \"The Acme API.\"\nlicense = \"Apache-2.0\"\nhomepage = \"https://acme.com\"\nauthors = [\"Acme <dev@acme.com>\"]\n"
         );
+        assert_eq!(
+            metadata(&json!({}), "Acme", None),
+            "# description = \"Acme API client\"\n# license = \"MIT\"\n# homepage = \"https://example.com\"\n# authors = [\"Acme <dev@example.com>\"]\n"
+        );
+    }
+
+    #[test]
+    fn licenses_are_spdx_expressions_and_offered_ones_ship_their_text() {
+        assert_eq!(
+            license_expression(" MIT OR Apache-2.0 ").unwrap(),
+            "MIT OR Apache-2.0"
+        );
+        assert!(license_expression("").is_err());
+        assert!(license_expression("\"MIT\"").is_err());
+        for license in LICENSES {
+            assert!(crate::scaffold::ships_license(license), "{license}");
+        }
     }
 }

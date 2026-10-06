@@ -8,7 +8,7 @@ use anyhow::Result;
 use super::{Workflow, git, join, layout, relative, workflow};
 use crate::{
     config::{self, Config, Source},
-    scaffold::RELEASE_WORKFLOW,
+    scaffold::{CI_WORKFLOW, RELEASE_WORKFLOW},
 };
 
 const OWNED: &str = "# Written by `perseid";
@@ -60,8 +60,18 @@ pub fn expected(config: &Config, root: &Path) -> Result<Expected> {
         requires: spec.as_deref(),
     });
     let mut files = vec![(layout::SDKS_WORKFLOW.to_owned(), yaml.into_bytes())];
+    let local: Vec<&config::Sdk> = sdks.iter().filter(|s| s.local).collect();
+    if !local.is_empty() {
+        let paths: Vec<String> = local
+            .iter()
+            .map(|s| crate::scaffold::package_path(&dir, &s.path))
+            .collect();
+        files.push((
+            CI_WORKFLOW.to_owned(),
+            crate::scaffold::ci_workflow(&branch, &paths),
+        ));
+    }
     if config.release != Some(false) {
-        let local: Vec<&config::Sdk> = sdks.iter().filter(|s| s.local).collect();
         let read = |path: &str| Ok(std::fs::read_to_string(top.join(path)).ok());
         files.extend(crate::scaffold::release_scaffold(
             config, &local, &dir, &branch, read,
@@ -80,8 +90,7 @@ pub fn write(config: &Config, root: &Path) -> Result<Vec<Written>> {
         if current.as_deref() == Some(content.as_slice()) {
             continue;
         }
-        let workflow = path == layout::SDKS_WORKFLOW || path == RELEASE_WORKFLOW;
-        if workflow && !owned(current.as_deref()) {
+        if is_workflow(&path) && !owned(current.as_deref()) {
             written.push(Written::Kept(kept(&path, &expected.branch)));
             continue;
         }
@@ -135,12 +144,20 @@ pub fn write_release_files(
     Ok(written)
 }
 
+/// Whether perseid writes `path` as a workflow, which it keeps once the user owns it.
+pub(super) fn is_workflow(path: &str) -> bool {
+    path.starts_with(".github/workflows/")
+}
+
 pub(super) fn kept(path: &str, branch: &str) -> String {
-    match path == RELEASE_WORKFLOW {
-        true => format!(
+    match path {
+        RELEASE_WORKFLOW => format!(
             "{path} is yours: check it runs release-please on `{branch}` and publishes from the `release` environment"
         ),
-        false => format!(
+        CI_WORKFLOW => format!(
+            "{path} is yours: check it tests the SDKs on their pull requests, and on `workflow_dispatch`"
+        ),
+        _ => format!(
             "{path} is yours: check it runs {} on `{branch}`",
             super::uses("")
         ),

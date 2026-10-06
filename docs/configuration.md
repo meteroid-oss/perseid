@@ -121,7 +121,7 @@ Every operation is generated, except those marked `x-internal: true`.
 ## Package metadata
 
 `[metadata]` holds what the generated manifests say about the packages. `perseid init` fills it
-from the spec's `info`.
+from the spec's `info` and the license it asks for, and comments out the rest.
 
 | Key | |
 |---|---|
@@ -131,6 +131,10 @@ from the spec's `info`.
 | `repository` | Source repository URL of the SDKs without a `repo` |
 | `authors` | `"Name <email>"` of each author |
 
+- `perseid generate` writes the `license` text as each SDK's `LICENSE`, unless it has one: for
+  `MIT`, `Apache-2.0`, `BSD-3-Clause`, `ISC`, `MPL-2.0` and `Unlicense`, the copyright line naming
+  the `authors`, else `name`. Add it yourself for any other license.
+- crates.io and Maven Central refuse packages without a license.
 - Each manifest names its repository: `https://github.com/{repo}` for an SDK with a `repo`, else
   `repository`, else the `origin` remote.
 - npm publishes with provenance, which needs `package.json` to name the publishing repository.
@@ -140,7 +144,8 @@ from the spec's `info`.
 ## Language tables
 
 `[rust]`, `[typescript]`, `[python]`, `[go]`, `[java]` and `[csharp]` override the settings of
-an SDK that `sdks` lists. A table for an SDK not listed fails.
+an SDK that `sdks` lists. A table for an SDK not listed fails. `perseid init` writes one per SDK,
+naming its package.
 
 | Key | |
 |---|---|

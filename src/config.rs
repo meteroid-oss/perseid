@@ -654,18 +654,27 @@ impl Config {
         })
     }
 
+    /// The `package` of `sdk`, else the one its language names after `name`.
+    pub fn package(&self, sdk: &Sdk) -> String {
+        let snake = self.name.to_snake_case();
+        sdk.target
+            .package
+            .clone()
+            .unwrap_or_else(|| match sdk.language {
+                "java" => format!("com.{}", snake.replace('_', "")),
+                "typescript" => self.name.to_kebab_case(),
+                "csharp" => self.name.clone(),
+                "go" => snake.replace('_', ""),
+                _ => snake,
+            })
+    }
+
     /// Values exposed to templates as `sdk`, for an SDK checked out at `dir`.
     pub fn context(&self, sdk: &Sdk, dir: &Path) -> Value {
         let (language, target) = (sdk.language, sdk.target);
         let snake = self.name.to_snake_case();
         let kebab = self.name.to_kebab_case();
-        let package = target.package.clone().unwrap_or_else(|| match language {
-            "java" => format!("com.{}", snake.replace('_', "")),
-            "typescript" => kebab.clone(),
-            "csharp" => self.name.clone(),
-            "go" => snake.replace('_', ""),
-            _ => snake.clone(),
-        });
+        let package = self.package(sdk);
         let version = manifest_version(dir).unwrap_or_else(|| "0.1.0".into());
         let pick = |own: &Option<String>, shared: &Option<String>, default: &str| {
             own.clone()

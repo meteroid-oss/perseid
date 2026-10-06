@@ -153,7 +153,7 @@ impl Ui {
 }
 
 /// `perseid sync`: installs the hosted perseid App on the repositories perseid.toml names, unless
-/// they have their own App or token, and commits their release workflow, once agreed.
+/// they have their own App or token, and commits their CI and release workflows, once agreed.
 pub fn sync(config_path: &Path, options: &Options) -> Result<ExitCode> {
     set_up(config_path, options, false)
 }

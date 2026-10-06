@@ -1,0 +1,49 @@
+# Written by `perseid init` or `perseid sync`, which rewrite it when it differs: delete this line to
+# keep your edits. Builds each SDK and runs its tests on pull requests and pushes. A dispatched run
+# also posts the `sdk-ci` commit status, which pull requests opened with the default token need.
+name: SDK CI
+
+on:
+  push:
+    branches: ["@@BRANCH@@"]
+    paths: ["@@PATHS@@"]
+  pull_request:
+    paths: ["@@PATHS@@"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdk-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        path: ["@@SDKS@@"]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: meteroid-oss/perseid/test@v0
+        with:
+          path: ${{ matrix.path }}
+
+  # Dispatched runs don't show in a pull request's checks: require this status to gate merges on them.
+  status:
+    needs: test
+    if: always() && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    permissions:
+      statuses: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          STATE: ${{ needs.test.result == 'success' && 'success' || 'failure' }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f context=sdk-ci -f state="$STATE" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

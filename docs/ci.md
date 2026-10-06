@@ -98,6 +98,7 @@ setup:
 | Workflow | Runs in | Writes to |
 |---|---|---|
 | `sdks.yml`, `sdk-release.yml` | the repository holding `perseid.toml`, each SDK repository | those repositories: contents, pull requests |
+| `sdk-ci.yml` | the repository holding `perseid.toml`, each SDK repository | its own commit statuses |
 | `perseid-push.yml` | the API repository | the SDKs repository: contents |
 | the publish job of `sdk-release.yml` | the SDK repository, `release` environment | the registries, with [trusted publishing](#publishing) or a registry token |
 
@@ -119,19 +120,23 @@ perseid setup only, and where the plan allows it, require a review on the SDK re
 ### `perseid init`
 
 `init` works in your clone only. It finds the spec (a tracked `openapi` or `swagger` file, JSON or
-YAML) and asks which SDKs to generate, where they live and the API name. It writes:
+YAML) and asks which SDKs to generate, where they live, the API name and the license, offering
+the spec's. It writes:
 
-- `perseid.toml`;
+- `perseid.toml`, with a `[metadata]` table (what the spec doesn't tell is commented out) and a
+  table per SDK naming its package;
 - `.github/workflows/sdks.yml`, which regenerates the SDKs;
-- for the SDKs kept in this repository, `sdk-release.yml` and the release-please files.
+- for the SDKs kept in this repository, `sdk-ci.yml`, `sdk-release.yml` and the release-please
+  files.
 
 Commit and push them: workflows run from the default branch. SDKs in their own repositories get
-their release workflow from `perseid sync`, and their release-please files in their first pull
-request.
+their CI and release workflows from `perseid sync`, and their release-please files in their first
+pull request.
 
 - Run `init` again after editing `perseid.toml`. It rewrites the workflows it wrote, except one
   whose first line, ``# Written by `perseid init` ``, you removed.
-- Without a terminal, pass `--sdks`, and optionally `--repo`, `--spec`, `--name` and `--base-url`.
+- Without a terminal, pass `--sdks`, and optionally `--repo`, `--spec`, `--name`, `--base-url`
+  and `--license` (an SPDX expression; the spec's by default).
 - Without a spec in the repository, it asks where the spec is: at a URL, in a file, or in another
   repository. For the last, `spec` defaults to `openapi.json`, where `perseid connect` pushes it.
   `perseid generate --spec <path|url> --out /tmp/sdks` previews the SDKs meanwhile.
@@ -147,9 +152,9 @@ GitHub with `perseid.toml`, prints the plan and applies it once you agree:
    the App's installation page with them selected, then checks the installation covers them.
    Skipped when they have `SDK_GITHUB_TOKEN`, or your own App (`SDK_APP_ID`), which `perseid app`
    manages.
-2. `sdk-release.yml` in each SDK repository, committed with your credentials to the default
-   branch, or through a pull request when the branch takes no direct push. One whose first line
-   you removed stays yours.
+2. `sdk-ci.yml` and `sdk-release.yml` in each SDK repository, committed with your credentials to
+   the default branch, or through a pull request when the branch takes no direct push. One whose
+   first line you removed stays yours.
 
 | Flag | |
 |---|---|
@@ -157,9 +162,9 @@ GitHub with `perseid.toml`, prints the plan and applies it once you agree:
 | `--yes` | Applies without asking |
 | `--no-browser` | Prints URLs instead of opening them |
 
-SDK pull requests never write `sdk-release.yml`: when it is missing or outdated, the run warns to
-run `perseid sync`. It uses `meteroid-oss/perseid/release@v0`, so new perseid releases don't
-change it. Pin it if you prefer, and let Dependabot's `github-actions` updates bump the pin.
+SDK pull requests never write workflows: when `sdk-release.yml` is missing or outdated, the run
+warns to run `perseid sync`. Both workflows use actions at `@v0`, so new perseid releases don't
+change them. Pin it if you prefer, and let Dependabot's `github-actions` updates bump the pin.
 
 ### `perseid generate`
 
@@ -224,7 +229,8 @@ and asks first. If you decline, it prints the steps to do it by hand:
 | `--yes` | Applies without asking |
 | `--no-browser` | Prints URLs instead of opening them |
 
-Like `perseid sync`, it commits `sdk-release.yml` to the SDK repositories lacking it. Run
+Like `perseid sync`, it commits `sdk-ci.yml` and `sdk-release.yml` to the SDK repositories
+lacking them. Run
 `perseid app` again after adding an SDK repository: it installs the App there too. GitHub
 shows a private key only once, so it asks you to generate a new one on the App's settings page,
 checks it belongs to the App, stores it on the repositories lacking one, and offers to delete the
@@ -246,7 +252,8 @@ For SDKs kept in the same repository, you can pass it to the Action by hand:
 
 Dispatched runs do not show in the pull request's checks or count as required status checks
 ([GitHub docs](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)).
-To gate merges on them, have the workflow post a commit status and require that context:
+`sdk-ci.yml` posts the `sdk-ci` commit status when dispatched: list it in `ci-workflows` and
+require that context. Your own workflows can do the same:
 
 ```yaml
 on: [pull_request, workflow_dispatch]
@@ -468,6 +475,28 @@ Without the image:
 - `rustfmt`, `gofmt` and the `dotnet` that installs `csharpier` come from the Rust, Go and .NET
   toolchains.
 
+## SDK tests
+
+`.github/workflows/sdk-ci.yml`, in each repository holding SDKs, runs
+`meteroid-oss/perseid/test@v0` on each SDK, for pull requests, pushes to the default branch and
+manual runs. The action builds the SDK and runs its tests, the generated ones and yours:
+
+| SDK | Runs |
+|---|---|
+| Rust | `cargo test` |
+| TypeScript | `npm ci` (or `npm install`), `tsc --noEmit`, `npm test` |
+| Python | `pip install -e .` in a venv, `unittest` on `tests/` |
+| Go | `go vet ./...`, `go test ./...` |
+| Java | `gradle build` (`./gradlew` when present) |
+| C# | `dotnet test` |
+
+- When the SDKs live in folders next to other code, it runs only on changes under them.
+- A dispatched run posts the `sdk-ci` commit status, so the release PRs and SDK pull requests
+  pushed with the default token can require it (see
+  [the default `GITHUB_TOKEN`](#the-default-github_token)).
+- Make its `test` jobs required status checks to gate merges, and `--auto-merge`, on the tests.
+- Like `sdk-release.yml`, `init` and `sync` rewrite it unless you delete its first line.
+
 ## Releases
 
 Every SDK has its own version, in its own manifest, and is released on its own.
@@ -539,7 +568,7 @@ Notes:
 | `app-id`, `app-private-key` | `SDK_APP_ID` variable, `SDK_APP_PRIVATE_KEY` secret | A GitHub App whose token, minted for this repository with Contents and Pull requests write, runs release-please |
 | `release-token` | `SDK_GITHUB_TOKEN` secret | The token for release-please without an App |
 | `token` | | Otherwise, the default `GITHUB_TOKEN` |
-| `ci-workflows` | `SDK_CI_WORKFLOWS` variable | Workflow files dispatched on the release PR branch when it was pushed with the default token |
+| `ci-workflows` | `SDK_CI_WORKFLOWS` variable, else `sdk-ci.yml` | Workflow files dispatched on the release PR branch when it was pushed with the default token |
 | `path` | the `path` of a manual run | A package to publish again, skipping release-please |
 
 It outputs `paths` (JSON array of the released package paths), `tags` (their release tags, by
