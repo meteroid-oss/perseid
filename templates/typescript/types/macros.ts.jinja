@@ -29,7 +29,7 @@
 {%- endmacro %}
 
 {% macro field_type(field) -%}
-    {{- js_type(field.type) }}{% if field.nullable %} | null{% endif -%}
+    {{- field.constant | tojson if field.constant is string else js_type(field.type) }}{% if field.nullable %} | null{% endif -%}
 {%- endmacro %}
 
 {% macro doc(description, deprecated) -%}

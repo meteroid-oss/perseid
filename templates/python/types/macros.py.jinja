@@ -159,10 +159,15 @@
     `X | None`, optional nullable `X | None | Unset` in request schemas. `ty` replaces the
     annotation of the value, such as an enum taking its literals too. -#}
 {% macro field_type(field, in_request=true, ty=none) -%}
-    {%- set ty = ty or py_type(field.type) -%}
+    {%- set ty = ty or literal_type(field) or py_type(field.type) -%}
     {%- if ty == "t.Any" or (field.required and not field.nullable) %}{{ ty }}
     {%- elif field.required or not is_tristate(field, in_request) %}{{ ty }} | None
     {%- else %}{{ ty }} | None | Unset{% endif -%}
+{%- endmacro %}
+
+{#- `t.Literal[...]` of a field of one string value, else nothing. -#}
+{% macro literal_type(field) -%}
+    {%- if field.constant is string %}t.Literal[{{ py_str(field.constant) }}]{% endif -%}
 {%- endmacro %}
 
 {#- The annotation and default of a struct field: optional ones default to `None`, or to

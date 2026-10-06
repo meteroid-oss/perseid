@@ -459,7 +459,8 @@ fn decide_objects(
     mode
 }
 
-/// Sets the `discriminator_defaults` of the structs that are variants of internally tagged unions.
+/// Sets the `discriminator_defaults` of the structs that are variants of internally tagged unions,
+/// and of their required fields of one string value.
 pub(crate) fn set_discriminator_defaults(types: &mut Types) {
     let mut values: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
     for ty in types.values() {
@@ -494,6 +495,22 @@ pub(crate) fn set_discriminator_defaults(types: &mut Types) {
         let own = fields.iter().any(|f| f.name == field && !f.flatten);
         if let (true, [value]) = (own, &values.into_iter().collect::<Vec<_>>()[..]) {
             ty.discriminator_defaults.insert(field, value.clone());
+        }
+    }
+    // A required string field of one value is filled in like a discriminator.
+    for ty in types.values_mut() {
+        let TypeData::Struct { fields, .. } = &ty.data else {
+            continue;
+        };
+        for field in fields
+            .iter()
+            .filter(|f| f.required && !f.nullable && !f.flatten)
+        {
+            if let Some(serde_json::Value::String(value)) = &field.constant {
+                (ty.discriminator_defaults)
+                    .entry(field.name.clone())
+                    .or_insert_with(|| value.clone());
+            }
         }
     }
 }
@@ -1990,8 +2007,8 @@ pub(crate) struct Field {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) flatten: bool,
     /// The only value of the field (`const` or a single-value `enum`), which can tell apart
-    /// the variants of a union.
-    #[serde(skip)]
+    /// the variants of a union, and which SDKs fill in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) constant: Option<serde_json::Value>,
 }
 

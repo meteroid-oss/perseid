@@ -172,6 +172,8 @@ expand[]=a&expand[]=b                         # lists with `style: deepObject`
 
 - A request body can be any JSON schema: a bare list or scalar, a boolean schema, a recursive
   alias (`Tree: array of Tree`, typed as plain JSON where an SDK cannot spell it).
+- A required property of one value (`const`, or an `enum` of one value) is filled in by the
+  SDKs, and typed as that value in TypeScript (`"chat.completion"`) and Python (`t.Literal`).
 - Nullable items, map values and response bodies stay nullable. A `null` body decodes to the
   language's empty value.
 - An operation declaring both a body and a bodiless 2xx (such as `204`) returns an optional
