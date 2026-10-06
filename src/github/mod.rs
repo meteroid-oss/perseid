@@ -271,9 +271,7 @@ pub fn workflow(w: &Workflow) -> String {
         dir => format!("          working-directory: {dir}\n"),
     };
     format!(
-        r#"# Written by `perseid init`: regenerates the SDKs when the spec changes and opens their pull
-# requests as the perseid App, else the GitHub App set up by `perseid app` or the SDK_GITHUB_TOKEN
-# secret.
+        r#"# Written by `perseid init`: regenerates the SDKs when the spec changes.
 name: SDKs
 
 on:

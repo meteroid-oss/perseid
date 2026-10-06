@@ -211,25 +211,15 @@ pub fn push_workflow(push: &Push) -> String {
         false => "",
     };
     let hub = push.hub;
-    let (who, app, credential) = match push.auth {
-        Auth::Perseid => (
-            format!(
-                "It pushes as the perseid App, installed on {hub}, whose perseid.toml names this repository as its source."
-            ),
-            String::new(),
-            String::new(),
-        ),
+    let (app, credential) = match push.auth {
+        Auth::Perseid => (String::new(), String::new()),
         Auth::Token => (
-            format!("{TOKEN} is a fine-grained token that can write to {hub}."),
             String::new(),
             format!("          token: ${{{{ secrets.{TOKEN} }}}}\n"),
         ),
         Auth::App => {
             let (owner, name) = hub.split_once('/').unwrap_or((hub, hub));
             (
-                format!(
-                    "It pushes as the GitHub App of {APP_ID} and {APP_KEY}, with a token for {hub} only."
-                ),
                 format!(
                     "      - id: app\n        uses: actions/create-github-app-token@v2\n        with:\n          app-id: ${{{{ vars.{APP_ID} }}}}\n          private-key: ${{{{ secrets.{APP_KEY} }}}}\n          owner: {owner}\n          repositories: {name}\n          permission-contents: write\n"
                 ),
@@ -238,9 +228,7 @@ pub fn push_workflow(push: &Push) -> String {
         }
     };
     format!(
-        r#"# Written by `perseid connect {hub}`: pushes the spec to {hub} {when},
-# which regenerates the SDKs. Run that command again to change these settings.
-# {who}
+        r#"# Written by `perseid connect {hub}`: pushes the spec to {hub} {when}.
 name: Spec
 
 on:
