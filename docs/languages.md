@@ -497,6 +497,8 @@ case errors.As(err, &apiErr):
 
 - Every error is an `SDKError`: `*APIError`, `*TimeoutError`, `*TransportError` (no
   response), `*DecodeError`, `*RequestError`.
+- `*DecodeError` also covers a 2xx body missing a required property, or holding it as `null`
+  when it is not nullable: it is not decoded as the zero value.
 - `errors.Is` tests the status: `ErrNotFound`, `ErrUnauthorized`, `ErrRateLimited`, `ErrServer`...
 - `APIError.Body` holds the body decoded as the declared error schema, else plain JSON.
 - `ErrorBody[T](err)` decodes it as any schema, `APIError.Detail()` as the API-wide one.

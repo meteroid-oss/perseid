@@ -12,12 +12,17 @@
 {{ go_union(extra_union, type.additional_properties) }}
 {% endif %}{% endset -%}
 {% set defaults = type.discriminator_defaults | default({}) -%}
-{% set ns = namespace(defaulted=[], names=[]) -%}
+{% set ns = namespace(defaulted=[], names=[], required=[]) -%}
 {% for field in type.fields -%}
 {% set ns.names = ns.names + [go_export(field.name)] -%}
 {% if field.name in defaults %}{% set ns.defaulted = ns.defaulted + [field] %}{% endif -%}
 {% endfor -%}
 {% set defaulted = ns.defaulted -%}
+{#- Decoding rejects these when missing or null; untyped JSON takes `null` as a value. -#}
+{% for field in type.fields if field.required and not field.nullable and field.name not in defaults -%}
+{% if not field.type.is_nullable() and (field.type.is_union() or not field.type.is_json_object()) %}{% set ns.required = ns.required + [field] %}{% endif -%}
+{% endfor -%}
+{% set required = ns.required -%}
 {% set extra = "ExtraFields" if "ExtraFields" not in ns.names else "ExtraProperties" -%}
 {% set extra_type = (go_field_type(extra_field, patch, extra_union) | trim) if has_extra else "map[string]json.RawMessage" -%}
 {% set typed_extra = extra_type != "map[string]json.RawMessage" -%}
@@ -55,13 +60,17 @@ func (v *{{ type_name }}) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, (*plain)(v)); err != nil {
 		return err
 	}
+	fields, err := objectFields(data, {{ type_name | tojson }}{% for field in required %}, {{ field.name | tojson }}{% endfor %})
+	if err != nil {
+		return err
+	}
 {% if untagged %}	if err := unmarshalFields(data, map[string]any{
 {% for field in untagged %}		{{ field.name | tojson }}: &v.{{ go_export(field.name) }},
 {% endfor %}	}); err != nil {
 		return err
 	}
-{% endif %}{% if typed_extra %}	return typedExtraFields(&v.{{ extra }}, data{% for field in type.fields %}, {{ field.name | tojson }}{% endfor %})
-{% else %}	v.{{ extra }} = extraFields(data{% for field in type.fields %}, {{ field.name | tojson }}{% endfor %})
+{% endif %}{% if typed_extra %}	return typedExtraFields(&v.{{ extra }}, fields{% for field in type.fields %}, {{ field.name | tojson }}{% endfor %})
+{% else %}	v.{{ extra }} = extraFields(fields{% for field in type.fields %}, {{ field.name | tojson }}{% endfor %})
 	return nil
 {% endif %}}
 
