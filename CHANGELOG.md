@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.2](https://github.com/meteroid-oss/perseid/compare/v0.12.1...v0.12.2) (2026-10-07)
+
+
+### Features
+
+* **init:** import a Stainless config with --from ([#101](https://github.com/meteroid-oss/perseid/issues/101)) ([2ea8874](https://github.com/meteroid-oss/perseid/commit/2ea8874cc123e42e0fc5b36fe11cb21fae3747b9))
+* **spec:** read Swagger 2.0 specs directly ([#100](https://github.com/meteroid-oss/perseid/issues/100)) ([262bd53](https://github.com/meteroid-oss/perseid/commit/262bd5341d81fb702b53cd69cf4d3d8cdfe978e2))
+
 ## [0.12.1](https://github.com/meteroid-oss/perseid/compare/v0.12.0...v0.12.1) (2026-10-07)
 
 
