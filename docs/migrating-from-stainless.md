@@ -25,11 +25,11 @@ These hold for the TypeScript and Python SDKs, checked against SDKs generated fr
 | Install | Same package names, on the same registries |
 | Client | `new Knock({ apiKey })`, `Knock(api_key=...)`, `AsyncKnock` in Python |
 | Environment | `KNOCK_API_KEY` and `KNOCK_BASE_URL` |
-| Resources | `client.users.list()`, `client.messages.markAsArchived(id)`: names come from `stainless.yml` |
+| Resources | `client.users.list()`, `client.messages.markAsArchived(id)`: method names come from `stainless.yml` for its top-level resources whose operations perseid groups under the same name (their first tag) |
 | Arguments | Path parameters first, then objects (TypeScript) or keyword arguments (Python) |
 | Pagination | `for await (const user of client.users.list())`, `for user in client.users.list()`, `hasNextPage()`/`getNextPage()`, `has_next_page()`/`get_next_page()` |
 | Errors | `APIError`, `NotFoundError`, `RateLimitError`, `APIConnectionError`... by status, with `status` / `status_code`. `Knock.NotFoundError` works in TypeScript |
-| Retries | Twice by default, exponential backoff from 0.5s to 8s, honoring `Retry-After`. `maxRetries` / `max_retries` on the client and per call |
+| Retry settings | Twice by default, exponential backoff from 0.5s to 8s, honoring `Retry-After`. `maxRetries` / `max_retries` on the client and per call. Which requests are retried differs: see [known differences](#known-differences) |
 | Timeouts | `timeout` in milliseconds (TypeScript) or seconds (Python), on the client and per call |
 | Raw responses | `.withResponse()`, `.asResponse()`, `client.users.with_raw_response.get(...)` |
 | Per-client options | `client.with_options(max_retries=0)` in Python |
@@ -70,7 +70,8 @@ try {
 const { data, response, requestId } = await client.users.get("dnedry").withResponse();
 ```
 
-- `import Knock from` becomes `import { Knock } from`.
+- `import Knock from` becomes `import { Knock } from`. Stainless SDKs already export the named
+  class too (`export { Knock }`), so your users can switch their imports before the migration.
 - Model properties and parameters are camelCase (`createdAt`, `pageSize`), not the JSON names.
   The SDK converts them on the wire.
 - `date-time` values are `Date`s.
@@ -95,8 +96,10 @@ raw = client.users.with_raw_response.get("dnedry")
 user = raw.parse()
 ```
 
-- Models are dataclasses with `from_dict()` and `to_dict()`, not pydantic models:
-  `model_dump()`, `model_validate()` and `to_json()` are gone.
+- Models are dataclasses with `from_dict()`, `from_json()`, `to_dict()` and `to_json()`, not
+  pydantic models: `model_dump()` and `model_validate()` are gone, and `to_dict()` and
+  `to_json()` take no options (no `indent`, `exclude_unset` or `mode`): `to_json()` is compact,
+  not indented.
 - Types live in `knockapi.models`, named after the spec's schemas.
 - There is no `with_streaming_response`.
 
@@ -121,14 +124,14 @@ imports. It writes `perseid.toml` and the workflows, then lists what it did not 
 with why:
 
 ```
-From stainless.yml: name, sdks, packages, repositories, base_url, license, timeout, idempotency_keys, 2 pagination rules, 4 method names, exclude (1 operation)
+From stainless.yml: name, sdks, packages, repositories, base_url, license, idempotency_keys, 2 pagination rules, 3 method names, exclude (1 operation)
 Not carried over from stainless.yml:
   - edition: perseid has no editions: a perseid upgrade that changes the SDKs comes as a pull request
   - targets.ruby: perseid generates no Ruby SDK
   - client_settings.opts.branch: perseid clients take no custom options: send `X-Knock-Branch` with the default headers (`defaultHeaders`, `default_headers`)
   - pagination.slack_channels_cursor: `query_options.cursor` is a nested parameter: perseid pages with a top-level query parameter
   - resources.users.list_schedules: `paginated: false`, but a pagination rule matches `listUserSchedules`: set `x-pagination: false` on it in the spec
-  - resources.users.feeds.list_items: `users.list_items` in perseid (get /v1/users/{user_id}/feeds/{channel_id}): perseid has no nested resources: it groups operations by their first tag
+  - resources.users.feeds (1 method): nested resource: perseid has one level of resources, named after the operations' first tag: users.retrieve_feed
   ...
 ```
 
@@ -137,7 +140,6 @@ spec = "openapi.yaml"
 name = "Knock"
 sdks = ["typescript", "python", "go"]
 base_url = "https://api.knock.app"
-timeout = 60
 idempotency_keys = true
 exclude = ["notify"]
 
@@ -174,19 +176,19 @@ Preview the SDKs with `npx perseid generate --out /tmp/sdks`, and compare the me
 | `stainless.yml` | `perseid.toml` |
 |---|---|
 | `organization.name` | `name`, cased as Stainless does: `onebusaway-sdk` is `OnebusawaySDK`, `custom_casings` apply |
-| `organization.docs`, `organization.contact` | `[metadata]` `homepage`, `authors` |
+| `organization.docs`, `organization.contact` | `[metadata]` `homepage`, `authors` (as `organization.name`) |
 | `targets.typescript` (or `node`), `python`, `go`, `java`, `csharp` | `sdks`. `skip: true` leaves one out |
 | `targets.*.package_name`, `targets.java.reverse_domain` | `package` of the language table |
-| `targets.*.production_repo` | `repo` of the language table |
+| `targets.*.production_repo` | `repo` of the language table, without its `#branch` |
 | `targets.go.options.go_module_path_override` | `[go] module` |
 | `environments` | `base_url`: the first one |
-| `client_settings.default_timeout` | `timeout`, in seconds, rounded up |
+| `client_settings.default_timeout` | `timeout`, in seconds, rounded up, unless it is perseid's 60 |
 | `client_settings.idempotency` | `idempotency_keys = true` |
-| `client_settings.opts.*.read_env` | `env_prefix` under `[context]`, when it isn't the `name`'s |
-| `settings.license` | `[metadata] license` |
+| `client_settings.default_env_prefix`, `client_settings.opts.*.read_env` | `env_prefix` under `[context]`, when it isn't the `name`'s |
+| `settings.license` | `[metadata] license`, over the spec's |
 | `pagination` | `[[pagination]]`, one rule per scheme |
-| `resources.*.methods` | `[methods]`, for each name perseid would give otherwise |
-| Endpoints no resource lists, `unspecified_endpoints`, `skip: true` | `exclude` |
+| `resources.*.methods` | `[methods]`, for each name perseid would give otherwise, in top-level resources perseid names alike |
+| Endpoints no resource lists, `unspecified_endpoints`, `skip: true` | `exclude`. When fewer than 80% of the endpoints `stainless.yml` lists are in the spec, it warns and excludes only `unspecified_endpoints` and `skip: true` |
 | `skip` or `only` naming languages | `exclude` of the language tables |
 
 Pagination schemes:
@@ -254,7 +256,7 @@ files without its `@generated` marker.
 |---|---|
 | Resources nested at any depth, methods on the client (`$client`) | One level of resources, from the spec's first tag |
 | Types namespaced by resource | Types named after the spec's schemas |
-| POST retried by default | POST retried only with an `Idempotency-Key`: `idempotency_keys = true` sends one with every POST. 409 is not retried |
+| Every request retried, POST included, on connection errors, 408, 409, 429 and 5xx | POST retried only with an `Idempotency-Key`: `idempotency_keys = true` sends one with every POST. 409 is not retried |
 | `environment` option between named base URLs | One default base URL, overridden by `baseURL` / `base_url` or `KNOCK_BASE_URL` |
 | Custom client options, sent as headers or parameters | Default headers, or a parameter on each call |
 | Pagination by next-page URL, backwards, or in the body | Forward, by a query parameter |
