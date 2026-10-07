@@ -27,28 +27,65 @@ void Equal<T>(T expected, T actual)
 
 void Ids(string expected, List<string> actual) => Equal(expected, string.Join(",", actual));
 
+async Task Cancelled(Func<Task> call)
+{
+    try
+    {
+        await call();
+    }
+    catch (OperationCanceledException)
+    {
+        return;
+    }
+    throw new Exception("expected the call to be cancelled");
+}
+
 using var client = new FeaturesClient("tok", new() { BaseUrl = serverUrl });
 Equal("||", (await client.Account.CheckHealthAsync()).Status);
 Equal("Bearer tok||", (await client.Account.RetrieveMachineAsync()).Status);
-Ids("w1,w2,w3", await Collect(client.Widgets.ListAutoPagingAsync(), w => w.Id));
+Ids("w1,w2,w3", await Collect(client.Widgets.ListAsync(), w => w.Id));
 Ids(
     "e1,e2,e3",
-    await Collect(client.Widgets.ListEventsAutoPagingAsync("w1", new() { Kind = "created" }), e => e.Id)
+    await Collect(client.Widgets.ListEventsAsync("w1", new() { Kind = "created" }), e => e.Id)
 );
-Ids("g1,g2,g3", await Collect(client.Gadgets.ListAutoPagingAsync(), g => g.Id));
-Ids("r1,r2,r3", await Collect(client.Records.ListAutoPagingAsync(), r => r.Id));
+Ids("g1,g2,g3", await Collect(client.Gadgets.ListAsync(), g => g.Id));
+Ids("r1,r2,r3", await Collect(client.Records.ListAsync(), r => r.Id));
 
 var pages = new List<string>();
-await foreach (var page in client.Widgets.ListAutoPagingAsync().AsPagesAsync())
+await foreach (var page in client.Widgets.ListAsync().AsPagesAsync())
 {
-    pages.Add($"{string.Join("+", page.Items.Select(w => w.Id))}:{page.HasNextPage}");
+    pages.Add($"{string.Join("+", page.Items.Select(w => w.Id))}:{page.HasNextPage}:{page.NextCursor}");
 }
-Equal("w1+w2:True,w3:False", string.Join(",", pages));
-var first = await client.Gadgets.ListAutoPagingAsync().GetFirstPageAsync();
-Equal(2, first.Response.Meta.TotalPages);
-var second = await first.GetNextPageAsync();
-Equal("g3", second.Items.Single().Id);
-Equal(false, second.HasNextPage);
+Equal("w1+w2:True:c2,w3:False:", string.Join(",", pages));
+var widgets = await client.Widgets.ListAsync();
+Equal("w1", widgets.Data[0].Id);
+Equal("c2", widgets.NextCursor);
+Equal(widgets.Body.NextCursor, widgets.NextCursor);
+Ids("w1,w2,w3", await Collect(widgets, w => w.Id));
+var gadgets = await client.Gadgets.ListAsync();
+Equal(2, gadgets.Meta.TotalPages);
+Equal(0, gadgets.Meta.Page);
+var nextGadgets = await gadgets.GetNextPageAsync();
+Equal(1, nextGadgets.Meta.Page);
+Equal("g3", nextGadgets.Items.Single().Id);
+Equal(false, nextGadgets.HasNextPage);
+var records = await client.Records.ListAsync().ConfigureAwait(false);
+Equal(3L, records.Total);
+Equal("r1", records.Data[0].Id);
+Ids("r1,r2,r3", await Collect(records, r => r.Id));
+using (var cancelled = new CancellationTokenSource())
+{
+    cancelled.Cancel();
+    await Cancelled(async () => await client.Records.ListAsync(cancellationToken: cancelled.Token));
+    await Cancelled(async () =>
+    {
+        await foreach (var record in client.Records.ListAsync().WithCancellation(cancelled.Token))
+        {
+            throw new Exception($"no record once cancelled, got {record.Id}");
+        }
+    });
+    await Cancelled(async () => await Collect(records.AsPagesAsync(cancelled.Token), p => p.Total.ToString()));
+}
 
 var widget = (await client.Widgets.ListAsync()).Data[0];
 Equal("red", widget.AdditionalProperties!["color"].GetString());
@@ -77,7 +114,7 @@ using var keyed = new FeaturesClient(
     null,
     new() { BaseUrl = serverUrl, ApiKeys = new() { ApiKey = "k" } }
 );
-Ids("w1,w2,w3", await Collect(keyed.Widgets.ListAutoPagingAsync(), w => w.Id));
+Ids("w1,w2,w3", await Collect(keyed.Widgets.ListAsync(), w => w.Id));
 using var anonymous = new FeaturesClient(null, new() { BaseUrl = serverUrl });
 try
 {
@@ -684,7 +721,7 @@ internal static class Scenarios
         var seen = new List<string>();
         var gone = await Throws<ConflictException>(async () =>
         {
-            await foreach (var widget in paged.Errors.ListScenariosPagesAutoPagingAsync())
+            await foreach (var widget in paged.Errors.ListScenariosPagesAsync())
             {
                 seen.Add(widget.Id);
             }
@@ -700,14 +737,13 @@ internal static class Scenarios
         using var anonymous = new FeaturesClient(null, new() { BaseUrl = url });
         var first = await Throws<UnauthorizedException>(async () =>
         {
-            await foreach (var widget in anonymous.Widgets.ListAutoPagingAsync())
+            await foreach (var widget in anonymous.Widgets.ListAsync())
             {
                 seen.Add(widget.Id);
             }
         });
         Equal("req_mock", first.RequestId);
-        await Throws<UnauthorizedException>(() => anonymous.Widgets.ListAutoPagingAsync().GetFirstPageAsync());
-        await Throws<UnauthorizedException>(() => anonymous.Widgets.ListAsync());
+        await Throws<UnauthorizedException>(async () => await anonymous.Widgets.ListAsync());
         Equal(2, seen.Count);
     }
 

@@ -67,6 +67,13 @@
 {% if id == owner or id in ["Equals", "GetHashCode", "ToString", "GetType", "MemberwiseClone", "ReferenceEquals", "Finalize", "EqualityContract", "PrintMembers", "Deconstruct"] %}{{ id }}Value{% else %}{{ id }}{% endif %}
 {%- endmacro %}
 
+{# `true` when a body property, whose member is `name`, is shadowed on the page class `page` by a
+   paging member (or one perseid reserves for them in every SDK), else empty. -#}
+{% macro shadowed(name, page) -%}
+{% if name == page or name in ["Items", "Body", "HasNextPage", "NextPage", "GetNextPage", "GetNextPageAsync", "Pages",
+    "IterPages", "AsPagesAsync", "GetAsyncEnumerator"] %}true{% endif %}
+{%- endmacro %}
+
 {# The class of a resource: `ActivityApi` for both `activity` and a renamed `activity_api`. -#}
 {% macro resource_class(name) -%}
 {% set id = name | to_upper_camel_case -%}
