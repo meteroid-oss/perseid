@@ -79,7 +79,7 @@ var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.
 | Webhooks | An opt-in [Standard Webhooks](https://www.standardwebhooks.com) verifier in every language |
 | Tests | A test per operation in every SDK, run in process against the response the spec declares |
 | Docs | An `api.md` per SDK, regenerated with the code, and a README calling your API's own operations |
-| Specs | OpenAPI 3.0, 3.1 and 3.2, external `$ref`s, parameter styles, nullable and recursive schemas, webhook-only specs |
+| Specs | Swagger 2.0, OpenAPI 3.0, 3.1 and 3.2, external `$ref`s, parameter styles, nullable and recursive schemas, webhook-only specs |
 | Customizing | Middleware, resource snippets, ejectable templates |
 | CI | `perseid generate --check` fails when the SDKs drift from the spec |
 
@@ -164,8 +164,8 @@ signs in with `GH_TOKEN`, `GITHUB_TOKEN`, the token `gh` stores, or a browser lo
 
 ## Status
 
-perseid reads OpenAPI 3.0, 3.1 and 3.2, in JSON or YAML. Convert Swagger 2.0 first, for example with
-`npx swagger2openapi`.
+perseid reads Swagger 2.0 and OpenAPI 3.0, 3.1 and 3.2, in JSON or YAML. Swagger 2.0 is converted
+to OpenAPI 3 in memory, with no conversion step of your own.
 
 It generates the [Meteroid SDKs](https://github.com/search?q=org%3Ameteroid-oss+sdk&type=repositories). SDKs from the
 Stripe, GitHub, OpenAI, Twilio, DigitalOcean and Linode specs compile in every language, with one

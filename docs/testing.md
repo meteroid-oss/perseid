@@ -20,7 +20,7 @@ perseid is tested in layers, from the generator to SDKs running against a server
 ## Edge fixtures
 
 `tests/fixtures/edge-*.yaml` (names, types, operations, security, unions, legacy 3.0 constructs,
-OpenAPI 3.2) pile up constructs that are hard to generate:
+OpenAPI 3.2, Swagger 2.0) pile up constructs that are hard to generate:
 
 - keywords and punctuation as names, clashing enums and parameters;
 - recursive aliases, boolean schemas, nullable items;

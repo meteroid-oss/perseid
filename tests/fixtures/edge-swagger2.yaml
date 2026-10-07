@@ -1,0 +1,306 @@
+swagger: '2.0'
+info:
+  title: Edge Swagger
+  version: 1.0.0
+  description: Swagger 2.0 in the shapes perseid converts to OpenAPI 3.
+host: files.example.com
+basePath: /v2/
+schemes: [http, https]
+consumes: [application/json]
+produces: [application/json]
+securityDefinitions:
+  basic:
+    type: basic
+  key:
+    type: apiKey
+    name: X-API-Key
+    in: header
+  machine:
+    type: oauth2
+    flow: application
+    tokenUrl: https://auth.example.com/token
+    scopes:
+      files.read: Read files
+      files.write: Write files
+  user:
+    type: oauth2
+    flow: accessCode
+    authorizationUrl: https://auth.example.com/authorize
+    tokenUrl: https://auth.example.com/token
+    scopes:
+      files.read: Read files
+  browser:
+    type: oauth2
+    flow: implicit
+    authorizationUrl: https://auth.example.com/authorize
+    scopes: {}
+  owner:
+    type: oauth2
+    flow: password
+    tokenUrl: https://auth.example.com/token
+    scopes: {}
+security:
+  - key: []
+  - machine: [files.read]
+parameters:
+  folderId:
+    name: folderId
+    in: path
+    required: true
+    type: string
+  pageSize:
+    name: page_size
+    in: query
+    type: integer
+    format: int32
+    minimum: 1
+    maximum: 100
+    default: 20
+  fileBody:
+    name: file
+    in: body
+    required: true
+    schema:
+      $ref: '#/definitions/FileUpdate'
+responses:
+  NotFound:
+    description: The resource does not exist.
+    schema:
+      $ref: '#/definitions/Error'
+paths:
+  /folders/{folderId}/files:
+    parameters:
+      - $ref: '#/parameters/folderId'
+    get:
+      operationId: list_files
+      tags: [files]
+      parameters:
+        - $ref: '#/parameters/pageSize'
+        - name: tags
+          in: query
+          type: array
+          items: { type: string }
+          collectionFormat: multi
+        - name: fields
+          in: query
+          type: array
+          items: { type: string }
+        - name: owners
+          in: query
+          type: array
+          items: { type: string }
+          collectionFormat: pipes
+        - name: X-Request-Id
+          in: header
+          type: string
+          x-example: 2f0b6c1e
+      responses:
+        '200':
+          description: The files of the folder.
+          headers:
+            X-Total-Count:
+              description: How many files the folder holds.
+              type: integer
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/File'
+        '404':
+          $ref: '#/responses/NotFound'
+    post:
+      operationId: upload_file
+      tags: [files]
+      summary: Uploads a file with its metadata.
+      consumes: [multipart/form-data]
+      security:
+        - user: [files.read]
+      parameters:
+        - name: content
+          in: formData
+          description: The bytes of the file.
+          required: true
+          type: file
+        - name: name
+          in: formData
+          required: true
+          type: string
+        - name: labels
+          in: formData
+          type: array
+          items: { type: string }
+          collectionFormat: multi
+      responses:
+        '201':
+          description: The uploaded file.
+          schema:
+            $ref: '#/definitions/File'
+  /folders/{folderId}/rename:
+    post:
+      operationId: rename_folder
+      tags: [folders]
+      consumes: [application/x-www-form-urlencoded]
+      security:
+        - basic: []
+        - owner: []
+      parameters:
+        - $ref: '#/parameters/folderId'
+        - name: name
+          in: formData
+          required: true
+          type: string
+        - name: notify
+          in: formData
+          type: boolean
+          default: false
+        - name: editors
+          in: formData
+          type: array
+          items: { type: string }
+      responses:
+        '204':
+          description: Renamed.
+        default:
+          description: An error.
+          schema:
+            $ref: '#/definitions/Error'
+  /files/{fileId}:
+    parameters:
+      - name: fileId
+        in: path
+        required: true
+        type: string
+        format: uuid
+    get:
+      operationId: get_file
+      tags: [files]
+      responses:
+        '200':
+          description: The file.
+          schema:
+            $ref: '#/definitions/File'
+        '404':
+          $ref: '#/responses/NotFound'
+    patch:
+      operationId: update_file
+      tags: [files]
+      security:
+        - browser: []
+      parameters:
+        - $ref: '#/parameters/fileBody'
+      responses:
+        '200':
+          description: The updated file.
+          schema:
+            $ref: '#/definitions/File'
+    delete:
+      operationId: delete_file
+      tags: [files]
+      responses:
+        '204':
+          description: Deleted.
+  /files/{fileId}/content:
+    get:
+      operationId: download_file
+      tags: [files]
+      parameters:
+        - name: fileId
+          in: path
+          required: true
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: The bytes of the file.
+          schema:
+            type: file
+  /events:
+    get:
+      operationId: list_events
+      tags: [events]
+      parameters:
+        - $ref: '#/parameters/pageSize'
+      responses:
+        '200':
+          description: The events, newest first.
+          schema:
+            type: array
+            items:
+              $ref: '#/definitions/Event'
+definitions:
+  File:
+    type: object
+    required: [id, name, size]
+    properties:
+      id:
+        type: string
+        format: uuid
+      name:
+        type: string
+      size:
+        type: integer
+        format: int64
+      description:
+        type: string
+        x-nullable: true
+      labels:
+        type: array
+        items: { type: string }
+      folder:
+        $ref: '#/definitions/Folder'
+      created_at:
+        type: string
+        format: date-time
+        readOnly: true
+  Folder:
+    type: object
+    required: [id]
+    properties:
+      id:
+        type: string
+      parent:
+        x-nullable: true
+        allOf:
+          - $ref: '#/definitions/Folder'
+  FileUpdate:
+    type: object
+    properties:
+      name:
+        type: string
+      description:
+        type: string
+        x-nullable: true
+  Event:
+    type: object
+    discriminator: kind
+    required: [kind, at]
+    properties:
+      kind:
+        type: string
+      at:
+        type: string
+        format: date-time
+  FileCreated:
+    allOf:
+      - $ref: '#/definitions/Event'
+      - type: object
+        required: [file]
+        properties:
+          file:
+            $ref: '#/definitions/File'
+  FileDeleted:
+    allOf:
+      - $ref: '#/definitions/Event'
+      - type: object
+        required: [file_id]
+        properties:
+          file_id:
+            type: string
+            format: uuid
+  Error:
+    type: object
+    required: [message]
+    properties:
+      code:
+        type: integer
+      message:
+        type: string

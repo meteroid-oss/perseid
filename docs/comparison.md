@@ -79,8 +79,7 @@ use a GitHub App of your own (`perseid app`) or a token: see [credentials](ci.md
   your edits into generated files. perseid keeps whole files you own, and offers middleware,
   snippets and templates for the rest.
 - **Protocols and spec formats.** Fern reads AsyncAPI, gRPC and its own definition format.
-  openapi-generator reads Swagger 2.0, which perseid rejects. perseid skips OpenAPI 3.2's `QUERY`
-  method.
+  perseid skips OpenAPI 3.2's `QUERY` method.
 - **GitHub only.** perseid's pull requests, releases and App are GitHub's. `perseid generate` and
   `--check` run in any CI, but the release flow does not.
 - **Support.** The commercial vendors sell support, SLAs and migrations. perseid has GitHub issues.

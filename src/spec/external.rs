@@ -5,18 +5,211 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Map, Value};
 
-use super::{is_url, load, upgrade};
+use super::{is_url, load, normalize::percent_decode, swagger2, upgrade};
+
+/// Inlines the path items, parameters and responses a Swagger 2.0 document, read from `location`,
+/// references in other files, before its conversion reshapes them. The schemas they reference are
+/// left to `bundle`, their references made relative to the main document.
+pub(super) fn inline_swagger_2(doc: &mut Value, location: &str, root: &Path) -> Result<()> {
+    let mut inliner = Inliner {
+        root,
+        main: normalize(location),
+        docs: BTreeMap::new(),
+        inlining: Vec::new(),
+    };
+    if let Some(paths) = doc.get_mut("paths").and_then(Value::as_object_mut) {
+        for (path, item) in paths.iter_mut() {
+            if !path.starts_with("x-") {
+                inliner.inline(item, Kind::PathItem)?;
+            }
+        }
+    }
+    for (key, kind) in [
+        ("parameters", Kind::Parameter),
+        ("responses", Kind::Response),
+    ] {
+        if let Some(shared) = doc.get_mut(key).and_then(Value::as_object_mut) {
+            for value in shared.values_mut() {
+                inliner.inline(value, kind)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum Kind {
+    PathItem,
+    Parameter,
+    Response,
+}
+
+struct Inliner<'a> {
+    root: &'a Path,
+    main: String,
+    /// Loaded documents by location, as written.
+    docs: BTreeMap<String, Value>,
+    inlining: Vec<(String, String)>,
+}
+
+impl Inliner<'_> {
+    /// Replaces `value`, a `kind` object, and those below it by what they reference in other files.
+    fn inline(&mut self, value: &mut Value, kind: Kind) -> Result<()> {
+        if let Some(Value::String(reference)) = value.get("$ref")
+            && !reference.starts_with('#')
+        {
+            let reference = reference.clone();
+            let (location, fragment) = locate(&reference, &self.main);
+            if location == self.main {
+                value["$ref"] = Value::String(format!("#{fragment}"));
+                return Ok(());
+            }
+            let key = (location.clone(), fragment.clone());
+            if self.inlining.contains(&key) {
+                bail!("external reference `{reference}` contains itself");
+            }
+            let mut target = self.target(&location, &fragment)?;
+            rebase(&mut target, &location, &self.main, self.root, false);
+            if let (Value::Object(target), Value::Object(siblings)) = (&mut target, &mut *value) {
+                siblings.remove("$ref");
+                target.extend(std::mem::take(siblings));
+            }
+            *value = target;
+            self.inlining.push(key);
+            let inlined = self.inline(value, kind);
+            self.inlining.pop();
+            return inlined;
+        }
+        let Kind::PathItem = kind else {
+            return Ok(());
+        };
+        let Some(item) = value.as_object_mut() else {
+            return Ok(());
+        };
+        for (key, child) in item.iter_mut() {
+            if key == "parameters" {
+                self.parameters(child)?;
+            } else if swagger2::METHODS.contains(&key.as_str())
+                && let Some(op) = child.as_object_mut()
+            {
+                if let Some(parameters) = op.get_mut("parameters") {
+                    self.parameters(parameters)?;
+                }
+                for (status, response) in op
+                    .get_mut("responses")
+                    .and_then(Value::as_object_mut)
+                    .into_iter()
+                    .flatten()
+                {
+                    if !status.starts_with("x-") {
+                        self.inline(response, Kind::Response)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn parameters(&mut self, parameters: &mut Value) -> Result<()> {
+        for parameter in parameters.as_array_mut().into_iter().flatten() {
+            self.inline(parameter, Kind::Parameter)?;
+        }
+        Ok(())
+    }
+
+    fn target(&mut self, location: &str, fragment: &str) -> Result<Value> {
+        let reference = format!("{location}#{fragment}");
+        if !self.docs.contains_key(location) {
+            let doc = load(location, self.root).with_context(|| resolving(&reference))?;
+            self.docs.insert(location.to_owned(), doc);
+        }
+        self.docs[location]
+            .pointer(&percent_decode(fragment))
+            .cloned()
+            .with_context(|| format!("unresolved external reference `{reference}`"))
+    }
+}
+
+fn resolving(reference: &str) -> String {
+    format!(
+        "resolving external reference `{reference}` (to avoid it, bundle the spec first, for \
+         example with `redocly bundle`)"
+    )
+}
+
+/// Points the references of `value`, which lives in the document at `current`, at the same
+/// objects from the document at `main`.
+fn rebase(value: &mut Value, current: &str, main: &str, root: &Path, names: bool) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key == "$ref" && !names {
+                    if let Value::String(reference) = child {
+                        let (location, fragment) = locate(reference, current);
+                        *reference = match (location == main, fragment.as_str()) {
+                            (true, fragment) => format!("#{fragment}"),
+                            (false, "") => relative(main, &location, root),
+                            (false, fragment) => {
+                                format!("{}#{fragment}", relative(main, &location, root))
+                            }
+                        };
+                    }
+                } else if !skipped(key, names) {
+                    rebase(child, current, main, root, names_below(key, names));
+                }
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|i| rebase(i, current, main, root, false)),
+        _ => {}
+    }
+}
+
+/// `location` as a reference from the document at `main`, absolute when no relative path reaches
+/// it.
+fn relative(main: &str, location: &str, root: &Path) -> String {
+    if is_url(location) || Path::new(location).is_absolute() {
+        return location.to_owned();
+    }
+    let dir: Vec<Component> = Path::new(main)
+        .parent()
+        .map(|p| p.components().collect())
+        .unwrap_or_default();
+    let target: Vec<Component> = Path::new(location).components().collect();
+    let common = dir.iter().zip(&target).take_while(|(a, b)| a == b).count();
+    if is_url(main)
+        || dir[common..]
+            .iter()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        let path = root.join(location);
+        return std::path::absolute(&path)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
+    }
+    let mut path: PathBuf = dir[common..].iter().map(|_| Component::ParentDir).collect();
+    path.extend(&target[common..]);
+    path.to_string_lossy().into_owned()
+}
 
 /// Hoists every schema the document references from another file or URL, resolved from `location`.
-/// `from_3_0` tells that the main document was OpenAPI 3.0, so that the schemas of plain files it
-/// references are upgraded as its own were.
-pub(super) fn bundle(doc: &mut Value, location: &str, root: &Path, from_3_0: bool) -> Result<()> {
+/// `from_3_0` tells that the main document was OpenAPI 3.0 (`from_2_0`, Swagger 2.0 converted to
+/// it), so that the schemas of plain files it references are upgraded as its own were.
+pub(super) fn bundle(
+    doc: &mut Value,
+    location: &str,
+    root: &Path,
+    from_3_0: bool,
+    from_2_0: bool,
+) -> Result<()> {
     if !has_external(doc, false) {
         return Ok(());
     }
@@ -30,6 +223,7 @@ pub(super) fn bundle(doc: &mut Value, location: &str, root: &Path, from_3_0: boo
         root,
         main: main.clone(),
         from_3_0,
+        from_2_0,
         docs: BTreeMap::new(),
         names: BTreeMap::new(),
         taken,
@@ -51,7 +245,7 @@ pub(super) fn bundle(doc: &mut Value, location: &str, root: &Path, from_3_0: boo
         if schema.as_object().is_some_and(|s| s.len() > 1) || reference.starts_with('#') {
             continue;
         }
-        let key = bundler.locate(reference, &main);
+        let key = locate(reference, &main);
         if key.0 != main && !bundler.names.contains_key(&key) {
             bundler.names.insert(key.clone(), name.clone());
             aliases.push((name.clone(), key));
@@ -116,8 +310,10 @@ struct Bundler<'a> {
     /// Location of the main document.
     main: String,
     from_3_0: bool,
-    /// Loaded documents by location, and whether each is an OpenAPI document (already upgraded).
-    docs: BTreeMap<String, (Value, bool)>,
+    from_2_0: bool,
+    /// Loaded documents by location, whether each is an OpenAPI document (already upgraded) and
+    /// whether it was Swagger 2.0, whose objects moved.
+    docs: BTreeMap<String, (Value, bool, bool)>,
     /// Hoisted component name by (location, fragment).
     names: BTreeMap<(String, String), String>,
     taken: BTreeSet<String>,
@@ -197,15 +393,14 @@ impl Bundler<'_> {
         Ok(())
     }
 
-    /// The (location, fragment) `reference`, seen from the document at `current`, points to.
-    fn locate(&self, reference: &str, current: &str) -> (String, String) {
-        let (file, fragment) = reference.split_once('#').unwrap_or((reference, ""));
-        let location = if file.is_empty() {
-            current.to_owned()
-        } else {
-            join(current, file)
-        };
-        (location, fragment.to_owned())
+    /// The local reference to `fragment` of the main document, where it moved to when it was
+    /// Swagger 2.0.
+    fn local(&self, fragment: &str) -> String {
+        let moved = self
+            .from_2_0
+            .then(|| swagger2::fragment(fragment))
+            .flatten();
+        format!("#{}", moved.as_deref().unwrap_or(fragment))
     }
 
     /// What `fragment` of the document at `location` holds, upgraded from 3.0 when the main
@@ -213,23 +408,24 @@ impl Bundler<'_> {
     fn target(&mut self, location: &str, fragment: &str, schema: bool) -> Result<Value> {
         let reference = format!("{location}#{fragment}");
         if !self.docs.contains_key(location) {
-            let mut other = load(location, self.root).with_context(|| {
-                format!(
-                    "resolving external reference `{reference}` (to avoid it, bundle the spec \
-                     first, for example with `redocly bundle`)"
-                )
-            })?;
-            let openapi = other.get("openapi").is_some() || other.get("swagger").is_some();
+            let mut other = load(location, self.root).with_context(|| resolving(&reference))?;
+            let swagger = swagger2::is_swagger(&other);
+            let openapi = other.get("openapi").is_some() || swagger;
             if openapi {
                 upgrade::to_3_1(&mut other).with_context(|| location.to_owned())?;
             }
-            self.docs.insert(location.to_owned(), (other, openapi));
+            self.docs
+                .insert(location.to_owned(), (other, openapi, swagger));
         }
-        let (doc, openapi) = &self.docs[location];
+        let (doc, openapi, swagger) = &self.docs[location];
+        let moved = swagger.then(|| swagger2::fragment(fragment)).flatten();
         let mut target = doc
-            .pointer(fragment)
+            .pointer(moved.as_deref().unwrap_or(fragment))
             .cloned()
             .with_context(|| format!("unresolved external reference `{reference}`"))?;
+        if self.from_2_0 && !openapi {
+            swagger2::schemas(&mut target);
+        }
         if self.from_3_0 && !openapi {
             if schema {
                 upgrade::schema(&mut target);
@@ -243,9 +439,9 @@ impl Bundler<'_> {
     /// The object `reference` points to, with its own references rewritten, or the local
     /// reference to use when it points into the main document.
     fn inline(&mut self, reference: &str, current: &str) -> Result<Result<Value, String>> {
-        let (location, fragment) = self.locate(reference, current);
+        let (location, fragment) = locate(reference, current);
         if location == self.main {
-            return Ok(Err(format!("#{fragment}")));
+            return Ok(Err(self.local(&fragment)));
         }
         let key = (location.clone(), fragment.clone());
         if self.inlining.contains(&key) {
@@ -261,9 +457,9 @@ impl Bundler<'_> {
     /// Adds the schema `reference` points to, with what it references in turn, to the hoisted
     /// schemas, and returns the local reference to it.
     fn hoist(&mut self, reference: &str, current: &str) -> Result<String> {
-        let (location, fragment) = self.locate(reference, current);
+        let (location, fragment) = locate(reference, current);
         if location == self.main {
-            return Ok(format!("#{fragment}"));
+            return Ok(self.local(&fragment));
         }
         let key = (location.clone(), fragment.clone());
         if let Some(name) = self.names.get(&key) {
@@ -315,6 +511,57 @@ impl Bundler<'_> {
         }
         self.taken.insert(name.clone());
         name
+    }
+}
+
+/// The (location, fragment) `reference`, seen from the document at `current`, points to.
+fn locate(reference: &str, current: &str) -> (String, String) {
+    let (file, fragment) = reference.split_once('#').unwrap_or((reference, ""));
+    let location = if file.is_empty() {
+        current.to_owned()
+    } else {
+        join(current, file)
+    };
+    (location, fragment.to_owned())
+}
+
+/// Points the references of `doc`, read from `location`, to other files at their absolute path
+/// or URL.
+pub(super) fn absolute_refs(doc: &mut Value, location: &str, root: &Path) {
+    let base = if is_url(location) {
+        location.to_owned()
+    } else {
+        let path = root.join(location);
+        std::path::absolute(&path)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned()
+    };
+    absolute(doc, &base, false);
+}
+
+fn absolute(value: &mut Value, base: &str, names: bool) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key == "$ref" && !names {
+                    if let Value::String(reference) = child
+                        && !reference.starts_with('#')
+                    {
+                        let (file, fragment) = reference.split_once('#').unwrap_or((reference, ""));
+                        let file = join(base, file);
+                        *reference = match fragment {
+                            "" => file,
+                            fragment => format!("{file}#{fragment}"),
+                        };
+                    }
+                } else if !skipped(key, names) {
+                    absolute(child, base, names_below(key, names));
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(|i| absolute(i, base, false)),
+        _ => {}
     }
 }
 
@@ -425,7 +672,7 @@ mod tests {
                     "$ref": "sub/other.json#/components/schemas/Ext" } } } } } } } },
             "components": { "schemas": { "Inner": { "type": "boolean" } } }
         });
-        bundle(&mut doc, "spec.json", dir.path(), false).unwrap();
+        bundle(&mut doc, "spec.json", dir.path(), false, false).unwrap();
         let schema =
             &doc["paths"]["/x"]["get"]["responses"]["200"]["content"]["application/json"]["schema"];
         assert_eq!(schema["$ref"], "#/components/schemas/Ext");
@@ -471,7 +718,7 @@ mod tests {
         let mut doc = json!({ "paths": {
             "/pets": { "$ref": "paths/pets.json", "summary": "Pets" }
         } });
-        bundle(&mut doc, "spec.json", dir.path(), false).unwrap();
+        bundle(&mut doc, "spec.json", dir.path(), false, false).unwrap();
         let item = &doc["paths"]["/pets"];
         assert_eq!(item["summary"], "Pets");
         assert!(item.get("$ref").is_none(), "{item}");
@@ -492,6 +739,120 @@ mod tests {
     }
 
     #[test]
+    fn swagger_2_specs_reference_files_by_their_2_0_locations() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "owner.json",
+            &json!({ "type": "object", "discriminator": "kind", "x-nullable": true,
+                "properties": { "kind": { "type": "string" },
+                    "pet": { "$ref": "spec.json#/definitions/Pet" } } }),
+        );
+        write(
+            dir.path(),
+            "other.json",
+            &json!({ "swagger": "2.0", "definitions": {
+                "Toy": { "properties": { "maker": { "$ref": "#/definitions/Maker" } } },
+                "Maker": { "type": "string" }
+            } }),
+        );
+        let mut doc = json!({ "swagger": "2.0", "definitions": { "Pet": { "properties": {
+            "owner": { "$ref": "owner.json" },
+            "toy": { "$ref": "other.json#/definitions/Toy" }
+        } } } });
+        upgrade::to_3_1(&mut doc).unwrap();
+        bundle(&mut doc, "spec.json", dir.path(), true, true).unwrap();
+        let schemas = &doc["components"]["schemas"];
+        let pet = &schemas["Pet"]["properties"];
+        assert_eq!(pet["owner"]["$ref"], "#/components/schemas/owner");
+        assert_eq!(pet["toy"]["$ref"], "#/components/schemas/Toy");
+        let owner = &schemas["owner"];
+        assert_eq!(owner["discriminator"], json!({ "propertyName": "kind" }));
+        assert_eq!(owner["type"], json!(["object", "null"]));
+        assert_eq!(
+            owner["properties"]["pet"]["$ref"],
+            "#/components/schemas/Pet"
+        );
+        assert_eq!(
+            schemas["Toy"]["properties"]["maker"]["$ref"],
+            "#/components/schemas/Maker"
+        );
+        assert_eq!(schemas["Maker"], json!({ "type": "string" }));
+    }
+
+    #[test]
+    fn rebased_references_reach_the_same_files_from_the_main_document() {
+        let root = Path::new("/repo");
+        for (main, location) in [
+            ("api/swagger.yaml", "api/paths/pets.yaml"),
+            ("api/swagger.yaml", "defs.yaml"),
+            ("api/v1/swagger.yaml", "api/v2/defs.yaml"),
+            ("swagger.yaml", "../defs.yaml"),
+            (
+                "https://h.example/v1/swagger.json",
+                "https://h.example/defs.json",
+            ),
+        ] {
+            let relative = relative(main, location, root);
+            assert_eq!(join(main, &relative), location, "{main} {relative}");
+        }
+        assert_eq!(
+            relative("../api/swagger.yaml", "defs.yaml", root),
+            "/repo/defs.yaml"
+        );
+        let mut value = json!({ "a": { "$ref": "#/definitions/A" }, "b": { "$ref": "../swagger.yaml#/x" },
+            "c": { "$ref": "../defs.yaml" }, "example": { "$ref": "#/kept" } });
+        rebase(
+            &mut value,
+            "api/paths/pets.yaml",
+            "api/swagger.yaml",
+            root,
+            false,
+        );
+        assert_eq!(
+            value,
+            json!({ "a": { "$ref": "paths/pets.yaml#/definitions/A" }, "b": { "$ref": "#/x" },
+                "c": { "$ref": "defs.yaml" }, "example": { "$ref": "#/kept" } })
+        );
+    }
+
+    #[test]
+    fn swagger_2_objects_of_other_files_are_inlined_before_the_conversion() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "params.json",
+            &json!({ "a": { "$ref": "#/b" }, "b": { "name": "b", "in": "body", "schema": {} },
+                "loop": { "$ref": "#/loop" } }),
+        );
+        let mut doc = json!({ "swagger": "2.0", "paths": {
+            "/x": { "post": { "parameters": [
+                { "$ref": "params.json#/a", "description": "d" }
+            ] } },
+            "x-skipped": { "$ref": "nope.json" }
+        } });
+        inline_swagger_2(&mut doc, "spec.json", dir.path()).unwrap();
+        assert_eq!(
+            doc["paths"]["/x"]["post"]["parameters"][0],
+            json!({ "name": "b", "in": "body", "schema": {}, "description": "d" })
+        );
+        let mut looping = json!({ "swagger": "2.0", "parameters": {
+            "L": { "$ref": "params.json#/loop" } } });
+        let error = inline_swagger_2(&mut looping, "spec.json", dir.path()).unwrap_err();
+        assert!(error.to_string().contains("contains itself"), "{error}");
+    }
+
+    #[test]
+    fn absolute_references_reach_other_files_from_anywhere() {
+        let mut doc = json!({ "a": { "$ref": "../b.json#/definitions/B" }, "c": { "$ref": "#/c" },
+            "d": { "$ref": "https://h.example/d.json" } });
+        absolute_refs(&mut doc, "api/spec.json", Path::new("/repo"));
+        assert_eq!(doc["a"]["$ref"], "/repo/b.json#/definitions/B");
+        assert_eq!(doc["c"]["$ref"], "#/c");
+        assert_eq!(doc["d"]["$ref"], "https://h.example/d.json");
+    }
+
+    #[test]
     fn plain_schema_files_of_a_3_0_spec_are_upgraded() {
         let dir = tempfile::tempdir().unwrap();
         write(
@@ -501,7 +862,7 @@ mod tests {
         );
         let mut doc = json!({ "components": { "schemas": { "Thing": { "properties": {
             "n": { "$ref": "Nul.json" } } } } } });
-        bundle(&mut doc, "spec.json", dir.path(), true).unwrap();
+        bundle(&mut doc, "spec.json", dir.path(), true, false).unwrap();
         assert_eq!(
             doc["components"]["schemas"]["Nul"],
             json!({ "type": ["string", "null"] })
@@ -516,7 +877,7 @@ mod tests {
             "exampleValue": { "$ref": "Ex.json" },
             "example": { "$ref": "Ex.json" }
         }, "example": { "$ref": "nope.json" } } } } });
-        bundle(&mut doc, "spec.json", dir.path(), false).unwrap();
+        bundle(&mut doc, "spec.json", dir.path(), false, false).unwrap();
         let properties = &doc["components"]["schemas"]["Thing"]["properties"];
         assert_eq!(
             properties["exampleValue"]["$ref"],
@@ -543,7 +904,7 @@ mod tests {
                 "Error": { "type": "object" }
             } }
         });
-        bundle(&mut doc, "openapi.json", dir.path(), false).unwrap();
+        bundle(&mut doc, "openapi.json", dir.path(), false, false).unwrap();
         let schemas = doc["components"]["schemas"].as_object().unwrap();
         let mut names = schemas.keys().collect::<Vec<_>>();
         names.sort();
@@ -566,7 +927,7 @@ mod tests {
             "application/json": { "schema": { "$ref": "nope.yaml#/X" } } } } } } } } });
         let error = format!(
             "{:#}",
-            bundle(&mut doc, "spec.json", dir.path(), false).unwrap_err()
+            bundle(&mut doc, "spec.json", dir.path(), false, false).unwrap_err()
         );
         assert!(
             error.contains("nope.yaml#/X") && error.contains("redocly bundle"),
