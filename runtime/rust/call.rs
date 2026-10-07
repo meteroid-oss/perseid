@@ -155,4 +155,12 @@ impl<T> ApiResponse<T> {
     pub fn into_parts(self) -> (StatusCode, HeaderMap, T) {
         (self.status, self.headers, self.data)
     }
+
+    pub(crate) fn map<U>(self, f: impl FnOnce(T) -> U) -> ApiResponse<U> {
+        ApiResponse {
+            status: self.status,
+            headers: self.headers,
+            data: f(self.data),
+        }
+    }
 }

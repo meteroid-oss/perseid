@@ -12,9 +12,6 @@
 
 {% macro method(op) %}{{ op.name | to_rust_ident }}{% endmacro %}
 
-{#- The method iterating over every item of a paginated operation. -#}
-{% macro iter_method(op) %}{{ op.name | to_snake_case }}_iter{% endmacro %}
-
 {% macro model_path(name) %}src/models/{{ name | to_snake_case }}.rs{% endmacro %}
 
 {% macro resource_path(name) %}src/api/{{ name | to_snake_case }}.rs{% endmacro %}
@@ -31,9 +28,8 @@
 {% macro uses(ex) %}{% if ex.body %}use {{ sdk.rust_crate }}::models::{{ ex.body.schema | to_upper_camel_case }};
 {% endif %}{% endmacro %}
 
-{#- The call of an example, before `.await`; `iter` calls its `_iter` twin, and `options` are
-    request options it is called with. -#}
-{% macro call(ex, iter=false, options="") -%}
+{#- The call of an example, before `.await`; `options` are request options it is called with. -#}
+{% macro call(ex, options="") -%}
     {%- set out = namespace(args=[]) -%}
     {%- for a in ex.path_args %}{% set out.args = out.args + [literal(a)] %}{% endfor -%}
     {%- if ex.body -%}
@@ -42,5 +38,5 @@
         {%- set out.args = out.args + [(ex.body.schema | to_upper_camel_case) ~ "::new(" ~ (fields.list | join(", ")) ~ ")"] -%}
     {%- endif -%}
     {%- if ex.operation | has_query_or_header_params %}{% set out.args = out.args + ["None"] %}{% endif -%}
-    {{ resource(ex.resource) }}{{ ".with_options(" ~ options ~ ")" if options }}.{{ iter_method(ex.operation) if iter else method(ex.operation) }}({{ out.args | join(", ") }})
+    {{ resource(ex.resource) }}{{ ".with_options(" ~ options ~ ")" if options }}.{{ method(ex.operation) }}({{ out.args | join(", ") }})
 {%- endmacro %}

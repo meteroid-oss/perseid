@@ -111,23 +111,33 @@ let options = RequestOptions::new().max_retries(0).timeout(std::time::Duration::
 {% if list %}
 ## Pagination
 
-`*_iter` methods return a `Paginator`, a `futures_core::Stream` of every item that fetches pages
-on demand. `pages()` walks pages instead:
+A paginated list returns a `PageCall`. Awaited, it gives the first `Page`, which dereferences to
+the response body and lists this page's items with `items()`; `next_page()` fetches the next one.
+`items()` on the call streams every item across pages, fetching each page when needed, and
+`pages()` every page; both are `futures_core::Stream`s too:
 
 ```rust
-use futures_util::StreamExt;
-
-let mut items = {{ docs.call(list, iter=true) }};
-while let Some({{ docs.var(list.item, "item") }}) = items.next().await {
-    println!("{:?}", {{ docs.var(list.item, "item") }}?);
-}
-
-let page = {{ docs.call(list, iter=true) }}.first_page().await?;
-println!("{} items", page.items().len());
+{% set pg = list.operation.pagination -%}
+{% set shown = pg.next_cursor or pg.total_pages or pg.total or pg.has_more or pg["items"] -%}
+{% set item = docs.var(list.item, "item") -%}
+let page = {{ docs.call(list) }}.await?;
+println!("{:?}, {} items", page.{{ shown[0] | to_rust_ident }}, page.items().len());
 if let Some(next) = page.next_page().await? {
     println!("{} more", next.items().len());
 }
+
+let mut items = {{ docs.call(list) }}.items();
+while let Some({{ item }}) = items.next().await {
+    println!("{:?}", {{ item }}?);
+}
+
+let mut pages = {{ docs.call(list) }}.pages();
+while let Some(page) = pages.next().await {
+    println!("{} items", page?.items().len());
+}
 ```
+
+`into_inner()` gives a page's body, and `with_response()` the status and headers of the first page.
 {% endif %}
 {%- if stream %}
 ## Streaming

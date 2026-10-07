@@ -18,7 +18,7 @@ pub(crate) mod auth_schemes;
 pub use auth_schemes::{BasicAuth, TokenProvider};
 #[path = "../pagination.rs"]
 pub(crate) mod pagination;
-pub use pagination::{Page, Pages, Paginator};
+pub use pagination::{Page, PageCall, Pages, Paginator};
 #[path = "../request_options.rs"]
 mod request_options;
 pub use request_options::RequestOptions;

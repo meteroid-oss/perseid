@@ -57,23 +57,23 @@ async fn smoke() {
     assert_eq!(tok.account().check_health().await.unwrap().status, "||");
     assert_eq!(tok.account().retrieve_machine().await.unwrap().status, "Bearer tok||");
     let widgets = tok.widgets();
-    assert_eq!(ids(widgets.list_iter(None), |w| w.id).await, ["w1", "w2", "w3"]);
+    assert_eq!(ids(widgets.list(None).items(), |w| w.id).await, ["w1", "w2", "w3"]);
     let options = WidgetsListEventsOptions::new("created");
-    let events = widgets.list_events_iter("w1", options);
+    let events = widgets.list_events("w1", options).items();
     assert_eq!(ids(events, |e| e.id).await, ["e1", "e2", "e3"]);
-    let mut gadgets = tok.gadgets().list_iter(None);
+    let mut gadgets = tok.gadgets().list(None).items();
     let mut gadget_ids = Vec::new();
     while let Some(gadget) = gadgets.next().await {
         gadget_ids.push(gadget.unwrap().id);
     }
     assert_eq!(gadget_ids, ["g1", "g2", "g3"]);
-    assert_eq!(ids(tok.records().list_iter(None), |r| r.id).await, ["r1", "r2", "r3"]);
+    assert_eq!(ids(tok.records().list(None).items(), |r| r.id).await, ["r1", "r2", "r3"]);
     let streamed: Vec<String> =
-        widgets.list_iter(None).map_ok(|w| w.id).try_collect().await.unwrap();
+        widgets.list(None).items().map_ok(|w| w.id).try_collect().await.unwrap();
     assert_eq!(streamed, ["w1", "w2", "w3"]);
-    let first = tok.gadgets().list_iter(None).take(1).collect::<Vec<_>>().await;
+    let first = tok.gadgets().list(None).items().take(1).collect::<Vec<_>>().await;
     assert_eq!(first.len(), 1);
-    let spawned = tokio::spawn(tok.widgets().list_iter(None).collect());
+    let spawned = tokio::spawn(tok.widgets().list(None).items().collect());
     assert_eq!(spawned.await.unwrap().unwrap().len(), 3);
     let other = RequestOptions::new().header("authorization", "Bearer other");
     let status = tok.account().with_options(other).retrieve_machine().await.unwrap().status;
@@ -85,9 +85,11 @@ async fn smoke() {
     let provided = builder().token_provider(provider).build().unwrap();
     assert_eq!(provided.account().retrieve_machine().await.unwrap().status, "Bearer fresh||");
     let keyed = builder().api_key("api_key", "k").build().unwrap();
-    assert_eq!(ids(keyed.widgets().list_iter(None), |w| w.id).await, ["w1", "w2", "w3"]);
+    assert_eq!(ids(keyed.widgets().list(None).items(), |w| w.id).await, ["w1", "w2", "w3"]);
     let anonymous = client("");
-    let error = anonymous.widgets().list_iter(None).next().await.unwrap().unwrap_err();
+    let error = anonymous.widgets().list(None).items().next().await.unwrap().unwrap_err();
+    assert_eq!(error.kind(), Some(ApiErrorKind::Unauthorized));
+    let error = anonymous.widgets().list(None).await.unwrap_err();
     assert_eq!(error.kind(), Some(ApiErrorKind::Unauthorized));
     assert_eq!(error.api().unwrap().payload().unwrap().error, "unauthorized");
 }
@@ -95,7 +97,8 @@ async fn smoke() {
 #[tokio::test]
 async fn parity() {
     let client = client("tok");
-    let widget = &client.widgets().list(None).await.unwrap().data[0];
+    let page = client.widgets().list(None).await.unwrap();
+    let widget = &page.data[0];
     assert_eq!(widget.extra["color"], "red");
     assert_eq!(serde_json::to_value(widget).unwrap()["color"], "red");
 
@@ -103,8 +106,11 @@ async fn parity() {
     assert_eq!(response.status(), 200);
     assert_eq!(response.request_id(), Some("req_mock"));
     assert_eq!(response.data().data.len(), 2);
+    assert!(response.data().has_next_page());
+    let body: WidgetList = response.into_data().into_inner();
+    assert_eq!(body.next_cursor.as_deref(), Some("c2"));
 
-    let page = client.widgets().list_iter(None).first_page().await.unwrap();
+    let page = client.widgets().list(None).await.unwrap();
     let names = |page: &Page<WidgetList, Widget>| {
         page.items().iter().map(|w| w.id.clone()).collect::<Vec<_>>()
     };
@@ -115,8 +121,29 @@ async fn parity() {
     assert_eq!(names(&last), ["w3"]);
     assert!(!last.has_next_page());
     assert!(last.next_page().await.unwrap().is_none());
-    let pages = client.gadgets().list_iter(None).pages();
+    let pages = client.gadgets().list(None).pages();
     assert_eq!(pages.map_ok(|page| page.into_items().len()).try_collect::<Vec<_>>().await.unwrap(), [2, 1]);
+
+    let gadgets = client.gadgets().list(None).await.unwrap();
+    assert_eq!((gadgets.meta.page, gadgets.meta.total_pages), (0, 2));
+    assert_eq!(gadgets.items.len(), gadgets.items().len());
+    let next = gadgets.next_page().await.unwrap().unwrap();
+    assert_eq!((next.meta.page, next.items().len(), next.has_next_page()), (1, 1, false));
+    let mut pages = client.gadgets().list(None).pages();
+    let mut walked = Vec::new();
+    while let Some(page) = pages.next().await {
+        walked.push(page.unwrap().items().iter().map(|g| g.id.clone()).collect::<Vec<_>>());
+    }
+    assert_eq!(walked, [vec!["g1", "g2"], vec!["g3"]]);
+    let records = client.records().list(None).await.unwrap();
+    assert_eq!((records.total, records.data.len()), (3, records.items().len()));
+    let mut all = Vec::new();
+    let mut current = Some(records);
+    while let Some(page) = current {
+        all.extend(page.items().iter().map(|r| r.id.clone()));
+        current = page.next_page().await.unwrap();
+    }
+    assert_eq!(all, ["r1", "r2", "r3"]);
 
     let streaming = client.streaming();
     let mut chunks = streaming.create_completion_stream(CompletionRequest::new("ab")).await.unwrap();
@@ -684,7 +711,7 @@ async fn status_errors_are_typed_and_not_retried() {
 #[tokio::test]
 async fn a_failing_second_page_is_raised_not_swallowed() {
     let (client, tap) = tapped(builder().max_retries(2));
-    let mut items = client.errors().list_scenarios_pages_iter(None);
+    let mut items = client.errors().list_scenarios_pages(None).items();
     for id in ["p1", "p2"] {
         assert_eq!(items.next().await.unwrap().unwrap().id, id);
     }
@@ -695,10 +722,10 @@ async fn a_failing_second_page_is_raised_not_swallowed() {
     assert!(items.next().await.is_none(), "the iteration stops after the error");
     assert_eq!(tap.count(), 2);
 
-    let error = client.errors().list_scenarios_pages_iter(None).collect().await.unwrap_err();
+    let error = client.errors().list_scenarios_pages(None).items().collect().await.unwrap_err();
     assert_eq!(error.kind(), Some(ApiErrorKind::Conflict));
 
-    let first = client.errors().list_scenarios_pages_iter(None).first_page().await.unwrap();
+    let first = client.errors().list_scenarios_pages(None).await.unwrap();
     assert!(first.has_next_page());
     let error = first.next_page().await.err().expect("the second page fails");
     assert_eq!(error.status(), Some(StatusCode::CONFLICT));

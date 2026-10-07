@@ -151,11 +151,22 @@ impl {{ resource_type_name }} {
     {% endif -%}
     {% set may_be_empty = op.response_may_be_empty | default(false) and op.pagination is undefined and (op.response_body_schema_name is defined or op.response_body_json_type is defined) -%}
     {% if may_be_empty %}{% set returned %}Option<{{ returned }}>{% endset %}{% endif -%}
+    {# A paginated operation's request is private: its public method returns a `PageCall`. -#}
+    {% set paginated = op.pagination is defined -%}
+    {% set request_fn = (op.name | to_snake_case) ~ "_request" if paginated else op.name | to_rust_ident -%}
+    {% set doc -%}
     {% if op.description is defined -%}
         {{ op.description | to_doc_comment(style="rust") }}
     ///
     {% endif -%}
+    {% if paginated -%}
+    /// `{{ op.method | upper }} {{ op.path }}`, a page at a time: awaiting the call gives the first
+    /// [`Page`](crate::api::Page), [`items`](crate::api::PageCall::items) every
+    /// [`{{ op.pagination.item_schema | to_upper_camel_case }}`](crate::models::{{ op.pagination.item_schema | to_upper_camel_case }}) across pages
+    /// and [`pages`](crate::api::PageCall::pages) every page.
+    {% else -%}
     /// `{{ op.method | upper }} {{ op.path }}`{% if op.response_is_event_stream %}, as an event stream{% if op.event_schema_name is defined %} of [`{{ op.event_schema_name | to_upper_camel_case }}`](crate::models::{{ op.event_schema_name | to_upper_camel_case }}){% endif %}{% endif %}{% if may_be_empty %}, `None` when the response has no body{% endif %}.
+    {% endif -%}
     {% if op.errors -%}
     {% set schemas = op.errors | dictsort | map(attribute=1) | unique | list -%}
     ///
@@ -166,7 +177,9 @@ impl {{ resource_type_name }} {
     {% if op.deprecated -%}
         #[deprecated]
     {% endif -%}
-    pub fn {{ op.name | to_rust_ident }}(
+    {% endset -%}
+    {% if not paginated %}{{ doc }}{% endif -%}
+    {% if not paginated %}pub {% endif %}fn {{ request_fn }}(
         &self,
 
         {#- path parameters -#}
@@ -329,12 +342,8 @@ impl {{ resource_type_name }} {
     {% set field = param.ident | to_rust_ident -%}
     {% set ty = rust_type(param.type) -%}
     {% set lossless = ["i8", "u8", "i16", "u16", "i32", "u32"] -%}
-    /// Every item of [`Self::{{ op.name | to_rust_ident }}`], fetching further pages on demand.
-    /// [`pages`](crate::api::Paginator::pages) walks the pages instead.
-    {% if op.deprecated -%}
-    #[deprecated]
-    {% endif -%}
-    pub fn {{ op.name | to_snake_case }}_iter(
+    {{ doc -}}
+    pub fn {{ op.name | to_rust_ident }}(
         &self,
         {% for p in op.path_params -%}
             {% if p in op.path_styles and op.path_styles[p].type is defined -%}
@@ -353,7 +362,7 @@ impl {{ resource_type_name }} {
         {%- else -%}
             options: impl Into<Option<{{ param_struct_name }}>>,
         {%- endif %}
-    ) -> crate::api::Paginator<crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}, crate::models::{{ pg.item_schema | to_upper_camel_case }}> {
+    ) -> crate::api::PageCall<crate::models::{{ op.response_body_schema_name | to_upper_camel_case }}, crate::models::{{ pg.item_schema | to_upper_camel_case }}> {
         {% if pg.style == "cursor" -%}
         static WALK: crate::api::pagination::Walk<{{ param_struct_name }}> = crate::api::pagination::Walk::Cursor {
             {% if param.required -%}
@@ -391,17 +400,14 @@ impl {{ resource_type_name }} {
         let {{ p | to_rust_ident }} = {{ p | to_rust_ident }}.to_string();
         {% endfor -%}
         let this = self.clone();
-        {% if op.deprecated -%}
-        #[allow(deprecated)]
-        {% endif -%}
         let call = move |options: {{ param_struct_name }}| {
-            this.{{ op.name | to_rust_ident }}(
+            this.{{ request_fn }}(
                 {% for p in op.path_params %}{% if p in op.path_styles and op.path_styles[p].type is defined %}{{ p | to_rust_ident }}.clone(){% else %}&{{ p | to_rust_ident }}{% endif %}, {% endfor %}
                 {% if op.request_body_schema_name is defined %}{{ body_ident }}.clone(), {% elif op.request_body_json_type is defined %}body.clone(), {% endif %}
                 options,
             )
         };
-        crate::api::Paginator::new(
+        crate::api::PageCall::new(
             options{% if not has_required_params %}.into().unwrap_or_default(){% endif %},
             WALK,
             crate::api::pages::{{ (resource.name ~ "_" ~ op.name) | to_upper_snake_case }},

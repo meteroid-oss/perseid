@@ -2587,7 +2587,7 @@ fn api_md_lists_every_operation_and_readmes_call_real_ones() {
         (
             "features.yaml",
             "rust",
-            "client.errors().list_scenarios_pages_iter(None)",
+            "client.errors().list_scenarios_pages(None).items()",
         ),
         (
             "features.yaml",
