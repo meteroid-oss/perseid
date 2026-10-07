@@ -15,6 +15,8 @@ fn a_base_url_is_required() {
     assert!(format!("{explicit:?}").contains("https://pets.example.com"));
     std::env::set_var("PETSTORE_BASE_URL", "https://env.example.com");
     let from_env = Petstore::from_env().unwrap();
+    let builder = Petstore::builder().build();
     std::env::remove_var("PETSTORE_BASE_URL");
     assert!(format!("{from_env:?}").contains("https://env.example.com"));
+    assert!(builder.is_err(), "the builder reads no environment variable");
 }

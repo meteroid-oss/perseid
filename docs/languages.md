@@ -119,6 +119,8 @@ let client = Acme::builder()
 ```
 
 - `Acme::new(token)` and `Acme::from_env()` are shortcuts. All three return a `Result`.
+- Only `from_env()` and `AcmeBuilder::from_env()` read the environment variables: `builder()` and
+  `new` take nothing from them.
 - The builder also takes `header`, `middleware`, `http_client`, and `connector` for any hyper
   connector (custom TLS roots, client certificates, a proxy).
 - Credentials: `token_provider`, `client_credentials(id, secret)`, `basic_auth`,
@@ -195,12 +197,12 @@ match client.customers().retrieve("cus_1").await {
   setter per field `new` leaves out: `CustomerUpdate::new().name("Ada")`.
 - `Default` is implemented when every required field has a default.
 - In PATCH bodies, nullable optional fields are `Option<Option<T>>`: `Some(None)` sends `null`.
-- Recursive fields are boxed. Dates are `chrono` types.
-- Enums and unions are `#[non_exhaustive]`, with an `Unknown` variant that serializes back
   Their setters wrap the value, and `clear_*()` sends `null`.
 - A named string schema, such as `CustomerId`, is a newtype over `String`: built `From` any
   string, read as `&str` through `Deref`, `as_str()` or `Display`, compared with strings. One ID
   type cannot be passed where another is expected.
+- Recursive fields are boxed. Dates are `chrono` types.
+- Enums and unions are `#[non_exhaustive]`, with an `Unknown` variant that serializes back
   unchanged.
 - Unions are enums with `From` impls and `as_*` accessors: `ChargeCustomer::String(id)`,
   `ChargeCustomer::Customer(Box<Customer>)`. Expandable fields have `id()`.

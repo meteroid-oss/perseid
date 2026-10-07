@@ -209,7 +209,7 @@ pub struct {{ client }} {
 }
 
 impl {{ client }} {
-    /// A client sending `token`, configured otherwise like [`from_env`](Self::from_env).
+    /// A client sending `token`, with the default settings.
     ///
     /// # Errors
     ///
@@ -225,11 +225,11 @@ impl {{ client }} {
     ///
     /// See [`{{ client }}Builder::build`].
     pub fn from_env() -> Result<Self, Error> {
-        Self::builder().build()
+        {{ client }}Builder::from_env().build()
     }
 
     /// A builder of a client, to set its token, base URL, timeout, retries, headers or HTTP
-    /// client.
+    /// client. It reads no environment variable, unlike [`{{ client }}Builder::from_env`].
     pub fn builder() -> {{ client }}Builder {
         {{ client }}Builder::default()
     }
@@ -290,18 +290,32 @@ pub struct {{ client }}Builder {
 }
 
 impl {{ client }}Builder {
-    /// The token sent to the API. Defaults to `{{ sdk.env_prefix }}_API_KEY`.
+    /// A builder with the settings the environment holds: the token from `{{ sdk.env_prefix }}_API_KEY`,
+    /// the base URL from `{{ sdk.env_prefix }}_BASE_URL`{% if oauth %}, the client credentials from
+    /// `{{ sdk.env_prefix }}_CLIENT_ID` and `{{ sdk.env_prefix }}_CLIENT_SECRET`{% endif %}. Empty variables are ignored.
+    pub fn from_env() -> Self {
+        let env = |name| std::env::var(name).ok().filter(|value: &String| !value.is_empty());
+        Self {
+            token: env(API_KEY_ENV),
+            base_url: env(BASE_URL_ENV),
+{%- if oauth %}
+            client_id: env(CLIENT_ID_ENV),
+            client_secret: env(CLIENT_SECRET_ENV),
+{%- endif %}
+            ..Self::default()
+        }
+    }
+
+    /// The token sent to the API.
     pub fn token(mut self, token: impl Into<String>) -> Self {
         self.token = Some(token.into());
         self
     }
 
 {% if sdk.has_default_base_url -%}
-    /// The URL the API is served at. Defaults to `{{ sdk.env_prefix }}_BASE_URL`, or
-    /// `{{ sdk.default_base_url }}`.
+    /// The URL the API is served at. Defaults to `{{ sdk.default_base_url }}`.
 {%- else -%}
-    /// The URL the API is served at. Defaults to `{{ sdk.env_prefix }}_BASE_URL`; the API has no
-    /// default, so one of them is required.
+    /// The URL the API is served at. The API has no default, so it is required.
 {%- endif %}
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = Some(base_url.into());
@@ -370,7 +384,7 @@ impl {{ client }}Builder {
     /// The OAuth2 client credentials of the client credentials flow. They make the client fetch the
     /// access token of {% for scheme in oauth %}`{{ scheme.name }}`{% if not loop.last %}, {% endif %}{% endfor %} from its token URL on first use, keep it until it
     /// expires, and fetch a new one when the API rejects it. A token provider and the token take
-    /// precedence. Default: `{{ sdk.env_prefix }}_CLIENT_ID` and `{{ sdk.env_prefix }}_CLIENT_SECRET`.
+    /// precedence.
     pub fn client_credentials(
         mut self,
         client_id: impl Into<String>,
@@ -413,17 +427,14 @@ impl {{ client }}Builder {
     ///
     /// # Errors
     ///
-    /// Fails with [`Error::Request`] when the base URL is {% if not sdk.has_default_base_url %}missing (neither
-    /// [`base_url`](Self::base_url) nor `{{ sdk.env_prefix }}_BASE_URL` is set) or {% endif %}not an absolute URL.
+    /// Fails with [`Error::Request`] when the base URL is {% if not sdk.has_default_base_url %}missing or {% endif %}not an absolute URL.
     pub fn build(self) -> Result<{{ client }}, Error> {
-        let env = |name| std::env::var(name).ok().filter(|value: &String| !value.is_empty());
         let base_path = self
             .base_url
-            .or_else(|| env(BASE_URL_ENV))
             .or_else(|| DEFAULT_BASE_URL.map(str::to_owned))
             .ok_or_else(|| {
                 invalid(format!(
-                    "no base URL: call `base_url()` on the builder or set `{BASE_URL_ENV}`"
+                    "no base URL: call `base_url()` on the builder, or set `{BASE_URL_ENV}` for `from_env()`"
                 ))
             })?;
         let absolute = base_path.parse::<http::Uri>().ok().is_some_and(|uri| {
@@ -441,7 +452,7 @@ impl {{ client }}Builder {
                 .unwrap_or_else(|| super::http_client(crate::make_connector())),
             timeout: self.timeout,
             base_path,
-            bearer_access_token: self.token.or_else(|| env(API_KEY_ENV)),
+            bearer_access_token: self.token,
             max_retries: self.max_retries.unwrap_or(2),
             middleware: self.middleware.0,
             headers: self.headers,
@@ -451,8 +462,7 @@ impl {{ client }}Builder {
                 token_provider: self.token_provider,
                 oauth: {% if oauth %}self
                     .client_id
-                    .or_else(|| env(CLIENT_ID_ENV))
-                    .zip(self.client_secret.or_else(|| env(CLIENT_SECRET_ENV)))
+                    .zip(self.client_secret)
                     .map(|(id, secret)| OAuthClient::new(id, secret, self.client_auth_in_body)){% else %}None{% endif %},
                 basic_auth: self.basic_auth,
                 api_keys: self.api_keys,

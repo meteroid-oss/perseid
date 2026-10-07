@@ -33,10 +33,9 @@ fn url() -> String {
     std::env::var("FEATURES_URL").unwrap()
 }
 
-/// A builder pointing at the mock server that carries no credentials, whatever the environment
-/// holds (`FEATURES_API_KEY` is read by builders that set no token).
+/// A builder pointing at the mock server that carries no credentials.
 fn builder() -> FeaturesBuilder {
-    Features::builder().base_url(url()).token("")
+    Features::builder().base_url(url())
 }
 
 fn client(token: &str) -> Features {
@@ -142,10 +141,13 @@ async fn environment() {
     std::env::set_var("FEATURES_API_KEY", "from-env");
     let from_env = Features::from_env().unwrap();
     assert_eq!(from_env.account().retrieve_machine().await.unwrap().status, "Bearer from-env||");
-    let explicit = Features::builder().token("explicit").base_url(url).build().unwrap();
+    let explicit = Features::builder().token("explicit").base_url(&url).build().unwrap();
     assert_eq!(explicit.account().retrieve_machine().await.unwrap().status, "Bearer explicit||");
+    let tokenless = Features::builder().base_url(url).build().unwrap();
+    let unauthorized = tokenless.account().retrieve_machine().await.unwrap_err();
+    assert_eq!(unauthorized.status(), Some(StatusCode::UNAUTHORIZED), "the builder ignores FEATURES_API_KEY");
     std::env::set_var("FEATURES_BASE_URL", "http://127.0.0.1:9");
-    let unreachable = Features::builder().token("t").max_retries(0).build().unwrap();
+    let unreachable = FeaturesBuilder::from_env().token("t").max_retries(0).build().unwrap();
     assert!(unreachable.account().check_health().await.unwrap_err().is_connection());
     let invalid = Features::builder().base_url("features.example.com").build().unwrap_err();
     assert!(invalid.to_string().contains("`features.example.com` is not an absolute"), "{invalid}");

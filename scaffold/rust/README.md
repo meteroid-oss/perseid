@@ -32,7 +32,9 @@ println!("{{ "{" }}{{ result }}:?}");{% else %}{{ call_of() }}.await?;{% endif %
 ```
 
 `@@CLIENT_NAME@@::from_env()?` takes the token from `@@ENV_PREFIX@@_API_KEY` and the base URL from
-`@@ENV_PREFIX@@_BASE_URL` when set. The builder also sets the timeout, retries and default headers:
+`@@ENV_PREFIX@@_BASE_URL` when set; `builder()` reads no environment variable, and
+`@@CLIENT_NAME@@Builder::from_env()` starts from them. The builder also sets the timeout, retries
+and default headers:
 
 ```rust
 let client = @@CLIENT_NAME@@::builder()
@@ -45,7 +47,7 @@ let client = @@CLIENT_NAME@@::builder()
 ```
 
 Building a client fails with `Error::Request` when it has no base URL (the API declares none and
-neither `base_url()` nor `@@ENV_PREFIX@@_BASE_URL` is set) or an invalid one.
+`base_url()` is not called) or an invalid one.
 
 Every API area hangs off the client (`{{ docs.resource(call.resource) if call else "client.items()" }}`), and `with_options` sets headers, the
 timeout, retries or the idempotency key of the calls made through it. Clients are cheap to clone
