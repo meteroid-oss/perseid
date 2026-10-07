@@ -2,6 +2,10 @@
 #![allow(clippy::doc_markdown, clippy::default_trait_access)]
 {% from "types/macros.rs.jinja" import rust_type, union_enum -%}
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
+{#- The string alias a plain path parameter `p` of `op` is typed by, if any. -#}
+{% macro path_alias(op, p) -%}
+{% if p not in op.path_styles %}{% for t in op.typed_path_params if t.name == p and t.type.is_string_alias() %}crate::models::{{ t.type.to_rust() }}{% endfor %}{% endif -%}
+{%- endmacro %}
 
 #[allow(unused_imports, clippy::wildcard_imports)]
 use crate::{error::Result, models::*, Configuration};
@@ -70,10 +74,19 @@ use crate::{error::Result, models::*, Configuration};
             }
         }
         {% for p, ty, location in params.all if not p.required and (p.ident | to_rust_ident) != "new" %}
+        {% set ident = p.ident | to_rust_ident -%}
+        {% set bare = ident | replace("r#", "") -%}
         /// Sets the `{{ p.name }}` {{ location }} parameter.
         #[must_use]
-        pub fn {{ p.ident | to_rust_ident }}(mut self, {{ p.ident | to_rust_ident }}: impl Into<{{ ty }}>) -> Self {
-            self.{{ p.ident | to_rust_ident }} = Some({{ p.ident | to_rust_ident }}.into());
+        pub fn {{ ident }}(mut self, {{ ident }}: impl Into<{{ ty }}>) -> Self {
+            self.{{ ident }} = Some({{ ident }}.into());
+            self
+        }
+
+        /// Sets the `{{ p.name }}` {{ location }} parameter, or unsets it with `None`.
+        #[must_use]
+        pub fn maybe_{{ bare }}(mut self, {{ ident }}: Option<{{ ty }}>) -> Self {
+            self.{{ ident }} = {{ ident }};
             self
         }
         {% endfor %}
@@ -171,8 +184,11 @@ impl {{ resource_type_name }} {
 
         {#- path parameters -#}
         {% for p in op.path_params -%}
+            {% set alias = path_alias(op, p) -%}
             {% if p in op.path_styles and op.path_styles[p].type is defined -%}
             {{ p | to_rust_ident }}: {{ rust_type(op.path_styles[p].type) }},
+            {% elif alias -%}
+            {{ p | to_rust_ident }}: impl Into<{{ alias }}>,
             {% else -%}
             {{ p | to_rust_ident }}: &str,
             {% endif -%}
@@ -247,7 +263,8 @@ impl {{ resource_type_name }} {
             {% set ps = op.path_styles[p] -%}
             .with_styled_path_param("{{ p }}", {% if ps.type is defined %}&{{ p | to_rust_ident }}{% else %}{{ p | to_rust_ident }}.to_string(){% endif %}, "{{ ps.style }}", {{ ps.explode | lower }})
             {% else -%}
-            .with_path_param("{{ p }}", {{ p | to_rust_ident }})
+            {% set alias = path_alias(op, p) -%}
+            .with_path_param("{{ p }}", {% if alias %}Into::<{{ alias }}>::into({{ p | to_rust_ident }}){% else %}{{ p | to_rust_ident }}{% endif %})
             {% endif -%}
         {% endfor -%}
 
@@ -337,8 +354,11 @@ impl {{ resource_type_name }} {
     pub fn {{ op.name | to_snake_case }}_iter(
         &self,
         {% for p in op.path_params -%}
+            {% set alias = path_alias(op, p) -%}
             {% if p in op.path_styles and op.path_styles[p].type is defined -%}
             {{ p | to_rust_ident }}: {{ rust_type(op.path_styles[p].type) }},
+            {% elif alias -%}
+            {{ p | to_rust_ident }}: impl Into<{{ alias }}>,
             {% else -%}
             {{ p | to_rust_ident }}: &str,
             {% endif -%}
@@ -388,7 +408,8 @@ impl {{ resource_type_name }} {
         };
         {% endif -%}
         {% for p in op.path_params if not (p in op.path_styles and op.path_styles[p].type is defined) -%}
-        let {{ p | to_rust_ident }} = {{ p | to_rust_ident }}.to_string();
+        {% set alias = path_alias(op, p) -%}
+        let {{ p | to_rust_ident }}{% if alias %}: {{ alias }} = {{ p | to_rust_ident }}.into(){% else %} = {{ p | to_rust_ident }}.to_string(){% endif %};
         {% endfor -%}
         let this = self.clone();
         {% if op.deprecated -%}

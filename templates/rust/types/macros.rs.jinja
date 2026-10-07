@@ -361,6 +361,42 @@ use super::{{ c | to_rust_ident }}::{{ c | to_upper_camel_case }};
 {% endfor %}
 {%- endmacro %}
 
+{# Chainable setters of the fields `new` leaves unset; `clear_*` sends `null` for the nullable
+   fields of PATCH bodies. -#}
+{% macro struct_setters(fields, recursive, patch_body, owner=none) -%}
+{% set taken = fields | map(attribute="name") | map("to_rust_ident") | list -%}
+{% for field in fields if not (field.required and not field.nullable) -%}
+{% set ident = field.name | to_rust_ident -%}
+{% set bare = ident | replace("r#", "") -%}
+{% set ty = value_type(field.type, recursive, union_name(owner, field.name, field.type)) -%}
+{% set patch = field.nullable and patch_body and not field.required -%}
+{% if ident != "new" %}
+/// Sets `{{ bare }}`.
+#[must_use]
+{% if field.deprecated -%}
+#[deprecated]
+#[allow(deprecated)]
+{% endif -%}
+pub fn {{ ident }}(mut self, {{ ident }}: impl Into<{{ ty }}>) -> Self {
+    self.{{ ident }} = {% if patch %}Some(Some({{ ident }}.into())){% else %}Some({{ ident }}.into()){% endif %};
+    self
+}
+{% endif -%}
+{% if patch and ("clear_" ~ bare) not in taken %}
+/// Sends `{{ bare }}` as `null`, clearing it.
+#[must_use]
+{% if field.deprecated -%}
+#[deprecated]
+#[allow(deprecated)]
+{% endif -%}
+pub fn clear_{{ bare }}(mut self) -> Self {
+    self.{{ ident }} = Some(None);
+    self
+}
+{% endif -%}
+{% endfor -%}
+{%- endmacro %}
+
 {# The field keeping the properties a struct does not declare. -#}
 {% macro extra_name(fields) -%}
 {% if "extra" in (fields | map(attribute="name") | map("to_rust_ident") | list) %}extra_properties{% else %}extra{% endif -%}
@@ -390,6 +426,8 @@ pub fn new(
         {% set union = union_name(owner, field.name, field.type) -%}
         {% if field.type.to_rust() == "String" and not field.type.is_datetime() and not field.type.is_date() -%}
         {{ field_name(field.name) }}: impl Into<String>,
+        {% elif field.type.is_string_alias() -%}
+        {{ field_name(field.name) }}: impl Into<{{ field.type.to_rust() }}>,
         {% elif union and field.type.is_union() -%}
         {{ field_name(field.name) }}: impl Into<{{ union }}>,
         {% elif union -%}
@@ -407,7 +445,7 @@ pub fn new(
             {% if field.name in defaults and field.required and not field.nullable -%}
                 {{ field_name(field.name) }}: {{ defaults[field.name] | rust_str }}.into(),
             {% elif field in params -%}
-                {% if (field.type.to_rust() == "String" and not field.type.is_datetime() and not field.type.is_date()) or (field.type.is_union() and union_name(owner, field.name, field.type)) -%}
+                {% if (field.type.to_rust() == "String" and not field.type.is_datetime() and not field.type.is_date()) or field.type.is_string_alias() or (field.type.is_union() and union_name(owner, field.name, field.type)) -%}
                 {{ field_name(field.name) }}: {{ field_name(field.name) }}.into(),
                 {% elif field.type.is_schema_ref() and field.type.to_rust() in recursive -%}
                 {{ field_name(field.name) }}: Box::new({{ field_name(field.name) }}),

@@ -85,6 +85,6 @@ pub(crate) fn ranked(value: &Value, candidates: &[(&[&str], &[&str])]) -> Vec<us
             (index, known.iter().filter(|p| object.contains_key(**p)).count())
         })
         .collect();
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|&(_, score)| std::cmp::Reverse(score));
     scored.into_iter().map(|(index, _)| index).collect()
 }

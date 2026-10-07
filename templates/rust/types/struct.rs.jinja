@@ -1,4 +1,4 @@
-{% from "types/macros.rs.jinja" import default_trait, extra_field, extra_name, rust_type, struct_fields, struct_new, union_enums, union_imports, union_name -%}
+{% from "types/macros.rs.jinja" import default_trait, extra_field, extra_name, rust_type, struct_fields, struct_new, struct_setters, union_enums, union_imports, union_name -%}
 use serde::{Deserialize, Serialize};
 
 {% if referenced_components -%}
@@ -36,6 +36,9 @@ pub struct {{ type_name }} {
 
 impl {{ type_name }} {
     {{ struct_new(type.fields, recursive, owner=type_name, defaults=defaults, extra=extra, extra_type=extra_type) }}
+    {%- if request_schema %}
+    {{ struct_setters(type.fields, recursive, patch_body, owner=type_name) }}
+    {%- endif %}
 }
 {% if has_default and defaulted %}
 

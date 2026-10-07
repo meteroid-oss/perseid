@@ -98,7 +98,7 @@ pub use self::{
 {% if kind == "str" and walk.expr is endingwith(".as_ref()") -%}
 {{ walk.expr[:-9] }}.as_deref()
 {%- else -%}
-{{ walk.expr }}{% if kind == "str" %}.map(String::as_str){% elif kind == "copy" or (kind == "i64" and walk.ty == "i64") %}.copied(){% elif kind == "i64" and lossless %}.map(|value| i64::from(*value)){% elif kind == "i64" %}.and_then(|value| i64::try_from(*value).ok()){% endif %}
+{{ walk.expr }}{% if kind == "str" %}.map(|value| value.as_str()){% elif kind == "copy" or (kind == "i64" and walk.ty == "i64") %}.copied(){% elif kind == "i64" and lossless %}.map(|value| i64::from(*value)){% elif kind == "i64" %}.and_then(|value| i64::try_from(*value).ok()){% endif %}
 {%- endif -%}
 {%- elif kind == "str" -%}
 Some({{ walk.expr }}.as_str())

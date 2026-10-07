@@ -140,7 +140,10 @@ client.customers().with_options(options).list(None).await?;
 
 - Methods take path parameters, the body, then query and header parameters as an options struct.
 - Options structs are `#[non_exhaustive]`: `new(required...)`, then a setter per optional
-  parameter. When none is required, pass the struct or `None`.
+  parameter, and its `maybe_*` twin taking an `Option`. When none is required, pass the struct
+  or `None`.
+- A path parameter typed by a string schema of the spec takes `impl Into` of its newtype:
+  `retrieve("cus_1")` and `retrieve(&customer.id)` both work.
 - `with_options` on a resource sets headers, timeout, retries or idempotency key for its calls.
 - An operation that also declares a bodiless 2xx returns `Option<T>`.
 
@@ -188,11 +191,16 @@ match client.customers().retrieve("cus_1").await {
 - Structs keep undeclared properties in `extra` (`extra_properties` when the schema has an
   `extra` property). `allOf` parts are inlined into one struct.
 - Structs only found in responses are `#[non_exhaustive]`: build them with `new(required...)` or
-  `Default`, then assign fields. Request structs also take struct literals.
+  `Default`, then assign fields. Request structs also take struct literals, and a chainable
+  setter per field `new` leaves out: `CustomerUpdate::new().name("Ada")`.
 - `Default` is implemented when every required field has a default.
 - In PATCH bodies, nullable optional fields are `Option<Option<T>>`: `Some(None)` sends `null`.
 - Recursive fields are boxed. Dates are `chrono` types.
 - Enums and unions are `#[non_exhaustive]`, with an `Unknown` variant that serializes back
+  Their setters wrap the value, and `clear_*()` sends `null`.
+- A named string schema, such as `CustomerId`, is a newtype over `String`: built `From` any
+  string, read as `&str` through `Deref`, `as_str()` or `Display`, compared with strings. One ID
+  type cannot be passed where another is expected.
   unchanged.
 - Unions are enums with `From` impls and `as_*` accessors: `ChargeCustomer::String(id)`,
   `ChargeCustomer::Customer(Box<Customer>)`. Expandable fields have `id()`.

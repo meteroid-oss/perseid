@@ -3213,6 +3213,12 @@ impl minijinja::value::Object for FieldType {
                 ensure_no_args(args, "is_schema_ref")?;
                 Ok(matches!(**self, Self::SchemaRef { .. }).into())
             }
+            "is_string_alias" => {
+                ensure_no_args(args, "is_string_alias")?;
+                Ok(matches!(&**self, Self::SchemaRef { inner: Some(ty), .. }
+                    if matches!(ty.data, TypeData::StringAlias))
+                .into())
+            }
             "schema_name" => {
                 ensure_no_args(args, "schema_name")?;
                 Ok(match &**self {
