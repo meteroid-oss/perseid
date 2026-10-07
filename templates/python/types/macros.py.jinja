@@ -38,6 +38,12 @@
     {{ module ~ "_api" if module in ["client", "common", "middleware"] else module }}
 {%- endmacro %}
 
+{#- The page the list method `operation` of `resource` returns, a subclass of its response model
+    in `api/_pages.py`: `WidgetsListPage`, like the Go SDK's. -#}
+{% macro page_class(resource, operation, is_async=false) -%}
+    {{ ("Async" if is_async else "") ~ (resource | to_upper_camel_case) ~ (operation | to_upper_camel_case) ~ "Page" }}
+{%- endmacro %}
+
 {#- The attribute of a field; a `flatten` field is named after the schema it inlines. Names of
     `BaseModel` members (`extra_fields`, `to_dict`...) and of the builtins a model body uses get a
     trailing `_`, like a keyword. -#}

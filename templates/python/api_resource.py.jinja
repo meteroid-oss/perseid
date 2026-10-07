@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import arg_type, docstring, in_class, literal_type, field_ident, field_type, field_decl, has_object_union, is_flat_union, named_type, py_str, py_field, py_ident, py_type, param_type, resource_module, type_refs, union_refs, union_type -%}
+{% from "types/macros.py.jinja" import arg_type, docstring, in_class, literal_type, field_ident, field_type, field_decl, has_object_union, is_flat_union, named_type, page_class, py_str, py_field, py_ident, py_type, param_type, resource_module, type_refs, union_refs, union_type -%}
 # this file is @generated
 {% if resource.subresources | length > 0 -%}
     {{ panic("resource `" ~ resource.name ~ "` has subresources, which the Python templates do not support yet") }}
@@ -122,14 +122,21 @@ from .common import (
     serialize_query_params,
 )
 {%- if paginated | length > 0 %}
+{%- set styles = paginated | map(attribute="pagination") | map(attribute="style") | unique | list %}
+from ._pages import (
+{%- for op in paginated %}
+{%- if page_class(resource.name, op.name) in names %}
+    {{ panic("schema `" ~ page_class(resource.name, op.name) ~ "` is named like the page of `" ~ op.id ~ "`: rename it") }}
+{%- endif %}
+    {{ page_class(resource.name, op.name, true) }},
+    {{ page_class(resource.name, op.name) }},
+{%- endfor %}
+)
 from ._pagination import (
     AsyncPaginator,
-    CursorPaging,
-    OffsetPaging,
-    PagePaging,
-    SyncPage,
-    async_first_page,
-    first_page,
+{%- for style in ["cursor", "offset", "page"] if style in styles %}
+    {{ style | capitalize }}Paging,
+{%- endfor %}
     step,
 )
 {%- endif %}
@@ -261,7 +268,8 @@ class {{ class_name }}({{ base_class }}):
 {%- set pg = op.pagination if op.pagination is defined else none %}
 {%- if pg %}
 {%- set item_type = pg.item_schema | to_upper_camel_case %}
-{%- set page_type = ("AsyncPaginator[" if is_async else "SyncPage[") ~ item_type ~ ", " ~ response_type ~ "]" %}
+{%- set page = page_class(resource.name, op.name, is_async) %}
+{%- set page_type = "AsyncPaginator[" ~ item_type ~ ", " ~ page ~ "]" if is_async else page %}
 {%- endif %}
 {%- macro option(name) %}{{ "request_" ~ name if name in arg_names.list else name }}{% endmacro %}
 
@@ -500,9 +508,9 @@ class {{ class_name }}({{ base_class }}):
 {%- set pg_query = op.query_params | selectattr("name", "equalto", pg.param) | first %}
 {%- set pg_arg = py_ident(pg_query.ident if pg_query else pg.param) %}
 {%- if is_async %}
-        return AsyncPaginator(lambda: async_first_page(fetch, {{ pg_arg }}, paging))
+        return AsyncPaginator(lambda: {{ page }}._first(fetch, {{ pg_arg }}, paging))
 {%- else %}
-        return first_page(fetch, {{ pg_arg }}, paging)
+        return {{ page }}._first(fetch, {{ pg_arg }}, paging)
 {%- endif %}
 {%- else %}
 

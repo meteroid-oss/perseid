@@ -79,7 +79,9 @@ after a model member, such as `extra_fields` or `to_dict`, gets a trailing `_`.
 {% if list %}
 ## Pagination
 
-List methods return their first page. Iterating it walks every item of every page,
+List methods return their first page, which is also the response of the request: a
+subclass of the response model, such as `{{ docs.page(list) }}` (in `@@PACKAGE_NAME@@.api`),
+whose properties are read on the page. Iterating it walks every item of every page,
 fetching the next ones on demand:
 
 ```python
@@ -87,16 +89,20 @@ for {{ docs.var(list.item, "item") }} in {{ docs.call(list) }}:
     print({{ docs.var(list.item, "item") }})
 
 page = {{ docs.call(list) }}
+print(page.{{ docs.page_field(list) }})  # a property of the response
 page.items  # this page's items
-page.body  # the decoded response, with its other properties
 if page.has_next_page():
     page = page.get_next_page()
 for page in {{ docs.call(list) }}.iter_pages():
     print(len(page.items))
 ```
 
+A response property named like a paging member (`items`, `has_next_page`, `get_next_page`,
+`iter_pages` or `body`) is read on `page.body`, the response as decoded.
+
 With the async client, `async for item in {{ docs.call(list) }}` walks the items, and
-`page = await {{ docs.call(list) }}` returns the first page.
+`page = await {{ docs.call(list) }}` returns the first page, whose `get_next_page()` is
+awaited and `iter_pages()` walked with `async for`.
 {% endif %}
 {%- if stream %}
 ## Streaming

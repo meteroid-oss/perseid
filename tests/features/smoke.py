@@ -23,7 +23,7 @@ from features import (
     PermissionDeniedError,
     UnprocessableEntityError,
 )
-from features.api import StreamingUploadFileBody, Upload
+from features.api import AsyncWidgetsListPage, GadgetsListPage, RecordsListPage, StreamingUploadFileBody, Upload, WidgetsListPage
 from features.models import (
     UNSET,
     ChargeItemsItem,
@@ -35,6 +35,7 @@ from features.models import (
     FilterAmount,
     Health,
     SearchRange,
+    WidgetList,
 )
 
 URL = os.environ["FEATURES_URL"]
@@ -94,12 +95,23 @@ assert ids(client.widgets.list_events("w1", kind="created")) == ["e1", "e2", "e3
 assert ids(client.gadgets.list()) == ["g1", "g2", "g3"]
 assert ids(client.records.list()) == ["r1", "r2", "r3"]
 
+# A page is the response of its request, with the paging members.
 page = client.widgets.list()
-assert ids(page.items) == ["w1", "w2"] and page.body.next_cursor == "c2"
+assert isinstance(page, WidgetsListPage) and isinstance(page, WidgetList), type(page)
+assert ids(page.items) == ["w1", "w2"] and ids(page.data) == ["w1", "w2"] and page.next_cursor == "c2"
+assert type(page.body) is WidgetList and page.body.next_cursor == "c2" and page.to_dict() == page.body.to_dict()
 assert page.has_next_page()
 last = page.get_next_page()
-assert ids(last.items) == ["w3"] and not last.has_next_page()
-assert [ids(p.items) for p in client.gadgets.list().iter_pages()] == [["g1", "g2"], ["g3"]]
+assert isinstance(last, WidgetsListPage) and ids(last.items) == ["w3"] and last.next_cursor is None
+assert not last.has_next_page()
+gadgets = client.gadgets.list()
+assert isinstance(gadgets, GadgetsListPage), type(gadgets)
+assert ids(gadgets.items) == ["g1", "g2"] and (gadgets.meta.page, gadgets.meta.total_pages) == (0, 2), gadgets
+assert [(p.meta.page, ids(p.items)) for p in gadgets.iter_pages()] == [(0, ["g1", "g2"]), (1, ["g3"])]
+records = client.records.list()
+assert isinstance(records, RecordsListPage), type(records)
+assert records.total == 3 and ids(records.data) == ids(records.items) == ["r1", "r2"], records
+assert [ids(p.items) for p in records.iter_pages()] == [["r1", "r2"], ["r3"]]
 assert page.items[0].extra_fields == {"color": "red"} and page.items[0].color == "red"
 assert page.items[0].to_dict() == {"id": "w1", "name": "w1", "color": "red"}
 
@@ -377,8 +389,12 @@ async def main():
         assert [w.id async for w in client.widgets.list()] == ["w1", "w2", "w3"]
         assert [g.id async for g in client.gadgets.list()] == ["g1", "g2", "g3"]
         page = await client.widgets.list()
-        assert ids(page.items) == ["w1", "w2"] and page.has_next_page()
+        assert isinstance(page, AsyncWidgetsListPage) and isinstance(page, WidgetList), type(page)
+        assert ids(page.items) == ["w1", "w2"] and page.next_cursor == "c2" and page.has_next_page()
         assert ids((await page.get_next_page()).items) == ["w3"]
+        assert [ids(p.items) async for p in page.iter_pages()] == [["w1", "w2"], ["w3"]]
+        assert (await client.gadgets.list()).meta.total_pages == 2
+        assert (await client.records.list()).total == 3
         raw = await client.with_raw_response.widgets.list()
         assert raw.request_id == "req_mock" and ids(raw.parse().items) == ["w1", "w2"]
         events = [e async for e in await client.streaming.retrieve_events_stream(topic="async")]

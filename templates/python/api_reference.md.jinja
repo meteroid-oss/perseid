@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import field_ident, field_type, named_type, param_type, py_ident, py_type -%}
+{% from "types/macros.py.jinja" import field_ident, field_type, named_type, page_class, param_type, py_ident, py_type -%}
 {% import "docs.jinja" as docs -%}
 {% set _ = set_summary_filename("api.md") -%}
 {% macro model(name) -%}
@@ -75,7 +75,7 @@
         {%- set response = none -%}
     {%- endif -%}
     {%- if op.pagination is defined -%}
-        {%- set returned = "SyncPage[" ~ (op.pagination.item_schema | to_upper_camel_case) ~ ", " ~ response ~ "]" -%}
+        {%- set returned = page_class(resource.name, op.name) -%}
     {%- elif op.response_is_event_stream -%}
         {%- set returned = "Stream[" ~ (op.event_schema_name | to_upper_camel_case) ~ "]" if op.event_schema_name is defined else "EventStream" -%}
     {%- elif op.response_is_binary -%}
@@ -90,7 +90,7 @@
     {{ docs.resource(resource.name) }}.{{ docs.method(op) }}({{ args.list | join(", ") }}) -> {{ returned }}
 {%- endmacro -%}
 {% macro returns(op) -%}
-    {%- if op.pagination is defined %}pages of {{ model(op.pagination.item_schema) }}
+    {%- if op.pagination is defined %}{{ model(op.response_body_schema_name) }} pages of {{ model(op.pagination.item_schema) }}
     {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
     {%- elif op.response_is_binary %}bytes
     {%- elif op.response_is_text %}text
@@ -113,6 +113,13 @@ resource; `Async{{ sdk.client_name }}` has the same methods, to await, and `clie
 the same resources, returning the HTTP response. Every method also takes the keyword arguments
 `extra_headers`, `extra_query`, `extra_body`, `timeout` and `max_retries` for that call; `=...`
 marks optional keyword arguments. Models are in [`{{ docs.package() }}/models`]({{ docs.package() }}/models).
+{%- set paged = namespace(page=none, model=none) %}
+{%- for resource in api.resources %}{% for op in resource.operations if op.pagination is defined and paged.page is none %}{% set paged.page = page_class(resource.name, op.name) %}{% set paged.model = op.response_body_schema_name | to_upper_camel_case %}{% endfor %}{% endfor %}
+{%- if paged.page is not none %}
+A list method returns its first page, such as a `{{ paged.page }}`: a subclass of the response
+model (`{{ paged.model }}`) with the paging members `items`, `has_next_page()`, `get_next_page()`,
+`iter_pages()` and `body`, which iterates every item. The page classes are in `{{ docs.package() }}.api`.
+{%- endif %}
 {% if api.resources | length > 1 %}
 {{ docs.contents(api.resources) }}
 {% endif %}

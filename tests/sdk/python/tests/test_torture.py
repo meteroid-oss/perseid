@@ -124,6 +124,15 @@ paths:
         "200":
           description: ok
           content: {application/json: {schema: {$ref: '#/components/schemas/LogPage'}}}
+  /clashes:
+    get:
+      operationId: list_clashes
+      x-pagination: {page: page, total_pages: meta.total_pages, first_page: 0}
+      parameters: [{name: page, in: query, schema: {type: integer}}]
+      responses:
+        "200":
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/ClashPage'}}}
   /chat:
     post:
       operationId: create_chat
@@ -155,6 +164,16 @@ components:
         data: {type: array, items: {$ref: '#/components/schemas/Item'}}
         next: {type: [string, "null"]}
         has_more: {type: boolean}
+    ClashPage:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Item'}}
+        meta: {type: object, properties: {total_pages: {type: integer}}}
+        items: {type: integer}
+        body: {type: string}
+        has_next_page: {type: boolean}
+        iter_pages: {type: array, items: {type: string}}
 """
 
 torture = generate("torture")
@@ -654,10 +673,22 @@ class PaginationTest(unittest.TestCase):
             None: {"data": [{"id": "l1"}], "next": "n1", "has_more": True},
             "n1": {"data": [{"id": "l2"}], "has_more": False},
         },
+        "/clashes": {
+            "0": {
+                "data": [{"id": "x"}],
+                "meta": {"total_pages": 2},
+                "items": 7,
+                "body": "b",
+                "has_next_page": False,
+                "iter_pages": ["p"],
+                "extra": 1,
+            },
+            "1": {"data": [{"id": "y"}], "meta": {"total_pages": 2}},
+        },
     }
 
     def handler(self, request: httpx.Request) -> httpx.Response:
-        param = request.url.params.get("page" if request.url.path == "/items" else "after")
+        param = request.url.params.get("after" if request.url.path == "/logs" else "page")
         page = self.PAGES[request.url.path][param]
         return httpx.Response(200, json=page)
 
@@ -665,17 +696,40 @@ class PaginationTest(unittest.TestCase):
         transport = httpx.MockTransport(self.handler)
         api = paged.Paged(api_key="k", base_url="https://paged.test", http_client=httpx.Client(transport=transport))
         page = api.items.list()
+        self.assertIsInstance(page, paged.models.ItemPage)
+        self.assertIsInstance(page, paged.api.ItemsListPage)
         self.assertEqual([item.id for item in page.items], ["a", "b"])
         self.assertTrue(page.has_next_page())
-        self.assertEqual(page.body.result.meta.total_pages, 2)
+        self.assertEqual(page.result.meta.total_pages, 2)
+        self.assertIs(type(page.body), paged.models.ItemPage)
+        self.assertEqual(page.to_dict(), self.PAGES["/items"]["1"])
+        self.assertEqual(page, api.items.list())
+        self.assertNotEqual(page, page.body)
         last = page.get_next_page()
         self.assertEqual(([item.id for item in last.items], last.has_next_page()), (["c"], False))
         with self.assertRaises(RuntimeError):
             last.get_next_page()
         self.assertEqual([item.id for item in api.items.list()], ["a", "b", "c"])
         logs = api.logs.list()
+        self.assertEqual((logs.next, logs.has_more), ("n1", True))
         self.assertEqual([len(p.items) for p in logs.iter_pages()], [1, 1])
         self.assertEqual([item.id for item in logs], ["l1", "l2"])
+
+    def test_paging_members_shadow_the_response_properties_of_their_name(self) -> None:
+        transport = httpx.MockTransport(self.handler)
+        api = paged.Paged(api_key="k", base_url="https://paged.test", http_client=httpx.Client(transport=transport))
+        page = api.clashes.list()
+        self.assertEqual([item.id for item in page.items], ["x"])
+        self.assertTrue(page.has_next_page())
+        self.assertEqual([len(p.items) for p in page.iter_pages()], [1, 1])
+        self.assertEqual([item.id for item in page], ["x", "y"])
+        self.assertEqual((page.meta.total_pages, page.extra_fields), (2, {"extra": 1}))
+        body = page.body
+        self.assertEqual((body.items, body.body, body.has_next_page, body.iter_pages), (7, "b", False, ["p"]))
+        self.assertEqual(page.to_dict(), self.PAGES["/clashes"]["0"])
+        self.assertIn("items=7", repr(page))
+        self.assertEqual(page, api.clashes.list())
+        self.assertIsNone(page.get_next_page().body.items)
 
     def test_async_pages(self) -> None:
         async def handler(request: httpx.Request) -> httpx.Response:
@@ -687,6 +741,8 @@ class PaginationTest(unittest.TestCase):
                 api_key="k", base_url="https://paged.test", http_client=httpx.AsyncClient(transport=transport)
             ) as api:
                 first = await api.items.list()
+                self.assertIsInstance(first, paged.api.AsyncItemsListPage)
+                self.assertEqual(first.result.meta.total_pages, 2)
                 pages = [[item.id for item in p.items] async for p in first.iter_pages()]
                 return [item.id async for item in api.logs.list()], pages[1]
 

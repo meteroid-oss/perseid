@@ -1,6 +1,6 @@
 {#- The API as Python names it, for api.md and the README's examples. An example is a
     `{resource, operation, path_args, body, result, item}` the README receives. -#}
-{% from "types/macros.py.jinja" import field_ident, py_ident, module_name, resource_module %}
+{% from "types/macros.py.jinja" import field_ident, page_class, py_field, py_ident, module_name, resource_module %}
 
 {#- The heading of a resource in api.md, and links to every resource's. -#}
 {% macro title(name) %}{{ name | to_snake_case | replace("_", " ") | capitalize }}{% endmacro %}
@@ -16,6 +16,16 @@
 {% macro method(op) %}{{ py_ident(op.name) }}{% endmacro %}
 
 {% macro model_path(name) %}{{ package() }}/models/{{ module_name(name) }}.py{% endmacro %}
+
+{#- The page class the list of example `ex` returns. -#}
+{% macro page(ex) %}{{ page_class(ex.resource, ex.operation.name) }}{% endmacro %}
+
+{#- A response property its paging reads, as a page of example `ex` reads it: `meta.total_pages`. -#}
+{% macro page_field(ex) -%}
+    {%- set pg = ex.operation.pagination -%}
+    {%- set path = pg.total or pg.total_pages or pg.next_cursor or pg.has_more or pg["items"] -%}
+    {%- for key in path %}{% if not loop.first %}.{% endif %}{{ py_field(key) }}{% endfor -%}
+{%- endmacro %}
 
 {% macro resource_path(name) %}{{ package() }}/api/{{ resource_module(name) }}.py{% endmacro %}
 

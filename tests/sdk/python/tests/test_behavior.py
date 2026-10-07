@@ -415,6 +415,7 @@ class PaginationErrorTest(unittest.TestCase):
             self.assertEqual(body_get(raised.exception.body, "error"), "page_gone")
             self.assertEqual(len(calls), 2, "the failed page is not fetched again")
             page = api.errors.list_scenarios_pages()
+            self.assertEqual(page.next_cursor, "c2")
             self.assertTrue(page.has_next_page())
             with self.assertRaises(features.ConflictError):
                 page.get_next_page()
