@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/meteroid-oss/perseid/compare/v0.12.0...v0.12.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **security:** check only generated operations, drop undeclared alternatives ([#97](https://github.com/meteroid-oss/perseid/issues/97)) ([31c9cae](https://github.com/meteroid-oss/perseid/commit/31c9cae5c8625e82ce5fbe32ed0217e8584f3c79))
+
 ## [0.12.0](https://github.com/meteroid-oss/perseid/compare/v0.11.4...v0.12.0) (2026-10-07)
 
 
