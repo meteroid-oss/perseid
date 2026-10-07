@@ -47,7 +47,7 @@ pub(crate) struct Security {
 }
 
 impl Security {
-    pub(crate) fn from_spec(spec: &Value) -> Self {
+    pub(crate) fn from_spec(spec: &Value) -> anyhow::Result<Self> {
         let declared = spec["components"]["securitySchemes"].as_object();
         let mut skipped: Vec<(String, String)> = Vec::new();
         let mut schemes: Vec<_> = match declared {
@@ -99,6 +99,33 @@ impl Security {
             }
             effective.insert(id.to_owned(), req);
         }
+        let known = |name: &String| {
+            schemes.iter().any(|s| &s.name == name) || skipped.iter().any(|(n, _)| n == name)
+        };
+        let mut undefined: Vec<&String> = std::iter::once(&global)
+            .chain(effective.values())
+            .flatten()
+            .flatten()
+            .filter(|name| !known(name))
+            .collect();
+        undefined.sort_unstable();
+        undefined.dedup();
+        if let Some(name) = undefined.first() {
+            let affected: Vec<&str> = effective
+                .iter()
+                .filter(|(_, req)| req.iter().flatten().any(|n| n == *name))
+                .map(|(id, _)| id.as_str())
+                .collect();
+            let used = match affected.as_slice() {
+                [] => "the global `security`".to_owned(),
+                ops => operation_list(ops),
+            };
+            anyhow::bail!(
+                "{used} require{s} the security scheme `{name}`, which `components.securitySchemes` \
+                 does not declare",
+                s = if affected.len() > 1 { "" } else { "s" }
+            );
+        }
         for (name, reason) in &skipped {
             let affected: Vec<&str> = effective
                 .iter()
@@ -127,11 +154,11 @@ impl Security {
                 .find(|(_, c)| *c == most)
                 .map_or(global, |(r, _)| r)
         };
-        Self {
+        Ok(Self {
             schemes,
             default,
             effective,
-        }
+        })
     }
 
     /// The requirement of an operation, when it differs from [`Self::default`].
@@ -244,7 +271,7 @@ mod tests {
     #[test]
     fn specs_without_schemes_keep_sending_the_bearer_token() {
         let security =
-            Security::from_spec(&json!({"paths": {"/a": {"get": {"operationId": "a"}}}}));
+            Security::from_spec(&json!({"paths": {"/a": {"get": {"operationId": "a"}}}})).unwrap();
         assert_eq!(security.schemes[0].kind, SchemeKind::Bearer);
         assert_eq!(security.default, vec![vec!["bearer".to_owned()]]);
         assert_eq!(security.override_for("a"), None);
@@ -266,7 +293,7 @@ mod tests {
                 "/e": {"get": {"operationId": "e"}},
             }
         });
-        let security = Security::from_spec(&spec);
+        let security = Security::from_spec(&spec).unwrap();
         assert_eq!(security.default, vec![vec!["key".to_owned()]]);
         assert_eq!(security.override_for("a"), None);
         assert_eq!(security.override_for("c"), Some(vec![]));
@@ -298,7 +325,7 @@ mod tests {
                 "/b": {"get": {"operationId": "b"}},
             }
         });
-        let security = Security::from_spec(&spec);
+        let security = Security::from_spec(&spec).unwrap();
         let oauth = security.schemes.iter().find(|s| s.name == "oauth").unwrap();
         assert_eq!(oauth.token_url.as_deref(), Some("/token"));
         assert_eq!(oauth.scope, "list read write");
@@ -320,9 +347,39 @@ mod tests {
             "components": {"securitySchemes": {"b": {"type": "http", "scheme": "bearer"}}},
             "paths": {"/a": {"get": {"operationId": "a", "security": []}}, "/b": {"get": {"operationId": "b", "security": []}}}
         });
-        let security = Security::from_spec(&spec);
+        let security = Security::from_spec(&spec).unwrap();
         assert_eq!(security.default, vec![vec!["b".to_owned()]]);
         assert_eq!(security.override_for("a"), Some(vec![]));
+    }
+
+    #[test]
+    fn undeclared_schemes_are_errors() {
+        let spec = json!({
+            "components": {"securitySchemes": {
+                "bearer": {"type": "http", "scheme": "bearer"},
+                "digest": {"type": "http", "scheme": "digest"},
+            }},
+            "paths": {
+                "/a": {"get": {"operationId": "a", "security": [{"beraer": []}]}},
+                "/b": {"get": {"operationId": "b", "security": [{}, {"digest": []}]}},
+                "/c": {"get": {"operationId": "c", "security": [{"bearer": []}]}},
+            }
+        });
+        let err = Security::from_spec(&spec).err().unwrap();
+        assert_eq!(
+            err.to_string(),
+            "operation `a` requires the security scheme `beraer`, which \
+             `components.securitySchemes` does not declare"
+        );
+        let global = json!({"security": [{"key": []}], "paths": {}});
+        let err = Security::from_spec(&global).err().unwrap();
+        assert!(
+            err.to_string()
+                .starts_with("the global `security` requires the security scheme `key`")
+        );
+        let implicit =
+            json!({"paths": {"/a": {"get": {"operationId": "a", "security": [{"bearer": []}]}}}});
+        assert!(Security::from_spec(&implicit).is_ok());
     }
 
     #[test]

@@ -105,7 +105,7 @@ impl Api {
 
         types::set_discriminator_defaults(&mut types);
 
-        let security = security::Security::from_spec(raw_spec);
+        let security = security::Security::from_spec(raw_spec)?;
         for resource in resources.values_mut() {
             resource.resolve_extensions(&security, &filters.pagination, &types)?;
         }
