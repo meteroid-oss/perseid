@@ -32,6 +32,11 @@ import com.torture.models.UnionHolder.UnionHolderStrOrInt;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.NoSuchElementException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -145,16 +150,46 @@ class RoundTripTest {
         assertEquals("a", label);
     }
 
+    static final class ThingPage extends Page<ThingPage, Thing> {
+        ThingPage(List<Thing> items, Supplier<ThingPage> next) {
+            super(items, next);
+        }
+    }
+
     @Test
     void pagesKeepUnknownEnumValues() {
         ThingList first = ThingList.fromJson("{\"data\":[{\"kind\":\"brand-new\"}],\"next_cursor\":\"c\"}");
         ThingList last = ThingList.fromJson("{\"data\":[{\"kind\":\"alpha\"}]}");
-        Paginator<Thing> things = new Paginator<>(
-                () -> Page.of(first.data(), () -> Page.of(last.data(), null)));
+        ThingPage things = new ThingPage(first.data(), () -> new ThingPage(last.data(), null));
         List<Kind> kinds = new ArrayList<>();
         things.forEach(thing -> kinds.add(thing.kind()));
         assertEquals(List.of(Kind.of("brand-new"), Kind.ALPHA), kinds);
         assertEquals(2, things.stream().count());
+        List<Integer> sizes = new ArrayList<>();
+        things.pages().forEach(page -> sizes.add(page.items().size()));
+        assertEquals(List.of(1, 1), sizes);
+        assertFalse(things.nextPage().hasNextPage());
+        assertThrows(NoSuchElementException.class, () -> things.nextPage().nextPage());
+    }
+
+    static final class AsyncThingPage extends AsyncPage<AsyncThingPage, Thing> {
+        AsyncThingPage(List<Thing> items, Supplier<CompletableFuture<AsyncThingPage>> next) {
+            super(items, next);
+        }
+    }
+
+    @Test
+    void asyncPagesWalkEveryItem() throws Exception {
+        List<Thing> first = ThingList.fromJson("{\"data\":[{\"kind\":\"alpha\"}]}").data();
+        List<Thing> last = ThingList.fromJson("{\"data\":[{\"kind\":\"beta-2\"}]}").data();
+        AsyncThingPage page = new AsyncThingPage(
+                first, () -> CompletableFuture.completedFuture(new AsyncThingPage(last, null)));
+        assertEquals(List.of(Kind.ALPHA, Kind.BETA_2), page.toList().get().stream().map(Thing::kind).collect(Collectors.toList()));
+        List<Integer> sizes = new ArrayList<>();
+        page.forEachPage(p -> sizes.add(p.items().size())).get();
+        assertEquals(List.of(1, 1), sizes);
+        ExecutionException end = assertThrows(ExecutionException.class, () -> page.nextPage().get().nextPage().get());
+        assertInstanceOf(NoSuchElementException.class, end.getCause());
     }
 
     @Test
