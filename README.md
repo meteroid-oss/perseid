@@ -176,6 +176,12 @@ with `exclude = ["<operation id>"]`, and open an issue with the spec attached.
 
 perseid started as a fork of [Svix's openapi-codegen](https://github.com/svix/openapi-codegen).
 
+## Contributing
+
+Bug reports with a spec attached, fixes and features are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the setup, the tests, and how a change reaches all six
+languages.
+
 ## License
 
 Apache-2.0, see [LICENSE](LICENSE). Third-party attributions are in [NOTICE](NOTICE).
