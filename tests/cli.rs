@@ -711,7 +711,8 @@ fn with_generated_sdk(dir: &Path) {
 #[cfg(unix)]
 #[derive(Default)]
 struct Answers {
-    /// The open pull requests of `perseid/update`.
+    /// The open pull requests of the update branches: those with a `head` only for that
+    /// branch, the others for any.
     listed: Vec<Value>,
     /// The `github-authentication-token-expiration` header.
     expiration: Option<String>,
@@ -764,13 +765,28 @@ fn fake_github(answers: Answers, log: Arc<Mutex<Vec<String>>>) -> u16 {
             };
             let (status, reply) = match (method.as_str(), &segments[..]) {
                 _ if !authorized => (401, json!({ "message": "Bad credentials" })),
-                ("GET", ["repos", _, _, "pulls"]) => (200, json!(answers.listed)),
+                ("GET", ["repos", _, _, "pulls"]) => {
+                    let head = target
+                        .split_once("head=")
+                        .map(|(_, h)| h.split('&').next().unwrap());
+                    let listed: Vec<&Value> = answers
+                        .listed
+                        .iter()
+                        .filter(|p| match (p["head"]["ref"].as_str(), head) {
+                            (Some(branch), Some(head)) => head.ends_with(&format!(":{branch}")),
+                            _ => true,
+                        })
+                        .collect();
+                    (200, json!(listed))
+                }
                 ("POST", ["repos", _, _, "pulls"]) => (201, pull("2")),
                 ("PATCH", ["repos", _, _, "pulls", number]) => (200, pull(number)),
                 ("POST", ["repos", _, _, "labels"]) => {
                     (422, json!({ "message": "Validation Failed" }))
                 }
                 ("POST", ["repos", _, _, "issues", _, "labels"]) => (200, json!([])),
+                ("POST", ["repos", _, _, "issues", _, "comments"]) => (201, json!({})),
+                ("DELETE", ["repos", _, _, "git", "refs", "heads", ..]) => (204, Value::Null),
                 ("PUT", ["repos", _, _, "pulls", _, "merge"]) => (200, json!({ "merged": true })),
                 ("POST", ["repos", _, _, "actions", "workflows", _, "dispatches"]) => {
                     (204, Value::Null)
@@ -1277,6 +1293,208 @@ fn open_pull_requests_keep_their_largest_bump() {
     assert!(message.contains("feat(api): add `GET /toys`"), "{message}");
     assert!(run.requests("POST", "/pulls").is_empty());
     assert!(run.output.contains("/pull/1\n"), "{}", run.output);
+}
+
+/// The open update pull request of the rust SDK alone, `perseid/update-rust`.
+#[cfg(unix)]
+fn rust_pull_request() -> Answers {
+    Answers {
+        listed: vec![json!({
+            "number": 1,
+            "html_url": "https://github.com/acme/petstore-sdks/pull/1",
+            "node_id": "PR_1",
+            "title": "feat(api): update the rust SDK to Petstore 1",
+            "head": { "ref": "perseid/update-rust" },
+        })],
+        ..Answers::default()
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn updates_of_several_sdks_share_a_pull_request() {
+    let dir = pull_request_project();
+    let run = generate_pr_with(dir.path(), &["go", "--bump", "minor"]);
+    let created = run.request("POST", "/pulls");
+    assert_eq!(created["head"], "perseid/update", "{created}");
+    let title = created["title"].as_str().unwrap();
+    assert!(title.starts_with("feat(api): update SDKs to"), "{title}");
+    let origin = dir.path().join("origin.git");
+    let files = git_in(&origin, &["ls-tree", "-r", "--name-only", "perseid/update"]);
+    for sdk in ["rust/", "go/"] {
+        assert!(
+            files.lines().any(|f| f.starts_with(sdk)),
+            "{sdk} not in {files}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn updates_too_large_for_release_please_get_a_pull_request_per_sdk() {
+    let dir = pull_request_project();
+    let spec = dir.path().join("openapi.yaml");
+    let changed = fs::read_to_string(&spec)
+        .unwrap()
+        .replace("title:", "description: Pets\n  title:");
+    fs::write(&spec, changed).unwrap();
+    let answers = Answers {
+        listed: vec![json!({
+            "number": 1,
+            "html_url": "https://github.com/acme/petstore-sdks/pull/1",
+            "node_id": "PR_1",
+            "title": "feat(api): update SDKs to Petstore 1",
+            "head": { "ref": "perseid/update" },
+        })],
+        ..Answers::default()
+    };
+    let args = [
+        "go",
+        "--bump",
+        "minor",
+        "--auto-merge",
+        "--dispatch",
+        "ci.yml",
+    ];
+    let run = run_pr(dir.path(), &args, answers, &[("PERSEID_SPLIT_ABOVE", "10")]);
+    assert!(run.ok, "{}", run.output);
+
+    let created = run.requests("POST", "/pulls");
+    let heads: Vec<_> = created
+        .iter()
+        .map(|p| p["head"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        heads,
+        ["perseid/update-rust", "perseid/update-go"],
+        "{created:#?}"
+    );
+    for (pull, name) in created.iter().zip(["rust", "go"]) {
+        let title = pull["title"].as_str().unwrap();
+        let expected = format!("feat(api): update the {name} SDK to Petstore");
+        assert!(title.starts_with(&expected), "{title}");
+    }
+    assert_eq!(run.requests("POST", "/issues/2/labels").len(), 2);
+    let dispatched = run.requests("POST", "/actions/workflows/ci.yml/dispatches");
+    let refs = [
+        json!({ "ref": "perseid/update-rust" }),
+        json!({ "ref": "perseid/update-go" }),
+    ];
+    assert_eq!(dispatched, refs);
+
+    let origin = |args: &[&str]| git_in(&dir.path().join("origin.git"), args);
+    for (name, other) in [("rust", "go"), ("go", "rust")] {
+        let branch = format!("perseid/update-{name}");
+        let files = origin(&["ls-tree", "-r", "--name-only", &branch]);
+        assert!(
+            files.lines().any(|f| f.starts_with(&format!("{name}/"))),
+            "{files}"
+        );
+        assert!(
+            !files.lines().any(|f| f.starts_with(&format!("{other}/"))),
+            "{files}"
+        );
+        let spec = origin(&["show", &format!("{branch}:openapi.yaml")]);
+        assert!(
+            spec.contains("description: Pets"),
+            "the spec rides along: {spec}"
+        );
+    }
+
+    let comment = run.request("POST", "/issues/1/comments");
+    let text = comment["body"].as_str().unwrap();
+    assert!(
+        text.starts_with("Replaced by one pull request per SDK"),
+        "{text}"
+    );
+    assert!(text.contains("/pull/2"), "{text}");
+    assert_eq!(
+        run.request("PATCH", "/pulls/1"),
+        json!({ "state": "closed" })
+    );
+    let deleted = |c: &&String| c.starts_with("DELETE") && c.ends_with("/heads/perseid/update");
+    assert!(run.calls.iter().any(|c| deleted(&c)), "{:#?}", run.calls);
+}
+
+#[cfg(unix)]
+#[test]
+fn open_pull_requests_of_an_sdk_keep_the_update_split() {
+    let dir = pull_request_project();
+    let run = run_pr(
+        dir.path(),
+        &["go", "--bump", "minor"],
+        rust_pull_request(),
+        &[],
+    );
+    assert!(run.ok, "{}", run.output);
+    let edited = run.request("PATCH", "/pulls/1");
+    let title = edited["title"].as_str().unwrap();
+    assert!(
+        title.starts_with("feat(api): update the rust SDK to"),
+        "{title}"
+    );
+    let created = run.request("POST", "/pulls");
+    assert_eq!(created["head"], "perseid/update-go", "{created}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_spec_change_leaving_every_sdk_alone_gets_one_pull_request() {
+    let dir = pull_request_project();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let git = |args: &[&str]| git_in(dir.path(), args);
+    git(&["add", "--all"]);
+    git(&[
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-qm",
+        "sdks",
+    ]);
+    git(&["push", "--quiet", "origin", "main"]);
+    let spec = dir.path().join("openapi.yaml");
+    let commented = format!("# Pets\n{}", fs::read_to_string(&spec).unwrap());
+    fs::write(&spec, commented).unwrap();
+
+    // Whether the update is split or not: the pull request of an SDK left alone is closed.
+    for (answers, split) in [(Answers::default(), false), (rust_pull_request(), true)] {
+        let run = run_pr(dir.path(), &["go", "--bump", "patch"], answers, &[]);
+        assert!(run.ok, "{}", run.output);
+        let created = run.request("POST", "/pulls");
+        assert_eq!(created["head"], "perseid/update", "{created}");
+        let title = created["title"].as_str().unwrap();
+        assert!(title.starts_with("fix(api): update SDKs to"), "{title}");
+        let origin = dir.path().join("origin.git");
+        let changed = git_in(&origin, &["diff", "--name-only", "main", "perseid/update"]);
+        assert_eq!(changed, "openapi.yaml");
+        let deleted = run
+            .calls
+            .iter()
+            .any(|c| c.starts_with("DELETE") && c.contains("/git/refs/heads/perseid/update-rust"));
+        assert_eq!(deleted, split, "{:#?}", run.calls);
+        if split {
+            let comment = run.request("POST", "/issues/1/comments");
+            let text = comment["body"].as_str().unwrap();
+            assert!(
+                text.starts_with("Closed: the base branch already holds"),
+                "{text}"
+            );
+            assert_eq!(
+                run.request("PATCH", "/pulls/1"),
+                json!({ "state": "closed" })
+            );
+        } else {
+            assert!(
+                run.requests("PATCH", "/pulls/1").is_empty(),
+                "{:#?}",
+                run.calls
+            );
+            assert!(run.requests("POST", "/issues/1/comments").is_empty());
+        }
+    }
 }
 
 #[cfg(unix)]

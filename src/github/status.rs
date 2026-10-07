@@ -362,20 +362,29 @@ fn health(report: &mut Report, api: &GitHub, plan: &Plan) -> Result<()> {
         repos.insert(sdk.remote().unwrap_or(&plan.hub).to_owned());
     }
     for repo in &repos {
-        let owner = repo.split('/').next().unwrap_or_default();
         let open = api
-            .find(&format!(
-                "/repos/{repo}/pulls?head={owner}:{}&state=open",
-                crate::pr::BRANCH
-            ))?
+            .find(&format!("/repos/{repo}/pulls?state=open&per_page=100"))?
             .unwrap_or_default();
-        match open[0]["html_url"].as_str() {
-            Some(url) => report.ui.warn(&format!(
-                "{repo}: SDK pull request waiting for review, {url}"
-            )),
-            None => report
+        let urls: Vec<&str> = open
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|p| {
+                p["head"]["ref"]
+                    .as_str()
+                    .is_some_and(crate::pr::is_update_branch)
+            })
+            .filter_map(|p| p["html_url"].as_str())
+            .collect();
+        if urls.is_empty() {
+            report
                 .ui
-                .ok(&format!("{repo}: no SDK pull request waiting")),
+                .ok(&format!("{repo}: no SDK pull request waiting"));
+        }
+        for url in urls {
+            report.ui.warn(&format!(
+                "{repo}: SDK pull request waiting for review, {url}"
+            ));
         }
     }
     if plan.app {

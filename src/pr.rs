@@ -22,6 +22,31 @@ use crate::{
 
 pub const BRANCH: &str = "perseid/update";
 
+/// The update branch of the SDK `name` in a repository holding several, when its update is
+/// split: one pull request each.
+pub fn branch_of(name: &str) -> String {
+    format!("{BRANCH}-{name}")
+}
+
+/// Whether `branch` is an update branch perseid pushes.
+pub fn is_update_branch(branch: &str) -> bool {
+    branch == BRANCH || is_sdk_branch(branch)
+}
+
+fn is_sdk_branch(branch: &str) -> bool {
+    branch.starts_with(&format!("{BRANCH}-"))
+}
+
+/// The most files an update of several SDKs changes in one pull request. release-please finds the
+/// SDKs a commit changed from its files, of which GitHub lists the first 3000: past that, it
+/// misses the last SDKs. The margin covers the base branch moving before the merge.
+pub fn split_above() -> usize {
+    std::env::var("PERSEID_SPLIT_ABOVE")
+        .ok()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(2500)
+}
+
 /// Marks pull requests whose release PR `meteroid-oss/perseid/release` auto-merges.
 pub const AUTO_RELEASE: &str = "perseid:auto-release";
 
@@ -289,9 +314,15 @@ fn generated(dir: &Path, args: &[&str], paths: &[String]) -> Result<BTreeSet<Str
 /// Brings the generated files under `paths`, and `files`, from the checkout `from` to the
 /// worktree `to`. Other files under `paths` keep their content in `to`.
 fn mirror(from: &Path, to: &Path, paths: &[String], files: &[String]) -> Result<()> {
-    let ours = generated(from, &["--cached", "--others", "--exclude-standard"], paths)?;
-    for stale in generated(to, &[], paths)?.difference(&ours) {
-        std::fs::remove_file(to.join(stale))?;
+    let ours = match paths.is_empty() {
+        // `ls-files` without paths would list the whole repository.
+        true => BTreeSet::new(),
+        false => generated(from, &["--cached", "--others", "--exclude-standard"], paths)?,
+    };
+    if !paths.is_empty() {
+        for stale in generated(to, &[], paths)?.difference(&ours) {
+            std::fs::remove_file(to.join(stale))?;
+        }
     }
     for path in ours.iter().chain(files) {
         let target = to.join(path);
@@ -367,19 +398,21 @@ fn token() -> Result<String> {
     auth::token(&ui).map(|(token, _)| token)
 }
 
-/// An open pull request of the update branch.
+/// An open pull request of an update branch.
 pub struct Pull {
     pub url: String,
     repo: String,
+    branch: String,
     number: u64,
     node_id: String,
 }
 
 impl Pull {
-    fn new(repo: &str, pull: &Value) -> Result<Self> {
+    fn new(repo: &str, branch: &str, pull: &Value) -> Result<Self> {
         Ok(Self {
             url: pull["html_url"].as_str().unwrap_or_default().to_owned(),
             repo: repo.to_owned(),
+            branch: branch.to_owned(),
             number: pull["number"]
                 .as_u64()
                 .context("GitHub answered a pull request without a number")?,
@@ -411,9 +444,103 @@ fn warn(message: &str) {
     }
 }
 
-/// Commits the generated files under `paths`, and `files`, of the repository at `dir` on top of
-/// its upstream branch to the update branch, and opens (or refreshes) its PR. The commit is made
-/// in a temporary worktree: the checkout at `dir` keeps its branch, index and files.
+/// Fetches `refspec` from `origin`, as shallow as the checkout at `dir`: its commit.
+fn fetch(dir: &Path, refspec: &str) -> Result<String> {
+    let mut args = vec!["fetch", "--quiet"];
+    if git(dir, &["rev-parse", "--is-shallow-repository"])? == "true" {
+        args.extend(["--depth", "1"]);
+    }
+    args.extend(["origin", refspec]);
+    remote_git(dir, &args)?;
+    git(dir, &["rev-parse", "FETCH_HEAD"])
+}
+
+/// The upstream branch of the checkout at `dir`, when it is on one, and the commit to build on:
+/// its tip, else that of the default branch.
+fn upstream(dir: &Path) -> Result<(Option<String>, String)> {
+    let branch = git(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    match branch.map(|b| fetch(dir, &b).map(|sha| (b, sha))) {
+        Some(Ok((branch, sha))) => Ok((Some(branch), sha)),
+        _ => Ok((
+            None,
+            fetch(dir, "HEAD").context("fetching the default branch of `origin`")?,
+        )),
+    }
+}
+
+/// Stages the files of `update` from the checkout at `dir` in the worktree `work`: false when
+/// none of its own changed.
+fn stage(dir: &Path, work: &Path, update: &Update) -> Result<bool> {
+    let Update {
+        paths,
+        files,
+        shared,
+        ..
+    } = *update;
+    let own: Vec<&str> = paths.iter().chain(files).map(String::as_str).collect();
+    if own.is_empty() {
+        return Ok(false);
+    }
+    let carried: Vec<String> = files.iter().chain(shared).cloned().collect();
+    mirror(dir, work, paths, &carried)?;
+    git(work, &[&["add", "--all", "--"][..], &own].concat())?;
+    let mut status = vec!["status", "--porcelain", "--"];
+    status.extend(&own);
+    if git(work, &status)?.is_empty() {
+        return Ok(false);
+    }
+    if !shared.is_empty() {
+        let mut add = vec!["add", "--all", "--"];
+        add.extend(shared.iter().map(String::as_str));
+        git(work, &add)?;
+    }
+    Ok(true)
+}
+
+/// How many files the pull request of `update` would change.
+pub fn changed_files(dir: &Path, update: &Update) -> Result<usize> {
+    let (_, start) = upstream(dir)?;
+    let tree = Worktree::add(dir, &start)?;
+    if !stage(dir, &tree.path, update)? {
+        return Ok(0);
+    }
+    let names = git(
+        &tree.path,
+        &["diff", "--cached", "--name-only", "--no-renames"],
+    )?;
+    Ok(names.lines().count())
+}
+
+/// Whether the repository at `dir` has an open update pull request of one of its SDKs.
+pub fn splitting(github: &Client, dir: &Path) -> Result<bool> {
+    let remote = git(dir, &["remote", "get-url", "origin"])?;
+    let Some(repo) = repo_of(&remote) else {
+        return Ok(false);
+    };
+    let pulls = github
+        .api()?
+        .get(&format!("/repos/{repo}/pulls?state=open&per_page=100"))?;
+    Ok(pulls
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|p| p["head"]["ref"].as_str().is_some_and(is_sdk_branch)))
+}
+
+/// What a pull request of [`open`] brings.
+pub struct Update<'a> {
+    pub branch: &'a str,
+    /// Directories whose generated files it brings.
+    pub paths: &'a [String],
+    /// Other files it brings.
+    pub files: &'a [String],
+    /// Files it brings along with changes to `paths` or `files`, never alone.
+    pub shared: &'a [String],
+}
+
+/// Commits the files of `update` of the repository at `dir` on top of its upstream branch to
+/// the update branch, and opens (or refreshes) its PR. The commit is made in a temporary
+/// worktree: the checkout at `dir` keeps its branch, index and files.
 /// An open PR keeps its bump if larger: it releases every spec change since the last merge.
 /// Opens or updates the pull request of `dir`, its description from `describe` given the section
 /// listing the API changes: those of `changelog` and those it already lists, unless its SDKs are
@@ -422,38 +549,21 @@ fn warn(message: &str) {
 pub fn open(
     github: &Client,
     dir: &Path,
-    paths: &[String],
-    files: &[String],
+    update: &Update,
     bump: Bump,
     subject: &str,
     changelog: &Changelog,
     describe: impl FnOnce(&str) -> String,
 ) -> Result<Option<Pull>> {
-    let shallow = git(dir, &["rev-parse", "--is-shallow-repository"])? == "true";
-    let fetch = |refspec: &str| {
-        let mut args = vec!["fetch", "--quiet"];
-        if shallow {
-            args.extend(["--depth", "1"]);
-        }
-        args.extend(["origin", refspec]);
-        remote_git(dir, &args)?;
-        git(dir, &["rev-parse", "FETCH_HEAD"])
-    };
-    let branch = git(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
-    let (base, start) = match branch.map(|b| fetch(&b).map(|sha| (b, sha))) {
-        Some(Ok((branch, sha))) => (Some(branch), sha),
-        _ => (
-            None,
-            fetch("HEAD").context("fetching the default branch of `origin`")?,
-        ),
-    };
+    let Update {
+        branch: target,
+        paths,
+        ..
+    } = *update;
+    let (base, start) = upstream(dir)?;
     let tree = Worktree::add(dir, &start)?;
     let work = tree.path.as_path();
-    mirror(dir, work, paths, files)?;
-    let mut add = vec!["add", "--all", "--"];
-    add.extend(paths.iter().chain(files).map(String::as_str));
-    git(work, &add)?;
-    if git(work, &["status", "--porcelain"])?.is_empty() {
+    if !stage(dir, work, update)? {
         return Ok(None);
     }
     let remote = git(dir, &["remote", "get-url", "origin"])?;
@@ -462,7 +572,7 @@ pub fn open(
     let owner = repo.split('/').next().unwrap_or_default();
     let api = github.api()?;
     let pulls = api.get(&format!(
-        "/repos/{repo}/pulls?head={owner}:{BRANCH}&state=open"
+        "/repos/{repo}/pulls?head={owner}:{target}&state=open"
     ))?;
     github.check_expiration(api);
     let existing = pulls.get(0).filter(|p| p.is_object());
@@ -514,9 +624,9 @@ pub fn open(
         let tree = git(dir, &["rev-parse", &format!("{sha}^{{tree}}")]).ok();
         (tree, git(dir, &["log", "-1", "--format=%B", sha]).ok())
     };
-    let unchanged = fetch(BRANCH).is_ok_and(|sha| commit_of(&sha) == commit_of(&head));
+    let unchanged = fetch(dir, target).is_ok_and(|sha| commit_of(&sha) == commit_of(&head));
     if !unchanged {
-        let refspec = format!("{head}:refs/heads/{BRANCH}");
+        let refspec = format!("{head}:refs/heads/{target}");
         remote_git(dir, &["push", "--quiet", "--force", "origin", &refspec])?;
     }
     let body = describe(&changelog.section());
@@ -527,12 +637,62 @@ pub fn open(
             api.patch(&format!("/repos/{repo}/pulls/{number}"), content)?
         }
         None => {
-            content["head"] = BRANCH.into();
+            content["head"] = target.into();
             content["base"] = base.map_or_else(|| default_branch(dir), Ok)?.into();
             api.post(&format!("/repos/{repo}/pulls"), content)?
         }
     };
-    Pull::new(&repo, &pull).map(Some)
+    Pull::new(&repo, target, &pull).map(Some)
+}
+
+/// Closes the open pull request of [`BRANCH`] in the repository at `dir`, which the update
+/// pull requests `by` of each of its SDKs replace, and deletes the branch.
+pub fn close_superseded(github: &Client, dir: &Path, by: &[Pull]) -> Result<()> {
+    let links: Vec<&str> = by.iter().map(|p| p.url.as_str()).collect();
+    let reason = format!(
+        "Replaced by one pull request per SDK, as release-please reads at most 3000 files of a \
+         commit to tell which SDKs it changed: {}",
+        links.join(", ")
+    );
+    close(github, dir, BRANCH, &reason)
+}
+
+/// Closes the open pull request of `branch`, the update branch of an SDK the base branch now
+/// holds as generated, and deletes the branch.
+pub fn close_stale(github: &Client, dir: &Path, branch: &str) -> Result<()> {
+    let reason = "Closed: the base branch already holds this SDK as perseid generates it now.";
+    close(github, dir, branch, reason)
+}
+
+/// Closes the open pull request of `branch` in the repository at `dir`, with `reason` as a
+/// comment, and deletes the branch.
+fn close(github: &Client, dir: &Path, branch: &str, reason: &str) -> Result<()> {
+    let remote = git(dir, &["remote", "get-url", "origin"])?;
+    let Some(repo) = repo_of(&remote) else {
+        return Ok(());
+    };
+    let owner = repo.split('/').next().unwrap_or_default();
+    let api = github.api()?;
+    let pulls = api.get(&format!(
+        "/repos/{repo}/pulls?head={owner}:{branch}&state=open"
+    ))?;
+    let Some(number) = pulls.get(0).and_then(|p| p["number"].as_u64()) else {
+        return Ok(());
+    };
+    api.post(
+        &format!("/repos/{repo}/issues/{number}/comments"),
+        json!({ "body": reason }),
+    )?;
+    api.patch(
+        &format!("/repos/{repo}/pulls/{number}"),
+        json!({ "state": "closed" }),
+    )?;
+    let path = format!("/repos/{repo}/git/refs/heads/{branch}");
+    let reply = api.send("DELETE", &path, None)?;
+    if reply.status != 422 && reply.status != 404 {
+        check("DELETE", &path, reply)?;
+    }
+    Ok(())
 }
 
 /// Enables auto-merge (squash) on `pull`, labelled so its release PR follows.
@@ -543,6 +703,7 @@ pub fn auto_merge(github: &Client, pull: &Pull) -> Result<()> {
         repo,
         number,
         node_id,
+        ..
     } = pull;
     let labels = format!("/repos/{repo}/labels");
     let label = json!({
@@ -591,14 +752,27 @@ pub fn dispatch(github: &Client, pull: &Pull, workflows: &[String]) -> Result<()
             "/repos/{}/actions/workflows/{workflow}/dispatches",
             pull.repo
         );
-        github.api()?.post(&path, json!({ "ref": BRANCH }))?;
+        github.api()?.post(&path, json!({ "ref": pull.branch }))?;
     }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AUTO_RELEASE, Bump, SOURCE, origin, repo_of, token_config};
+    use super::{
+        AUTO_RELEASE, Bump, SOURCE, branch_of, is_update_branch, origin, repo_of, token_config,
+    };
+
+    #[test]
+    fn each_sdk_of_a_repository_has_its_update_branch() {
+        assert_eq!(branch_of("rust"), "perseid/update-rust");
+        for branch in ["perseid/update", "perseid/update-rust"] {
+            assert!(is_update_branch(branch), "{branch}");
+        }
+        for branch in ["perseid/updates", "main", "release-please--branches--main"] {
+            assert!(!is_update_branch(branch), "{branch}");
+        }
+    }
 
     #[test]
     fn the_release_action_reads_the_auto_release_label() {

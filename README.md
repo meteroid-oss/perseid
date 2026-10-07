@@ -102,7 +102,8 @@ var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.
 
 - `sdks.yml` runs the `meteroid-oss/perseid` Action when the spec changes. It installs perseid
   and the pinned formatters, then runs `perseid generate --pr`, which commits the SDKs to the
-  `perseid/update` branch and opens or updates one pull request per repository.
+  `perseid/update` branch and opens or updates one pull request per repository, split per SDK
+  when an update of several is too large for release-please.
 - `sdk-ci.yml`, in each repository holding SDKs, builds each SDK and runs its tests on pull
   requests and pushes.
 - `sdk-release.yml`, in each repository holding SDKs, runs release-please on merge and publishes

@@ -49,7 +49,7 @@ inputs:
     default: 'false'
   ci-workflows:
     description: >-
-      Workflow files (space or newline separated) to dispatch on `perseid/update` once its pull
+      Workflow files (space or newline separated) to dispatch on each update branch once its pull
       request is opened or updated in this repository, when `token` is the workflow's own `github.token`,
       whose pushes start no workflow. The job needs `actions: write`
     default: ''

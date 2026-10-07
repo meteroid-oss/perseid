@@ -431,14 +431,21 @@ impl GitHub {
                 (201, json!({}))
             }
             ("GET", ["pulls"]) => {
-                let head = param("head").unwrap();
+                // GitHub answers `head` as an object, which `head=owner:branch` filters on.
+                let head = param("head");
                 let open: Vec<_> = self
                     .pulls
                     .iter()
                     .filter(|p| {
-                        p["repo"] == name && format!("acme:{}", p["head"].as_str().unwrap()) == head
+                        let branch = p["head"].as_str().unwrap();
+                        p["repo"] == name
+                            && head.as_ref().is_none_or(|h| format!("acme:{branch}") == *h)
                     })
-                    .cloned()
+                    .map(|p| {
+                        let mut p = p.clone();
+                        p["head"] = json!({ "ref": p["head"] });
+                        p
+                    })
                     .collect();
                 (200, Value::Array(open))
             }

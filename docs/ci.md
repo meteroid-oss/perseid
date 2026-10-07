@@ -248,7 +248,8 @@ For SDKs kept in the same repository, you can pass it to the Action by hand:
 - `token: ${{ github.token }}`, with `contents: write` and `pull-requests: write` on the job;
 - "Allow GitHub Actions to create and approve pull requests" in the repository settings;
 - `ci-workflows` listing your CI workflows, with `actions: write`. The Action dispatches them on
-  `perseid/update`, and each needs `on: workflow_dispatch`.
+  each update branch (`perseid/update`, or `perseid/update-<language>`), and each needs
+  `on: workflow_dispatch`.
 
 Dispatched runs do not show in the pull request's checks or count as required status checks
 ([GitHub docs](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)).
@@ -329,7 +330,7 @@ fares, each problem with its fix.
 
 | Repository | Checks |
 |---|---|
-| SDKs repository | Secrets, workflows not yet refreshed or pushed, the last spec pushed (commit, release, age), open `perseid/update` pull requests, the last `sdks.yml` run, the App installation |
+| SDKs repository | Secrets, workflows not yet refreshed or pushed, the last spec pushed (commit, release, age), open update pull requests, the last `sdks.yml` run, the App installation |
 | API repository | The credential `perseid-push.yml` needs (the `source` of the SDKs repository, or the App's key or token), the last spec the SDKs repository received, the last `perseid-push.yml` run |
 
 - Exits with 2 when something waits on you, 1 on errors, 0 otherwise.
@@ -382,6 +383,15 @@ The Action installs the perseid matching its own ref, then:
 4. It runs `perseid generate --pr`, which commits the generated files on top of the current
    branch to `perseid/update`. It opens or updates a pull request in each repository holding
    SDKs, titled as described in [releases](#releases).
+
+   release-please tells which SDKs a commit changed from its files, of which GitHub lists the
+   first 3000. So when an update of several SDKs in one repository changes more than 2500 files
+   (a first generation, or a perseid upgrade rewriting them all), each SDK gets its own pull
+   request, from `perseid/update-<language>`, carrying the spec and release files along. Updates
+   stay split until those pull requests are merged, then share one again. An open
+   `perseid/update` pull request they replace is closed, as is the pull request of an SDK the
+   base branch already holds as generated. Each merges on its own: where branch protection
+   requires branches to be up to date, merge them one at a time or through a merge queue.
 
 | Input | Default | |
 |---|---|---|
