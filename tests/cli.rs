@@ -890,7 +890,7 @@ fn auto_bumps_are_sized_by_oasdiff_against_the_previous_commit() {
     git_in(dir.path(), &[&commit[..], &["spec"]].concat());
     executable(
         &dir.path().join("bin/oasdiff"),
-        "#!/bin/sh\necho \"$@\" >> \"$LOG_DIR/oasdiff.log\"\ncase \"$*\" in\n  breaking*) exit 1 ;;\n  *markdown*) echo '- removed GET /pets/{id}' ;;\nesac\n",
+        "#!/bin/sh\necho \"$@\" >> \"$LOG_DIR/oasdiff.log\"\necho '[{\"text\": \"api path removed without deprecation\", \"level\": 3, \"operation\": \"DELETE\", \"path\": \"/pets/{id}\"}]'\n",
     );
 
     let run = generate_pr_with(dir.path(), &[]);
@@ -900,17 +900,29 @@ fn auto_bumps_are_sized_by_oasdiff_against_the_previous_commit() {
         run.calls
     );
     let body = &run.request("POST", "/pulls")["body"];
+    let entry = "`DELETE /pets/{id}`: api path removed without deprecation";
     assert!(
         body.as_str()
             .unwrap()
-            .contains("### API changes\n\n- removed GET /pets/{id}"),
+            .contains(&format!("### API changes\n\n- ⚠️ {entry}\n")),
         "{body}"
     );
-    let runs = fs::read_to_string(dir.path().join("oasdiff.log")).unwrap();
-    let first = runs.lines().next().unwrap();
+    let message = git_in(
+        &dir.path().join("origin.git"),
+        &["log", "-1", "--format=%B", "perseid/update"],
+    );
     assert!(
-        first.starts_with("breaking --fail-on ERR --severity-levels ")
-            && first.ends_with("/openapi.yaml"),
+        message.starts_with("feat(api)!: update SDKs to")
+            && message.ends_with(&format!(
+                "\n\nBEGIN_NESTED_COMMIT\nfeat(api)!: {entry}\nEND_NESTED_COMMIT"
+            )),
+        "{message}"
+    );
+    let runs = fs::read_to_string(dir.path().join("oasdiff.log")).unwrap();
+    assert_eq!(runs.lines().count(), 1, "{runs}");
+    assert!(
+        runs.starts_with("changelog --format json --severity-levels ")
+            && runs.trim_end().ends_with("/openapi.yaml"),
         "{runs}"
     );
 }
@@ -1203,6 +1215,7 @@ fn open_pull_requests_keep_their_largest_bump() {
             "html_url": "https://github.com/acme/petstore-sdks/pull/1",
             "node_id": "PR_1",
             "title": "feat(api)!: update SDKs to Petstore 1",
+            "body": "### API changes\n\n```\nBEGIN_NESTED_COMMIT\nfeat(api): `GET /toys`: endpoint added\nEND_NESTED_COMMIT\n```",
         })],
         expiration: Some("2999-01-01 00:00:00 UTC".into()),
         ..Answers::default()
@@ -1225,6 +1238,19 @@ fn open_pull_requests_keep_their_largest_bump() {
             .unwrap()
             .starts_with("feat(api)!: update SDKs to"),
         "{edited}"
+    );
+    let body = edited["body"].as_str().unwrap();
+    assert!(
+        body.contains("### API changes\n\n- `GET /toys`: endpoint added\n"),
+        "{body}"
+    );
+    let message = git_in(
+        &dir.path().join("origin.git"),
+        &["log", "-1", "--format=%B", "perseid/update"],
+    );
+    assert!(
+        message.contains("feat(api): `GET /toys`: endpoint added"),
+        "{message}"
     );
     assert!(run.requests("POST", "/pulls").is_empty());
     assert!(run.output.contains("/pull/1\n"), "{}", run.output);

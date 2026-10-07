@@ -11,10 +11,13 @@ use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 
-use crate::github::{
-    Options, TOKEN, Ui,
-    api::{GitHub, check, expiration_epoch},
-    auth,
+use crate::{
+    changelog::{self, Entry},
+    github::{
+        Options, TOKEN, Ui,
+        api::{GitHub, check, expiration_epoch},
+        auth,
+    },
 };
 
 pub const BRANCH: &str = "perseid/update";
@@ -412,6 +415,9 @@ fn warn(message: &str) {
 /// its upstream branch to the update branch, and opens (or refreshes) its PR. The commit is made
 /// in a temporary worktree: the checkout at `dir` keeps its branch, index and files.
 /// An open PR keeps its bump if larger: it releases every spec change since the last merge.
+/// Opens or updates the pull request of `dir`, its description from `describe` given the section
+/// listing the API changes: `entries` and those it already lists.
+#[allow(clippy::too_many_arguments)]
 pub fn open(
     github: &Client,
     dir: &Path,
@@ -419,7 +425,8 @@ pub fn open(
     files: &[String],
     bump: Bump,
     subject: &str,
-    body: &str,
+    entries: &[Entry],
+    describe: impl FnOnce(&str) -> String,
 ) -> Result<Option<Pull>> {
     let shallow = git(dir, &["rev-parse", "--is-shallow-repository"])? == "true";
     let fetch = |refspec: &str| {
@@ -464,6 +471,11 @@ pub fn open(
     let title = bump
         .max(Bump::of_title(previous).unwrap_or(bump))
         .title(subject);
+    let listed = existing
+        .and_then(|p| p["body"].as_str())
+        .unwrap_or_default();
+    let entries = changelog::merged(changelog::parse(listed).into_iter().chain(entries.to_vec()));
+    let nested = changelog::nested(&entries);
     let name = format!("user.name={BOT_NAME}");
     let email = format!("user.email={BOT_EMAIL}");
     let mut commit = vec![];
@@ -474,15 +486,22 @@ pub fn open(
         commit.extend(["-c", &email]);
     }
     commit.extend(["commit", "--quiet", "-m", &title]);
+    if !nested.is_empty() {
+        commit.extend(["-m", &nested]);
+    }
     git(work, &commit)?;
     let head = git(work, &["rev-parse", "HEAD"])?;
     drop(tree);
-    let tree_of = |sha: &str| git(dir, &["rev-parse", &format!("{sha}^{{tree}}")]);
-    let unchanged = fetch(BRANCH).is_ok_and(|sha| tree_of(&sha).ok() == tree_of(&head).ok());
+    let commit_of = |sha: &str| {
+        let tree = git(dir, &["rev-parse", &format!("{sha}^{{tree}}")]).ok();
+        (tree, git(dir, &["log", "-1", "--format=%B", sha]).ok())
+    };
+    let unchanged = fetch(BRANCH).is_ok_and(|sha| commit_of(&sha) == commit_of(&head));
     if !unchanged {
         let refspec = format!("{head}:refs/heads/{BRANCH}");
         remote_git(dir, &["push", "--quiet", "--force", "origin", &refspec])?;
     }
+    let body = describe(&changelog::section(&entries));
     let mut content = json!({ "title": title, "body": body });
     let pull = match existing {
         Some(pull) => {

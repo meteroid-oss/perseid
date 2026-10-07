@@ -1,5 +1,6 @@
 mod api;
 pub mod assets;
+pub mod changelog;
 pub mod client_name;
 mod codesamples;
 pub mod config;

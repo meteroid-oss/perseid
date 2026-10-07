@@ -513,8 +513,8 @@ Every SDK has its own version, in its own manifest, and is released on its own.
 
 1. `generate --pr` titles its pull request as a conventional commit sized by
    [oasdiff](https://github.com/oasdiff/oasdiff): `feat(api)!:` for breaking changes,
-   `feat(api):` for other API changes, `fix(api):` otherwise. oasdiff's changelog goes in the
-   description.
+   `feat(api):` for other API changes, `fix(api):` otherwise. Each API change oasdiff finds
+   is listed in the description, and nested in the commit as its own conventional commit.
 2. Merging it, or any `fix:` or `feat:` commit touching an SDK, opens a release PR that bumps the
    touched SDKs and their changelogs. Before 1.0, breaking changes bump the minor version.
 3. Merging the release PR tags each SDK and publishes it.
@@ -525,9 +525,25 @@ Sizing the change:
   (`GITHUB_EVENT_BEFORE`, set by the Action), else the previous commit.
 - Without a previous spec, or without oasdiff, the pull request asks for a minor release.
 - `--bump major|minor|patch` skips the comparison.
-- An open pull request keeps its largest bump.
+- An open pull request keeps its largest bump, and the API changes it already lists.
 - `--relax-enum-additions`, on by default, counts enum values added to responses as minor
   changes. Generated SDKs accept unknown enum values, which makes this safe.
+
+The SDK changelogs list each API change, breaking ones under "⚠ BREAKING CHANGES":
+
+```markdown
+### ⚠ BREAKING CHANGES
+
+* **api:** `DELETE /pets/{id}`: api path removed without deprecation
+
+### Features
+
+* **api:** `GET /pets`: added the new optional `query` request parameter `limit`
+* **api:** update SDKs to Pets 2
+```
+
+release-please reads them from the merged commit. Squash merges take them from the commit or
+the description; a squash message set to the pull request title alone drops them.
 
 Tags look like `rust/v0.4.0`, or `v0.4.0` alone in its repository. Go tags carry the module's
 folder, such as `api/go/v0.4.0`, as the module proxy expects.
