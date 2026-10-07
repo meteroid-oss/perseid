@@ -711,7 +711,7 @@ mod tests {
             ("go", "RoundTripperFunc"),
             ("go", "RequestPager"),
             ("rust", "Paginator"),
-            ("java", "Paginator"),
+            ("java", "AsyncPage"),
             ("csharp", "SseParser"),
             ("python", "TaggedUnionModel"),
             ("typescript", "ErrorParsers"),

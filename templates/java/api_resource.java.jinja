@@ -5,10 +5,6 @@
 {#- Runtime types, qualified when a model of the same name is imported. -#}
 {% set root = sdk.java_package ~ "." -%}
 {% set RO = root ~ "RequestOptions" if "RequestOptions" in models else "RequestOptions" -%}
-{% set PAGINATOR = root ~ "Paginator" if "Paginator" in models else "Paginator" -%}
-{% set PAGE = root ~ "Page" if "Page" in models else "Page" -%}
-{% set APAGINATOR = root ~ "AsyncPaginator" if "AsyncPaginator" in models else "AsyncPaginator" -%}
-{% set APAGE = root ~ "AsyncPage" if "AsyncPage" in models else "AsyncPage" -%}
 {% set RESPONSE = root ~ "ApiResponse" if "ApiResponse" in models else "ApiResponse" -%}
 {% set STREAM = root ~ "streaming.EventStream" if "EventStream" in models else "EventStream" -%}
 {% set SSE = root ~ "streaming.SseEvent" if "SseEvent" in models else "SseEvent" -%}
@@ -154,8 +150,25 @@
             {% set current = "options." ~ pp.field ~ "().orElse(" ~ start ~ ")" -%}
             {% set next_args = pd.args ~ "options.toBuilder()." ~ pp.field ~ "(next).build(), " -%}
         {% endif -%}
-        {% set page = {"style": pg.style, "item": pg.item_schema | to_upper_camel_case, "param_type": pp.type, "current": current, "next_args": next_args, "first": first, "pg": pg} -%}
+        {#- The page classes, qualified where a model of the same name is imported. -#}
+        {% set cls = resource_type_name ~ op_pascal ~ "Page" -%}
+        {% set async_cls = resource_type_name ~ op_pascal ~ "AsyncPage" -%}
+        {% set page = {
+            "style": pg.style,
+            "item": pg.item_schema | to_upper_camel_case,
+            "param_type": pp.type,
+            "current": current,
+            "next_args": next_args,
+            "first": first,
+            "pg": pg,
+            "cls": cls,
+            "async_cls": async_cls,
+            "type": (sdk.java_package ~ ".api." ~ cls) if cls in models else cls,
+            "async_type": (sdk.java_package ~ ".api." ~ async_cls) if async_cls in models else async_cls,
+        } -%}
     {% endif -%}
+    {% set full -%}{{ pd.params }}{% if optional_params %}final {{ options_type }} options, {% endif %}final {{ RO }} requestOptions{% endset -%}
+    {% set full_args -%}{{ pd.args }}{% if optional_params %}options, {% endif %}requestOptions{% endset -%}
     {% set ops.list = ops.list + [{
         "op": op,
         "name": op_name,
@@ -171,6 +184,8 @@
         "body_var": body_var,
         "has_body": has_body,
         "page": page,
+        "full": full,
+        "full_args": full_args,
         "empty_note": ", empty when the response has none" if may_be_empty else "",
     }] -%}
 {% endfor -%}
@@ -197,10 +212,9 @@
 {%- endmacro %}
 
 {#- The overloads of the method of `o` returning `ret`, sending with `send`: no options, optional
-    parameters only, request options only, and both. -#}
-{% macro overloads(o, ret, send, exchange, returns) -%}
+    parameters only, request options only, and both. `impl`, when given, is the body of the last. -#}
+{% macro overloads(o, ret, send, exchange, returns, impl="") -%}
 {% set body = "" if ret == "void" else "return " -%}
-{% set full -%}{{ o.params }}{% if o.has_options %}final {{ o.options_type }} options, {% endif %}final {{ RO }} requestOptions{% endset -%}
 {{ op_doc(o, false, returns) }}public {{ ret }} {{ o.name }}({{ o.params | strip_trailing_comma }}) {
     {{ body }}{{ o.name }}({{ o.args }}{% if o.has_options %}{{ o.options_type }}.none(), {% endif %}{{ RO }}.none());
 }
@@ -239,63 +253,126 @@ public {{ ret }} {{ o.name }}({{ o.params }}final {{ RO }} requestOptions) {
 }
 {% endif %}
 
-{{ op_doc(o, true, returns) }}public {{ ret }} {{ o.name }}({{ full }}) {
-    {{ body }}{{ exchange }}exchange{{ o.pascal }}({{ o.args }}{% if o.has_options %}options, {% endif %}requestOptions).{{ send }}();
+{{ op_doc(o, true, returns) }}public {{ ret }} {{ o.name }}({{ o.full }}) {
+    {% if impl %}{{ impl }}{% else %}{{ body }}{{ exchange }}exchange{{ o.pascal }}({{ o.full_args }}).{{ send }}();{% endif %}
 }
 {%- endmacro %}
 
-{#- The overloads of the paginator method of `o`, returning `ret` from `page_method`. -#}
-{% macro pager_overloads(o, ret, page_method, ctor) -%}
-{% set full -%}{{ o.params }}{% if o.has_options %}final {{ o.options_type }} options, {% endif %}final {{ RO }} requestOptions{% endset -%}
-{% set returns = "every item, across pages" -%}
-{% set text -%}
-Iterates over every item of {@link #{{ o.name }}}, fetching further pages on demand.
+{#- Java type of `ty`, as a model getter returns it, in the page class `cls`: its unions are the
+    `union_cls` class, and a schema named `cls` is qualified. -#}
+{% macro page_type(ty, union_cls, cls) -%}
+{%- if ty.is_union() and union_cls -%}{{ union_cls }}
+{%- elif ty.is_nullable() -%}{{ page_type(ty.inner_type(), union_cls, cls) }}
+{%- elif ty.is_list() -%}List<{{ page_type(ty.inner_type(), union_cls, cls) }}>
+{%- elif ty.is_set() -%}Set<{{ page_type(ty.inner_type(), union_cls, cls) }}>
+{%- elif ty.is_map() -%}Map<String,{{ page_type(ty.value_type(), union_cls, cls) }}>
+{%- elif ty.is_schema_ref() and ty.to_java() == cls -%}{{ sdk.java_package }}.models.{{ cls }}
+{%- else -%}{{ ty.to_java() }}
+{%- endif -%}
+{%- endmacro %}
 
-{% for d in o.param_docs %}{{ d }}
-{% endfor %}@return {{ returns }}
+{#- The models `page_type` names in `ty`, space-separated. -#}
+{% macro page_refs(ty) -%}
+{%- if ty.is_union() -%}
+{%- elif ty.is_nullable() or ty.is_list() or ty.is_set() -%}{{ page_refs(ty.inner_type()) }}
+{%- elif ty.is_map() -%}{{ page_refs(ty.value_type()) }}
+{%- elif ty.is_schema_ref() and ty.to_java() != "String" -%}{{ ty.to_java() }} {% endif -%}
+{%- endmacro %}
+
+{#- The page class of `o`, of the async client with `is_async`: the getters of the response body,
+    but those a member of the page shadows. -#}
+{% macro page_source(o, is_async) -%}
+{% set cls = o.page.async_cls if is_async else o.page.cls -%}
+{% set qualify = sdk.java_package ~ ".models." -%}
+{% set response = types[o.op.response_body_schema_name] -%}
+{% set body_cls = o.op.response_body_schema_name | to_upper_camel_case -%}
+{% set body_type = qualify ~ body_cls if body_cls == cls else body_cls -%}
+{% set item = qualify ~ o.page.item if o.page.item == cls else o.page.item -%}
+{% set owner = "schema `" ~ response.name ~ "`" -%}
+{% set fields = response.fields | default([]) -%}
+{% set vars = m.member_names(fields, owner) | split(" ") | reject("equalto", "") | list -%}
+{% set pascals = m.field_idents(fields, "pascal", owner) | split(" ") | reject("equalto", "") | list -%}
+{% set type_names = types | list | map("to_upper_camel_case") | list -%}
+{% set members = ["items", "body", "hasNextPage", "nextPage", "pages", "stream", "iterator", "spliterator", "forEach", "forEachPage", "toList"] -%}
+{% set getters = namespace(list=[], refs=[body_cls, o.page.item], shadowed=[]) -%}
+{% for field in fields -%}
+    {% set var = vars[loop.index0] -%}
+    {% if var not in members -%}
+        {% set union = body_cls ~ (pascals[loop.index0] | replace("_", "")) -%}
+        {% set union = body_type ~ "." ~ union ~ ("Value" if union in type_names else "") if m.has_union(field.type) and not field.flatten else "" -%}
+        {% set getters.list = getters.list + [{"field": field, "var": var, "kind": m.kind(field), "type": page_type(field.type, union, cls)}] -%}
+        {% set getters.refs = getters.refs + (page_refs(field.type) | split(" ") | reject("equalto", "") | list) -%}
+    {% else -%}
+        {% set getters.shadowed = getters.shadowed + ["{@code " ~ m.html(field.name) ~ "}"] -%}
+    {% endif -%}
+{% endfor -%}
+// this file is @generated
+package {{ sdk.java_package }}.api;
+
+import {{ sdk.java_package }}.{{ "AsyncPage" if is_async else "Page" }};
+{% for name in getters.refs | unique | sort if name != cls -%}
+import {{ qualify }}{{ name }};
+{% endfor -%}
+import com.fasterxml.jackson.databind.JsonNode;
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.net.URI;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+{% if is_async %}import java.util.concurrent.CompletableFuture;
+{% endif %}import java.util.function.Supplier;
+
+{% set text -%}
+A page of {@link {{ async_type_name if is_async else resource_type_name }}#{{ o.name }}}: the {@link {{ item }}} items of one response, and the
+properties of its body, {@link {{ body_type }}}.
+{%- if getters.shadowed %} {{ getters.shadowed | join(", ") }}, named like members of the page, are on {@link #body()} only.{% endif %}
+{%- if not is_async %}
+
+<p>Iterating it yields every item from this page on, fetching the next pages as the iteration goes.
+{%- endif %}
 {%- endset -%}
 {{ text | to_doc_comment(style="java") }}
-public {{ ret }} {{ o.name }}Iter({{ o.params | strip_trailing_comma }}) {
-    return {{ o.name }}Iter({{ o.args }}{% if o.has_options %}{{ o.options_type }}.none(), {% endif %}{{ RO }}.none());
-}
-{% if o.has_options %}
+public final class {{ cls }} extends {{ "AsyncPage" if is_async else "Page" }}<{{ cls }}, {{ item }}> {
+    private final {{ body_type }} body;
 
-{% set text -%}
-Iterates over every item of {@link #{{ o.name }}}, fetching further pages on demand.
+    /**
+     * A page, built by the SDK.
+     *
+     * @param body the response body
+     * @param items the items of the page
+     * @param next fetches the next page, or null on the last page
+     */
+    public {{ cls }}({{ body_type }} body, List<{{ item }}> items, Supplier<{{ "CompletableFuture<" ~ cls ~ ">" if is_async else cls }}> next) {
+        super(items, next);
+        this.body = body;
+    }
 
-{% for d in o.param_docs %}{{ d }}
-{% endfor %}@param options the optional parameters, the first page's included
-@return {{ returns }}
-{%- endset -%}
-{{ text | to_doc_comment(style="java") }}
-public {{ ret }} {{ o.name }}Iter({{ o.params }}final {{ o.options_type }} options) {
-    return {{ o.name }}Iter({{ o.args }}options, {{ RO }}.none());
-}
+    /**
+     * The response body, as received.
+     *
+     * @return the body
+     */
+    public {{ body_type }} body() {
+        return body;
+    }
+{%- for g in getters.list %}
+{%- set k = g.kind %}
 
-{% set text -%}
-Iterates over every item of {@link #{{ o.name }}}, fetching further pages on demand.
+    {{ m.field_doc(g.field, "@return the value" ~ (", never null" if k == "required" else "" if k == "flatten" else ", empty when unset or null" if k == "tri" else ", empty when null" if k == "nullable" else ", empty when unset")) | trim | indent(4) }}
+    public {{ g.type if k in ["required", "flatten"] else "Optional<" ~ g.type ~ ">" }} {{ g.var }}() {
+        return body.{{ g.var }}();
+    }
+{%- endfor %}
 
-{% for d in o.param_docs %}{{ d }}
-{% endfor %}@param requestOptions headers, timeout and retries of each call
-@return {{ returns }}
-{%- endset -%}
-{{ text | to_doc_comment(style="java") }}
-public {{ ret }} {{ o.name }}Iter({{ o.params }}final {{ RO }} requestOptions) {
-    return {{ o.name }}Iter({{ o.args }}{{ o.options_type }}.none(), requestOptions);
-}
-{% endif %}
-
-{% set text -%}
-Iterates over every item of {@link #{{ o.name }}}, fetching further pages on demand.
-
-{% for d in o.param_docs %}{{ d }}
-{% endfor %}{% if o.has_options %}@param options the optional parameters, the first page's included
-{% endif %}@param requestOptions headers, timeout and retries of each call
-@return {{ returns }}
-{%- endset -%}
-{{ text | to_doc_comment(style="java") }}
-public {{ ret }} {{ o.name }}Iter({{ full }}) {
-    return new {{ ctor }}<>(() -> {{ page_method }}({{ o.args }}{% if o.has_options %}options, {% endif %}requestOptions));
+    @Override
+    public String toString() {
+        return "{{ cls }}{body=" + body + ", hasNextPage=" + hasNextPage() + "}";
+    }
 }
 {%- endmacro %}
 
@@ -315,7 +392,6 @@ public {{ ret }} {{ o.name }}Iter({{ full }}) {
 {{ "(short) (" ~ expr ~ ")" if ty == "Short" else expr }}
 {%- endmacro %}
 
-{% set has_pages = ops.list | selectattr("page") | list | length > 0 -%}
 {% set has_streams = resource.operations | selectattr("response_is_event_stream") | list | length > 0 -%}
 {% set body_kinds = resource.operations | map(attribute="request_body_kind") | list -%}
 {% set async_source -%}
@@ -324,10 +400,6 @@ package {{ sdk.java_package }}.api;
 
 import {{ sdk.java_internal_package }}.Utils;
 {% if RESPONSE == "ApiResponse" %}import {{ sdk.java_package }}.ApiResponse;
-{% endif -%}
-{% if has_pages and APAGINATOR == "AsyncPaginator" %}import {{ sdk.java_package }}.AsyncPaginator;
-{% endif -%}
-{% if has_pages and APAGE == "AsyncPage" %}import {{ sdk.java_package }}.AsyncPage;
 {% endif -%}
 {% if RO == "RequestOptions" %}import {{ sdk.java_package }}.RequestOptions;
 {% endif -%}
@@ -379,21 +451,20 @@ public final class {{ async_type_name }} {
         return withRawResponse;
     }
 {% for o in ops.list %}
+{% if o.page %}
+{% set ret = o.page.async_type %}
+{% set impl = "return sync.exchange" ~ o.pascal ~ "(" ~ o.full_args ~ ").sendAsync().thenApply(response -> pageOf" ~ o.pascal ~ "(response, " ~ o.full_args ~ "));" %}
+
+    {{ overloads(o, "CompletableFuture<" ~ ret ~ ">", "sendAsync", "sync.", "the page, once received", impl) | indent(4) }}
+
+    private {{ ret }} pageOf{{ o.pascal }}({{ o.type }} response, {{ o.full }}) {
+        List<{{ o.page.item }}> items = {{ resource_type_name }}.itemsOf{{ o.pascal }}(response);
+        {{ o.page.param_type }} next = {{ resource_type_name }}.nextOf{{ o.pascal }}(response, items, {{ o.page.current }});
+        return new {{ ret }}(response, items, next == null ? null : () -> {{ o.name }}({{ o.page.next_args }}requestOptions));
+    }
+{% else %}
 
     {{ overloads(o, "CompletableFuture<" ~ o.type ~ ">", "sendAsync", "sync.", "the response body" ~ o.empty_note ~ ", once received") | indent(4) }}
-{% if o.page %}
-
-    {{ pager_overloads(o, APAGINATOR ~ "<" ~ o.page.item ~ ">", "pageOf" ~ o.pascal, APAGINATOR) | indent(4) }}
-
-    private CompletableFuture<{{ APAGE }}<{{ o.page.item }}>> pageOf{{ o.pascal }}({{ o.params }}{% if o.has_options %}final {{ o.options_type }} options, {% endif %}final {{ RO }} requestOptions) {
-        return {{ o.name }}({{ o.args }}{% if o.has_options %}options, {% endif %}requestOptions)
-                .thenApply(
-                        response -> {
-                            List<{{ o.page.item }}> items = {{ resource_type_name }}.itemsOf{{ o.pascal }}(response);
-                            {{ o.page.param_type }} next = {{ resource_type_name }}.nextOf{{ o.pascal }}(response, items, {{ o.page.current }});
-                            return {{ APAGE }}.of(items, next == null ? null : () -> pageOf{{ o.pascal }}({{ o.page.next_args }}requestOptions));
-                        });
-    }
 {% endif %}
 {% endfor %}
 
@@ -402,22 +473,27 @@ public final class {{ async_type_name }} {
         private WithRawResponse() {}
 {% for o in ops.list %}
 
+{% if o.page %}
+{% set impl = "return sync.exchange" ~ o.pascal ~ "(" ~ o.full_args ~ ").sendRawAsync().thenApply(response -> new " ~ RESPONSE ~ "<>(response.statusCode(), response.headers(), pageOf" ~ o.pascal ~ "(response.body(), " ~ o.full_args ~ ")));" %}
+        {{ overloads(o, "CompletableFuture<" ~ RESPONSE ~ "<" ~ o.page.async_type ~ ">>", "sendRawAsync", "sync.", "the status, headers and page, once received", impl) | indent(8) }}
+{% else %}
         {{ overloads(o, "CompletableFuture<" ~ RESPONSE ~ "<" ~ o.type ~ ">>", "sendRawAsync", "sync.", "the status, headers and body, once received") | indent(8) }}
+{% endif %}
 {% endfor %}
     }
 }
 {% endset -%}
 {% set _ = generate_extra_file(output_dir ~ "/" ~ async_type_name ~ ".java", async_source) -%}
+{% for o in ops.list if o.page -%}
+{% set _ = generate_extra_file(output_dir ~ "/" ~ o.page.cls ~ ".java", page_source(o, false)) -%}
+{% set _ = generate_extra_file(output_dir ~ "/" ~ o.page.async_cls ~ ".java", page_source(o, true)) -%}
+{% endfor -%}
 // this file is @generated
 package {{ sdk.java_package }}.api;
 
 import {{ sdk.java_internal_package }}.{{ http_client_type }};
 import {{ sdk.java_internal_package }}.Utils;
 {% if RESPONSE == "ApiResponse" %}import {{ sdk.java_package }}.ApiResponse;
-{% endif -%}
-{% if has_pages and PAGINATOR == "Paginator" %}import {{ sdk.java_package }}.Paginator;
-{% endif -%}
-{% if has_pages and PAGE == "Page" %}import {{ sdk.java_package }}.Page;
 {% endif -%}
 {% if RO == "RequestOptions" %}import {{ sdk.java_package }}.RequestOptions;
 {% endif -%}
@@ -591,8 +667,13 @@ public final class {{ resource_type_name }} {
 
 {% for o in ops.list -%}
     {% set op = o.op -%}
+    {% if o.page -%}
+    {% set impl = "return pageOf" ~ o.pascal ~ "(exchange" ~ o.pascal ~ "(" ~ o.full_args ~ ").send(), " ~ o.full_args ~ ");" -%}
+    {{ overloads(o, o.page.type, "send", "", "the page: the response body, its items and the way to the next pages", impl) | indent(4) }}
+    {% else -%}
     {{ overloads(o, "void" if o.type == "Void" else o.type, "send", "", "the response body" ~ o.empty_note if o.type != "Void" else "") | indent(4) }}
-    {% set full -%}{{ o.params }}{% if o.has_options %}final {{ o.options_type }} options, {% endif %}final {{ RO }} requestOptions{% endset -%}
+    {% endif -%}
+    {% set full = o.full -%}
     {% if op.security is defined -%}
         {% set http_client -%}
             client.withSecurity(List.of({%- for names in op.security %}{% if not loop.first %}, {% endif %}List.of({%- for name in names %}{% if not loop.first %}, {% endif %}{{ name | tojson }}{% endfor -%}){% endfor -%}))
@@ -785,13 +866,10 @@ public final class {{ resource_type_name }} {
     {% set res = o.type -%}
     {% set T = o.page.param_type %}
 
-    {{ pager_overloads(o, PAGINATOR ~ "<" ~ item ~ ">", "pageOf" ~ o.pascal, PAGINATOR) | indent(4) }}
-
-    private {{ PAGE }}<{{ item }}> pageOf{{ o.pascal }}({{ full }}) {
-        {{ res }} response = {{ o.name }}({{ o.args }}{% if o.has_options %}options, {% endif %}requestOptions);
+    private {{ o.page.type }} pageOf{{ o.pascal }}({{ res }} response, {{ full }}) {
         List<{{ item }}> items = itemsOf{{ o.pascal }}(response);
         {{ T }} next = nextOf{{ o.pascal }}(response, items, {{ o.page.current }});
-        return {{ PAGE }}.of(items, next == null ? null : () -> pageOf{{ o.pascal }}({{ o.page.next_args }}requestOptions));
+        return new {{ o.page.type }}(response, items, next == null ? null : () -> {{ o.name }}({{ o.page.next_args }}requestOptions));
     }
 
     static List<{{ item }}> itemsOf{{ o.pascal }}({{ res }} response) {
@@ -844,7 +922,12 @@ public final class {{ resource_type_name }} {
         private WithRawResponse() {}
 {% for o in ops.list %}
 
+{% if o.page %}
+{% set impl = RESPONSE ~ "<" ~ o.type ~ "> response = exchange" ~ o.pascal ~ "(" ~ o.full_args ~ ").sendRaw();\n    return new " ~ RESPONSE ~ "<>(response.statusCode(), response.headers(), pageOf" ~ o.pascal ~ "(response.body(), " ~ o.full_args ~ "));" %}
+        {{ overloads(o, RESPONSE ~ "<" ~ o.page.type ~ ">", "sendRaw", resource_type_name ~ ".this.", "the status, headers and page", impl) | indent(8) }}
+{% else %}
         {{ overloads(o, RESPONSE ~ "<" ~ o.type ~ ">", "sendRaw", resource_type_name ~ ".this.", "the status, headers and body") | indent(8) }}
+{% endif %}
 {% endfor %}
     }
 }

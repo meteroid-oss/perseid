@@ -2607,7 +2607,7 @@ fn api_md_lists_every_operation_and_readmes_call_real_ones() {
         (
             "features.yaml",
             "java",
-            "client.errors().listScenariosPagesIter()",
+            "client.errors().listScenariosPages()",
         ),
         (
             "features.yaml",

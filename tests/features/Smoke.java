@@ -2,17 +2,19 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.TextNode;
 import com.features.ApiResponse;
-import com.features.AsyncPage;
 import com.features.Features;
 import com.features.FeaturesOptions;
-import com.features.Page;
-import com.features.Paginator;
 import com.features.RequestOptions;
 import com.features.api.EncodingListScenariosHeadersOptions;
+import com.features.api.GadgetsListPage;
+import com.features.api.RecordsListPage;
 import com.features.api.Streaming;
 import com.features.api.StreamingRetrieveEventsStreamOptions;
 import com.features.api.WireBetaSearchOptions;
 import com.features.api.WireSearchOptions;
+import com.features.api.WidgetsListAsyncPage;
+import com.features.api.WidgetsListEventsAsyncPage;
+import com.features.api.WidgetsListPage;
 import com.features.exceptions.ApiConnectionException;
 import com.features.exceptions.ApiException;
 import com.features.exceptions.AuthenticationException;
@@ -49,7 +51,6 @@ import com.features.models.Paint;
 import com.features.models.Payment;
 import com.features.models.SearchRange;
 import com.features.models.Widget;
-import com.features.models.WidgetList;
 import com.features.streaming.EventStream;
 import com.features.streaming.SseEvent;
 import com.features.streaming.Upload;
@@ -69,6 +70,7 @@ import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -84,8 +86,10 @@ public class Smoke {
         }
     }
 
-    static <T> List<String> ids(Paginator<T> items, Function<T, String> id) {
-        return items.stream().map(id).collect(Collectors.toList());
+    static <T> List<String> ids(Iterable<T> items, Function<T, String> id) {
+        List<String> ids = new ArrayList<>();
+        items.forEach(item -> ids.add(id.apply(item)));
+        return ids;
     }
 
     static byte[] bytes(String text) {
@@ -110,20 +114,34 @@ public class Smoke {
     static void run(Features client) throws Exception {
         expect(client.account().checkHealth().status(), "||");
         expect(client.account().retrieveMachine().status(), "Bearer tok||");
-        expect(ids(client.widgets().listIter(), Widget::id), List.of("w1", "w2", "w3"));
-        expect(ids(client.widgets().listEventsIter("w1", "created"), Event::id), List.of("e1", "e2", "e3"));
-        expect(ids(client.gadgets().listIter(), Gadget::id), List.of("g1", "g2", "g3"));
-        expect(ids(client.records().listIter(), Entry::id), List.of("r1", "r2", "r3"));
+        expect(ids(client.widgets().list(), Widget::id), List.of("w1", "w2", "w3"));
+        expect(ids(client.widgets().listEvents("w1", "created"), Event::id), List.of("e1", "e2", "e3"));
+        expect(ids(client.gadgets().list(), Gadget::id), List.of("g1", "g2", "g3"));
+        expect(client.records().list().stream().map(Entry::id).collect(Collectors.toList()), List.of("r1", "r2", "r3"));
 
-        Page<Widget> first = client.widgets().listIter().firstPage();
+        WidgetsListPage first = client.widgets().list();
         expect(first.items().stream().map(Widget::id).collect(Collectors.toList()), List.of("w1", "w2"));
+        expect(first.data(), first.items());
+        expect(first.nextCursor(), Optional.of("c2"));
+        expect(first.body().nextCursor(), Optional.of("c2"));
         expect(first.hasNextPage(), true);
-        Page<Widget> second = first.nextPage();
+        WidgetsListPage second = first.nextPage();
         expect(second.items().get(0).id(), "w3");
+        expect(second.nextCursor(), Optional.empty());
         expect(second.hasNextPage(), false);
+        expect(ids(second, Widget::id), List.of("w3"));
+        raises(NoSuchElementException.class, second::nextPage);
         List<Integer> sizes = new ArrayList<>();
-        client.gadgets().listIter().pages().forEach(page -> sizes.add(page.items().size()));
+        client.gadgets().list().pages().forEach(page -> sizes.add(page.items().size()));
         expect(sizes, List.of(2, 1));
+        GadgetsListPage gadgets = client.gadgets().list();
+        expect(gadgets.meta().totalPages(), 2);
+        expect(gadgets.meta().page(), 0);
+        expect(gadgets.nextPage().meta().page(), 1);
+        RecordsListPage records = client.records().list();
+        expect(records.total(), 3L);
+        expect(records.data().size(), 2);
+        expect(records.nextPage().items().get(0).id(), "r3");
 
         Widget widget = client.widgets().list().data().get(0);
         expect(widget.additionalProperties().get("color"), TextNode.valueOf("red"));
@@ -136,15 +154,24 @@ public class Smoke {
             expect(expected.getMessage(), "`name` is required, but was not set");
         }
 
-        ApiResponse<WidgetList> raw = client.withRawResponse().widgets().list();
+        ApiResponse<WidgetsListPage> raw = client.withRawResponse().widgets().list();
         expect(raw.statusCode(), 200);
         expect(raw.headers().get("x-request-id"), "req_mock");
         expect(raw.requestId().orElseThrow(), "req_mock");
         expect(raw.body().data().size(), 2);
+        expect(ids(raw.body(), Widget::id), List.of("w1", "w2", "w3"));
 
-        expect(client.async().widgets().listIter().toList().get().stream().map(Widget::id).collect(Collectors.toList()), List.of("w1", "w2", "w3"));
-        AsyncPage<Event> events = client.async().widgets().listEventsIter("w1", "created").firstPage().get();
+        expect(client.async().widgets().list().get().toList().get().stream().map(Widget::id).collect(Collectors.toList()), List.of("w1", "w2", "w3"));
+        WidgetsListAsyncPage asyncFirst = client.async().widgets().list().get();
+        expect(asyncFirst.nextCursor(), Optional.of("c2"));
+        expect(asyncFirst.nextPage().get().items().get(0).id(), "w3");
+        List<Integer> asyncSizes = new ArrayList<>();
+        asyncFirst.forEachPage(page -> asyncSizes.add(page.data().size())).get();
+        expect(asyncSizes, List.of(2, 1));
+        WidgetsListEventsAsyncPage events = client.async().widgets().listEvents("w1", "created").get();
+        expect(events.hasMore(), true);
         expect(events.nextPage().get().items().get(0).id(), "e3");
+        expect(client.async().withRawResponse().widgets().list().get().body().nextCursor(), Optional.of("c2"));
         expect(client.async().withRawResponse().account().checkHealth().get().requestId().orElseThrow(), "req_mock");
         try {
             new Features(null, options().build()).async().widgets().list().join();
@@ -155,9 +182,9 @@ public class Smoke {
 
         expect(new Features(null, options().basicAuth("u", "p").build()).account().createSession().status(), "Basic dTpw||");
         expect(new Features(null, options().tokenProvider(() -> "fresh").build()).account().retrieveMachine().status(), "Bearer fresh||");
-        expect(ids(new Features(null, options().putApiKey("api_key", "k").build()).widgets().listIter(), Widget::id), List.of("w1", "w2", "w3"));
+        expect(ids(new Features(null, options().putApiKey("api_key", "k").build()).widgets().list(), Widget::id), List.of("w1", "w2", "w3"));
         try {
-            new Features(null, options().build()).widgets().listIter().iterator().hasNext();
+            new Features(null, options().build()).widgets().list();
             throw new AssertionError("expected an authentication error");
         } catch (AuthenticationException expected) {
             expect(expected.statusCode(), 401);
@@ -492,7 +519,7 @@ public class Smoke {
         }
         List<String> seen = new ArrayList<>();
         ConflictException gone = raises(ConflictException.class, () -> {
-            for (Widget widget : client.errors().listScenariosPagesIter()) {
+            for (Widget widget : client.errors().listScenariosPages()) {
                 seen.add(widget.id());
             }
         });
@@ -557,7 +584,7 @@ public class Smoke {
             expect(asyncCause(client.errors().retrieveScenarioStatus(404)) instanceof NotFoundException, true);
             expect(asyncCause(client.errors().retrieveScenarioStatus(422)) instanceof UnprocessableEntityException, true);
             List<String> seen = new ArrayList<>();
-            Throwable gone = asyncCause(client.errors().listScenariosPagesIter().forEach(widget -> seen.add(widget.id())));
+            Throwable gone = asyncCause(client.errors().listScenariosPages().thenCompose(page -> page.forEach(widget -> seen.add(widget.id()))));
             expect(gone instanceof ConflictException, true);
             expect(((ConflictException) gone).statusCode(), 409);
             expect(seen, List.of("p1", "p2"));

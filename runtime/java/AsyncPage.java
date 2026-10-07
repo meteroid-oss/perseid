@@ -6,34 +6,30 @@ import java.util.Collections;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 /**
  * One page of a paginated list operation of the async client: its items, and the way to the next
- * page.
+ * page. Each list operation returns its own subclass, which also has the getters of the response
+ * body.
  *
+ * @param <P> the type of the pages
  * @param <T> the type of the items
  */
-public final class AsyncPage<T> {
+public abstract class AsyncPage<P extends AsyncPage<P, T>, T> {
     private final List<T> items;
-    private final Supplier<CompletableFuture<AsyncPage<T>>> next;
-
-    private AsyncPage(List<T> items, Supplier<CompletableFuture<AsyncPage<T>>> next) {
-        this.items = Collections.unmodifiableList(new ArrayList<>(items));
-        this.next = next;
-    }
+    private final Supplier<CompletableFuture<P>> next;
 
     /**
      * A page, built by the SDK.
      *
-     * @param <T> the type of the items
      * @param items the items of the page
      * @param next fetches the next page, or null on the last page
-     * @return the page
      */
-    public static <T> AsyncPage<T> of(
-            List<T> items, Supplier<CompletableFuture<AsyncPage<T>>> next) {
-        return new AsyncPage<>(items, next);
+    protected AsyncPage(List<T> items, Supplier<CompletableFuture<P>> next) {
+        this.items = Collections.unmodifiableList(new ArrayList<>(items));
+        this.next = next;
     }
 
     /**
@@ -41,7 +37,7 @@ public final class AsyncPage<T> {
      *
      * @return the items, unmodifiable
      */
-    public List<T> items() {
+    public final List<T> items() {
         return items;
     }
 
@@ -50,7 +46,7 @@ public final class AsyncPage<T> {
      *
      * @return false on the last page
      */
-    public boolean hasNextPage() {
+    public final boolean hasNextPage() {
         return next != null;
     }
 
@@ -59,15 +55,52 @@ public final class AsyncPage<T> {
      *
      * @return the next page, failed with {@link NoSuchElementException} on the last page
      */
-    public CompletableFuture<AsyncPage<T>> nextPage() {
+    public final CompletableFuture<P> nextPage() {
         if (next == null) {
             return CompletableFuture.failedFuture(new NoSuchElementException("this is the last page"));
         }
         return next.get();
     }
 
-    @Override
-    public String toString() {
-        return "AsyncPage{items=" + items + ", hasNextPage=" + hasNextPage() + "}";
+    /**
+     * Calls {@code action} with this page and each one after it, fetching the next page once the
+     * action returns.
+     *
+     * @param action called with each page, in order
+     * @return completes after the last page, or with the first error
+     */
+    public final CompletableFuture<Void> forEachPage(Consumer<? super P> action) {
+        P page = self();
+        action.accept(page);
+        if (!page.hasNextPage()) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return page.nextPage().thenCompose(next -> next.forEachPage(action));
+    }
+
+    /**
+     * Calls {@code action} with every item from this page on, fetching the next page once the items
+     * of one are done.
+     *
+     * @param action called with each item, in order
+     * @return completes after the last item, or with the first error
+     */
+    public final CompletableFuture<Void> forEach(Consumer<? super T> action) {
+        return forEachPage(page -> page.items().forEach(action));
+    }
+
+    /**
+     * Collects every item from this page on.
+     *
+     * @return the items of this page and the ones after it
+     */
+    public final CompletableFuture<List<T>> toList() {
+        List<T> all = new ArrayList<>();
+        return forEach(all::add).thenApply(done -> all);
+    }
+
+    @SuppressWarnings("unchecked")
+    private P self() {
+        return (P) this;
     }
 }
