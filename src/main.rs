@@ -404,18 +404,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             if pr {
                 let base = base_spec.map(|b| cwd.join(b));
-                let (bump, notes) = match bump {
+                let (bump, changelog) = match bump {
                     Bump::Auto => sizing::size(&sizing::Comparison {
                         root: &root,
                         spec: &location,
                         base: base.as_deref(),
                         relax_enum_additions,
                     })?,
-                    bump => (bump, None),
+                    bump => (bump, Default::default()),
                 };
                 let request = Request {
                     bump,
-                    notes,
+                    changelog,
                     origin: pr::origin(&config, &root, &spec),
                     auto_merge,
                     dispatch: dispatch
@@ -569,8 +569,8 @@ struct Delivery {
 /// What `--pr` asks of each pull request.
 struct Request {
     bump: Bump,
-    /// Appended to the description.
-    notes: Option<String>,
+    /// The API changes, summed up in the SDK changelogs.
+    changelog: perseid::changelog::Changelog,
     /// Where the spec comes from.
     origin: Option<String>,
     auto_merge: bool,
@@ -627,10 +627,6 @@ fn deliver(
             .as_ref()
             .map_or_else(String::new, |o| format!(" from {o}"))
     );
-    let notes = request
-        .notes
-        .as_ref()
-        .map_or_else(String::new, |n| format!("{}\n\n", n.trim()));
     let github = pr::Client::default();
     for (repo, delivery) in repos {
         let opened = pr::open(
@@ -640,10 +636,15 @@ fn deliver(
             &delivery.files,
             request.bump,
             subject.trim(),
-            &format!(
-                "```\n{}\n```\n\n{notes}{credit}",
-                generate::summary(&delivery.changes, &BTreeMap::new())
-            ),
+            &request.changelog,
+            |changes| {
+                let summary = generate::summary(&delivery.changes, &BTreeMap::new());
+                let changes = match changes {
+                    "" => String::new(),
+                    changes => format!("{changes}\n\n"),
+                };
+                format!("```\n{summary}\n```\n\n{changes}{credit}")
+            },
         )?;
         let Some(pull) = opened else {
             println!("{}: nothing to update", repo.display());

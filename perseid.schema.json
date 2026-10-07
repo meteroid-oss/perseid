@@ -843,6 +843,11 @@
           "description": "Prefix of this SDK's `User-Agent` header, over the top-level one.",
           "type": "string"
         },
+        "validate_responses": {
+          "description": "`false` keeps response bodies as received, without checking them against their schema.",
+          "default": null,
+          "type": "boolean"
+        },
         "webhooks": {
           "description": "Installs the Standard Webhooks signature verifier, over the top-level setting.",
           "type": "boolean"

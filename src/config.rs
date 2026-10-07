@@ -223,6 +223,7 @@ pub struct Target {
     pub module: Option<String>,
     pub exports: Vec<String>,
     pub int64: Option<Int64>,
+    pub validate_responses: Option<bool>,
 }
 
 /// A language table: the settings every SDK takes, then the language's own.
@@ -297,6 +298,8 @@ language!(TypeScript, "npm package name: the kebab-case `name` by default." {
     exports: Vec<String>,
     /// Type of int64 values.
     int64: Option<Int64>,
+    /// `false` keeps response bodies as received, without checking them against their schema.
+    validate_responses: Option<bool>,
 });
 language!(Python, "Python package name: the snake_case `name` by default." {});
 language!(Go, "Go package name: the snake_case `name` by default." {
@@ -734,6 +737,7 @@ impl Config {
                 Int64::Bigint => "bigint",
                 Int64::String => "string",
             },
+            "validate_responses": target.validate_responses.unwrap_or(true),
             "version": version,
             "extra_exports": target.exports,
             "timeout": target.timeout.or(self.timeout).unwrap_or(60),
@@ -1189,6 +1193,11 @@ mod tests {
         let toml =
             "name = \"A\"\nsdks = [\"typescript\", \"python\"]\n[typescript]\nint64 = \"bigint\"\n";
         assert_eq!(context(toml, "typescript")["int64"], "bigint");
+        assert_eq!(context(toml, "typescript")["validate_responses"], true);
+        let lenient =
+            "name = \"A\"\nsdks = [\"typescript\"]\n[typescript]\nvalidate_responses = false\n";
+        assert_eq!(context(lenient, "typescript")["validate_responses"], false);
+        assert!(load("name = \"A\"\nsdks = [\"go\"]\n[go]\nvalidate_responses = false\n").is_err());
         assert!(
             load("name = \"A\"\nsdks = [\"typescript\"]\n[typescript]\nint64 = \"long\"\n")
                 .is_err()

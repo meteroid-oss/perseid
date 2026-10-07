@@ -18,16 +18,17 @@ export const tsc = resolve("node_modules/typescript/bin/tsc");
 
 /**
  * Generates the SDK of `fixtures/<spec>` named `name` with the given `int64` mode, with its round
- * trips when `roundTrips` is set. `build` compiles it and imports it as `sdk`.
+ * trips when `roundTrips` is set and `[typescript]` keys of `settings`. `build` compiles it and
+ * imports it as `sdk`.
  */
-export async function generate(spec, { name, int64 = "number", roundTrips = false, build = true }) {
+export async function generate(spec, { name, int64 = "number", roundTrips = false, build = true, settings = "" }) {
   const dir = mkdtempSync(join(tmpdir(), `perseid-${name.toLowerCase()}-`));
   const cleanup = () => rmSync(dir, { recursive: true, force: true });
   try {
     copyFileSync(join(fixtures, spec), join(dir, "openapi.yaml"));
     writeFileSync(
       join(dir, "perseid.toml"),
-      `spec = "openapi.yaml"\nsdks = ["typescript"]\nname = "${name}"\nbase_url = "https://${name.toLowerCase()}.test/v1"\nround_trips = ${roundTrips}\n[typescript]\nint64 = "${int64}"\n`
+      `spec = "openapi.yaml"\nsdks = ["typescript"]\nname = "${name}"\nbase_url = "https://${name.toLowerCase()}.test/v1"\nround_trips = ${roundTrips}\n[typescript]\nint64 = "${int64}"\n${settings}`
     );
     await run("perseid", ["generate"], { cwd: dir });
     const sdkDir = join(dir, "typescript");

@@ -101,12 +101,24 @@
     {%- endif -%}
 {%- endmacro %}
 
+{# `yes` when parsing values of `type` checks or converts them: all but untyped JSON, and the
+   unions with nothing to convert, which are kept as received. -#}
+{% macro checked(type) -%}
+    {%- if type.is_nullable() -%}
+        {{ checked(type.inner_type()) }}
+    {%- elif type.is_union() -%}
+        {{ converted(type) }}
+    {%- elif not type.is_json_object() -%}
+        yes
+    {%- endif -%}
+{%- endmacro %}
+
 {#- The conversion of the object `expr` to or from the object variant of the union `type` it
     is: the first whose conditions it meets, or the best match. Other objects are kept as is. -#}
-{% macro pick_object(expr, type, outgoing) -%}
+{% macro pick_object(expr, type, outgoing, p, k) -%}
     {%- set candidates = type.object_variants() -%}
     {%- macro convert(v) -%}
-        {%- if outgoing -%}{{ to_json("(" ~ expr ~ " as " ~ js_type(v.type) ~ ")", v.type) }}{%- else -%}{{ from_json(expr, v.type) }}{%- endif -%}
+        {%- if outgoing -%}{{ to_json("(" ~ expr ~ " as " ~ js_type(v.type) ~ ")", v.type) }}{%- else -%}{{ from_json(expr, v.type, p, k) }}{%- endif -%}
     {%- endmacro -%}
     {%- macro name(p) -%}{{ p | ident("camel") if outgoing else p }}{%- endmacro -%}
     {%- if type.union_mode() == "rules" -%}
@@ -123,7 +135,7 @@
 
 {#- The union conversion of `expr` when variants share a JSON type: `unionTry` tries the
     variants in order, each as its shape, rules or property sets, and conversion. -#}
-{% macro union_try(expr, type, outgoing) -%}
+{% macro union_try(expr, type, outgoing, p, k) -%}
     {%- macro name(p) -%}{{ p | ident("camel") if outgoing else p }}{%- endmacro -%}
     {%- set mode = type.union_mode() -%}
     unionTry({{ expr }}, [
@@ -133,39 +145,50 @@
             {%- if v.empty %}, empty: true{% endif -%}
             {%- if mode == "rules" and v.json_type == "object" and v.when %}, when: [{% for c in v.when %}[{{ name(c.property) | tojson }}{% if c.value is defined %}, {{ c.value | tojson }}{% endif %}]{% if not loop.last %}, {% endif %}{% endfor %}]{% endif -%}
             {%- if mode == "best-match" and v.json_type == "object" %}, required: [{% for p in v.required %}{{ name(p) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}], known: [{% for p in v.properties %}{{ name(p) | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]{% endif -%}
-            , parse: (part: any) => {% if variant_converted(v, outgoing) %}{{ to_json("part", v.type) if outgoing else from_json("part", v.type) }}{% else %}part{% endif %} }
+            , parse: (part: any) => {% if variant_converted(v, outgoing) %}{{ to_json("part", v.type) if outgoing else from_json("part", v.type, p, k) }}{% else %}part{% endif %} }
             {%- if not loop.last %}, {% endif -%}
         {%- endfor -%}
     ], {{ (mode | tojson) if mode in ["rules", "best-match"] else "undefined" }}, {{ "true" if outgoing else "false" }})
 {%- endmacro %}
 
 {#- The union conversion of `expr`, by JSON type, then among objects by `pick_object`. -#}
-{% macro union_json(expr, type, outgoing) -%}
+{% macro union_json(expr, type, outgoing, p=none, k=none) -%}
     {%- if type.union_decode() == "try" -%}
-    {{ union_try(expr, type, outgoing) }}
+    {{ union_try(expr, type, outgoing, p, k) }}
     {%- else -%}
     {%- set objects = type.union_mode() != "json" -%}
-    ({% if objects %}isJsonObject({{ expr }}) ? {{ pick_object(expr, type, outgoing) }} : {% endif %}{% for v in type.union_variants() if variant_converted(v, outgoing) and not (objects and v.json_type == "object") %}{{ is_variant(expr, v.json_type) }} ? {{ to_json(expr, v.type) if outgoing else from_json(expr, v.type) }} : {% endfor %}{{ expr }})
+    ({% if objects %}isJsonObject({{ expr }}) ? {{ pick_object(expr, type, outgoing, p, k) }} : {% endif %}{% for v in type.union_variants() if variant_converted(v, outgoing) and not (objects and v.json_type == "object") %}{{ is_variant(expr, v.json_type) }} ? {{ to_json(expr, v.type) if outgoing else from_json(expr, v.type, p, k) }} : {% endfor %}{{ expr }})
     {%- endif -%}
 {%- endmacro %}
 
-{% macro from_json(expr, type) -%}
+{#- The parsing of the JSON value `expr`, the one at key `k` of the value at path `p` (both
+    TypeScript expressions), checked against `type` and converted to its TypeScript form. -#}
+{% macro from_json(expr, type, p, k) -%}
+    {%- set at %}{{ expr }}, {{ p }}, {{ k }}{% endset -%}
     {%- if type.is_nullable() -%}
-        {%- if converted(type) %}({{ expr }} == null ? null : {{ from_json(expr, type.inner_type()) }}){% else %}{{ expr }}{% endif -%}
-    {%- elif type.is_union() and converted(type) -%}
-        {{ union_json(expr, type, false) }}
-    {%- elif type.is_datetime() -%}
-        parseDateTime({{ expr }})
-    {%- elif type.is_schema_ref() -%}
-        {{ type.to_js() }}Serializer.parse({{ expr }})
-    {%- elif is_int64(type) -%}
-        {{ "BigInt" if sdk.int64 == "bigint" else "String" }}({{ expr }})
-    {%- elif not converted(type) -%}
+        {%- if checked(type) %}({{ expr }} == null ? null : {{ from_json(expr, type.inner_type(), p, k) }}){% else %}{{ expr }}{% endif -%}
+    {%- elif type.is_union() -%}
+        {%- if converted(type) %}{{ union_json(expr, type, false, p, k) }}{% else %}{{ expr }}{% endif -%}
+    {%- elif type.is_json_object() -%}
         {{ expr }}
+    {%- elif type.is_datetime() -%}
+        decodeDateTime({{ at }})
+    {%- elif type.is_schema_ref() -%}
+        {{ type.to_js() }}Serializer.parse({{ expr }}, {% if k == "undefined" %}{{ p }}{% else %}decodePath({{ p }}, {{ k }}){% endif %})
+    {%- elif is_int64(type) -%}
+        {{ "BigInt" if sdk.int64 == "bigint" else "String" }}(decodeInteger({{ at }}))
     {%- elif type.is_map() -%}
-        Object.fromEntries(Object.entries({{ expr }}).map(([key, entry]: [string, any]) => [key, {{ from_json("entry", type.value_type()) }}]))
+        decodeMap({{ at }}, {% if checked(type.value_type()) %}(entry: any, p: string, key: string) => {{ from_json("entry", type.value_type(), "p", "key") }}{% else %}(entry: any) => entry{% endif %})
+    {%- elif type.is_list() or type.is_set() -%}
+        decodeList({{ at }}, {% if checked(type.inner_type()) %}(item: any, p: string, i: number) => {{ from_json("item", type.inner_type(), "p", "i") }}{% else %}(item: any) => item{% endif %})
+    {%- elif type.to_js() == "boolean" -%}
+        decodeBoolean({{ at }})
+    {%- elif type.to_js() == "number" -%}
+        {{ "decodeInteger" if type.is_int_or_uint() else "decodeNumber" }}({{ at }})
+    {%- elif type.to_js() == "string" -%}
+        decodeString({{ at }})
     {%- else -%}
-        {{ expr }}.map((item: any) => {{ from_json("item", type.inner_type()) }})
+        {{ expr }}
     {%- endif -%}
 {%- endmacro %}
 
@@ -191,21 +214,33 @@
 {# Absent and null values are passed through, keeping `null` for nullable fields only. A
    union's conversion already passes them through. -#}
 {% macro guarded(expr, field, conversion, outgoing) -%}
-    {%- if converted(field.type, outgoing) and (not field.required or field.nullable) and not (field.nullable and field.type.is_union()) -%}
+    {%- set needed = converted(field.type, true) if outgoing else checked(field.type) -%}
+    {%- if needed and (not field.required or field.nullable) and not (field.nullable and field.type.is_union()) -%}
         {{ expr }} != null ? {{ conversion }} : {{ expr if field.nullable else "undefined" }}
     {%- else -%}
         {{ conversion }}
     {%- endif -%}
 {%- endmacro %}
 
-{% macro field_from_json(json, field) -%}
-    {#- `json["__proto__"]` reads the prototype when the JSON has no such own property. -#}
-    {%- if field.name == "__proto__" -%}
-    {%- set expr %}(Object.prototype.hasOwnProperty.call({{ json }}, "__proto__") ? {{ json }}["__proto__"] : undefined){% endset -%}
+{#- A missing field with a `fallback` (JSON) value takes it. Unions, which keep what no variant
+    holds, are checked to be present here. -#}
+{% macro field_from_json(json, field, p="path", fallback=none) -%}
+    {#- `json["constructor"]` reads `Object.prototype` when the JSON has no such own property. -#}
+    {%- if field.name in ["__proto__", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__", "constructor", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "toLocaleString", "toString", "valueOf"] -%}
+    {%- set expr %}(Object.prototype.hasOwnProperty.call({{ json }}, {{ field.name | tojson }}) ? {{ json }}[{{ field.name | tojson }}] : undefined){% endset -%}
     {%- else -%}
     {%- set expr %}{{ json }}[{{ field.name | tojson }}]{% endset -%}
     {%- endif -%}
-    {{ guarded(expr, field, from_json(expr, field.type), false) }}
+    {%- set key = field.name | tojson -%}
+    {%- set conversion = from_json(expr, field.type, p, key) -%}
+    {%- if field.literal is defined and checked(field.type) %}{% set conversion %}({{ conversion }} as {{ field_type(field) }}){% endset %}{% endif -%}
+    {%- if fallback is not none -%}
+    {% if checked(field.type) %}{{ expr }} != null ? {{ conversion }} : {{ fallback | tojson }}{% else %}{{ expr }} ?? {{ fallback | tojson }}{% endif %}
+    {%- elif field.required and not (field.nullable or field.type.is_nullable()) and field.type.is_union() -%}
+    decodeRequired({{ conversion }}, {{ p }}, {{ key }})
+    {%- else -%}
+    {{ guarded(expr, field, conversion, false) }}
+    {%- endif -%}
 {%- endmacro %}
 
 {% macro field_to_json(value, field) -%}
@@ -215,9 +250,9 @@
 
 {#- The object literal members parsing `fields` out of `json`. `defaults` fills the
     discriminator of a union variant model when it is missing. -#}
-{% macro parse_fields(fields, json, defaults={}) -%}
+{% macro parse_fields(fields, json, defaults={}, p="path") -%}
     {%- for field in fields if not field.flatten %}
-    {{ field.name | ident("camel") }}: {{ field_from_json(json, field) }}{% if field.name in defaults %} ?? {{ defaults[field.name] | tojson }}{% endif %},
+    {{ field.name | ident("camel") }}: {{ field_from_json(json, field, p, defaults[field.name] if field.name in defaults else none) }},
     {%- endfor %}
 {%- endmacro %}
 

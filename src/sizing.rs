@@ -1,5 +1,5 @@
-//! `--bump auto`: the release size of a spec change, from oasdiff comparing the spec with its
-//! previous version.
+//! `--bump auto`: the release size of a spec change and its changelog, from oasdiff comparing the
+//! spec with its previous version.
 
 use std::{
     ffi::OsString,
@@ -9,10 +9,7 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use crate::{config::Source, pr::Bump};
-
-/// Largest changelog appended to a pull request description, which GitHub caps at 65536.
-const CHANGELOG_LIMIT: usize = 50_000;
+use crate::{changelog::Changelog, config::Source, pr::Bump};
 
 /// A workflow command in GitHub Actions, a plain line on stderr elsewhere.
 fn annotate(level: &str, message: &str) {
@@ -45,9 +42,9 @@ pub struct Comparison<'a> {
     pub relax_enum_additions: bool,
 }
 
-/// The bump of the change from the base spec to the current one, and its changelog in markdown.
+/// The bump of the change from the base spec to the current one, and its changelog.
 /// Without a base spec or oasdiff, a minor release.
-pub fn size(c: &Comparison) -> Result<(Bump, Option<String>)> {
+pub fn size(c: &Comparison) -> Result<(Bump, Changelog)> {
     let scratch = tempfile::tempdir()?;
     let current: OsString = match Source::parse(c.spec) {
         Source::File(file) => c.root.join(file).into(),
@@ -69,7 +66,7 @@ pub fn size(c: &Comparison) -> Result<(Bump, Option<String>)> {
                 "notice",
                 "no previous spec to compare with, asking for a minor release",
             );
-            return Ok((Bump::Minor, None));
+            return Ok((Bump::Minor, Changelog::default()));
         }
     };
     if !crate::format::on_path("oasdiff") {
@@ -77,7 +74,7 @@ pub fn size(c: &Comparison) -> Result<(Bump, Option<String>)> {
             "warning",
             "oasdiff isn't installed (`perseid tools install` installs it), asking for a minor release",
         );
-        return Ok((Bump::Minor, None));
+        return Ok((Bump::Minor, Changelog::default()));
     }
     let mut levels: Vec<OsString> = vec![];
     if c.relax_enum_additions {
@@ -85,53 +82,30 @@ pub fn size(c: &Comparison) -> Result<(Bump, Option<String>)> {
         std::fs::write(&path, "response-property-enum-value-added info\n")?;
         levels = vec!["--severity-levels".into(), path.into()];
     }
-    let oasdiff = |args: &[&str]| -> Result<std::process::Output> {
-        Command::new("oasdiff")
-            .args(args)
-            .args(&levels)
-            .arg(&base)
-            .arg(&current)
-            .output()
-            .context("running oasdiff")
-    };
-    let finds = |args: &[&str]| -> Result<bool> {
-        let output = oasdiff(args)?;
-        if !matches!(output.status.code(), Some(0 | 1)) {
-            annotate(
-                "warning",
-                &format!(
-                    "`oasdiff {}` failed: {}",
-                    args.join(" "),
-                    String::from_utf8_lossy(&output.stderr).trim()
-                ),
-            );
-        }
-        Ok(!output.status.success())
-    };
-    let bump = if finds(&["breaking", "--fail-on", "ERR"])? {
-        Bump::Major
-    } else if finds(&["changelog", "--fail-on", "INFO"])? {
-        Bump::Minor
-    } else {
-        Bump::Patch
-    };
-    if bump == Bump::Patch {
-        return Ok((bump, None));
+    let output = Command::new("oasdiff")
+        .args(["changelog", "--format", "json"])
+        .args(&levels)
+        .arg(&base)
+        .arg(&current)
+        .output()
+        .context("running oasdiff")?;
+    if !output.status.success() {
+        annotate(
+            "warning",
+            &format!(
+                "`oasdiff changelog` failed, asking for a minor release: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        );
+        return Ok((Bump::Minor, Changelog::default()));
     }
-    let markdown = oasdiff(&["changelog", "-f", "markdown"])?;
-    let changelog = String::from_utf8_lossy(&markdown.stdout);
-    let notes = markdown.status.success().then(|| {
-        let mut notes = format!("### API changes\n\n{}", changelog.trim());
-        if notes.len() > CHANGELOG_LIMIT {
-            let mut end = CHANGELOG_LIMIT;
-            while !notes.is_char_boundary(end) {
-                end -= 1;
-            }
-            notes.truncate(end);
-        }
-        notes
-    });
-    Ok((bump, notes))
+    let changelog = Changelog::of_oasdiff(&output.stdout)?;
+    let bump = match () {
+        _ if changelog.breaking() => Bump::Major,
+        _ if !changelog.is_empty() => Bump::Minor,
+        _ => Bump::Patch,
+    };
+    Ok((bump, changelog))
 }
 
 #[cfg(test)]
@@ -160,7 +134,7 @@ paths:
       responses: { "204": { description: deleted } }
 "#;
 
-    fn size_of(next: &str, relax: bool) -> (Bump, Option<String>) {
+    fn size_of(next: &str, relax: bool) -> (Bump, Changelog) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("base.yaml"), BASE).unwrap();
         std::fs::write(dir.path().join("openapi.yaml"), next).unwrap();
@@ -180,20 +154,27 @@ paths:
             eprintln!("oasdiff isn't installed, skipped");
             return;
         }
-        assert_eq!(size_of(BASE, true), (Bump::Patch, None));
+        assert_eq!(size_of(BASE, true), (Bump::Patch, Changelog::default()));
         let described = BASE.replace("description: deleted", "description: gone for good");
         assert_eq!(size_of(&described, true).0, Bump::Patch);
         let added = BASE.replace(
             "  /pets/{id}:\n",
             "  /toys:\n    get:\n      operationId: listToys\n      responses: { \"200\": { description: ok } }\n  /pets/{id}:\n",
         );
-        let (bump, notes) = size_of(&added, true);
+        let (bump, changelog) = size_of(&added, true);
         assert_eq!(bump, Bump::Minor);
-        let notes = notes.unwrap();
-        assert!(notes.starts_with("### API changes\n\n"), "{notes}");
-        assert!(notes.contains("/toys"), "{notes}");
+        let toys = &changelog.changes[0];
+        assert_eq!(
+            (toys.operation.as_deref(), toys.id.as_str()),
+            (Some("GET /toys"), "endpoint-added")
+        );
         let removed = BASE.split("  /pets/{id}:").next().unwrap();
-        assert_eq!(size_of(removed, true).0, Bump::Major);
+        let (bump, changelog) = size_of(removed, true);
+        assert_eq!(bump, Bump::Major);
+        assert_eq!(
+            changelog.changes[0].operation.as_deref(),
+            Some("DELETE /pets/{id}")
+        );
         let enum_added = BASE.replace("[available, sold]", "[available, pending, sold]");
         assert_eq!(size_of(&enum_added, true).0, Bump::Minor);
     }
@@ -208,6 +189,6 @@ paths:
             relax_enum_additions: true,
         })
         .unwrap();
-        assert_eq!(sized, (Bump::Minor, None));
+        assert_eq!(sized, (Bump::Minor, Changelog::default()));
     }
 }

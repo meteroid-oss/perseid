@@ -68,7 +68,8 @@ export type {{ type_name }} =
 
 /** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
-    parse(json: any): {{ type_name }} {
+    parse(json: any, path = "$"): {{ type_name }} {
+        decodeObject(json, path);
         switch (json[{{ disc_json | tojson }}]) {
         {%- for variant in type.variants %}
             case {{ variant.name | tojson }}:
@@ -76,12 +77,12 @@ export const {{ type_name }}Serializer = {
                     {% if adjacent -%}
                     ...extraProperties(json, {{ m.names(type.fields, false, [disc_json, content_json]) }}),
                     {% if variant.type == "ref" and variant.schema_ref is defined -%}
-                    {{ content }}: {{ variant.schema_ref | to_upper_camel_case }}Serializer.parse(json[{{ content_json | tojson }}]),
+                    {{ content }}: {{ variant.schema_ref | to_upper_camel_case }}Serializer.parse(json[{{ content_json | tojson }}], decodePath(path, {{ content_json | tojson }})),
                     {% elif variant.type == "struct" and variant.fields is defined and variant.fields -%}
-                    {{ content }}: { {{- m.parse_fields(variant.fields, "json[" ~ (content_json | tojson) ~ "]") }} },
+                    {{ content }}: ((content: any, p: string) => ({ {{- m.parse_fields(variant.fields, "content", {}, "p") }} }))(decodeObject(json[{{ content_json | tojson }}], path, {{ content_json | tojson }}), decodePath(path, {{ content_json | tojson }})),
                     {% endif -%}
                     {% elif variant.type == "ref" and variant.schema_ref is defined -%}
-                    {% set parsed %}{{ variant.schema_ref | to_upper_camel_case }}Serializer.parse(json){% endset -%}
+                    {% set parsed %}{{ variant.schema_ref | to_upper_camel_case }}Serializer.parse(json, path){% endset -%}
                     ...{% if type.fields %}omitProperties({{ parsed }}, {{ m.names(type.fields) }}){% else %}{{ parsed }}{% endif %},
                     {% elif variant.type == "struct" and variant.fields is defined -%}
                     ...extraProperties(json, {{ m.names(variant.fields + type.fields, false, [disc_json]) }}),

@@ -13,8 +13,8 @@ export type {{ type_name }} = (typeof {{ type_name }})[keyof typeof {{ type_name
 
 /** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
-    parse(json: any): {{ type_name }} {
-        return json;
+    parse(json: any, path = "$"): {{ type_name }} {
+        return decodeString(json, path);
     },
 
     serialize(value: {{ type_name }}): any {

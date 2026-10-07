@@ -10,14 +10,34 @@ import (
 	"strings"
 )
 
-// extraFields returns the properties of the JSON object data that are not
-// known, or nil when there are none. Like encoding/json, it matches names
-// case-insensitively, so "Id" counts as the known "id".
-func extraFields(data []byte, known ...string) map[string]json.RawMessage {
+// objectFields returns the properties of the JSON object data, failing as
+// typeName when one of required is missing or null. Like encoding/json, it
+// matches names case-insensitively.
+func objectFields(data []byte, typeName string, required ...string) (map[string]json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(data, &fields) != nil {
-		return nil
+		return nil, nil
 	}
+	for _, name := range required {
+		value, ok := fields[name]
+		if !ok {
+			for key, v := range fields {
+				if strings.EqualFold(key, name) {
+					value, ok = v, true
+					break
+				}
+			}
+		}
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return nil, fmt.Errorf("@@PACKAGE_NAME@@: %s: required property %q is missing or null", typeName, name)
+		}
+	}
+	return fields, nil
+}
+
+// extraFields removes the known properties from fields, returning nil when
+// none are left.
+func extraFields(fields map[string]json.RawMessage, known ...string) map[string]json.RawMessage {
 	for name := range fields {
 		if slices.ContainsFunc(known, func(k string) bool { return strings.EqualFold(k, name) }) {
 			delete(fields, name)
@@ -30,23 +50,23 @@ func extraFields(data []byte, known ...string) map[string]json.RawMessage {
 }
 
 // typedExtraFields is extraFields for a model whose additionalProperties
-// schema types the values: it decodes each unknown property of data as a T
-// into target, which is left nil when there are none.
-func typedExtraFields[T any](target *map[string]T, data []byte, known ...string) error {
-	raw := extraFields(data, known...)
+// schema types the values: it decodes each unknown property as a T into
+// target, which is left nil when there are none.
+func typedExtraFields[T any](target *map[string]T, fields map[string]json.RawMessage, known ...string) error {
+	raw := extraFields(fields, known...)
 	if raw == nil {
 		*target = nil
 		return nil
 	}
-	fields := make(map[string]T, len(raw))
+	decoded := make(map[string]T, len(raw))
 	for name, value := range raw {
-		var decoded T
-		if err := json.Unmarshal(value, &decoded); err != nil {
+		var item T
+		if err := json.Unmarshal(value, &item); err != nil {
 			return fmt.Errorf("@@PACKAGE_NAME@@: additional property %q: %w", name, err)
 		}
-		fields[name] = decoded
+		decoded[name] = item
 	}
-	*target = fields
+	*target = decoded
 	return nil
 }
 

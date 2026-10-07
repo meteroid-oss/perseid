@@ -6,9 +6,9 @@
 {% endif -%}
 
 {#
-    The body is rendered first so that the `parseDateTime` import is only
-    emitted by the models that use it (the datetime conversion can sit deep in
-    a list, a map or an enum variant).
+    The body is rendered first so that the runtime helpers are only imported
+    by the models that use them (a conversion can sit deep in a list, a map or
+    an enum variant).
 -#}
 {% set body -%}
 {% if type.kind == "struct" -%}
@@ -28,9 +28,6 @@
     {{ panic("typescript codegen: unsupported schema kind `" ~ type.kind ~ "` for type `" ~ type.name ~ "`") }}
 {% endif %}
 {% endset -%}
-{% if "parseDateTime(" in body -%}
-import { parseDateTime } from "../datetime.js";
-{% endif -%}
 {% set json_helpers = ["extraProperties", "isJsonObject", "omitProperties", "pickProperties"] | select("in", body) | list -%}
 {% if json_helpers -%}
 import { {{ json_helpers | join(", ") }} } from "../json.js";
@@ -38,5 +35,9 @@ import { {{ json_helpers | join(", ") }} } from "../json.js";
 {% set union_helpers = ["unionBestMatch", "unionHas", "unionTry"] | select("in", body) | list -%}
 {% if union_helpers -%}
 import { {{ union_helpers | join(", ") }} } from "../unions.js";
+{% endif -%}
+{% set decode_helpers = ["decodeBoolean", "decodeDateTime", "decodeInteger", "decodeList", "decodeMap", "decodeNumber", "decodeObject", "decodePath", "decodeRequired", "decodeString"] | select("in", body) | list -%}
+{% if decode_helpers -%}
+import { {{ decode_helpers | join(", ") }} } from "../decode.js";
 {% endif -%}
 {{ body }}

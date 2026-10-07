@@ -36,7 +36,7 @@ func TestPrimitiveOrObjectUnions(t *testing.T) {
 	}
 	sameJSON(t, string(out), `{"shape":{"type":"circle","radius":1},"shapes":[],"str_or_int":3,"inline_union":["x"]}`)
 	var decoded UnionHolder
-	if err := json.Unmarshal([]byte(`{"str_or_int":"s","inline_union":"one"}`), &decoded); err != nil {
+	if err := json.Unmarshal([]byte(`{"shape":{"type":"circle","radius":1},"shapes":[],"str_or_int":"s","inline_union":"one"}`), &decoded); err != nil {
 		t.Fatal(err)
 	}
 	if *decoded.StrOrInt.OfString != "s" || *decoded.InlineUnion.OfString != "one" {
