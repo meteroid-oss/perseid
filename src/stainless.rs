@@ -16,10 +16,15 @@ use crate::{
     spec::{Filters, IncludeMode},
 };
 
+/// perseid's request timeout, in seconds, when `timeout` is unset.
+const DEFAULT_TIMEOUT: u64 = 60;
+
 /// What a stainless.yml maps to, and what it doesn't.
 #[derive(Default)]
 pub(crate) struct Import {
     pub name: Option<String>,
+    /// `organization.name` as written, which `authors` names.
+    pub organization: Option<String>,
     /// SDKs of the targets stainless.yml generates, in `LANGUAGES` order.
     pub sdks: Vec<String>,
     pub targets: BTreeMap<&'static str, Target>,
@@ -39,7 +44,11 @@ pub(crate) struct Import {
     pub mapped: Vec<String>,
     /// `(key, why)` of what has no perseid equivalent.
     pub skipped: Vec<(String, String)>,
+    /// What the user should check before generating.
+    pub warnings: Vec<String>,
     endpoints: Vec<Method>,
+    /// `unspecified_endpoints`, as `(verb, path)`.
+    unspecified: Vec<(String, String)>,
     security_schemes: Option<Value>,
     security: Option<Value>,
 }
@@ -87,7 +96,7 @@ pub(crate) fn read(location: &str, root: &Path) -> Result<Import> {
         "{location} is not a Stainless config: it holds no mapping"
     );
     ensure!(
-        doc.get("openapi").is_none_or(Value::is_object) && doc.get("paths").is_none(),
+        !doc["openapi"].is_string() && !doc["openapi"].is_number() && doc.get("paths").is_none(),
         "{location} is an OpenAPI document: pass it as --spec, and the Stainless config (stainless.yml) as --from"
     );
     Ok(Import::from_config(&doc))
@@ -112,7 +121,14 @@ impl Import {
                 "query_settings" => import.query_settings(value),
                 "security_schemes" => import.security_schemes = Some(value.clone()),
                 "security" => import.security = Some(value.clone()),
-                "unspecified_endpoints" => {}
+                "unspecified_endpoints" => {
+                    import.unspecified = value
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|e| endpoint_of(e.as_str()?))
+                        .collect();
+                }
                 "custom_casings" => import.skip(
                     key,
                     "perseid spells names its own way in each language; only the client name took them",
@@ -144,6 +160,12 @@ impl Import {
                 _ => import.skip(key, "no perseid.toml equivalent"),
             }
         }
+        if doc["query_settings"].get("array_format").is_none() {
+            import.skip(
+                "query_settings.array_format",
+                "Stainless sends list parameters comma-separated (`a=1,2`) by default: perseid repeats them (`a=1&a=2`) unless the spec sets `explode: false` on them",
+            );
+        }
         if import.endpoints.is_empty() && doc["unspecified_endpoints"].is_array() {
             import.skip(
                 "unspecified_endpoints",
@@ -162,6 +184,7 @@ impl Import {
                     match text.map(|name| crate::client_name::parse(&client_name(name, casings))) {
                         Some(Ok(name)) => {
                             self.name = Some(name);
+                            self.organization = text.map(str::to_owned);
                             self.mapped.push("name".into());
                         }
                         Some(Err(error)) => self.skip(at, error),
@@ -264,7 +287,23 @@ impl Import {
                 .map(str::to_owned)
         };
         out.package = text(package_key);
-        out.repo = text("production_repo");
+        if let Some(production) = text("production_repo") {
+            let at = format!("targets.{key}.production_repo");
+            let (repo, branch) = production.split_once('#').unwrap_or((&production, ""));
+            match repo_name(repo) {
+                true => out.repo = Some(repo.to_owned()),
+                false => self.skip(
+                    &at,
+                    format!("`{repo}` is no GitHub owner/name: set `repo` under [{language}]"),
+                ),
+            }
+            if !branch.is_empty() {
+                self.skip(
+                    at,
+                    format!("perseid opens its pull requests against the default branch of the repository, not `{branch}`"),
+                );
+            }
+        }
         for (k, value) in target.as_object().into_iter().flatten() {
             let at = format!("targets.{key}.{k}");
             match k.as_str() {
@@ -351,9 +390,10 @@ impl Import {
                         self.option(name, opt);
                     }
                 }
-                "default_timeout" => match seconds(value) {
+                "default_timeout" => match seconds(value).map(|s| s.ceil().max(1.0) as u64) {
+                    Some(DEFAULT_TIMEOUT) => {}
                     Some(seconds) => {
-                        self.timeout = Some(seconds.ceil().max(1.0) as u64);
+                        self.timeout = Some(seconds);
                         self.mapped.push("timeout".into());
                     }
                     None => self.skip(at, "not a number of milliseconds nor an ISO 8601 duration"),
@@ -385,6 +425,10 @@ impl Import {
                         }
                     }
                 }
+                "default_env_prefix" => match value.as_str().map(|p| p.trim_end_matches('_')) {
+                    Some(prefix) if !prefix.is_empty() => self.env_prefix(&at, prefix),
+                    _ => self.skip(at, "not an environment variable prefix"),
+                },
                 "default_max_retries" if value.as_u64() == Some(2) => {}
                 "default_max_retries" => self.skip(
                     at,
@@ -430,15 +474,7 @@ impl Import {
         match (env, suffix) {
             (None, _) => {}
             (Some(env), Some(suffix)) if env.ends_with(suffix) && env.len() > suffix.len() => {
-                let prefix = &env[..env.len() - suffix.len()];
-                match &self.env_prefix {
-                    None => self.env_prefix = Some(prefix.to_owned()),
-                    Some(other) if other == prefix => {}
-                    Some(other) => self.skip(
-                        format!("{at}.read_env"),
-                        format!("perseid reads every variable with one prefix, {other}_: {env} is {other}{suffix}"),
-                    ),
-                }
+                self.env_prefix(&format!("{at}.read_env"), &env[..env.len() - suffix.len()]);
             }
             (Some(env), Some(suffix)) => self.skip(
                 format!("{at}.read_env"),
@@ -459,6 +495,18 @@ impl Import {
                     format!("perseid sends credentials as the spec's `{scheme}` security scheme declares: check its `in` and `name`"),
                 );
             }
+        }
+    }
+
+    /// Takes `prefix` as that of every environment variable, unless another one was.
+    fn env_prefix(&mut self, at: &str, prefix: &str) {
+        match &self.env_prefix {
+            None => self.env_prefix = Some(prefix.to_owned()),
+            Some(other) if other == prefix => {}
+            Some(other) => self.skip(
+                at,
+                format!("perseid reads every variable with one prefix, {other}_, not {prefix}_"),
+            ),
         }
     }
 
@@ -560,7 +608,7 @@ impl Import {
     ) {
         let dotted = format!("{resource}.{name}");
         let endpoint = method.as_str().or(method["endpoint"].as_str());
-        let Some((verb, path)) = endpoint.and_then(|e| e.trim().split_once(' ')) else {
+        let Some((verb, path)) = endpoint.and_then(endpoint_of) else {
             let why = match method["type"].as_str() {
                 Some("webhook_unwrap") => {
                     "`webhooks = true` installs perseid's Standard Webhooks verifier instead"
@@ -594,8 +642,8 @@ impl Import {
             dotted,
             resource: resource.to_owned(),
             name: name.to_owned(),
-            verb: verb.to_lowercase(),
-            path: path.trim().to_owned(),
+            verb,
+            path,
             paginated,
             skipped_in: skipped_in(method, skipped),
         });
@@ -695,27 +743,28 @@ impl Import {
             .iter()
             .map(|entry| ((entry.1.method.clone(), shape(&entry.1.path)), entry))
             .collect();
+        let find =
+            |verb: &str, path: &str| by_endpoint.get(&(verb.to_owned(), shape(path))).copied();
         let mut used = BTreeSet::new();
         let mut names = BTreeMap::new();
         let mut excluded: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
         let mut mismatches = Vec::new();
+        let mut missing = Groups::default();
         for method in &self.endpoints {
             let at = format!("resources.{}", method.dotted);
-            let Some((_, op)) = by_endpoint.get(&(method.verb.clone(), shape(&method.path))) else {
-                mismatches.push((
-                    at,
-                    format!(
-                        "`{} {}` is no operation perseid generates: not in the spec, or `x-internal`",
-                        method.verb, method.path
-                    ),
-                ));
+            let Some((resource, op)) = find(&method.verb, &method.path) else {
+                missing.add(
+                    &method.resource,
+                    "no operation perseid generates: not in the spec, or `x-internal`".into(),
+                    format!("{} {}", method.verb, method.path),
+                );
                 continue;
             };
             used.insert(op.id.clone());
             for language in &method.skipped_in {
                 excluded.entry(language).or_default().push(op.id.clone());
             }
-            if snake(&op.name) != snake(&method.name) {
+            if same_resource(&method.resource, resource) && snake(&op.name) != snake(&method.name) {
                 names.insert(op.id.clone(), method.name.clone());
             }
             match (method.paginated, op.paginated()) {
@@ -730,7 +779,10 @@ impl Import {
                 _ => {}
             }
         }
-        let clashes = drop_clashes(&generated_ops, &mut names);
+        let total = self.endpoints.len();
+        let matched = total - missing.count();
+        let trusted = matched * 5 >= total * 4;
+        drop_clashes(&generated_ops, &mut names);
         let renamed = match quietly(|| crate::spec::api(spec, &filters(&names, &self.pagination))) {
             Ok(api) => Some(api),
             Err(error) => {
@@ -747,35 +799,46 @@ impl Import {
                 .into_iter()
                 .map(|(resource, op)| (op.id.clone(), (resource, snake(&op.name))))
                 .collect();
+        let mut moved = Groups::default();
         for method in &self.endpoints {
-            let Some((_, op)) = by_endpoint.get(&(method.verb.clone(), shape(&method.path))) else {
+            let Some((_, op)) = find(&method.verb, &method.path) else {
                 continue;
             };
             let Some((resource, name)) = generated.get(&op.id) else {
                 continue;
             };
-            let got = format!("{resource}.{name}");
-            if got == format!("{}.{}", method.resource, snake(&method.name)) {
+            if *resource == method.resource && *name == snake(&method.name) {
                 continue;
             }
             let why = if method.resource == "$client" {
-                "perseid has no methods on the client itself: it groups operations by their first tag"
+                "methods of the client: perseid has none, it groups operations by their first tag"
+                    .to_owned()
             } else if method.resource.contains('.') {
-                "perseid has no nested resources: it groups operations by their first tag"
-            } else if *resource != method.resource && !clashes.contains(&op.id) {
-                "perseid groups operations by their first tag: tag the operation with the resource name"
-            } else {
-                "the name clashes with another method of the resource in perseid"
-            };
-            mismatches.push((
-                format!("resources.{}", method.dotted),
+                "nested resource: perseid has one level of resources, named after the operations' first tag".to_owned()
+            } else if *resource == format!("{}_api", snake(&method.resource)) {
                 format!(
-                    "`{got}` in perseid ({} {}): {why}",
-                    method.verb, method.path
-                ),
-            ));
+                    "perseid names the resource `{resource}`, as a type is named like `{}`",
+                    method.resource
+                )
+            } else if !same_resource(&method.resource, resource) {
+                format!(
+                    "perseid groups operations by their first tag: tag them `{}` in the spec",
+                    method.resource
+                )
+            } else {
+                "the names clash with other methods of the resource in perseid".to_owned()
+            };
+            moved.add(&method.resource, why, format!("{resource}.{name}"));
         }
         self.skipped.extend(mismatches);
+        self.skipped.extend(moved.lines());
+        match trusted {
+            true => self.skipped.extend(missing.lines()),
+            false => self.warnings.push(format!(
+                "only {matched} of the {total} endpoints of stainless.yml are operations of the spec{}: stainless.yml may have been written for another spec. Only its `skip` and `unspecified_endpoints` are excluded: the operations it doesn't list are generated",
+                missing.first().map(|e| format!(" (`{e}` is not)")).unwrap_or_default()
+            )),
+        }
         if !names.is_empty() {
             self.mapped.push(count(names.len(), "method name"));
         }
@@ -793,10 +856,20 @@ impl Import {
             .filter(|id| left_out(id))
             .cloned()
             .collect();
+        let unspecified: BTreeSet<&String> = self
+            .unspecified
+            .iter()
+            .filter_map(|(verb, path)| Some(&find(verb, path)?.1.id))
+            .collect();
         self.exclude = generated_ops
             .iter()
-            .map(|(_, op)| op.id.clone())
-            .filter(|id| !used.contains(id) || everywhere.contains(id))
+            .map(|(_, op)| &op.id)
+            .filter(|id| {
+                everywhere.contains(*id)
+                    || unspecified.contains(id)
+                    || (trusted && !used.contains(*id))
+            })
+            .cloned()
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
@@ -921,6 +994,23 @@ fn client_name(org: &str, casings: &Value) -> String {
             }
         })
         .collect()
+}
+
+/// `get /v1/users` as `("get", "/v1/users")`.
+fn endpoint_of(text: &str) -> Option<(String, String)> {
+    let (verb, path) = text.trim().split_once(' ')?;
+    Some((verb.to_lowercase(), path.trim().to_owned()))
+}
+
+/// Whether `repo` reads as a GitHub `owner/name`.
+fn repo_name(repo: &str) -> bool {
+    let parts: Vec<&str> = repo.split('/').collect();
+    parts.len() == 2
+        && parts.iter().all(|p| {
+            !p.is_empty()
+                && p.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+        })
 }
 
 /// Seconds of a Stainless duration: milliseconds, or ISO 8601 such as `PT1M30S`.
@@ -1158,12 +1248,8 @@ fn operations(api: &crate::api::Api) -> Vec<(String, &Operation)> {
     out
 }
 
-/// Drops the names that two methods of a perseid resource would share, giving the ids dropped.
-fn drop_clashes(
-    operations: &[(String, &Operation)],
-    names: &mut BTreeMap<String, String>,
-) -> BTreeSet<String> {
-    let mut dropped = BTreeSet::new();
+/// Drops the names that two methods of a perseid resource would share.
+fn drop_clashes(operations: &[(String, &Operation)], names: &mut BTreeMap<String, String>) {
     loop {
         let mut seen: BTreeMap<(String, String), Vec<&str>> = BTreeMap::new();
         for (resource, op) in operations {
@@ -1182,12 +1268,55 @@ fn drop_clashes(
             .map(|id| (*id).to_owned())
             .collect();
         if clashing.is_empty() {
-            return dropped;
+            return;
         }
         for id in clashing {
             names.remove(&id);
-            dropped.insert(id);
         }
+    }
+}
+
+/// Whether the methods of the Stainless resource `stainless` are those of the perseid resource
+/// `perseid`: a top-level one, named alike, or renamed `<name>_api` as a type is named like it.
+fn same_resource(stainless: &str, perseid: &str) -> bool {
+    let name = snake(stainless);
+    !stainless.contains('.')
+        && !stainless.starts_with('$')
+        && (perseid == name || perseid == format!("{name}_api"))
+}
+
+/// Methods of Stainless resources, grouped by resource and by why they differ in perseid.
+#[derive(Default)]
+struct Groups(Vec<(String, String, Vec<String>)>);
+
+impl Groups {
+    fn add(&mut self, resource: &str, why: String, item: String) {
+        match self
+            .0
+            .iter_mut()
+            .find(|(r, w, _)| r == resource && *w == why)
+        {
+            Some((_, _, items)) => items.push(item),
+            None => self.0.push((resource.to_owned(), why, vec![item])),
+        }
+    }
+
+    fn count(&self) -> usize {
+        self.0.iter().map(|(_, _, items)| items.len()).sum()
+    }
+
+    fn first(&self) -> Option<&String> {
+        self.0.first()?.2.first()
+    }
+
+    /// `(key, why)` lines of the report, one per group.
+    fn lines(self) -> impl Iterator<Item = (String, String)> {
+        self.0.into_iter().map(|(resource, why, items)| {
+            (
+                format!("resources.{resource} ({})", count(items.len(), "method")),
+                format!("{why}: {}", items.join(", ")),
+            )
+        })
     }
 }
 
@@ -1395,6 +1524,128 @@ mod tests {
         assert_eq!(node, BTreeSet::from(["typescript"]));
         let only = skipped_in(&json!({ "only": ["python"] }), &node);
         assert!(!only.contains("python") && only.contains("go"));
+    }
+
+    #[test]
+    fn production_repos_lose_their_branch_and_must_read_owner_name() {
+        let import = Import::from_config(&json!({ "targets": {
+            "typescript": { "production_repo": "AcmeOrg/acme-typescript#master" },
+            "python": { "production_repo": "acme/py\\sdk" },
+        }}));
+        assert_eq!(
+            import.targets["typescript"].repo.as_deref(),
+            Some("AcmeOrg/acme-typescript")
+        );
+        assert_eq!(import.targets["python"].repo, None);
+        let why = |key: &str| {
+            import
+                .skipped
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, why)| why.clone())
+                .unwrap_or_default()
+        };
+        assert!(why("targets.typescript.production_repo").contains("not `master`"));
+        assert!(why("targets.python.production_repo").contains("no GitHub owner/name"));
+    }
+
+    #[test]
+    fn client_settings_map_the_env_prefix_and_leave_defaults_out() {
+        let import = Import::from_config(&json!({ "client_settings": {
+            "default_env_prefix": "ACME_",
+            "default_timeout": 60000,
+        }}));
+        assert_eq!(import.env_prefix.as_deref(), Some("ACME"));
+        assert_eq!(import.timeout, None);
+        let array_format = import
+            .skipped
+            .iter()
+            .find(|(k, _)| k == "query_settings.array_format");
+        assert!(array_format.is_some_and(|(_, why)| why.contains("comma-separated")));
+        let explicit =
+            Import::from_config(&json!({ "query_settings": { "array_format": "repeat" } }));
+        assert!(explicit.skipped.is_empty(), "{:?}", explicit.skipped);
+    }
+
+    #[test]
+    fn a_bare_openapi_section_is_no_openapi_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = "organization:\n  name: acme\nopenapi:\n  # transforms: []\n";
+        std::fs::write(dir.path().join("stainless.yml"), config).unwrap();
+        assert!(read("stainless.yml", dir.path()).is_ok());
+        std::fs::write(dir.path().join("openapi.yml"), "openapi: 3.1.0\n").unwrap();
+        assert!(read("openapi.yml", dir.path()).is_err());
+    }
+
+    #[test]
+    fn only_top_level_resources_rename_the_methods_of_their_perseid_resource() {
+        let op = |id: &str, tag: &str| json!({ "operationId": id, "tags": [tag], "responses": { "204": { "description": "ok" } } });
+        let spec = json!({
+            "openapi": "3.1.0",
+            "info": { "title": "Acme", "version": "1" },
+            "paths": {
+                "/users": { "get": op("listUsers", "users") },
+                "/health": { "get": op("healthCheck", "users") },
+                "/sessions/{id}/peers": {
+                    "post": op("addSessionPeers", "sessions"),
+                    "delete": op("removeSessionPeers", "sessions"),
+                },
+            },
+        });
+        let mut import = Import::from_config(&json!({ "resources": {
+            "users": { "methods": { "all": "get /users" } },
+            "$client": { "methods": { "health": "get /health" } },
+            "sessions": { "subresources": { "peers": { "methods": {
+                "add": "post /sessions/{session_id}/peers",
+                "remove": "delete /sessions/{session_id}/peers",
+            }}}},
+        }}));
+        import.with_spec(&spec.to_string());
+        assert_eq!(
+            import.methods,
+            BTreeMap::from([("listUsers".to_owned(), "all".to_owned())])
+        );
+        let keys: Vec<&str> = import.skipped.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(keys.contains(&"resources.$client (1 method)"), "{keys:?}");
+        assert!(
+            keys.contains(&"resources.sessions.peers (2 methods)"),
+            "{keys:?}"
+        );
+        assert!(import.exclude.is_empty() && import.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_config_written_for_another_spec_excludes_only_what_it_skips() {
+        let op = |id: &str| json!({ "operationId": id, "responses": { "204": { "description": "ok" } } });
+        let spec = json!({
+            "openapi": "3.1.0",
+            "info": { "title": "Acme", "version": "1" },
+            "paths": {
+                "/v3/users": { "get": op("listUsers") },
+                "/v3/teams": { "get": op("listTeams") },
+                "/v3/notify": { "post": op("notify") },
+            },
+        });
+        let mut import = Import::from_config(&json!({
+            "resources": { "users": { "methods": {
+                "list": "get /v3/users",
+                "get": "get /v2/users/{id}",
+                "update": "put /v2/users/{id}",
+                "delete": "delete /v2/users/{id}",
+                "create": "post /v2/users",
+            }}},
+            "unspecified_endpoints": ["post /v3/notify"],
+        }));
+        import.with_spec(&spec.to_string());
+        assert_eq!(import.exclude, ["notify"]);
+        assert!(
+            import
+                .warnings
+                .iter()
+                .any(|w| w.contains("only 1 of the 5 endpoints")),
+            "{:?}",
+            import.warnings
+        );
     }
 
     #[test]

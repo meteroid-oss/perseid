@@ -172,9 +172,9 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
     assert!(ok, "{out}");
     let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
     for expected in [
-        "spec = \"openapi.yaml\"\nname = \"Knock\"\nsdks = [\"typescript\", \"python\", \"go\"]\nbase_url = \"https://api.knock.app\"\ntimeout = 60\nidempotency_keys = true\nexclude = [\"notify\"]\n",
-        "license = \"Apache-2.0\"\nhomepage = \"https://docs.knock.app\"\nauthors = [\"Knock <support@knock.app>\"]\n",
-        "[methods]\naddAudienceMembers = \"add_members\"\narchiveMessage = \"mark_as_archived\"\ngetUser = \"get\"\ngetUserFeed = \"list_items\"\n",
+        "spec = \"openapi.yaml\"\nname = \"Knock\"\nsdks = [\"typescript\", \"python\", \"go\"]\nbase_url = \"https://api.knock.app\"\nidempotency_keys = true\nexclude = [\"notify\"]\n",
+        "license = \"Apache-2.0\"\nhomepage = \"https://docs.knock.app\"\nauthors = [\"knock <support@knock.app>\"]\n",
+        "[methods]\naddAudienceMembers = \"add_members\"\narchiveMessage = \"mark_as_archived\"\ngetUser = \"get\"\n\n",
         "# entries_cursor\ncursor = \"after\"\nitems = \"entries\"\nnext_cursor = \"page_info.after\"\n",
         "# items_cursor\ncursor = \"after\"\nitems = \"items\"\nnext_cursor = \"page_info.after\"\n",
         "[typescript]\npackage = \"@knocklabs/node\"\nrepo = \"knocklabs/knock-node\"\n",
@@ -182,7 +182,10 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
     ] {
         assert!(config.contains(expected), "{expected}\n---\n{config}");
     }
-    assert!(!config.contains("env_prefix"), "{config}");
+    assert!(
+        !config.contains("env_prefix") && !config.contains("timeout"),
+        "{config}"
+    );
     assert!(
         out.contains(
             "Knock SDKs: knocklabs/knock-node, knocklabs/knock-python, knocklabs/knock-go"
@@ -197,7 +200,7 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
         "pagination.slack_channels_cursor: `query_options.cursor` is a nested parameter",
         "resources.*.models: perseid names types after their schema, without resource namespaces: MessageSchedule is Schedule",
         "resources.users.list_schedules: `paginated: false`",
-        "resources.users.feeds.list_items: `users.list_items` in perseid",
+        "resources.users.feeds (1 method): nested resource: perseid has one level of resources, named after the operations' first tag: users.retrieve_feed",
         "readme: ",
     ] {
         assert!(
@@ -229,6 +232,29 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
         audiences.contains("def add_members(") && !audiences.contains("def list_members("),
         "{audiences}"
     );
+}
+
+#[test]
+fn init_from_a_stainless_config_written_for_another_spec_warns_and_keeps_its_operations() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        "tests/fixtures/stainless-openapi.yaml",
+        dir.path().join("openapi.yaml"),
+    )
+    .unwrap();
+    let config = fs::read_to_string("tests/fixtures/stainless.yml").unwrap();
+    let stale = config
+        .replace(" /v1/", " /v2/")
+        .replace("post /v2/notify", "post /v1/notify");
+    fs::write(dir.path().join("stainless.yml"), stale).unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "--from", "stainless.yml"]);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("! only 0 of the 13 endpoints of stainless.yml are operations of the spec"),
+        "{out}"
+    );
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(config.contains("exclude = [\"notify\"]\n"), "{config}");
 }
 
 #[test]

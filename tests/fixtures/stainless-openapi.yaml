@@ -3,6 +3,8 @@ info:
   title: Knock API
   version: '1.0'
   description: Knock is a set of tools for adding notifications to your app.
+  license:
+    name: MIT
 servers:
   - url: https://api.knock.app
 security:

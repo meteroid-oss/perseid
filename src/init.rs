@@ -163,11 +163,12 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             "`--repo {repo}` must read owner/name, or owner/name-{{lang}} for a repository per SDK"
         );
     }
-    let from_spec = spec_license(&doc).or_else(|| imported.as_ref()?.license.clone());
+    let imported_license = imported.as_ref().and_then(|i| i.license.clone());
+    let from_spec = spec_license(&doc);
     let license = match (&init.license, interactive) {
         (Some(license), _) => Some(license_expression(license).map_err(anyhow::Error::msg)?),
         (None, true) => ask_license(from_spec.as_deref())?,
-        (None, false) => from_spec,
+        (None, false) => imported_license.or(from_spec),
     };
     let base_url = init
         .base_url
@@ -202,7 +203,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         toml += &stainless.top_level();
     }
     let info = match &imported {
-        Some(stainless) => &with_contact(&doc["info"], stainless, &name),
+        Some(stainless) => &with_contact(&doc["info"], stainless),
         None => &doc["info"],
     };
     toml += &format!(
@@ -289,13 +290,16 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
                 println!("  - {key}: {why}");
             }
         }
+        for warning in &stainless.warnings {
+            println!("! {warning}");
+        }
     }
     next_steps(&config, root);
     Ok(())
 }
 
 /// `info` of the spec, its contact completed with the organization of stainless.yml.
-fn with_contact(info: &Value, stainless: &crate::stainless::Import, name: &str) -> Value {
+fn with_contact(info: &Value, stainless: &crate::stainless::Import) -> Value {
     let mut info = info.clone();
     let contact = &mut info["contact"];
     if contact["url"].as_str().is_none()
@@ -304,7 +308,7 @@ fn with_contact(info: &Value, stainless: &crate::stainless::Import, name: &str) 
         contact["url"] = json!(homepage);
     }
     if contact["name"].as_str().is_none()
-        && let Some(email) = &stainless.contact
+        && let (Some(name), Some(email)) = (&stainless.organization, &stainless.contact)
     {
         contact["name"] = json!(name);
         contact["email"] = json!(email);
