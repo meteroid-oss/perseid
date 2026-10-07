@@ -58,13 +58,13 @@ export function isJsonObject<T>(
 export function extraProperties(
   object: unknown,
   known: readonly string[],
-  convert?: (value: any) => unknown
+  convert?: (value: any, key: string) => unknown
 ): object {
   const extra = {};
   if (isJsonObject(object)) {
     for (const [key, item] of Object.entries(object as Record<string, unknown>)) {
       if (!known.includes(key)) {
-        const value = convert && item !== undefined ? convert(item) : item;
+        const value = convert && item !== undefined ? convert(item, key) : item;
         Object.defineProperty(extra, key, { value, enumerable: true, writable: true, configurable: true });
       }
     }

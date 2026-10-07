@@ -177,6 +177,7 @@ Keys of one language:
 |---|---|---|
 | `[typescript]` | `exports` | Modules re-exported from the entry point |
 | `[typescript]` | `int64` | Type of int64 values: `"number"` (default, exact up to 2^53), `"bigint"` or `"string"` |
+| `[typescript]` | `validate_responses` | `false` skips checking response bodies against their schema (`true` by default) |
 | `[go]` | `module` | Module path. `github.com/{repo}/{path}` by default |
 | `[csharp.context]` | `dependency_injection` | `true` adds an `IHttpClientFactory` integration |
 

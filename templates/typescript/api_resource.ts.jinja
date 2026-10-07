@@ -294,12 +294,12 @@ export class {{ resource_type_name }} {
             {% elif op.response_is_text | default(false) -%}
                 return request.sendText(this.requestCtx, requestOptions);
             {% elif op.response_body_json_type is defined -%}
-                {% set parse = m.from_json("json", op.response_body_json_type) -%}
+                {% set parse = m.from_json("json", op.response_body_json_type, '"$"', "undefined") -%}
                 return request.send{% if may_be_empty %}Optional{% endif %}(this.requestCtx, (json: any) => {{ parse }}, requestOptions);
             {% elif op.response_body_schema_name is defined -%}
                 {% set serializer = (op.response_body_schema_name | to_upper_camel_case) ~ "Serializer" -%}
                 {% if op.response_body_is_list -%}
-                return request.send{% if may_be_empty %}Optional{% endif %}(this.requestCtx, (json: any[]) => json.map((item) => {{ serializer }}.parse(item)), requestOptions);
+                return request.send{% if may_be_empty %}Optional{% endif %}(this.requestCtx, (json: any) => decodeList(json, "$", undefined, (item: any, p: string, i: number) => {{ serializer }}.parse(item, decodePath(p, i))), requestOptions);
                 {% else -%}
                 return request.send{% if may_be_empty %}Optional{% endif %}(this.requestCtx, {{ serializer }}.parse, requestOptions);
                 {% endif -%}
@@ -336,8 +336,9 @@ import { {{ used | join(", ") }} } from "../models/{{ c | to_lower_camel_case }}
 {% if "isJsonObject(" in body -%}
 import { isJsonObject } from "../json.js";
 {% endif -%}
-{% if "parseDateTime(" in body -%}
-import { parseDateTime } from "../datetime.js";
+{% set decode_helpers = ["decodeBoolean", "decodeDateTime", "decodeInteger", "decodeList", "decodeMap", "decodeNumber", "decodeObject", "decodePath", "decodeRequired", "decodeString"] | select("in", body) | list -%}
+{% if decode_helpers -%}
+import { {{ decode_helpers | join(", ") }} } from "../decode.js";
 {% endif -%}
 {% set union_helpers = ["unionBestMatch", "unionHas", "unionTry"] | select("in", body) | list -%}
 {% if union_helpers -%}

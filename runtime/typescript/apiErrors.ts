@@ -108,7 +108,10 @@ export class APIUserAbortError extends @@CLIENT_NAME@@Error {
   }
 }
 
-/** A successful response the SDK could not read: invalid JSON, or not the expected media type. */
+/**
+ * A successful response the SDK could not read: invalid JSON, not the expected media type, or
+ * a body that does not match its schema.
+ */
 export class APIDecodeError extends @@CLIENT_NAME@@Error {
   override name = "APIDecodeError";
 
@@ -119,6 +122,16 @@ export class APIDecodeError extends @@CLIENT_NAME@@Error {
     options?: { cause?: unknown }
   ) {
     super(message, options);
+  }
+}
+
+/** @internal `parse(json)`, throwing what it throws as an `APIDecodeError` holding `body`. */
+export function decodeBody<R>(parse: (json: any) => R, json: unknown, body: string): R {
+  try {
+    return parse(json);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new APIDecodeError(`The response body does not match its schema: ${reason}`, body, { cause: error });
   }
 }
 

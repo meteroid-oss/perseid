@@ -281,7 +281,7 @@ try {
 | `BadRequestError`, `AuthenticationError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError`, `UnprocessableEntityError`, `RateLimitError`, `InternalServerError` | 400, 401, 403, 404, 409, 422, 429, 5xx |
 | `APIConnectionError`, `APIConnectionTimeoutError` | No response, or none within the timeout |
 | `APIUserAbortError` | The `signal` aborted |
-| `APIDecodeError` | A 2xx body that is not valid JSON or the expected event stream |
+| `APIDecodeError` | A 2xx body that is not valid JSON, not the expected event stream, or not what its schema describes |
 
 ### Raw responses
 
@@ -294,6 +294,10 @@ Methods return an `APIPromise`. `.withResponse()` gives `{ data, response, reque
 - `CustomerSerializer.parse(json)` and `.serialize(value)` convert them, keeping unknown
   properties under their JSON names. A typed `additionalProperties` gives the model an index
   signature.
+- Parsing checks values against their schema: a wrong type, or a required property missing
+  or `null`, throws an `APIDecodeError` naming its path (`$.items[3].total: expected a number,
+  got string "abc"`). Unknown properties, unknown enum values and values no union variant holds
+  are kept. `validate_responses = false` under `[typescript]` turns the checks off.
 - With a non-default `int64`, `parseJson` and `stringifyJson` do the same for webhook payloads.
 - Enums are `const` objects with a union type of their values.
 - Tagged unions are unions of interfaces keyed by the discriminator.

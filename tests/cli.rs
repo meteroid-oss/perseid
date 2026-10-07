@@ -1941,7 +1941,8 @@ fn typescript_int64_is_opt_in() {
     let (ok, out) = perseid(dir.path(), &["generate", "typescript", "--no-format"]);
     assert!(ok, "{out}");
     assert!(
-        thing().contains("count: bigint;") && thing().contains("BigInt(json[\"count\"])"),
+        thing().contains("count: bigint;")
+            && thing().contains("BigInt(decodeInteger(json[\"count\"], path, \"count\"))"),
         "{}",
         thing()
     );
@@ -2375,7 +2376,7 @@ fn typescript_types_unions_errors_and_the_default_timeout() {
     }
     assert!(
         charge.contains(
-            "isJsonObject(json[\"customer\"]) ? CustomerSerializer.parse(json[\"customer\"])"
+            "isJsonObject(json[\"customer\"]) ? CustomerSerializer.parse(json[\"customer\"], decodePath(path, \"customer\"))"
         ),
         "{charge}"
     );
@@ -3155,7 +3156,12 @@ components:
                 ": std::collections::HashMap<String, i64>,",
             ],
         ),
-        ("typescript", &["...extraProperties(json, [\"name\"])"]),
+        (
+            "typescript",
+            &[
+                "...extraProperties(json, [\"name\"], (item: any, key: string) => decodeInteger(item, path, key))",
+            ],
+        ),
         ("python", &["_EXTRA_FIELDS: t.ClassVar[dict[str, int]]"]),
         ("go", &["ExtraFields map[string]int64", "typedExtraFields("]),
         (

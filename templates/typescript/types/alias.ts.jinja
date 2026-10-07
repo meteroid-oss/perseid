@@ -5,8 +5,8 @@
 {% set serializer -%}
 /** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
-    parse(json: any): {{ type_name }} {
-        return {{ m.from_json("json", type.target) if m.converted(type.target) else "json" }};
+    parse(json: any, {% if m.checked(type.target) %}path = "$"{% else %}_path?: string{% endif %}): {{ type_name }} {
+        return {{ m.from_json("json", type.target, "path", "undefined") if m.checked(type.target) else "json" }};
     },
 
     serialize(value: {{ type_name }}): any {

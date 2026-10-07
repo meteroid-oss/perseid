@@ -3,6 +3,7 @@ import {
   APIConnectionError,
   APIConnectionTimeoutError,
   APIDecodeError,
+  decodeBody,
   APIUserAbortError,
   @@CLIENT_NAME@@Error,
   apiError,
@@ -415,7 +416,7 @@ export class @@CLIENT_NAME@@Request {
       } catch (error) {
         throw new APIDecodeError("The response body is not valid JSON.", text, { cause: error });
       }
-      return parse(json);
+      return decodeBody(parse, json, text);
     });
   }
 
@@ -439,7 +440,7 @@ export class @@CLIENT_NAME@@Request {
       } catch (error) {
         throw new APIDecodeError("The response body is not valid JSON.", text, { cause: error });
       }
-      return json === null || json === undefined ? undefined : parse(json);
+      return json === null || json === undefined ? undefined : decodeBody(parse, json, text);
     });
   }
 

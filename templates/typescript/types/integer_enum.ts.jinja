@@ -16,8 +16,8 @@ export type {{ type_name }} = (typeof {{ type_name }})[keyof typeof {{ type_name
 
 /** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
-    parse(json: any): {{ type_name }} {
-        return {% if int64 == "bigint" %}BigInt(json) as {{ type_name }}{% elif int64 == "string" %}String(json) as {{ type_name }}{% else %}json{% endif %};
+    parse(json: any, path = "$"): {{ type_name }} {
+        return {% if int64 == "bigint" %}BigInt(decodeInteger(json, path)) as {{ type_name }}{% elif int64 == "string" %}String(decodeInteger(json, path)) as {{ type_name }}{% else %}decodeInteger(json, path) as {{ type_name }}{% endif %};
     },
 
     serialize(value: {{ type_name }}): any {

@@ -46,17 +46,18 @@ export interface {{ type_name }}{% if base_names %} extends {{ ns.parents | join
 {% set inherited = inherited_fields | list -%}
 {#- A typed `additionalProperties` converts the values of those properties. -#}
 {% set extra_ty = type.additional_properties.value_type() if type.additional_properties is defined else none -%}
-{% set parse_extra = (", (item: any) => " ~ m.from_json("item", extra_ty)) if extra_ty is not none and m.converted(extra_ty) else "" -%}
+{% set parse_extra = (", (item: any, key: string) => " ~ m.from_json("item", extra_ty, "path", "key")) if extra_ty is not none and m.checked(extra_ty) else "" -%}
 {% set serialize_extra = (", (item: any) => " ~ m.to_json("item", extra_ty)) if extra_ty is not none and m.converted(extra_ty, true) else "" -%}
 /** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
-    parse(json: any): {{ type_name }} {
+    parse(json: any, path = "$"): {{ type_name }} {
+        decodeObject(json, path);
         return {
             {%- if extras %}
             ...extraProperties(json, {{ m.names(type.fields, false, inherited) }}{{ parse_extra }}),
             {%- endif %}
             {%- for base in base_names %}
-            ...{% if extras %}pickProperties({{ base }}Serializer.parse(json), {{ m.names([], true, inherited) }}){% else %}{{ base }}Serializer.parse(json){% endif %},
+            ...{% if extras %}pickProperties({{ base }}Serializer.parse(json, path), {{ m.names([], true, inherited) }}){% else %}{{ base }}Serializer.parse(json, path){% endif %},
             {%- endfor %}
             {{- m.parse_fields(type.fields, "json", type.discriminator_defaults | default({})) }}
         };
