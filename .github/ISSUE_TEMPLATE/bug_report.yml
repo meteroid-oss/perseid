@@ -1,0 +1,66 @@
+name: Bug report
+description: Generation fails, or the generated code is wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A spec that reproduces the bug is the most useful thing you can attach. Trim it to the
+        schemas and operations involved if you can.
+  - type: input
+    id: version
+    attributes:
+      label: perseid version
+      description: The output of `perseid --version`, or the Action's ref.
+      placeholder: 0.12.1
+    validations:
+      required: true
+  - type: dropdown
+    id: languages
+    attributes:
+      label: Languages
+      description: The SDKs that show the bug.
+      multiple: true
+      options:
+        - Rust
+        - TypeScript
+        - Python
+        - Go
+        - Java
+        - C#
+        - Not language-specific (CLI, GitHub, releases)
+    validations:
+      required: true
+  - type: textarea
+    id: spec
+    attributes:
+      label: Spec
+      description: The part of the OpenAPI spec involved, or a link to the whole spec.
+      render: yaml
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: perseid.toml
+      render: toml
+  - type: textarea
+    id: command
+    attributes:
+      label: Command and output
+      description: What you ran, and the warnings or errors perseid printed.
+      render: shell
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: The code you expected perseid to generate, or what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: The code perseid generated, or the compiler or runtime error it leads to.
+    validations:
+      required: true

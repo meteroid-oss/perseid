@@ -160,6 +160,7 @@ signs in with `GH_TOKEN`, `GITHUB_TOKEN`, the token `gh` stores, or a browser lo
 - [Customizing](docs/customizing.md): handwritten code, middleware, snippets, templates, webhooks
 - [Testing](docs/testing.md): how perseid itself is tested, for contributors
 - [Migrating from Stainless](docs/migrating-from-stainless.md): `perseid init --from stainless.yml`, and what changes for your users
+- [Comparison](docs/comparison.md): perseid next to Stainless, Fern, Speakeasy, Scalar, openapi-generator and Kiota
 
 ## Status
 
@@ -175,6 +176,12 @@ operation or schema. Names that clash fail generation, listed together. Leave an
 with `exclude = ["<operation id>"]`, and open an issue with the spec attached.
 
 perseid started as a fork of [Svix's openapi-codegen](https://github.com/svix/openapi-codegen).
+
+## Contributing
+
+Bug reports with a spec attached, fixes and features are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the setup, the tests, and how a change reaches all six
+languages.
 
 ## License
 

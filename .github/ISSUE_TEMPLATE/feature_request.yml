@@ -1,0 +1,29 @@
+name: Feature request
+description: Something perseid should generate or do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do, and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What the SDKs, the configuration or the CLI would look like. Code in one or two languages helps.
+    validations:
+      required: true
+  - type: textarea
+    id: spec
+    attributes:
+      label: Spec
+      description: The spec construct or extension involved, if any.
+      render: yaml
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Workarounds you use now, such as middleware, resource snippets or ejected templates.
