@@ -1,0 +1,47 @@
+name: New language
+description: Propose an SDK language perseid does not generate yet.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A new language has to match the others: retries, pagination, typed errors, streaming,
+        uploads, webhooks, generated tests and publishing. See
+        [Adding a language](https://github.com/meteroid-oss/perseid/blob/main/CONTRIBUTING.md#adding-a-language).
+  - type: input
+    id: language
+    attributes:
+      label: Language
+      placeholder: Ruby
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: Who would use these SDKs, and which APIs you would generate them for.
+    validations:
+      required: true
+  - type: textarea
+    id: stack
+    attributes:
+      label: Toolchain
+      description: Minimum language version, HTTP client, JSON library, formatter, test runner and registry you would pick, and why.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example
+      description: A few calls as the SDK would read, in the style of the README examples.
+      render: text
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - I would like to write it
+        - I can help test and review it
+        - I am asking for it
+    validations:
+      required: true
