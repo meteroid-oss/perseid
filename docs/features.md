@@ -73,28 +73,35 @@ has them; without any, paging stops at the first empty page.
 
 `x-pagination: false` opts an operation out of the `perseid.toml` rules.
 
-Paginated operations give every item, fetching pages on demand, and the pages themselves: their
-items, the response body, and whether there is a next page.
+A paginated operation has one method. It gives the first page, and iterating it gives every
+item, fetching the next pages on demand; Go iterates with a `...AutoPaging` twin. A page is the response body, with the paging members:
+
+- The response's properties are read on the page, typed: `page.total`, `page.pagination_meta`.
+  They are those of each API's schema.
+- The paging members are the same for every API: `items`, the items of the page, whether there
+  is a next page, the next page, and the pages from this one.
+- `body` gives the response as decoded. A property named like a paging member stays there, and
+  generating warns about it.
 
 ```ts
 for await (const customer of client.customers.list({ perPage: 100 })) { ... }
-const page = await client.customers.list();       // page.items, page.hasNextPage(), page.getNextPage()
+const page = await client.customers.list();       // page.total, page.items, page.hasNextPage(), page.getNextPage()
 ```
 
 ```python
 for customer in client.customers.list(per_page=100): ...
-page = client.customers.list()                     # page.items, page.has_next_page(), page.get_next_page()
+page = client.customers.list()                     # page.total, page.items, page.has_next_page(), page.get_next_page()
 ```
 
 ```go
 for customer, err := range client.Customers().ListAutoPaging(ctx, nil).All() { ... }
-page, err := client.Customers().List(ctx, nil) // page.Items, page.Body, page.HasNextPage(), page.NextPage(ctx)
+page, err := client.Customers().List(ctx, nil) // page.Total, page.Items, page.HasNextPage(), page.NextPage(ctx)
 ```
 
 ```rust
-let mut customers = client.customers().list_iter(None);
+let mut customers = client.customers().list(None).items();
 while let Some(customer) = customers.next().await { let customer = customer?; }
-let page = client.customers().list_iter(None).first_page().await?; // items(), next_page()
+let page = client.customers().list(None).await?; // page.total, page.items(), page.next_page()
 ```
 
 ```java

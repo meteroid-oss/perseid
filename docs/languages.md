@@ -29,7 +29,7 @@ See [features](features.md) for auth, pagination and encoding, and
 
 | | Requires | Client | Base error | Paginated list | Raw response |
 |---|---|---|---|---|---|
-| Rust | Tokio | `Acme::builder()...build()?` | `Error` | `list_iter(...)` | `.with_response()` |
+| Rust | Tokio | `Acme::builder()...build()?` | `Error` | `.items()` on `list()` | `.with_response()` |
 | TypeScript | Node.js 20+, Deno, Bun, browsers | `new Acme({ apiKey })` | `AcmeError` | `for await` on `list()` | `.withResponse()` |
 | Python | Python 3.10+ | `Acme(api_key=...)`, `AsyncAcme` | `AcmeError` | iterate `list()` | `client.with_raw_response` |
 | Go | Go 1.23+ | `acme.New(token, opts)` | `SDKError` | `ListAutoPaging(...)` | `WithResponseInto(&resp)` |
@@ -147,16 +147,23 @@ client.customers().with_options(options).list(None).await?;
 ### Pagination
 
 ```rust
-let mut customers = client.customers().list_iter(None);
+let page = client.customers().list(None).await?;    // the first page
+page.total;                                         // a response field, through Deref
+for customer in page.items() { ... }
+let next = page.next_page().await?;                 // None after the last page
+
+let mut customers = client.customers().list(None).items();
 while let Some(customer) = customers.next().await {
     let customer = customer?;
 }
-let page = client.customers().list_iter(None).first_page().await?;
 ```
 
-`*_iter` methods return a `Paginator`, a `futures_core::Stream` of items. `pages()` and
-`first_page()` give `Page`s with `items()`, `has_next_page()` and `next_page()`; the response
-body is reachable through `Deref`.
+- List methods return a `PageCall`. Awaited, it gives a `Page` that dereferences to the
+  response body, with `items()`, `into_items()`, `has_next_page()`, `next_page()` and
+  `into_inner()`, the body itself.
+- `.items()` is a `Paginator`, a `futures_core::Stream` of every item fetched page by page, with
+  `next()` and `collect()`; `.pages()` streams the pages; `.with_response()` gives the first
+  page with its status and headers.
 
 ### Streaming
 
@@ -248,10 +255,14 @@ const customer = await client.customers.retrieve("cus_1", { timeout: 5_000, maxR
 ```ts
 for await (const customer of client.customers.list({ perPage: 100 })) { ... }
 const page = await client.customers.list();
+page.total;                                       // a response field, read on the page
+page.items; page.hasNextPage(); await page.getNextPage();
 ```
 
-List methods return a `PagePromise`. A `Page` has `items`, `body`, `hasNextPage()`,
-`getNextPage()` and `iterPages()`.
+- List methods return a `PagePromise`: await it for the first page, or `for await` every item.
+- A `Page<Body, Item>` has the response's properties, typed, with `items`, `hasNextPage()`,
+  `getNextPage()`, `iterPages()`, `body` (the response as decoded) and `response` (the HTTP
+  response). `JSON.stringify(page)` writes the body.
 
 ### Streaming
 
@@ -356,12 +367,17 @@ client.customers.retrieve("cus_1", timeout=5.0, max_retries=0)
 
 ```python
 for customer in client.customers.list(per_page=100): ...
-page = client.customers.list()          # page.items, page.body, page.has_next_page(), page.get_next_page()
+page = client.customers.list()          # CustomersListPage, a CustomerList
+page.total                              # a response field, read on the page
+page.items, page.has_next_page(), page.get_next_page()
 async for customer in async_client.customers.list(): ...
 ```
 
-List methods return a `SyncPage`, iterated item by item; `iter_pages()` walks the pages. The
-async client returns an `AsyncPaginator`: `await` it for the first page, or `async for` the items.
+- List methods return the first page, such as `CustomersListPage`: a subclass of the response
+  model with `items`, `has_next_page()`, `get_next_page()`, `iter_pages()` and `body`, the
+  response as decoded. Iterating it yields every item, fetching pages on demand.
+- The async client returns an `AsyncPaginator`: `await` it for an `AsyncCustomersListPage`, or
+  `async for` the items.
 
 ### Streaming
 
@@ -464,12 +480,15 @@ customer, err := client.Customers().Retrieve(ctx, "cus_1", acme.WithMaxRetries(0
 ### Pagination
 
 ```go
+page, err := client.Customers().List(ctx, nil) // *CustomersListPage
+page.Total                                     // a response field, promoted
+page.Items; page.HasNextPage(); page, err = page.NextPage(ctx)
 for customer, err := range client.Customers().ListAutoPaging(ctx, nil).All() { ... }
-page, err := client.Customers().List(ctx, nil) // page.Items, page.Body, page.HasNextPage(), page.NextPage(ctx)
 ```
 
-- List methods return a page, such as `*CustomersListPage`, an alias of `*Page[Customer, *CustomerList]`.
-- `Body` is the whole typed response, for totals.
+- List methods return a page, such as `*CustomersListPage`, that embeds the response
+  (`page.CustomerList`) with `Items`, `HasNextPage()` and `NextPage(ctx)`, nil after the last
+  page. `json.Marshal(page)` writes the response.
 - The `ListAutoPaging` twin returns an `*AutoPager[Customer]`: `range pager.All()`, or
   `Next()`, `Current()` and `Err()`.
 
