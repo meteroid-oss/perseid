@@ -88,23 +88,36 @@ await {{ call_of(request_options="new RequestOptions { MaxRetries = 0, Timeout =
 {% if list %}
 ## Pagination
 
-`…AutoPagingAsync` methods fetch the pages as you go, item by item or, with `AsPagesAsync()`, page by
-page:
+The method of a paginated operation returns a pager. `await` it for the first page, which has the
+properties of the response body, the page's `Items`, `HasNextPage` and `GetNextPageAsync()`;
+`await foreach` over it (or over a page) yields every item, fetching the pages as it goes:
 
 ```csharp
-await foreach (var {{ docs.var(list.item, "item") }} in {{ docs.call(list, auto_paging=true) }})
+var page = await {{ docs.call(list) }};
+Console.WriteLine({{ docs.page_property(list) }});
+foreach (var {{ docs.var(list.item, "item") }} in page.Items)
+{
+    Console.WriteLine({{ docs.var(list.item, "item") }});
+}
+if (page.HasNextPage)
+{
+    page = await page.GetNextPageAsync();
+}
+
+await foreach (var {{ docs.var(list.item, "item") }} in {{ docs.call(list) }})
 {
     Console.WriteLine({{ docs.var(list.item, "item") }});
 }
 
-var page = await {{ docs.call(list, auto_paging=true) }}.GetFirstPageAsync();
-while (true)
+await foreach (var each in {{ docs.call(list) }}.AsPagesAsync())
 {
-    Console.WriteLine(page.Items.Count);
-    if (!page.HasNextPage) break;
-    page = await page.GetNextPageAsync();
+    Console.WriteLine(each.Items.Count);
 }
 ```
+
+`page.Body` is the decoded body itself, with the properties a paging member (`Items`, `Body`,
+`HasNextPage`...) shadows on the page. The `CancellationToken` of the call also cancels the
+requests of the following pages; `WithCancellation(token)` adds one to an enumeration.
 {% endif %}
 {%- if stream %}
 ## Streaming

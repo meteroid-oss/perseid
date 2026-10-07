@@ -7,26 +7,23 @@ using System.Threading.Tasks;
 
 namespace @@PACKAGE_NAME@@;
 
-/// <summary>One page of a list operation: its items, the whole response, and the way to the next page.</summary>
-/// <typeparam name="TResponse">The response of the list operation.</typeparam>
+/// <summary>
+/// The paging members of a page of a list operation: its items and the way to the following pages.
+/// <c>await foreach</c> over a page yields every item from it on, fetching the following pages.
+/// </summary>
+/// <typeparam name="TPage">The page class of the operation.</typeparam>
 /// <typeparam name="TItem">The type of the items.</typeparam>
-public sealed class Page<TResponse, TItem>
+public abstract class Page<TPage, TItem> : IAsyncEnumerable<TItem>
+    where TPage : Page<TPage, TItem>
 {
-    private readonly Func<CancellationToken, Task<Page<TResponse, TItem>>>? _next;
+    private readonly Func<CancellationToken, Task<TPage>>? _next;
 
-    internal Page(
-        TResponse response,
-        IReadOnlyList<TItem> items,
-        Func<CancellationToken, Task<Page<TResponse, TItem>>>? next
-    )
+    private protected Page(IReadOnlyList<TItem> items, Func<CancellationToken, Task<TPage>>? next)
     {
-        Response = response;
+        ArgumentNullException.ThrowIfNull(items);
         Items = items;
         _next = next;
     }
-
-    /// <summary>The decoded response of this page, with its other properties.</summary>
-    public TResponse Response { get; }
 
     /// <summary>The items of this page.</summary>
     public IReadOnlyList<TItem> Items { get; }
@@ -35,35 +32,20 @@ public sealed class Page<TResponse, TItem>
     public bool HasNextPage => _next is not null;
 
     /// <summary>Fetches the next page, with the same parameters and request options.</summary>
+    /// <param name="cancellationToken">Cancels the request.</param>
     /// <exception cref="InvalidOperationException">This is the last page.</exception>
-    public Task<Page<TResponse, TItem>> GetNextPageAsync(CancellationToken cancellationToken = default) =>
+    public Task<TPage> GetNextPageAsync(CancellationToken cancellationToken = default) =>
         _next is { } next
             ? next(cancellationToken)
             : throw new InvalidOperationException("this is the last page");
-}
 
-/// <summary>
-/// The pages of a list operation, fetched on demand. <c>await foreach</c> over it yields every item;
-/// <see cref="AsPagesAsync"/> yields the pages.
-/// </summary>
-/// <typeparam name="TResponse">The response of the list operation.</typeparam>
-/// <typeparam name="TItem">The type of the items.</typeparam>
-public sealed class AsyncPager<TResponse, TItem> : IAsyncEnumerable<TItem>
-{
-    private readonly Func<CancellationToken, Task<Page<TResponse, TItem>>> _first;
-
-    internal AsyncPager(Func<CancellationToken, Task<Page<TResponse, TItem>>> first) => _first = first;
-
-    /// <summary>Fetches the first page.</summary>
-    public Task<Page<TResponse, TItem>> GetFirstPageAsync(CancellationToken cancellationToken = default) =>
-        _first(cancellationToken);
-
-    /// <summary>Every page, the next one fetched once the current one is consumed.</summary>
-    public async IAsyncEnumerable<Page<TResponse, TItem>> AsPagesAsync(
+    /// <summary>This page then the following ones, each fetched once the previous one is consumed.</summary>
+    /// <param name="cancellationToken">Cancels the requests.</param>
+    public async IAsyncEnumerable<TPage> AsPagesAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken = default
     )
     {
-        var page = await _first(cancellationToken).ConfigureAwait(false);
+        var page = (TPage)this;
         while (true)
         {
             yield return page;
@@ -75,7 +57,8 @@ public sealed class AsyncPager<TResponse, TItem> : IAsyncEnumerable<TItem>
         }
     }
 
-    /// <summary>Every item of every page.</summary>
+    /// <summary>The items of this page, then those of the following pages.</summary>
+    /// <param name="cancellationToken">Cancels the requests.</param>
     public async IAsyncEnumerator<TItem> GetAsyncEnumerator(
         CancellationToken cancellationToken = default
     )
@@ -90,59 +73,158 @@ public sealed class AsyncPager<TResponse, TItem> : IAsyncEnumerable<TItem>
     }
 }
 
-/// <summary>Builds the pagers of list operations from typed accessors of their responses.</summary>
+/// <summary>
+/// A page of a list operation: its decoded <see cref="Body"/>, whose properties the generated page
+/// class repeats, and the paging members.
+/// </summary>
+/// <typeparam name="TPage">The page class of the operation.</typeparam>
+/// <typeparam name="TBody">The response body of the operation.</typeparam>
+/// <typeparam name="TItem">The type of the items.</typeparam>
+public abstract class Page<TPage, TBody, TItem> : Page<TPage, TItem>
+    where TPage : Page<TPage, TBody, TItem>
+{
+    private protected Page(
+        TBody body,
+        IReadOnlyList<TItem> items,
+        Func<CancellationToken, Task<TPage>>? next
+    )
+        : base(items, next)
+    {
+        Body = body;
+    }
+
+    /// <summary>The decoded response body, with every property, those the page shadows included.</summary>
+    public TBody Body { get; }
+}
+
+/// <summary>
+/// What a list operation returns: <c>await</c> it for the first page, or <c>await foreach</c> over it
+/// for every item, the pages fetched as the enumeration goes. Each of them sends the first request
+/// anew.
+/// </summary>
+/// <typeparam name="TPage">The page class of the operation.</typeparam>
+/// <typeparam name="TItem">The type of the items.</typeparam>
+public sealed class AsyncPager<TPage, TItem> : IAsyncEnumerable<TItem>
+    where TPage : Page<TPage, TItem>
+{
+    private readonly Func<CancellationToken, Task<TPage>> _first;
+    private readonly CancellationToken _cancellationToken;
+
+    /// <summary>A pager whose first page <paramref name="first"/> fetches, as a fake of a list operation.</summary>
+    /// <param name="first">Fetches the first page.</param>
+    /// <param name="cancellationToken">Cancels the requests, along with those given to the enumerations.</param>
+    public AsyncPager(
+        Func<CancellationToken, Task<TPage>> first,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        _first = first;
+        _cancellationToken = cancellationToken;
+    }
+
+    /// <summary>Fetches the first page, for <c>await</c>.</summary>
+    public TaskAwaiter<TPage> GetAwaiter() => _first(_cancellationToken).GetAwaiter();
+
+    /// <summary>Fetches the first page, for <c>await</c> with the given context.</summary>
+    /// <param name="continueOnCapturedContext">Whether to resume on the captured context.</param>
+    public ConfiguredTaskAwaitable<TPage> ConfigureAwait(bool continueOnCapturedContext) =>
+        _first(_cancellationToken).ConfigureAwait(continueOnCapturedContext);
+
+    /// <summary>Every page, the next one fetched once the current one is consumed.</summary>
+    /// <param name="cancellationToken">Cancels the requests.</param>
+    public async IAsyncEnumerable<TPage> AsPagesAsync(
+        [EnumeratorCancellation] CancellationToken cancellationToken = default
+    )
+    {
+        using var linked =
+            _cancellationToken.CanBeCanceled && cancellationToken.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(_cancellationToken, cancellationToken)
+                : null;
+        var token =
+            linked?.Token ?? (cancellationToken.CanBeCanceled ? cancellationToken : _cancellationToken);
+        var first = await _first(token).ConfigureAwait(false);
+        await foreach (var page in first.AsPagesAsync(token).ConfigureAwait(false))
+        {
+            yield return page;
+        }
+    }
+
+    /// <summary>Every item of every page.</summary>
+    /// <param name="cancellationToken">Cancels the requests.</param>
+    public async IAsyncEnumerator<TItem> GetAsyncEnumerator(
+        CancellationToken cancellationToken = default
+    )
+    {
+        await foreach (var page in AsPagesAsync(cancellationToken).ConfigureAwait(false))
+        {
+            foreach (var item in page.Items)
+            {
+                yield return item;
+            }
+        }
+    }
+}
+
+/// <summary>Builds the pagers of list operations from typed accessors of their bodies.</summary>
 internal static class Paging
 {
     /// <summary>Cursor pagination: <paramref name="next"/> reads the cursor of the following page.</summary>
-    public static AsyncPager<TResponse, TItem> Cursor<TResponse, TItem>(
+    public static AsyncPager<TPage, TItem> Cursor<TPage, TBody, TItem>(
         string? start,
-        Func<string?, CancellationToken, Task<TResponse>> fetch,
-        Func<TResponse, IReadOnlyList<TItem>?> items,
-        Func<TResponse, bool?>? hasMore,
-        Func<TResponse, IReadOnlyList<TItem>, string?> next
+        Func<string?, CancellationToken, Task<ApiResponse<TBody>>> fetch,
+        Func<TBody, IReadOnlyList<TItem>, Func<CancellationToken, Task<TPage>>?, TPage> page,
+        Func<TBody, IReadOnlyList<TItem>?> items,
+        Func<TBody, bool?>? hasMore,
+        Func<TBody, IReadOnlyList<TItem>, string?> next,
+        CancellationToken cancellationToken
     )
+        where TPage : Page<TPage, TBody, TItem>
     {
-        async Task<Page<TResponse, TItem>> Fetch(string? cursor, CancellationToken cancellationToken)
+        async Task<TPage> Fetch(string? cursor, CancellationToken ct)
         {
-            var response = await fetch(cursor, cancellationToken).ConfigureAwait(false);
-            var list = items(response) ?? [];
-            var following = list.Count == 0 || hasMore?.Invoke(response) == false
+            var body = (await fetch(cursor, ct).ConfigureAwait(false)).Value;
+            var list = items(body) ?? [];
+            var following = list.Count == 0 || hasMore?.Invoke(body) == false
                 ? null
-                : next(response, list);
-            return new(
-                response,
+                : next(body, list);
+            return page(
+                body,
                 list,
                 string.IsNullOrEmpty(following) || following == cursor
                     ? null
-                    : ct => Fetch(following, ct)
+                    : token => Fetch(following, token)
             );
         }
-        return new(ct => Fetch(start, ct));
+        return new(ct => Fetch(start, ct), cancellationToken);
     }
 
     /// <summary>Page (<paramref name="pages"/>) or offset pagination, from <paramref name="start"/>.</summary>
-    public static AsyncPager<TResponse, TItem> Numbered<TResponse, TItem>(
+    public static AsyncPager<TPage, TItem> Numbered<TPage, TBody, TItem>(
         long start,
         long firstPage,
         bool pages,
-        Func<long, CancellationToken, Task<TResponse>> fetch,
-        Func<TResponse, IReadOnlyList<TItem>?> items,
-        Func<TResponse, bool?>? hasMore,
-        Func<TResponse, long?>? total
+        Func<long, CancellationToken, Task<ApiResponse<TBody>>> fetch,
+        Func<TBody, IReadOnlyList<TItem>, Func<CancellationToken, Task<TPage>>?, TPage> page,
+        Func<TBody, IReadOnlyList<TItem>?> items,
+        Func<TBody, bool?>? hasMore,
+        Func<TBody, long?>? total,
+        CancellationToken cancellationToken
     )
+        where TPage : Page<TPage, TBody, TItem>
     {
-        async Task<Page<TResponse, TItem>> Fetch(long param, CancellationToken cancellationToken)
+        async Task<TPage> Fetch(long param, CancellationToken ct)
         {
-            var response = await fetch(param, cancellationToken).ConfigureAwait(false);
-            var list = items(response) ?? [];
+            var body = (await fetch(param, ct).ConfigureAwait(false)).Value;
+            var list = items(body) ?? [];
             var following = pages ? param + 1 : param + list.Count;
             var done =
                 list.Count == 0
-                || hasMore?.Invoke(response) == false
-                || total?.Invoke(response) is { } count
+                || hasMore?.Invoke(body) == false
+                || total?.Invoke(body) is { } count
                     && (pages ? param - firstPage + 1 >= count : following >= count);
-            return new(response, list, done ? null : ct => Fetch(following, ct));
+            return page(body, list, done ? null : token => Fetch(following, token));
         }
-        return new(ct => Fetch(start, ct));
+        return new(ct => Fetch(start, ct), cancellationToken);
     }
 }

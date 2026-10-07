@@ -571,11 +571,15 @@ fn csharp_generates_streaming_auth_and_pagination() {
     assert!(streaming.contains("Upload body,"), "{streaming}");
     let widgets = read("Api/WidgetsApi.cs");
     assert!(
-        widgets.contains("public AsyncPager<WidgetList, Widget> ListAutoPagingAsync("),
+        widgets.contains("public AsyncPager<WidgetsListPage, Widget> ListAsync("),
         "{widgets}"
     );
     assert!(
-        widgets.contains("(page, _) => page.NextCursor"),
+        widgets.contains("public string? NextCursor => Body.NextCursor;"),
+        "{widgets}"
+    );
+    assert!(
+        widgets.contains("(body, _) => body.NextCursor"),
         "{widgets}"
     );
     let client = read("FeaturesClient.cs");
@@ -2612,7 +2616,7 @@ fn api_md_lists_every_operation_and_readmes_call_real_ones() {
         (
             "features.yaml",
             "csharp",
-            "client.Errors.ListScenariosPagesAutoPagingAsync()",
+            "await foreach (var widget in client.Errors.ListScenariosPagesAsync())",
         ),
         (
             "features.yaml",

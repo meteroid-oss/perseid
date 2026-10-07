@@ -25,6 +25,10 @@
 {% set f.has_options = op | has_query_or_header_params -%}
 {% set f.required_options = op | has_required_query_or_header_params -%}
 {% set f.options_type = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Options" -%}
+{% if op.pagination is defined -%}
+{% set f.page_type = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Page" -%}
+{% set f.pager = "AsyncPager<" ~ f.page_type ~ ", " ~ m.model(op.pagination.item_schema) ~ ">" -%}
+{% endif -%}
 {%- endmacro -%}
 {#- The C# type of path parameter `p`: a string, unless its style or `content` types it. -#}
 {% macro path_param_type(op, p) -%}
@@ -103,9 +107,6 @@ requestOptions{% if cancellation %}, cancellationToken{% endif %}
     /// <summary>Calls <c>{{ op.method | upper }} {{ op.path | replace("&", "&amp;") }}</c>.</summary>
 {%- endif -%}
 {%- endmacro -%}
-{% macro pager_type(op) -%}
-AsyncPager<{{ m.response_type(op, types) }}, {{ m.model(op.pagination.item_schema) }}>
-{%- endmacro -%}
 {#- The C# expression of the JSON `path` from `root`, typed `owner`, null-safe past its first step. -#}
 {% macro path_expr(root, path, owner) -%}
 {{ root }}{% for segment in path %}{% if not loop.first %}?{% endif %}.{{ m.member(segment, owner if loop.first else "") }}{% endfor %}
@@ -156,6 +157,9 @@ public interface {{ interface_name }}
 {{- param_docs(op, f) }}
 {%- if f.may_be_empty %}
     /// <returns>The response body, or <c>null</c> when the response has none.</returns>
+{%- elif op.pagination is defined %}
+    /// <returns>Awaited, the first <see cref="{{ f.page_type }}"/>; enumerated with <c>await foreach</c>,
+    /// every item of every page, each page fetched as the enumeration reaches it.</returns>
 {%- endif %}
 {%- for class in thrown.classes %}
 {%- set statuses = namespace(list=[], schemas=[]) %}
@@ -168,16 +172,10 @@ public interface {{ interface_name }}
 {%- if op.deprecated %}
     [Obsolete("Deprecated by the API.")]
 {%- endif %}
-    {{ signature("Task" ~ ("<" ~ f.value ~ ">" if f.value else "") ~ " " ~ method_name, op, f, ";") }}
 {%- if op.pagination is defined %}
-
-    /// <summary>Every item of <see cref="{{ method_name }}"/>, fetched page by page as the enumeration goes:
-    /// <c>await foreach</c> over it, or over its <c>AsPagesAsync()</c>.</summary>
-{{- param_docs(op, f, cancellation=false) }}
-{%- if op.deprecated %}
-    [Obsolete("Deprecated by the API.")]
-{%- endif %}
-    {{ signature(pager_type(op) ~ " " ~ (op.name | to_upper_camel_case) ~ "AutoPagingAsync", op, f, ";", cancellation=false) }}
+    {{ signature(f.pager ~ " " ~ method_name, op, f, ";") }}
+{%- else %}
+    {{ signature("Task" ~ ("<" ~ f.value ~ ">" if f.value else "") ~ " " ~ method_name, op, f, ";") }}
 {%- endif %}
 {%- endfor %}
 }
@@ -189,7 +187,11 @@ public interface {{ raw_interface_name }}
 {%- set f = namespace() %}{% set _ = facts(f, op) %}
 {%- set method_name = (op.name | to_upper_camel_case) ~ "Async" %}
 {%- if not loop.first %}{{ "\n" }}{% endif %}
+{%- if op.pagination is defined %}
+    /// <summary>The single request of a page of <see cref="{{ interface_name }}.{{ method_name }}"/>, with the status and headers of the response.</summary>
+{%- else %}
     /// <summary><see cref="{{ interface_name }}.{{ method_name }}"/>, with the status and headers of the response.</summary>
+{%- endif %}
 {{- param_docs(op, f) }}
 {%- if op.deprecated %}
     [Obsolete("Deprecated by the API.")]
@@ -224,7 +226,46 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
 {%- if op.deprecated %}
     [Obsolete("Deprecated by the API.")]
 {%- endif %}
-{%- if f.value %}
+{%- if op.pagination is defined %}
+{%- set pg = op.pagination %}
+{%- set param = op.query_params | selectattr("name", "equalto", pg.param) | first %}
+{%- set property = m.member(param.ident, f.options_type) %}
+{%- set first = "options" if f.required_options else "(options ?? new())" %}
+{%- set response_class = op.response_body_schema_name | to_upper_camel_case %}
+{%- set item_class = pg.item_schema | to_upper_camel_case %}
+{%- set before %}{% for p in op.path_params %}{{ m.param(p) }}, {% endfor %}{% if f.takes_body %}{{ f.body }}, {% endif %}{% endset %}
+    {{ signature("public " ~ f.pager ~ " " ~ method_name, op, f) }}
+    {
+{{- checks(op, f) }}
+{%- if pg.style == "cursor" %}
+        return Paging.Cursor<{{ f.page_type }}, {{ m.response_type(op, types) }}, {{ m.model(pg.item_schema) }}>(
+            options{% if not f.required_options %}?{% endif %}.{{ property }},
+            (cursor, ct) => WithRawResponse.{{ method_name }}({{ before }}{{ first }} with { {{ property }} = cursor }, requestOptions, ct),
+{%- else %}
+        return Paging.Numbered<{{ f.page_type }}, {{ m.response_type(op, types) }}, {{ m.model(pg.item_schema) }}>(
+            options{% if not f.required_options %}?{% endif %}.{{ property }} ?? {{ pg.first_page if pg.style == "page" else 0 }},
+            {{ pg.first_page }},
+            pages: {{ "true" if pg.style == "page" else "false" }},
+            (param, ct) => WithRawResponse.{{ method_name }}({{ before }}{{ first }} with { {{ property }} = ({{ param.type.to_csharp() }})param }, requestOptions, ct),
+{%- endif %}
+            (body, items, next) => new(body, items, next),
+            body => {{ path_expr("body", pg.items, response_class) }},
+            {% if pg.has_more is defined %}body => {{ path_expr("body", pg.has_more, response_class) }}{% else %}null{% endif %},
+{%- if pg.style == "cursor" %}
+{%- if pg.next_cursor is defined %}
+            (body, _) => {{ path_expr("body", pg.next_cursor, response_class) }},
+{%- else %}
+            (_, items) => items[^1].{{ m.member(pg.item_cursor, item_class) }},
+{%- endif %}
+{%- elif pg.style == "page" %}
+            {% if pg.total_pages is defined %}body => (long?){{ path_expr("body", pg.total_pages, response_class) }}{% else %}null{% endif %},
+{%- else %}
+            {% if pg.total is defined %}body => (long?){{ path_expr("body", pg.total, response_class) }}{% else %}null{% endif %},
+{%- endif %}
+            cancellationToken
+        );
+    }
+{%- elif f.value %}
     {{ signature("public async Task<" ~ f.value ~ "> " ~ method_name, op, f) }}
     {
 {%- if 8 + (call | length) + 44 <= 120 %}
@@ -241,48 +282,6 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
 {%- set last = (sig | split("\n") | list)[-1] %}
     {{ sig }} =>{% if (0 if "\n" in sig else 4) + (last | length) + (call | length) + 5 <= 120 %} {% else %}
         {% endif %}{{ call }};
-{%- endif %}
-{%- if op.pagination is defined %}
-{%- set pg = op.pagination %}
-{%- set param = op.query_params | selectattr("name", "equalto", pg.param) | first %}
-{%- set property = m.member(param.ident, f.options_type) %}
-{%- set first = "options" if f.required_options else "(options ?? new())" %}
-{%- set response_class = op.response_body_schema_name | to_upper_camel_case %}
-{%- set item_class = pg.item_schema | to_upper_camel_case %}
-
-    /// <inheritdoc/>
-{%- if op.deprecated %}
-    [Obsolete("Deprecated by the API.")]
-{%- endif %}
-    {{ signature("public " ~ pager_type(op) ~ " " ~ (op.name | to_upper_camel_case) ~ "AutoPagingAsync", op, f, cancellation=false) }}
-    {
-{{- checks(op, f) }}
-{%- if pg.style == "cursor" %}
-        return Paging.Cursor<{{ m.response_type(op, types) }}, {{ m.model(pg.item_schema) }}>(
-            options{% if not f.required_options %}?{% endif %}.{{ property }},
-            (cursor, ct) => {{ method_name }}({% for p in op.path_params %}{{ m.param(p) }}, {% endfor %}{% if f.takes_body %}{{ f.body }}, {% endif %}{{ first }} with { {{ property }} = cursor }, requestOptions, ct),
-{%- else %}
-        return Paging.Numbered<{{ m.response_type(op, types) }}, {{ m.model(pg.item_schema) }}>(
-            options{% if not f.required_options %}?{% endif %}.{{ property }} ?? {{ pg.first_page if pg.style == "page" else 0 }},
-            {{ pg.first_page }},
-            pages: {{ "true" if pg.style == "page" else "false" }},
-            (param, ct) => {{ method_name }}({% for p in op.path_params %}{{ m.param(p) }}, {% endfor %}{% if f.takes_body %}{{ f.body }}, {% endif %}{{ first }} with { {{ property }} = ({{ param.type.to_csharp() }})param }, requestOptions, ct),
-{%- endif %}
-            page => {{ path_expr("page", pg.items, response_class) }},
-            {% if pg.has_more is defined %}page => {{ path_expr("page", pg.has_more, response_class) }}{% else %}null{% endif %},
-{%- if pg.style == "cursor" %}
-{%- if pg.next_cursor is defined %}
-            (page, _) => {{ path_expr("page", pg.next_cursor, response_class) }}
-{%- else %}
-            (_, items) => items[^1].{{ m.member(pg.item_cursor, item_class) }}
-{%- endif %}
-{%- elif pg.style == "page" %}
-            {% if pg.total_pages is defined %}page => (long?){{ path_expr("page", pg.total_pages, response_class) }}{% else %}null{% endif %}
-{%- else %}
-            {% if pg.total is defined %}page => (long?){{ path_expr("page", pg.total, response_class) }}{% else %}null{% endif %}
-{%- endif %}
-        );
-    }
 {%- endif %}
 {%- set extra %}{% include "extensions/" ~ (resource.name | to_snake_case) ~ "_" ~ (op.name | to_snake_case) ~ ".cs" ignore missing %}{% endset %}
 {%- if extra | trim %}
@@ -494,6 +493,42 @@ public sealed class {{ class_name }}
     public {% if field.required %}required {% endif %}Upload{% if field.nullable or not field.required %}?{% endif %} {{ m.member(field.name, class_name) }} { get; init; }
 {%- else %}
     public {% if field.required %}required {% endif %}{{ m.field_type(field) }} {{ m.member(field.name, class_name) }} { get; init; }
+{%- endif %}
+{%- endfor %}
+}
+{%- endfor %}
+{%- set taken = namespace(names=none) %}
+{%- for op in resource.operations if op.pagination is defined %}
+{%- set f = namespace() %}{% set _ = facts(f, op) %}
+{%- set response_class = op.response_body_schema_name | to_upper_camel_case %}
+{%- set schema = types[op.response_body_schema_name] or {} %}
+{%- if taken.names is none %}{% set taken.names = types | map("to_upper_camel_case") | list %}{% endif %}
+
+/// <summary>A page of <see cref="{{ resource_type_name }}.{{ (op.name | to_upper_camel_case) ~ "Async" }}"/>: its <see cref="{{ m.model(op.response_body_schema_name) }}"/> body,
+/// whose properties it repeats, and the paging members.</summary>
+public sealed class {{ f.page_type }} : Page<{{ f.page_type }}, {{ m.response_type(op, types) }}, {{ m.model(op.pagination.item_schema) }}>
+{
+    /// <summary>A page of <paramref name="items"/> from <paramref name="body"/>, for fakes of the operation in tests.</summary>
+    /// <param name="body">The decoded response body.</param>
+    /// <param name="items">The items of the page.</param>
+    /// <param name="next">Fetches the next page; <c>null</c> on the last page.</param>
+    public {{ f.page_type }}(
+        {{ m.response_type(op, types) }} body,
+        IReadOnlyList<{{ m.model(op.pagination.item_schema) }}> items,
+        Func<CancellationToken, Task<{{ f.page_type }}>>? next = null
+    )
+        : base(body, items, next) { }
+{%- for field in schema.fields | default([]) if schema.kind == "struct" %}
+{%- set name = m.member(field.name, response_class) %}
+{%- if not m.shadowed(name, f.page_type) %}
+{%- set ty = m.field_type(field, m.union_class(field, response_class, taken.names), readonly=true) %}
+{%- if response_class is endingwith "Patch" and field.nullable %}{% set ty = "MaybeUnset<" ~ ty ~ ">" %}{% endif %}
+
+    /// <inheritdoc cref="{{ m.model(op.response_body_schema_name) }}.{{ name }}"/>
+{%- if field.deprecated %}
+    [Obsolete("Deprecated by the API.")]
+{%- endif %}
+    public {{ ty }} {{ name }} => Body.{{ name }};
 {%- endif %}
 {%- endfor %}
 }
