@@ -75,7 +75,7 @@
         {%- set response = none -%}
     {%- endif -%}
     {%- if op.pagination is defined -%}
-        {%- set returned = page_class(op.response_body_schema_name) -%}
+        {%- set returned = page_class(resource.name, op.name) -%}
     {%- elif op.response_is_event_stream -%}
         {%- set returned = "Stream[" ~ (op.event_schema_name | to_upper_camel_case) ~ "]" if op.event_schema_name is defined else "EventStream" -%}
     {%- elif op.response_is_binary -%}
@@ -113,11 +113,11 @@ resource; `Async{{ sdk.client_name }}` has the same methods, to await, and `clie
 the same resources, returning the HTTP response. Every method also takes the keyword arguments
 `extra_headers`, `extra_query`, `extra_body`, `timeout` and `max_retries` for that call; `=...`
 marks optional keyword arguments. Models are in [`{{ docs.package() }}/models`]({{ docs.package() }}/models).
-{%- set paged = namespace(name=none) %}
-{%- for resource in api.resources %}{% for op in resource.operations if op.pagination is defined and paged.name is none %}{% set paged.name = op.response_body_schema_name %}{% endfor %}{% endfor %}
-{%- if paged.name is not none %}
-A list method returns its first page, such as a `{{ page_class(paged.name) }}`: a subclass of the response
-model (`{{ paged.name | to_upper_camel_case }}`) with the paging members `items`, `has_next_page()`, `get_next_page()`,
+{%- set paged = namespace(page=none, model=none) %}
+{%- for resource in api.resources %}{% for op in resource.operations if op.pagination is defined and paged.page is none %}{% set paged.page = page_class(resource.name, op.name) %}{% set paged.model = op.response_body_schema_name | to_upper_camel_case %}{% endfor %}{% endfor %}
+{%- if paged.page is not none %}
+A list method returns its first page, such as a `{{ paged.page }}`: a subclass of the response
+model (`{{ paged.model }}`) with the paging members `items`, `has_next_page()`, `get_next_page()`,
 `iter_pages()` and `body`, which iterates every item. The page classes are in `{{ docs.package() }}.api`.
 {%- endif %}
 {% if api.resources | length > 1 %}

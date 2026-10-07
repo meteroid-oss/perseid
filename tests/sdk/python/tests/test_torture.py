@@ -697,7 +697,7 @@ class PaginationTest(unittest.TestCase):
         api = paged.Paged(api_key="k", base_url="https://paged.test", http_client=httpx.Client(transport=transport))
         page = api.items.list()
         self.assertIsInstance(page, paged.models.ItemPage)
-        self.assertIsInstance(page, paged.api.ItemPagePage)
+        self.assertIsInstance(page, paged.api.ItemsListPage)
         self.assertEqual([item.id for item in page.items], ["a", "b"])
         self.assertTrue(page.has_next_page())
         self.assertEqual(page.result.meta.total_pages, 2)
@@ -741,7 +741,7 @@ class PaginationTest(unittest.TestCase):
                 api_key="k", base_url="https://paged.test", http_client=httpx.AsyncClient(transport=transport)
             ) as api:
                 first = await api.items.list()
-                self.assertIsInstance(first, paged.api.AsyncItemPagePage)
+                self.assertIsInstance(first, paged.api.AsyncItemsListPage)
                 self.assertEqual(first.result.meta.total_pages, 2)
                 pages = [[item.id for item in p.items] async for p in first.iter_pages()]
                 return [item.id async for item in api.logs.list()], pages[1]

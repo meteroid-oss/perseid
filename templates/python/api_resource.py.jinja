@@ -124,12 +124,12 @@ from .common import (
 {%- if paginated | length > 0 %}
 {%- set styles = paginated | map(attribute="pagination") | map(attribute="style") | unique | list %}
 from ._pages import (
-{%- for name in paginated | map(attribute="response_body_schema_name") | unique | sort %}
-{%- if page_class(name) in names %}
-    {{ panic("schema `" ~ page_class(name) ~ "` is named like the page of `" ~ name ~ "`: rename one") }}
+{%- for op in paginated %}
+{%- if page_class(resource.name, op.name) in names %}
+    {{ panic("schema `" ~ page_class(resource.name, op.name) ~ "` is named like the page of `" ~ op.id ~ "`: rename it") }}
 {%- endif %}
-    {{ page_class(name, true) }},
-    {{ page_class(name) }},
+    {{ page_class(resource.name, op.name, true) }},
+    {{ page_class(resource.name, op.name) }},
 {%- endfor %}
 )
 from ._pagination import (
@@ -268,7 +268,7 @@ class {{ class_name }}({{ base_class }}):
 {%- set pg = op.pagination if op.pagination is defined else none %}
 {%- if pg %}
 {%- set item_type = pg.item_schema | to_upper_camel_case %}
-{%- set page = page_class(op.response_body_schema_name, is_async) %}
+{%- set page = page_class(resource.name, op.name, is_async) %}
 {%- set page_type = "AsyncPaginator[" ~ item_type ~ ", " ~ page ~ "]" if is_async else page %}
 {%- endif %}
 {%- macro option(name) %}{{ "request_" ~ name if name in arg_names.list else name }}{% endmacro %}

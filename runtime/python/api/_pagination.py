@@ -156,8 +156,8 @@ class SyncPage(_Page[_Item, _M]):
     """One page of a list operation, and the response of its request.
 
     A list method returns a subclass of the response model and of this class, such as
-    ``WidgetListPage`` for a ``WidgetList`` response: the response's properties are read on
-    the page. Iterating it yields the items of this page and of the next ones.
+    ``WidgetsListPage`` for ``client.widgets.list()``: the response's properties are read
+    on the page. Iterating it yields the items of this page and of the next ones.
     """
 
     if t.TYPE_CHECKING:
@@ -208,7 +208,7 @@ class AsyncPage(_Page[_Item, _M]):
     """One page of a list operation, and the response of its request, for asyncio.
 
     A list method returns a subclass of the response model and of this class, such as
-    ``AsyncWidgetListPage`` for a ``WidgetList`` response: the response's properties are
+    ``AsyncWidgetsListPage`` for ``client.widgets.list()``: the response's properties are
     read on the page. ``async for`` yields the items of this page and of the next ones.
     """
 

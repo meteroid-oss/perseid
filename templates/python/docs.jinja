@@ -18,7 +18,7 @@
 {% macro model_path(name) %}{{ package() }}/models/{{ module_name(name) }}.py{% endmacro %}
 
 {#- The page class the list of example `ex` returns. -#}
-{% macro page(ex) %}{{ page_class(ex.operation.response_body_schema_name) }}{% endmacro %}
+{% macro page(ex) %}{{ page_class(ex.resource, ex.operation.name) }}{% endmacro %}
 
 {#- A response property its paging reads, as a page of example `ex` reads it: `meta.total_pages`. -#}
 {% macro page_field(ex) -%}
