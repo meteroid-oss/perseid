@@ -69,9 +69,12 @@
 Every operation of the API, as a method of a `{{ sdk.client_name }}` client (`client` below), by
 resource. A `Call<T>` resolves to `Result<T>` when awaited, and to the status and headers too
 with `.with_response()`; `with_options(RequestOptions)` on a resource sets the headers, timeout,
-retries or idempotency key of its calls. A paginated list returns a `PageCall<Body, Item>`:
+retries or idempotency key of its calls.
+{%- set ns = namespace(paginated=false) %}{% for resource in api.resources %}{% for op in resource.operations if op.pagination is defined %}{% set ns.paginated = true %}{% endfor %}{% endfor %}
+{%- if ns.paginated %} A paginated list returns a `PageCall<Body, Item>`:
 awaited, a `Page` that dereferences to the body (`page.field`) and lists `page.items()`, with
-`next_page()`; `.items()` streams every item across pages and `.pages()` every page. Models are
+`next_page()`; `.items()` streams every item across pages and `.pages()` every page.
+{%- endif %} Models are
 in [`src/models`](src/models), and the options structs next to their resource.
 {% if api.resources | length > 1 %}
 {{ docs.contents(api.resources) }}
