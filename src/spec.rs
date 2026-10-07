@@ -54,6 +54,19 @@ pub struct Filters {
     pub uuid_strings: bool,
 }
 
+impl Filters {
+    /// Whether the operation is generated.
+    pub(crate) fn generates(&self, operation_id: &str, internal: bool) -> bool {
+        crate::api::resources::is_generated(
+            operation_id,
+            internal,
+            self.include_mode,
+            &self.excluded,
+            &self.specified,
+        )
+    }
+}
+
 /// Largest spec read from a URL: GitHub's REST description is over 10 MB, ureq's default.
 const MAX_SPEC_BYTES: u64 = 200 * 1024 * 1024;
 
@@ -160,7 +173,7 @@ pub(crate) fn api_with_renames(
         normalize::drop_format(&mut doc, "uuid");
     }
     let renames = normalize::rename_reserved_schemas(&mut doc, &filters.reserved);
-    warn_ignored_servers(&doc);
+    warn_ignored_servers(&doc, filters);
     let raw = doc;
     // `OpenApi` borrows its version string, so it cannot deserialize from a `Value`.
     let doc = serde_json::to_string(&raw)?;
@@ -179,9 +192,16 @@ pub(crate) fn api_with_renames(
     Ok((api, renames))
 }
 
-/// Warns about each operation whose path item or operation `servers` name a URL the root
-/// `servers` do not: the generated client sends every operation to its one base URL.
-fn warn_ignored_servers(doc: &Value) {
+/// Warns about each generated operation whose path item or operation `servers` name a URL the
+/// root `servers` do not: the generated client sends every operation to its one base URL.
+fn warn_ignored_servers(doc: &Value, filters: &Filters) {
+    for (id, message) in ignored_servers(doc, filters) {
+        let _span = tracing::warn_span!("operation", name = %id).entered();
+        tracing::warn!("{message}");
+    }
+}
+
+fn ignored_servers(doc: &Value, filters: &Filters) -> Vec<(String, String)> {
     let urls = |servers: &Value| -> Vec<String> {
         servers
             .as_array()
@@ -191,8 +211,9 @@ fn warn_ignored_servers(doc: &Value) {
             .collect()
     };
     let root = urls(&doc["servers"]);
+    let mut ignored = Vec::new();
     let Some(paths) = doc["paths"].as_object() else {
-        return;
+        return ignored;
     };
     for (path, item) in paths {
         let Some(item) = item.as_object() else {
@@ -206,6 +227,10 @@ fn warn_ignored_servers(doc: &Value) {
             {
                 continue;
             }
+            let id = op["operationId"].as_str().unwrap_or(path);
+            if !filters.generates(id, op["x-internal"] == true) {
+                continue;
+            }
             let own = match op.get("servers").or_else(|| item.get("servers")) {
                 Some(servers) => urls(servers),
                 None => continue,
@@ -213,17 +238,19 @@ fn warn_ignored_servers(doc: &Value) {
             if own.is_empty() || own.iter().all(|u| root.contains(u)) {
                 continue;
             }
-            let id = op["operationId"].as_str().unwrap_or(path);
-            let _span = tracing::warn_span!("operation", name = %id).entered();
-            tracing::warn!(
-                "{} {path} declares its own `servers` ({}), which perseid ignores: the SDK sends it \
-                 to the client's base URL; move the operation to a spec of its own, or set \
-                 the base URL of the client when creating it",
-                method.to_uppercase(),
-                own.join(", ")
-            );
+            ignored.push((
+                id.to_owned(),
+                format!(
+                    "{} {path} declares its own `servers` ({}), which perseid ignores: the SDK \
+                     sends it to the client's base URL; move the operation to a spec of its \
+                     own, or set the base URL of the client when creating it",
+                    method.to_uppercase(),
+                    own.join(", ")
+                ),
+            ));
         }
     }
+    ignored
 }
 
 fn webhooks(spec: &OpenApi) -> Vec<String> {
@@ -593,5 +620,40 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(!converted.contains("\"$ref\":\"params.yaml"), "{converted}");
+    }
+
+    #[test]
+    fn only_generated_operations_are_warned_about_their_own_servers() {
+        let doc = json!({
+            "servers": [{ "url": "https://api.example.com" }],
+            "paths": {
+                "/files": {
+                    "servers": [{ "url": "https://files.example.com" }],
+                    "get": { "operationId": "ListFiles" },
+                    "post": { "operationId": "PostFiles" },
+                    "put": { "operationId": "PutFiles", "x-internal": true },
+                },
+                "/same": {
+                    "get": {
+                        "operationId": "GetSame",
+                        "servers": [{ "url": "https://api.example.com" }],
+                    },
+                },
+            },
+        });
+        let filters = super::Filters {
+            include_mode: super::IncludeMode::OnlyPublic,
+            excluded: ["PostFiles".to_owned()].into(),
+            specified: Default::default(),
+            pagination: vec![],
+            reserved: Default::default(),
+            names: Default::default(),
+            uuid_strings: false,
+        };
+        let warned: Vec<String> = super::ignored_servers(&doc, &filters)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(warned, ["ListFiles"]);
     }
 }

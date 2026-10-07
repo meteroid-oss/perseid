@@ -201,9 +201,10 @@ expand[]=a&expand[]=b                         # lists with `style: deepObject`
 
 ## Base URL
 
-Every operation goes to the client's one base URL. Operations or path items declaring `servers`
-that the root `servers` do not list produce a warning naming them. Put them in a spec of their
-own, or set the base URL when creating the client.
+Every operation goes to the client's one base URL. Generated operations, or their path items,
+declaring `servers` that the root `servers` do not list produce a warning naming them; those left
+out by `exclude` or `x-internal` do not. Put them in a spec of their own, or set the base URL
+when creating the client.
 
 ## Unsupported constructs
 

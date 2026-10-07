@@ -687,6 +687,22 @@ pub(crate) struct Operation {
     body_stream_property: Option<String>,
 }
 
+/// Whether the operation is generated, given `include_mode` and the `exclude` list.
+pub(crate) fn is_generated(
+    operation_id: &str,
+    internal: bool,
+    include_mode: IncludeMode,
+    excluded: &BTreeSet<String>,
+    specified: &BTreeSet<String>,
+) -> bool {
+    let included = match include_mode {
+        IncludeMode::OnlyPublic => !internal,
+        IncludeMode::PublicAndInternal => true,
+        IncludeMode::OnlySpecified => specified.contains(operation_id),
+    };
+    included && !excluded.contains(operation_id)
+}
+
 impl Operation {
     /// Whether the request carries a body.
     pub(crate) fn has_body(&self) -> bool {
@@ -735,12 +751,13 @@ impl Operation {
             .extensions
             .get("x-internal")
             .is_some_and(|val| val == true);
-        let include_operation = match include_mode {
-            IncludeMode::OnlyPublic => !x_internal,
-            IncludeMode::PublicAndInternal => true,
-            IncludeMode::OnlySpecified => specified_operations.contains(&op_id),
-        };
-        if !include_operation || excluded_operations.contains(&op_id) {
+        if !is_generated(
+            &op_id,
+            x_internal,
+            include_mode,
+            excluded_operations,
+            specified_operations,
+        ) {
             return Ok(None);
         }
 
