@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.12.0](https://github.com/meteroid-oss/perseid/compare/v0.11.4...v0.12.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* opt-in idempotency keys; Rust ID newtypes, setters and explicit from_env ([#95](https://github.com/meteroid-oss/perseid/issues/95))
+
+### Features
+
+* opt-in idempotency keys; Rust ID newtypes, setters and explicit from_env ([#95](https://github.com/meteroid-oss/perseid/issues/95)) ([5effc25](https://github.com/meteroid-oss/perseid/commit/5effc259a7ebddb6618a1665186eaddd85534797))
+* **pagination:** a list page is the response body, one list() entry point ([#96](https://github.com/meteroid-oss/perseid/issues/96)) ([da2bc3f](https://github.com/meteroid-oss/perseid/commit/da2bc3f98cb856f0e724f74f959b6334446c6263))
+
+
+### Bug Fixes
+
+* **pr:** one update pull request per SDK when an update is too large for release-please ([#91](https://github.com/meteroid-oss/perseid/issues/91)) ([749bad8](https://github.com/meteroid-oss/perseid/commit/749bad814b87db68d5f68d2a82d9121bddd4d5aa))
+* strict response decoding in TypeScript and Go, reject undeclared security schemes ([#92](https://github.com/meteroid-oss/perseid/issues/92)) ([d52dc7c](https://github.com/meteroid-oss/perseid/commit/d52dc7c41363e906e1dab05b27f782e9f560c1ea))
+
 ## [0.11.4](https://github.com/meteroid-oss/perseid/compare/v0.11.3...v0.11.4) (2026-10-06)
 
 
