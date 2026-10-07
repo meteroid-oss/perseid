@@ -1111,9 +1111,21 @@ impl Operation {
                 found
             }
         };
-        // A page is always there.
-        if self.pagination.is_some() {
+        if let Some(pagination) = &self.pagination {
+            // A page is always there.
             self.response_may_be_empty = false;
+            let response = self
+                .response_body_schema_name
+                .as_deref()
+                .unwrap_or_default();
+            let shadowed = pagination.shadowed(types, response);
+            if !shadowed.is_empty() {
+                tracing::warn!(
+                    "operation `{}`: page members shadow `{}` of the response, reachable through the page's body",
+                    self.id,
+                    shadowed.join("`, `")
+                );
+            }
         }
         Ok(())
     }

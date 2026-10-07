@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context as _, bail, ensure};
+use heck::ToSnakeCase as _;
 use serde::{Deserialize, Serialize};
 
 use super::types::{Field, FieldType, Type, TypeData, Types};
@@ -173,6 +174,32 @@ impl Pagination {
             first_page: spec.first_page.unwrap_or(1),
             optional,
         })
+    }
+}
+
+/// The members a page adds to the response body, in snake case.
+const PAGE_MEMBERS: &[&str] = &[
+    "items",
+    "body",
+    "has_next_page",
+    "next_page",
+    "get_next_page",
+    "pages",
+    "iter_pages",
+];
+
+impl Pagination {
+    /// Top-level properties of `response` that a page member shadows: only `body` reaches them.
+    pub(crate) fn shadowed(&self, types: &Types, response: &str) -> Vec<String> {
+        let Some(TypeData::Struct { fields, .. }) = types.get(response).map(|t| &t.data) else {
+            return Vec::new();
+        };
+        fields
+            .iter()
+            .filter(|f| PAGE_MEMBERS.contains(&f.name.to_snake_case().as_str()))
+            .filter(|f| self.items != [f.name.clone()])
+            .map(|f| f.name.clone())
+            .collect()
     }
 }
 

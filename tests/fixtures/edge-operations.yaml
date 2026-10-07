@@ -183,6 +183,32 @@ paths:
                 properties:
                   data: {type: array, items: {$ref: '#/components/schemas/Item'}}
                   next_cursor: {type: [string, 'null']}
+  /paginated-clash:
+    get:
+      operationId: paginated_clash
+      tags: [flags]
+      x-pagination:
+        page: page
+        total_pages: meta.total_pages
+        first_page: 0
+      parameters:
+        - {name: page, in: query, schema: {type: integer}}
+      responses:
+        '200':
+          description: a page whose body has properties named like page members
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: {type: array, items: {$ref: '#/components/schemas/Item'}}
+                  meta: {type: object, properties: {total_pages: {type: integer}}}
+                  items: {type: integer}
+                  body: {type: string}
+                  has_next_page: {type: boolean}
+                  nextPage: {type: string}
+                  pages: {type: array, items: {type: string}}
   /other-server:
     get:
       operationId: other_server
