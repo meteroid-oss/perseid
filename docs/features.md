@@ -105,8 +105,8 @@ let page = client.customers().list(None).await?; // page.total, page.items(), pa
 ```
 
 ```java
-for (Customer customer : client.customers().listIter()) { ... }
-Page<Customer> page = client.customers().listIter().firstPage(); // items(), hasNextPage(), nextPage()
+for (Customer customer : client.customers().list()) { ... }
+CustomersListPage page = client.customers().list(); // page.total(), items(), hasNextPage(), nextPage()
 ```
 
 ```csharp

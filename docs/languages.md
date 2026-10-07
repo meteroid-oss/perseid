@@ -33,7 +33,7 @@ See [features](features.md) for auth, pagination and encoding, and
 | TypeScript | Node.js 20+, Deno, Bun, browsers | `new Acme({ apiKey })` | `AcmeError` | `for await` on `list()` | `.withResponse()` |
 | Python | Python 3.10+ | `Acme(api_key=...)`, `AsyncAcme` | `AcmeError` | iterate `list()` | `client.with_raw_response` |
 | Go | Go 1.23+ | `acme.New(token, opts)` | `SDKError` | `ListAutoPaging(...)` | `WithResponseInto(&resp)` |
-| Java | Java 11+ | `new Acme(AcmeOptions...)` | `AcmeException` | `listIter()` | `client.withRawResponse()` |
+| Java | Java 11+ | `new Acme(AcmeOptions...)` | `AcmeException` | iterate `list()` | `client.withRawResponse()` |
 | C# | .NET 8 | `new AcmeClient(token)` | `AcmeException` | `ListAutoPagingAsync()` | `.WithRawResponse` |
 
 ## Formats
@@ -593,12 +593,17 @@ var customer = client.customers().retrieve("cus_1",
 ### Pagination
 
 ```java
-for (Customer customer : client.customers().listIter()) { ... }
-Page<Customer> page = client.customers().listIter().firstPage(); // items(), hasNextPage(), nextPage()
+for (Customer customer : client.customers().list()) { ... }
+CustomersListPage page = client.customers().list();
+page.total();                                   // a response property, read on the page
+page.items(); page.hasNextPage(); page.nextPage();
 ```
 
-`...Iter` methods return a `Paginator`: `Iterable`, `stream()`, `firstPage()`, `pages()`. The
-async client returns an `AsyncPaginator` with `forEach` and `toList`.
+- List methods return the first page, such as `CustomersListPage`: a getter per response
+  property, `items()`, `hasNextPage()`, `nextPage()`, `pages()` and `body()`, the response as
+  decoded. It is `Iterable` over every item, fetching pages on demand, and has `stream()`.
+- The async client returns a `CompletableFuture<CustomersListAsyncPage>`, whose `nextPage()`
+  is a future too, with `forEach`, `forEachPage` and `toList`.
 
 ### Streaming
 
