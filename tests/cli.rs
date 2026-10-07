@@ -154,6 +154,131 @@ fn without_a_spec_init_points_to_connect_and_generate_previews() {
 }
 
 #[test]
+fn init_from_stainless_maps_targets_pagination_and_method_names() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        "tests/fixtures/stainless-openapi.yaml",
+        dir.path().join("openapi.yaml"),
+    )
+    .unwrap();
+    fs::copy(
+        "tests/fixtures/stainless.yml",
+        dir.path().join("stainless.yml"),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "--from", "openapi.yaml"]);
+    assert!(!ok && out.contains("pass it as --spec"), "{out}");
+    let (ok, out) = perseid(dir.path(), &["init", "--from", "stainless.yml"]);
+    assert!(ok, "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    for expected in [
+        "spec = \"openapi.yaml\"\nname = \"Knock\"\nsdks = [\"typescript\", \"python\", \"go\"]\nbase_url = \"https://api.knock.app\"\ntimeout = 60\nidempotency_keys = true\nexclude = [\"notify\"]\n",
+        "license = \"Apache-2.0\"\nhomepage = \"https://docs.knock.app\"\nauthors = [\"Knock <support@knock.app>\"]\n",
+        "[methods]\naddAudienceMembers = \"add_members\"\narchiveMessage = \"mark_as_archived\"\ngetUser = \"get\"\ngetUserFeed = \"list_items\"\n",
+        "# entries_cursor\ncursor = \"after\"\nitems = \"entries\"\nnext_cursor = \"page_info.after\"\n",
+        "# items_cursor\ncursor = \"after\"\nitems = \"items\"\nnext_cursor = \"page_info.after\"\n",
+        "[typescript]\npackage = \"@knocklabs/node\"\nrepo = \"knocklabs/knock-node\"\n",
+        "[python]\npackage = \"knockapi\"\nrepo = \"knocklabs/knock-python\"\nexclude = [\"listAudienceMembers\"]\n",
+    ] {
+        assert!(config.contains(expected), "{expected}\n---\n{config}");
+    }
+    assert!(!config.contains("env_prefix"), "{config}");
+    assert!(
+        out.contains(
+            "Knock SDKs: knocklabs/knock-node, knocklabs/knock-python, knocklabs/knock-go"
+        ),
+        "{out}"
+    );
+    for skipped in [
+        "targets.ruby: perseid generates no Ruby SDK",
+        "targets.{go,python,typescript}.staging_repo: ",
+        "client_settings.opts.branch: perseid clients take no custom options: send `X-Knock-Branch`",
+        "pagination.entries_cursor.request.before: previous_cursor_param",
+        "pagination.slack_channels_cursor: `query_options.cursor` is a nested parameter",
+        "resources.*.models: perseid names types after their schema, without resource namespaces: MessageSchedule is Schedule",
+        "resources.users.list_schedules: `paginated: false`",
+        "resources.users.feeds.list_items: `users.list_items` in perseid",
+        "readme: ",
+    ] {
+        assert!(
+            out.contains(&format!("  - {skipped}")),
+            "{skipped}\n---\n{out}"
+        );
+    }
+    let args = [
+        "generate",
+        "--no-format",
+        "--out",
+        "sdks",
+        "typescript",
+        "python",
+    ];
+    let (ok, out) = perseid(dir.path(), &args);
+    assert!(ok, "{out}");
+    let api = fs::read_to_string(dir.path().join("sdks/typescript/api.md")).unwrap();
+    assert!(
+        api.contains("client.users.get(userId: string)")
+            && api.contains("client.messages.markAsArchived(")
+            && api.contains("client.users.list(options?: UsersListOptions): PagePromise<")
+            && !api.contains("/v1/notify"),
+        "{api}"
+    );
+    let audiences =
+        fs::read_to_string(dir.path().join("sdks/python/knockapi/api/audiences.py")).unwrap();
+    assert!(
+        audiences.contains("def add_members(") && !audiences.contains("def list_members("),
+        "{audiences}"
+    );
+}
+
+#[test]
+fn init_from_a_stainless_config_without_its_spec_lists_what_needs_one() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        "tests/fixtures/stainless-legacy.yml",
+        dir.path().join("openapi.stainless.yml"),
+    )
+    .unwrap();
+    let args = [
+        "init",
+        "--from",
+        "openapi.stainless.yml",
+        "--sdks",
+        "typescript,go,java",
+    ];
+    let (ok, out) = perseid(dir.path(), &args);
+    assert!(ok, "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    for expected in [
+        "spec = \"openapi.json\"\nname = \"OnebusawaySDK\"\nsdks = [\"typescript\", \"go\", \"java\"]\nbase_url = \"https://api.pugetsound.onebusaway.org\"\ntimeout = 120\n",
+        "[context]\nenv_prefix = \"ONEBUSAWAY\"\n",
+        "# page\npage = \"page\"\nitems = \"list\"\ntotal_pages = \"total_pages\"\n",
+        "[typescript]\npackage = \"onebusaway-sdk\"\nrepo = \"OneBusAway/js-sdk\"\n",
+        "[go]\npackage = \"onebusaway\"\nrepo = \"OneBusAway/go-sdk\"\nmodule = \"github.com/OneBusAway/go-sdk/v2\"\n",
+        "[java]\npackage = \"org.onebusaway\"\n",
+    ] {
+        assert!(config.contains(expected), "{expected}\n---\n{config}");
+    }
+    for skipped in [
+        "targets.python: left out by --sdks",
+        "targets.kotlin: perseid generates no Kotlin SDK",
+        "client_settings.default_retries.max_retries: perseid retries twice",
+        "environments.sandbox: perseid clients have one default base URL",
+        "query_settings.array_format: ",
+        "pagination.next_url: perseid has no pagination by next-page URL",
+        "resources: method names and the operations stainless.yml leaves out need the spec",
+        "security_schemes: perseid reads them from the spec",
+    ] {
+        assert!(
+            out.contains(&format!("  - {skipped}")),
+            "{skipped}\n---\n{out}"
+        );
+    }
+    let (ok, out) = perseid(dir.path(), &["init", "--from", "openapi.stainless.yml"]);
+    assert!(!ok && out.contains("perseid.toml already exists"), "{out}");
+}
+
+#[test]
 fn generate_is_idempotent_and_check_detects_drift() {
     let dir = project();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);

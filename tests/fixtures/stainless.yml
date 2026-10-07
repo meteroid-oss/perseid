@@ -1,0 +1,191 @@
+# yaml-language-server: $schema=https://app.stainless.com/config.schema.json
+# Modeled on knocklabs/docs data/specs/api/stainless.yml, trimmed to the fixture spec.
+
+edition: 2025-10-10
+
+organization:
+  name: knock
+  docs: https://docs.knock.app
+  contact: support@knock.app
+  security_contact: security@knock.app
+  github_org: knocklabs
+
+targets:
+  typescript:
+    package_name: "@knocklabs/node"
+    production_repo: knocklabs/knock-node
+    publish:
+      npm:
+        auth_method: oidc
+      release:
+        branch: main
+        prerelease: false
+    staging_repo: knocklabs/knock-node-staging
+  python:
+    package_name: knockapi
+    project_name: knockapi
+    production_repo: knocklabs/knock-python
+    publish:
+      pypi: true
+    staging_repo: knocklabs/knock-python-staging
+  go:
+    package_name: knock
+    production_repo: knocklabs/knock-go
+    staging_repo: knocklabs/knock-go-staging
+  ruby:
+    gem_name: knockapi
+    production_repo: knocklabs/knock-ruby
+    publish:
+      rubygems: false
+
+environments:
+  production: https://api.knock.app
+
+settings:
+  license: Apache-2.0
+
+client_settings:
+  default_timeout: PT1M
+  idempotency:
+    header: 'Idempotency-Key'
+  opts:
+    api_key:
+      type: string
+      read_env: KNOCK_API_KEY
+      auth: { security_scheme: BearerAuth }
+    branch:
+      type: string
+      read_env: KNOCK_BRANCH
+      nullable: true
+      description: "The slug of an existing branch"
+      send_in_header: "X-Knock-Branch"
+
+query_settings:
+  nested_format: brackets
+  array_format: brackets
+
+pagination:
+  - name: entries_cursor
+    type: cursor
+    request:
+      after:
+        type: string
+        x-stainless-pagination-property:
+          purpose: next_cursor_param
+      before:
+        type: string
+        x-stainless-pagination-property:
+          purpose: previous_cursor_param
+      page_size:
+        type: integer
+    response:
+      entries:
+        type: array
+        items:
+          type: object
+          additionalProperties: true
+      page_info:
+        type: object
+        properties:
+          after:
+            type: string
+            x-stainless-pagination-property:
+              purpose: next_cursor_field
+  - name: items_cursor
+    type: cursor
+    request:
+      after:
+        type: string
+        x-stainless-pagination-property:
+          purpose: next_cursor_param
+      page_size:
+        type: integer
+    response:
+      items:
+        type: array
+        items:
+          type: object
+          additionalProperties: true
+      page_info:
+        type: object
+        properties:
+          after:
+            type: string
+            x-stainless-pagination-property:
+              purpose: next_cursor_field
+  - name: slack_channels_cursor
+    type: cursor
+    request:
+      "query_options.cursor":
+        type: string
+        x-stainless-pagination-property:
+          purpose: next_cursor_param
+    response:
+      next_cursor:
+        type: string
+        x-stainless-pagination-property:
+          purpose: next_cursor_field
+      slack_channels:
+        type: array
+        items:
+          type: object
+
+resources:
+  $shared:
+    models:
+      page_info: '#/components/schemas/PageInfo'
+  users:
+    models:
+      user: '#/components/schemas/User'
+      identify_user_request: '#/components/schemas/IdentifyUserRequest'
+    methods:
+      list: get /v1/users
+      get: get /v1/users/{user_id}
+      update: put /v1/users/{user_id}
+      delete: delete /v1/users/{user_id}
+      merge: post /v1/users/{user_id}/merge
+      list_messages:
+        endpoint: get /v1/users/{user_id}/messages
+      list_schedules:
+        endpoint: get /v1/users/{user_id}/schedules
+        paginated: false
+    subresources:
+      feeds:
+        methods:
+          list_items:
+            type: http
+            endpoint: get /v1/users/{user_id}/feeds/{channel_id}
+            positional_params: [user_id, channel_id]
+  messages:
+    models:
+      message: '#/components/schemas/Message'
+      message_schedule: '#/components/schemas/Schedule'
+    methods:
+      list: get /v1/messages
+      mark_as_archived: put /v1/messages/{message_id}/archived
+  workflows:
+    methods:
+      trigger: post /v1/workflows/{key}/trigger
+  audiences:
+    methods:
+      list_members:
+        endpoint: get /v1/audiences/{key}/members
+        skip: [python]
+      add_members: post /v1/audiences/{key}/members
+
+readme:
+  example_requests:
+    default:
+      type: request
+      endpoint: get /v1/users/{user_id}
+      params:
+        user_id: dnedry
+    headline:
+      type: request
+      endpoint: post /v1/workflows/{key}/trigger
+      params:
+        key: dinosaurs-loose
+        recipients: ['dnedry']
+
+unspecified_endpoints:
+  - post /v1/notify

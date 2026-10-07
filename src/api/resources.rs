@@ -693,6 +693,11 @@ impl Operation {
         self.request_body_kind != RequestBodyKind::None
     }
 
+    /// Whether a pagination rule or `x-pagination` pages it.
+    pub(crate) fn paginated(&self) -> bool {
+        self.pagination.is_some()
+    }
+
     /// The schema of the JSON success body, if it is a named one.
     pub(crate) fn response_schema(&self) -> Option<&str> {
         self.response_body_schema_name.as_deref()

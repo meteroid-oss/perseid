@@ -1,0 +1,295 @@
+openapi: 3.1.0
+info:
+  title: Knock API
+  version: '1.0'
+  description: Knock is a set of tools for adding notifications to your app.
+servers:
+  - url: https://api.knock.app
+security:
+  - BearerAuth: []
+paths:
+  /v1/users:
+    get:
+      operationId: listUsers
+      tags: [Users]
+      parameters:
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of users
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListUsersResponse' }
+  /v1/users/{user_id}:
+    parameters:
+      - { name: user_id, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getUser
+      tags: [Users]
+      responses:
+        '200':
+          description: The user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+    put:
+      operationId: updateUser
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IdentifyUserRequest' }
+      responses:
+        '200':
+          description: The user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+    delete:
+      operationId: deleteUser
+      tags: [Users]
+      responses:
+        '204': { description: Deleted }
+  /v1/users/{user_id}/merge:
+    post:
+      operationId: mergeUser
+      tags: [Users]
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from_user_id]
+              properties:
+                from_user_id: { type: string }
+      responses:
+        '200':
+          description: The merged user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+  /v1/users/{user_id}/messages:
+    get:
+      operationId: listUserMessages
+      tags: [Users]
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of messages
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListMessagesResponse' }
+  /v1/users/{user_id}/schedules:
+    get:
+      operationId: listUserSchedules
+      tags: [Users]
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of schedules
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListSchedulesResponse' }
+  /v1/users/{user_id}/feeds/{channel_id}:
+    get:
+      operationId: getUserFeed
+      tags: [Users]
+      parameters:
+        - { name: user_id, in: path, required: true, schema: { type: string } }
+        - { name: channel_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The feed
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Message' }
+  /v1/messages:
+    get:
+      operationId: listMessages
+      tags: [Messages]
+      parameters:
+        - $ref: '#/components/parameters/After'
+        - $ref: '#/components/parameters/Before'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: A page of messages
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListMessagesResponse' }
+  /v1/messages/{message_id}/archived:
+    put:
+      operationId: archiveMessage
+      tags: [Messages]
+      parameters:
+        - { name: message_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The message
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Message' }
+  /v1/workflows/{key}/trigger:
+    post:
+      operationId: triggerWorkflow
+      tags: [Workflows]
+      parameters:
+        - { name: key, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TriggerWorkflowRequest' }
+      responses:
+        '200':
+          description: The workflow run
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [workflow_run_id]
+                properties:
+                  workflow_run_id: { type: string }
+  /v1/notify:
+    post:
+      operationId: notify
+      tags: [Workflows]
+      deprecated: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TriggerWorkflowRequest' }
+      responses:
+        '204': { description: Accepted }
+  /v1/audiences/{key}/members:
+    parameters:
+      - { name: key, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listAudienceMembers
+      tags: [Audiences]
+      responses:
+        '200':
+          description: The members
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/User' }
+    post:
+      operationId: addAudienceMembers
+      tags: [Audiences]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_ids]
+              properties:
+                user_ids:
+                  type: array
+                  items: { type: string }
+      responses:
+        '204': { description: Added }
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    After:
+      name: after
+      in: query
+      schema: { type: string }
+    Before:
+      name: before
+      in: query
+      schema: { type: string }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer }
+  schemas:
+    PageInfo:
+      type: object
+      required: [page_size]
+      properties:
+        after: { type: [string, 'null'] }
+        before: { type: [string, 'null'] }
+        page_size: { type: integer }
+    User:
+      type: object
+      required: [id, created_at]
+      properties:
+        id: { type: string }
+        email: { type: [string, 'null'] }
+        name: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    IdentifyUserRequest:
+      type: object
+      properties:
+        email: { type: [string, 'null'] }
+        name: { type: [string, 'null'] }
+    Message:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: string }
+        status: { type: string, enum: [queued, sent, delivered] }
+        archived_at: { type: [string, 'null'], format: date-time }
+    Schedule:
+      type: object
+      required: [id, workflow]
+      properties:
+        id: { type: string }
+        workflow: { type: string }
+    ListUsersResponse:
+      type: object
+      required: [entries, page_info]
+      properties:
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/User' }
+        page_info: { $ref: '#/components/schemas/PageInfo' }
+    ListMessagesResponse:
+      type: object
+      required: [items, page_info]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Message' }
+        page_info: { $ref: '#/components/schemas/PageInfo' }
+    ListSchedulesResponse:
+      type: object
+      required: [entries, page_info]
+      properties:
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/Schedule' }
+        page_info: { $ref: '#/components/schemas/PageInfo' }
+    TriggerWorkflowRequest:
+      type: object
+      required: [recipients]
+      properties:
+        recipients:
+          type: array
+          items: { type: string }
+        data:
+          type: object
+          additionalProperties: true

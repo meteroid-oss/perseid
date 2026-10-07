@@ -26,9 +26,11 @@ pub struct Init {
     pub repo: Option<String>,
     pub base_url: Option<String>,
     pub license: Option<String>,
+    /// A Stainless config to import.
+    pub from: Option<String>,
 }
 
-const FLAGS: &str = "--sdks <rust,typescript,python,go,java,csharp> (required), --repo <owner/name-{lang}|owner/name>, --spec <path|url>, --name <Name>, --base-url <url>, --license <SPDX>";
+const FLAGS: &str = "--sdks <rust,typescript,python,go,java,csharp> (required), --repo <owner/name-{lang}|owner/name>, --spec <path|url>, --name <Name>, --base-url <url>, --license <SPDX>, or --from <stainless.yml>";
 
 /// The licenses `init` offers, all of which `perseid generate` writes the LICENSE of.
 const LICENSES: [&str; 6] = [
@@ -49,7 +51,8 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
                 && init.name.is_none()
                 && init.sdks.is_empty()
                 && init.repo.is_none()
-                && init.license.is_none(),
+                && init.license.is_none()
+                && init.from.is_none(),
             "{} already exists: edit it (`sdks`, `repo`, `spec`…), then run `perseid init` again",
             config::FILE
         );
@@ -63,9 +66,20 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         }
         return Ok(());
     }
-    let interactive = std::io::stdin().is_terminal();
-    if !interactive && init.sdks.is_empty() {
-        bail!("perseid init asks which SDKs to generate: without a terminal, pass {FLAGS}");
+    let mut imported = match &init.from {
+        Some(from) => Some(crate::stainless::read(from, root)?),
+        None => None,
+    };
+    let interactive = std::io::stdin().is_terminal() && imported.is_none();
+    match &imported {
+        Some(stainless) if init.sdks.is_empty() && stainless.sdks.is_empty() => bail!(
+            "{} has no target perseid generates (typescript, python, go, java, csharp): pass --sdks",
+            init.from.as_deref().unwrap_or_default()
+        ),
+        None if !interactive && init.sdks.is_empty() => {
+            bail!("perseid init asks which SDKs to generate: without a terminal, pass {FLAGS}")
+        }
+        _ => {}
     }
     if interactive {
         crate::prompt::intro("perseid init")?;
@@ -93,6 +107,12 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         },
         _ => json!({}),
     };
+    if let Some(stainless) = &mut imported {
+        match doc.get("paths") {
+            Some(_) => stainless.with_spec(&doc.to_string()),
+            None => stainless.without_spec(),
+        }
+    }
     let here = crate::github::origin_repo(root);
     let derived = doc["info"]["title"]
         .as_str()
@@ -106,8 +126,10 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
                 .unwrap_or_default();
             name_from_title(&json!({ "info": { "title": fallback } }))
         });
+    let from_stainless = imported.as_ref().and_then(|i| i.name.clone());
     let name = match (&init.name, interactive) {
         (Some(name), _) => crate::client_name::parse(name).map_err(anyhow::Error::msg)?,
+        (None, _) if from_stainless.is_some() => from_stainless.unwrap_or_default(),
         (None, true) => crate::prompt::text_as(
             "API name, in any case: the SDKs' classes and packages are named after it",
             &derived,
@@ -115,9 +137,20 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         )?,
         (None, false) => derived,
     };
-    let sdks = match init.sdks.is_empty() {
-        true => ask_sdks()?,
-        false => checked(&init.sdks)?,
+    let sdks = match (init.sdks.is_empty(), &mut imported) {
+        (true, Some(stainless)) => stainless.sdks.clone(),
+        (true, None) => ask_sdks()?,
+        (false, stainless) => {
+            let sdks = checked(&init.sdks)?;
+            if let Some(stainless) = stainless {
+                for left in stainless.sdks.iter().filter(|s| !sdks.contains(s)) {
+                    stainless
+                        .skipped
+                        .push((format!("targets.{left}"), "left out by --sdks".to_owned()));
+                }
+            }
+            sdks
+        }
     };
     let repo = match (&init.repo, interactive) {
         (Some(repo), _) => Some(repo.clone()),
@@ -130,13 +163,17 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             "`--repo {repo}` must read owner/name, or owner/name-{{lang}} for a repository per SDK"
         );
     }
-    let from_spec = spec_license(&doc);
+    let from_spec = spec_license(&doc).or_else(|| imported.as_ref()?.license.clone());
     let license = match (&init.license, interactive) {
         (Some(license), _) => Some(license_expression(license).map_err(anyhow::Error::msg)?),
         (None, true) => ask_license(from_spec.as_deref())?,
         (None, false) => from_spec,
     };
-    let base_url = init.base_url.clone().or_else(|| server_url(&doc));
+    let base_url = init
+        .base_url
+        .clone()
+        .or_else(|| imported.as_ref()?.base_url.clone())
+        .or_else(|| server_url(&doc));
     if base_url.is_none() && readable {
         println!(
             "! the spec has no absolute server URL: until you set `base_url`, clients need one passed in or from {}_BASE_URL",
@@ -161,23 +198,58 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     if let Some(url) = base_url {
         toml += &format!("base_url = {}\n", quote(&url));
     }
+    if let Some(stainless) = &imported {
+        toml += &stainless.top_level();
+    }
+    let info = match &imported {
+        Some(stainless) => &with_contact(&doc["info"], stainless, &name),
+        None => &doc["info"],
+    };
     toml += &format!(
         "\n[metadata]\n{}",
-        metadata(&doc, &name, license.as_deref())
+        metadata(info, &name, license.as_deref())
     );
+    if let Some(stainless) = &imported {
+        let env_prefix = stainless
+            .env_prefix
+            .as_deref()
+            .filter(|p| *p != name.to_shouty_snake_case());
+        toml += &stainless.tables(env_prefix);
+    }
     let draft = Config::parse(&toml, config::FILE)?;
     for sdk in draft.sdks(&[])? {
-        let package = match sdk.language {
-            "java" => java_package(&doc, &name).unwrap_or_else(|| draft.package(&sdk)),
-            _ => draft.package(&sdk),
+        let target = imported.as_ref().and_then(|i| i.targets.get(sdk.language));
+        let package = match (target.and_then(|t| t.package.clone()), sdk.language) {
+            (Some(package), _) => package,
+            (None, "java") => java_package(&doc, &name).unwrap_or_else(|| draft.package(&sdk)),
+            (None, _) => draft.package(&sdk),
         };
         toml += &format!("\n[{}]\npackage = {}\n", sdk.language, quote(&package));
+        let Some(target) = target else { continue };
+        if let Some(own) = target.repo.as_ref().filter(|_| repo.is_none()) {
+            toml += &format!("repo = {}\n", quote(own));
+        }
+        if let Some(module) = &target.module {
+            toml += &format!("module = {}\n", quote(module));
+        }
+        if !target.exclude.is_empty() {
+            toml += &format!("exclude = {}\n", crate::stainless::list(&target.exclude));
+        }
     }
     fsx::write(&path, toml.as_bytes())?;
     println!("+ {}", config::FILE);
     let (config, _) = Config::load(&path)?;
     write_files(&config, root)?;
     let where_ = match &repo {
+        None if config.sdks(&[])?.iter().any(|s| s.remote().is_some()) => config
+            .sdks(&[])?
+            .iter()
+            .map(|s| match s.remote() {
+                Some(repo) => repo.to_owned(),
+                None => format!("{}/ here", s.path),
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
         Some(repo) if repo.contains("{lang}") => sdks
             .iter()
             .map(|s| repo.replace("{lang}", s))
@@ -209,8 +281,35 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         ),
         Some(_) => {}
     }
+    if let (Some(stainless), Some(from)) = (&imported, &init.from) {
+        println!("\nFrom {from}: {}", stainless.mapped.join(", "));
+        if !stainless.skipped.is_empty() {
+            println!("Not carried over from {from}:");
+            for (key, why) in &stainless.skipped {
+                println!("  - {key}: {why}");
+            }
+        }
+    }
     next_steps(&config, root);
     Ok(())
+}
+
+/// `info` of the spec, its contact completed with the organization of stainless.yml.
+fn with_contact(info: &Value, stainless: &crate::stainless::Import, name: &str) -> Value {
+    let mut info = info.clone();
+    let contact = &mut info["contact"];
+    if contact["url"].as_str().is_none()
+        && let Some(homepage) = &stainless.homepage
+    {
+        contact["url"] = json!(homepage);
+    }
+    if contact["name"].as_str().is_none()
+        && let Some(email) = &stainless.contact
+    {
+        contact["name"] = json!(name);
+        contact["email"] = json!(email);
+    }
+    info
 }
 
 /// Writes the workflows `config` calls for, saying which: whether any was written.
@@ -505,7 +604,8 @@ fn named_like_a_spec(path: &str) -> bool {
         && [".json", ".yaml", ".yml"].iter().any(|e| name.ends_with(e))
 }
 
-/// Whether `path` holds a document with a top-level `openapi` or `swagger` key.
+/// Whether `path` holds a document with a top-level `openapi` or `swagger` version: a Stainless
+/// config's `openapi` section is none.
 fn is_spec(path: &Path) -> bool {
     let Ok(text) = std::fs::read_to_string(path) else {
         return false;
@@ -516,8 +616,13 @@ fn is_spec(path: &Path) -> bool {
         false => text.lines().any(|line| {
             let key = line.trim_start_matches(['"', '\'']);
             ["openapi", "swagger"].iter().any(|k| {
-                key.strip_prefix(k)
-                    .is_some_and(|rest| rest.trim_start_matches(['"', '\'']).starts_with(':'))
+                key.strip_prefix(k).is_some_and(|rest| {
+                    rest.trim_start_matches(['"', '\''])
+                        .strip_prefix(':')
+                        .is_some_and(|value| {
+                            !value.trim().is_empty() && !value.trim().starts_with('#')
+                        })
+                })
             })
         }),
     }
@@ -545,8 +650,7 @@ pub fn pick_spec(root: &Path, interactive: bool) -> Result<Option<String>> {
 
 /// The [metadata] lines of perseid.toml: what the spec tells, with `license`, and commented
 /// examples for the rest.
-fn metadata(doc: &Value, name: &str, license: Option<&str>) -> String {
-    let info = &doc["info"];
+fn metadata(info: &Value, name: &str, license: Option<&str>) -> String {
     let text = |v: &Value| {
         v.as_str()
             .map(str::trim)
@@ -757,13 +861,13 @@ mod tests {
             "license": { "name": "Apache 2.0" },
             "contact": { "name": "Acme", "email": "dev@acme.com", "url": "https://acme.com" }
         }});
-        let toml = metadata(&doc, "Acme", spec_license(&doc).as_deref());
+        let toml = metadata(&doc["info"], "Acme", spec_license(&doc).as_deref());
         assert_eq!(
             toml,
             "description = \"The Acme API.\"\nlicense = \"Apache-2.0\"\nhomepage = \"https://acme.com\"\nauthors = [\"Acme <dev@acme.com>\"]\n"
         );
         assert_eq!(
-            metadata(&json!({}), "Acme", None),
+            metadata(&json!(null), "Acme", None),
             "# description = \"Acme API client\"\n# license = \"MIT\"\n# homepage = \"https://example.com\"\n# authors = [\"Acme <dev@example.com>\"]\n"
         );
     }

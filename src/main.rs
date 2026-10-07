@@ -73,6 +73,11 @@ enum Command {
         /// SPDX license of the SDKs, such as MIT or Apache-2.0 (default: the spec's, else asked).
         #[arg(long)]
         license: Option<String>,
+        /// Stainless config to migrate from (stainless.yml), path or URL: its targets, packages,
+        /// repositories, environments, client settings, pagination and method names, without
+        /// asking. What doesn't map is listed.
+        #[arg(long, value_name = "STAINLESS_YML")]
+        from: Option<String>,
     },
     /// Generate the SDKs perseid.toml lists, from its spec, starting each from its package skeleton.
     Generate {
@@ -264,6 +269,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             name,
             base_url,
             license,
+            from,
         } => {
             let root = cli.config.parent().map(|p| cwd.join(p)).unwrap_or(cwd);
             let init = init::Init {
@@ -273,6 +279,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 repo,
                 base_url,
                 license,
+                from,
             };
             init::run(init, &root)?;
         }

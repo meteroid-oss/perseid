@@ -57,7 +57,7 @@ pub struct Filters {
 const MAX_SPEC_BYTES: u64 = 200 * 1024 * 1024;
 
 /// Reads a JSON or YAML document from a path (under `root`) or an http(s) URL.
-fn load(location: &str, root: &Path) -> Result<Value> {
+pub(crate) fn load(location: &str, root: &Path) -> Result<Value> {
     let text = if is_url(location) {
         let agent: ureq::Agent = crate::http::config(Duration::from_secs(300)).build().into();
         agent
