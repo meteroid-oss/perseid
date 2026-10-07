@@ -113,24 +113,36 @@ response.requestId();
 response.body();
 ```
 {% if list %}
+{% set pg = list.operation.pagination -%}
+{% set field = ((pg.next_cursor or pg.has_more or pg.total or pg.total_pages or pg["items"])[0]) | ident("camel", "java") -%}
+{% set item = docs.var(list.item, "item") -%}
 ## Pagination
 
-List operations have an `...Iter` twin iterating over every item, fetching pages on demand, and
-giving the pages themselves:
+A list operation returns a page: the properties of the response body are its getters, next to
+its items and the way to the next page. Iterating a page yields every item from it on, fetching
+the next pages on demand:
 
 ```java
-for (var {{ docs.var(list.item, "item") }} : {{ docs.call(list, iter=true) }}) {
-    System.out.println({{ docs.var(list.item, "item") }});
-}
-
-var page = {{ docs.call(list, iter=true) }}.firstPage();
+var page = {{ docs.call(list) }};
+page.{{ "body()." if field in ["items", "body", "hasNextPage", "nextPage", "pages", "stream", "iterator", "spliterator", "forEach", "forEachPage", "toList"] }}{{ field }}();
 page.items();
 if (page.hasNextPage()) {
     page = page.nextPage();
 }
 
-client.async(){{ docs.call(list, iter=true)[6:] }}.forEach(System.out::println);
+for (var {{ item }} : {{ docs.call(list) }}) {
+    System.out.println({{ item }});
+}
+
+for (var each : page.pages()) {
+    System.out.println(each.items().size());
+}
+
+client.async(){{ docs.call(list)[6:] }}.thenCompose(first -> first.forEach(System.out::println));
 ```
+
+`page.body()` is the response body as received, with the properties named like a member of the
+page (`items()`, `nextPage()`...).
 {% endif %}
 {%- if stream %}
 ## Streaming

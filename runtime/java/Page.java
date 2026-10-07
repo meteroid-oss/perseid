@@ -3,34 +3,36 @@ package @@JAVA_PACKAGE@@;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 
 /**
- * One page of a paginated list operation: its items, and the way to the next page.
+ * One page of a paginated list operation: its items, and the way to the next page. Each list
+ * operation returns its own subclass, which also has the getters of the response body.
  *
+ * <p>Iterating a page yields every item from this page on, fetching the next pages as the iteration
+ * goes; each iteration fetches them again.
+ *
+ * @param <P> the type of the pages
  * @param <T> the type of the items
  */
-public final class Page<T> {
+public abstract class Page<P extends Page<P, T>, T> implements Iterable<T> {
     private final List<T> items;
-    private final Supplier<Page<T>> next;
-
-    private Page(List<T> items, Supplier<Page<T>> next) {
-        this.items = Collections.unmodifiableList(new ArrayList<>(items));
-        this.next = next;
-    }
+    private final Supplier<P> next;
 
     /**
      * A page, built by the SDK.
      *
-     * @param <T> the type of the items
      * @param items the items of the page
      * @param next fetches the next page, or null on the last page
-     * @return the page
      */
-    public static <T> Page<T> of(List<T> items, Supplier<Page<T>> next) {
-        return new Page<>(items, next);
+    protected Page(List<T> items, Supplier<P> next) {
+        this.items = Collections.unmodifiableList(new ArrayList<>(items));
+        this.next = next;
     }
 
     /**
@@ -38,7 +40,7 @@ public final class Page<T> {
      *
      * @return the items, unmodifiable
      */
-    public List<T> items() {
+    public final List<T> items() {
         return items;
     }
 
@@ -47,7 +49,7 @@ public final class Page<T> {
      *
      * @return false on the last page
      */
-    public boolean hasNextPage() {
+    public final boolean hasNextPage() {
         return next != null;
     }
 
@@ -57,15 +59,74 @@ public final class Page<T> {
      * @return the next page
      * @throws NoSuchElementException on the last page
      */
-    public Page<T> nextPage() {
+    public final P nextPage() {
         if (next == null) {
             throw new NoSuchElementException("this is the last page");
         }
         return next.get();
     }
 
+    /**
+     * This page and the ones after it, fetched as the iteration goes.
+     *
+     * @return the pages, from this one
+     */
+    public final Iterable<P> pages() {
+        return () ->
+                new Iterator<>() {
+                    private P current;
+
+                    @Override
+                    public boolean hasNext() {
+                        return current == null || current.hasNextPage();
+                    }
+
+                    @Override
+                    public P next() {
+                        if (!hasNext()) {
+                            throw new NoSuchElementException();
+                        }
+                        current = current == null ? self() : current.nextPage();
+                        return current;
+                    }
+                };
+    }
+
+    /**
+     * The items of this page and the ones after it, as a sequential stream fetching pages on demand.
+     *
+     * @return every item from this page on
+     */
+    public final Stream<T> stream() {
+        return StreamSupport.stream(spliterator(), false);
+    }
+
     @Override
-    public String toString() {
-        return "Page{items=" + items + ", hasNextPage=" + hasNextPage() + "}";
+    public final Iterator<T> iterator() {
+        Iterator<P> pages = pages().iterator();
+        return new Iterator<>() {
+            private Iterator<T> items = Collections.emptyIterator();
+
+            @Override
+            public boolean hasNext() {
+                while (!items.hasNext() && pages.hasNext()) {
+                    items = pages.next().items().iterator();
+                }
+                return items.hasNext();
+            }
+
+            @Override
+            public T next() {
+                if (!hasNext()) {
+                    throw new NoSuchElementException();
+                }
+                return items.next();
+            }
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private P self() {
+        return (P) this;
     }
 }
