@@ -75,10 +75,14 @@ fn load(location: &str, root: &Path) -> Result<Value> {
         std::fs::read_to_string(root.join(location))
             .with_context(|| format!("reading {location}"))?
     };
+    parse(&text, location)
+}
+
+fn parse(text: &str, location: &str) -> Result<Value> {
     if text.trim_start().starts_with('{') {
-        serde_json::from_str(&text).map_err(anyhow::Error::from)
+        serde_json::from_str(text).map_err(anyhow::Error::from)
     } else {
-        serde_norway::from_str::<yaml::Json>(&text)
+        serde_norway::from_str::<yaml::Json>(text)
             .map(|json| json.0)
             .map_err(anyhow::Error::from)
     }
@@ -94,6 +98,9 @@ fn is_url(location: &str) -> bool {
 pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
     let mut value = load(location, root)?;
     let from_2_0 = swagger2::is_swagger(&value);
+    if from_2_0 {
+        external::inline_swagger_2(&mut value, location, root)?;
+    }
     let from_3_0 = from_2_0
         || value["openapi"]
             .as_str()
@@ -111,12 +118,21 @@ pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
 
 /// A Swagger 2.0 document converted to OpenAPI 3.0, as JSON text, for the tools that only read
 /// OpenAPI 3; `None` for any other document. Its references to other files are absolute, so that
-/// the text can be written anywhere.
-pub(crate) fn swagger_2_as_3_0(location: &str, root: &Path) -> Result<Option<String>> {
-    let mut value = load(location, root)?;
+/// the text can be written anywhere. `text`, when given, is the document's content, its
+/// references still resolved from `location`.
+pub(crate) fn swagger_2_as_3_0(
+    location: &str,
+    root: &Path,
+    text: Option<&str>,
+) -> Result<Option<String>> {
+    let mut value = match text {
+        Some(text) => parse(text, location)?,
+        None => load(location, root)?,
+    };
     if !swagger2::is_swagger(&value) {
         return Ok(None);
     }
+    external::inline_swagger_2(&mut value, location, root)?;
     swagger2::to_3_0(&mut value).with_context(|| location.to_owned())?;
     external::absolute_refs(&mut value, location, root);
     Ok(Some(serde_json::to_string(&value)?))
@@ -485,6 +501,8 @@ mod yaml {
 mod tests {
     use std::io::{Read as _, Write as _};
 
+    use serde_json::json;
+
     #[test]
     fn specs_over_ten_megabytes_download() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -506,5 +524,74 @@ mod tests {
         });
         let text = super::read(&url, std::path::Path::new(".")).unwrap();
         assert!(text.len() > 11 * 1024 * 1024);
+    }
+
+    #[test]
+    fn swagger_2_path_items_parameters_and_responses_are_read_from_other_files() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let location = "tests/fixtures/swagger2-split/swagger.yaml";
+        let text = super::read(location, root).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let pet = json!({ "$ref": "#/components/schemas/Pet" });
+        let create = &doc["paths"]["/pets"]["post"];
+        assert_eq!(
+            create["requestBody"],
+            json!({ "content": { "application/json": { "schema": pet } }, "required": true })
+        );
+        assert_eq!(
+            create["parameters"],
+            json!([{ "$ref": "#/components/parameters/Limit" }])
+        );
+        assert_eq!(
+            create["responses"]["200"]["content"]["application/json"]["schema"],
+            pet
+        );
+        assert_eq!(
+            create["responses"]["404"],
+            json!({ "$ref": "#/components/responses/NotFound" })
+        );
+        let list = &doc["paths"]["/things"]["get"];
+        assert_eq!(
+            list["parameters"],
+            json!([{ "name": "limit", "in": "query", "schema": { "type": "integer" } }])
+        );
+        assert_eq!(
+            list["responses"]["200"]["content"]["application/json"]["schema"],
+            json!({ "type": "array", "items": pet })
+        );
+        let owner = &doc["paths"]["/owners"]["post"];
+        assert_eq!(
+            owner["requestBody"]["content"]["application/json"]["schema"],
+            json!({ "$ref": "#/components/schemas/Owner" })
+        );
+        assert_eq!(
+            owner["parameters"],
+            json!([{ "$ref": "#/components/parameters/Limit" }])
+        );
+        let components = &doc["components"];
+        let schemas: Vec<&String> = components["schemas"].as_object().unwrap().keys().collect();
+        assert_eq!(schemas, ["Pet", "Owner"]);
+        assert_eq!(
+            components["parameters"]["Limit"],
+            json!({ "name": "limit", "in": "query", "schema": { "type": "integer" } })
+        );
+        assert_eq!(
+            components["schemas"]["Owner"]["type"],
+            json!(["object", "null"])
+        );
+        let filters = super::Filters {
+            include_mode: super::IncludeMode::OnlyPublic,
+            excluded: Default::default(),
+            specified: Default::default(),
+            pagination: vec![],
+            reserved: Default::default(),
+            names: Default::default(),
+            uuid_strings: false,
+        };
+        super::api(&text, &filters).unwrap();
+        let converted = super::swagger_2_as_3_0(location, root, None)
+            .unwrap()
+            .unwrap();
+        assert!(!converted.contains("\"$ref\":\"params.yaml"), "{converted}");
     }
 }

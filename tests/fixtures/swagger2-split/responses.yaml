@@ -1,0 +1,6 @@
+Things:
+  description: The things.
+  schema:
+    type: array
+    items:
+      $ref: 'defs.yaml#/Pet'

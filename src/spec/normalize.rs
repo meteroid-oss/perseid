@@ -175,7 +175,7 @@ fn is_unsafe_name_char(c: char) -> bool {
 }
 
 /// Decodes `%XX` escapes of a URI fragment, leaving malformed escapes as they are.
-fn percent_decode(fragment: &str) -> String {
+pub(super) fn percent_decode(fragment: &str) -> String {
     let bytes = fragment.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -195,7 +195,7 @@ fn percent_decode(fragment: &str) -> String {
 }
 
 /// RFC 6901 unescaping of one pointer segment.
-fn unescape_segment(segment: &str) -> String {
+pub(super) fn unescape_segment(segment: &str) -> String {
     segment.replace("~1", "/").replace("~0", "~")
 }
 

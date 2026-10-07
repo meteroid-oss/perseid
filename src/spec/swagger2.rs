@@ -4,9 +4,12 @@
 use anyhow::{Result, bail};
 use serde_json::{Map, Value, json};
 
-use super::upgrade::{self, ANNOTATIONS, LITERALS, NAME_MAPS};
+use super::{
+    normalize::{percent_decode, unescape_segment},
+    upgrade::{self, ANNOTATIONS, LITERALS, NAME_MAPS},
+};
 
-const METHODS: [&str; 7] = ["get", "put", "post", "delete", "options", "head", "patch"];
+pub(super) const METHODS: [&str; 7] = ["get", "put", "post", "delete", "options", "head", "patch"];
 /// Fields of a parameter, a header or an `items` object that describe its value: its schema.
 const VALUE_FIELDS: [&str; 17] = [
     "type",
@@ -115,11 +118,8 @@ pub(super) fn to_3_0(doc: &mut Value) -> Result<()> {
     if let Some(Value::Object(schemes)) = old.shift_remove("securityDefinitions") {
         let schemes = schemes
             .into_iter()
-            .map(|(name, scheme)| {
-                let scheme = security_scheme(scheme, &name);
-                (name, scheme)
-            })
-            .collect();
+            .map(|(name, scheme)| Ok((name.clone(), security_scheme(scheme, &name)?)))
+            .collect::<Result<_>>()?;
         components.insert("securitySchemes".into(), Value::Object(schemes));
     }
     for (key, value) in old {
@@ -158,10 +158,18 @@ impl Globals {
     fn resolve<'a>(&'a self, p: &'a Value) -> &'a Value {
         p.get("$ref")
             .and_then(Value::as_str)
-            .and_then(|r| r.strip_prefix("#/parameters/"))
-            .and_then(|name| self.parameters.get(name))
+            .and_then(|r| shared(&self.parameters, r, "#/parameters/"))
             .unwrap_or(p)
     }
+}
+
+/// The entry of `map` the local reference `reference` names below `prefix`.
+fn shared<'a>(map: &'a Map<String, Value>, reference: &str, prefix: &str) -> Option<&'a Value> {
+    let name = percent_decode(reference.strip_prefix(prefix)?);
+    if name.contains('/') {
+        return None;
+    }
+    map.get(&unescape_segment(&name))
 }
 
 fn object(value: Option<Value>) -> Map<String, Value> {
@@ -171,15 +179,16 @@ fn object(value: Option<Value>) -> Map<String, Value> {
     }
 }
 
-/// A `consumes` or `produces` list, `None` when absent or empty (the global one applies then).
+/// A `consumes` or `produces` list, `None` when absent (the global one applies then): an empty
+/// one clears the global one.
 fn media_types(value: Option<Value>) -> Option<Vec<String>> {
-    let types: Vec<String> = value?
+    let types = value?
         .as_array()?
         .iter()
         .filter_map(Value::as_str)
         .map(str::to_owned)
         .collect();
-    (!types.is_empty()).then_some(types)
+    Some(types)
 }
 
 fn essence(media_type: &str) -> &str {
@@ -266,32 +275,42 @@ fn parameter(p: &Value) -> Value {
         }
     }
     let schema = value_schema(fields);
-    if schema.get("type").and_then(Value::as_str) == Some("array") {
-        let field = |key: &str| fields.get(key).and_then(Value::as_str);
-        let name = field("name").unwrap_or_default();
-        let location = field("in").unwrap_or_default();
-        let format = field("collectionFormat").unwrap_or("csv");
-        let style = match (location, format) {
-            ("query", "csv") => Some(("form", false)),
-            ("query", "multi") => Some(("form", true)),
-            ("query", "ssv") => Some(("spaceDelimited", false)),
-            ("query", "pipes") => Some(("pipeDelimited", false)),
-            (_, "csv") => None,
-            (location, format) => {
-                upgrade::warn_once(format!(
-                    "`collectionFormat: {format}` of the {location} parameter `{name}` has no \
-                     OpenAPI 3 equivalent: read as `csv`"
-                ));
-                (location == "query").then_some(("form", false))
-            }
-        };
-        if let Some((style, explode)) = style {
-            out.insert("style".into(), json!(style));
-            out.insert("explode".into(), json!(explode));
-        }
+    if let Some((style, explode)) = array_style(fields, &schema) {
+        out.insert("style".into(), json!(style));
+        out.insert("explode".into(), json!(explode));
     }
     out.insert("schema".into(), Value::Object(schema));
     Value::Object(out)
+}
+
+/// The `style` and `explode` of an array parameter or form field, out of its `collectionFormat`;
+/// `None` when it is not an array or OpenAPI's default for its location applies.
+fn array_style(
+    fields: &Map<String, Value>,
+    schema: &Map<String, Value>,
+) -> Option<(&'static str, bool)> {
+    if schema.get("type").and_then(Value::as_str) != Some("array") {
+        return None;
+    }
+    let field = |key: &str| fields.get(key).and_then(Value::as_str);
+    let name = field("name").unwrap_or_default();
+    let location = field("in").unwrap_or_default();
+    let format = field("collectionFormat").unwrap_or("csv");
+    let form = matches!(location, "query" | "formData");
+    match format {
+        "csv" if form => Some(("form", false)),
+        "multi" if form => Some(("form", true)),
+        "ssv" if form => Some(("spaceDelimited", false)),
+        "pipes" if form => Some(("pipeDelimited", false)),
+        "csv" => None,
+        format => {
+            upgrade::warn_once(format!(
+                "`collectionFormat: {format}` of the {location} parameter `{name}` has no \
+                 OpenAPI 3 equivalent: read as `csv`"
+            ));
+            form.then_some(("form", false))
+        }
+    }
 }
 
 fn path_item(item: &mut Map<String, Value>, globals: &Globals) {
@@ -336,11 +355,17 @@ fn operation(op: &mut Map<String, Value>, bodies: &[Value], globals: &Globals) {
         .map(|p| globals.resolve(p).clone())
         .collect();
     let overridden: Vec<_> = own_bodies.iter().map(key).collect();
+    let own_body = own_bodies.iter().any(|p| p["in"] == "body");
+    // An operation's body or form replaces its path's body; its form adds to its path's form.
+    let inherited = |p: &Value| match p["in"].as_str() {
+        Some("body") => own_bodies.is_empty(),
+        _ => !own_body && !overridden.contains(&key(p)),
+    };
     let fields: Vec<Value> = bodies
         .iter()
         .map(|p| globals.resolve(p).clone())
-        .filter(|p| !overridden.contains(&key(p)))
-        .chain(own_bodies)
+        .filter(inherited)
+        .chain(own_bodies.iter().cloned())
         .collect();
     let mut body = request_body(&fields, &consumes);
     let mut converted = Map::new();
@@ -423,11 +448,10 @@ fn request_body(params: &[Value], consumes: &[String]) -> Option<Value> {
         if field.get("required") == Some(&Value::Bool(true)) {
             required.push(json!(name));
         }
-        if schema.get("type") == Some(&json!("array")) {
-            let explode = field.get("collectionFormat") == Some(&json!("multi"));
+        if let Some((style, explode)) = array_style(field, &schema) {
             encoding.insert(
                 name.to_owned(),
-                json!({ "style": "form", "explode": explode }),
+                json!({ "style": style, "explode": explode }),
             );
         }
         properties.insert(name.to_owned(), Value::Object(schema));
@@ -448,7 +472,7 @@ fn request_body(params: &[Value], consumes: &[String]) -> Option<Value> {
         .into_iter()
         .map(|t| {
             let mut media = json!({ "schema": schema });
-            if t == FORM && !encoding.is_empty() {
+            if !encoding.is_empty() {
                 media["encoding"] = Value::Object(encoding.clone());
             }
             (t.to_owned(), media)
@@ -472,15 +496,12 @@ fn response(r: Value, produces: &[String], globals: &Globals) -> Value {
         if produces == globals.produces.as_slice() {
             return Value::Object(fields);
         }
-        return match reference
-            .strip_prefix("#/responses/")
-            .and_then(|name| globals.responses.get(name))
-        {
+        return match shared(&globals.responses, reference, "#/responses/") {
             Some(shared) => response(shared.clone(), produces, globals),
             None => Value::Object(fields),
         };
     }
-    let examples = fields.get("examples").cloned().unwrap_or(Value::Null);
+    let examples = object(fields.get("examples").cloned());
     let mut out = Map::new();
     out.insert(
         "description".into(),
@@ -502,7 +523,13 @@ fn response(r: Value, produces: &[String], globals: &Globals) -> Value {
                     .into_iter()
                     .map(|t| {
                         let mut media = json!({ "schema": value });
-                        if let Some(example) = examples.get(&t) {
+                        let example = examples.get(&t).or_else(|| {
+                            examples
+                                .iter()
+                                .find(|(k, _)| essence(k).eq_ignore_ascii_case(essence(&t)))
+                                .map(|(_, example)| example)
+                        });
+                        if let Some(example) = example {
                             media["example"] = example.clone();
                         }
                         (t, media)
@@ -538,9 +565,9 @@ fn header(header: Value) -> Value {
     Value::Object(out)
 }
 
-fn security_scheme(scheme: Value, name: &str) -> Value {
+fn security_scheme(scheme: Value, name: &str) -> Result<Value> {
     let Value::Object(fields) = scheme else {
-        return scheme;
+        return Ok(scheme);
     };
     let field = |key: &str| fields.get(key).cloned().unwrap_or(Value::Null);
     let mut out = Map::new();
@@ -555,13 +582,11 @@ fn security_scheme(scheme: Value, name: &str) -> Value {
                 Some("password") => ("password", &["tokenUrl"]),
                 Some("application") => ("clientCredentials", &["tokenUrl"]),
                 Some("accessCode") => ("authorizationCode", &["authorizationUrl", "tokenUrl"]),
-                other => {
-                    upgrade::warn_once(format!(
-                        "OAuth2 security scheme `{name}` has an unknown flow {}: left as it is",
-                        other.unwrap_or("(none)")
-                    ));
-                    return Value::Object(fields);
-                }
+                Some(other) => bail!(
+                    "OAuth2 security scheme `{name}` has an unknown `flow: {other}`; Swagger 2.0 \
+                     flows are implicit, password, application and accessCode"
+                ),
+                None => bail!("OAuth2 security scheme `{name}` has no `flow`"),
             };
             let mut details: Map<String, Value> = urls
                 .iter()
@@ -583,7 +608,7 @@ fn security_scheme(scheme: Value, name: &str) -> Value {
             out.insert(key.clone(), value.clone());
         }
     }
-    Value::Object(out)
+    Ok(Value::Object(out))
 }
 
 fn rewrite_refs(value: &mut Value, names: bool) {
@@ -960,6 +985,156 @@ mod tests {
         assert_eq!(
             properties["owner"],
             json!({ "$ref": "#/components/schemas/Owner", "description": "d", "nullable": true })
+        );
+    }
+
+    #[test]
+    fn escaped_references_to_shared_objects_resolve() {
+        let doc = converted(json!({
+            "parameters": { "a/b": { "name": "body", "in": "body", "required": true,
+                "schema": { "$ref": "#/definitions/Foo~1Bar" } } },
+            "responses": { "Not/Found": { "description": "nf",
+                "schema": { "$ref": "#/definitions/Foo~1Bar" } } },
+            "definitions": { "Foo/Bar": { "type": "object" } },
+            "paths": { "/b": {
+                "post": { "produces": ["text/plain"], "parameters": [{ "$ref": "#/parameters/a~1b" }],
+                    "responses": { "200": { "$ref": "#/responses/Not~1Found" } } },
+                "put": { "parameters": [{ "$ref": "#/parameters/a%7E1b" }], "responses": {} }
+            } }
+        }));
+        let schema = json!({ "$ref": "#/components/schemas/Foo~1Bar" });
+        let item = &doc["paths"]["/b"];
+        let body = json!({ "content": { JSON: { "schema": schema } }, "required": true });
+        assert_eq!(item["post"]["requestBody"], body);
+        assert_eq!(item["put"]["requestBody"], body);
+        assert_eq!(
+            item["post"]["responses"]["200"],
+            json!({ "description": "nf", "content": { "text/plain": { "schema": schema } } })
+        );
+    }
+
+    #[test]
+    fn an_operation_body_replaces_its_path_body() {
+        let doc = converted(json!({ "paths": {
+            "/a": {
+                "parameters": [{ "name": "path", "in": "body", "schema": { "type": "integer" } }],
+                "post": { "parameters": [{ "name": "op", "in": "body", "schema": { "type": "string" } }],
+                    "responses": {} },
+                "put": { "parameters": [{ "name": "f", "in": "formData", "type": "string" }],
+                    "responses": {} },
+                "patch": { "responses": {} }
+            },
+            "/b": {
+                "parameters": [{ "name": "path", "in": "formData", "type": "string" }],
+                "post": { "parameters": [{ "name": "op", "in": "body", "schema": { "type": "string" } }],
+                    "responses": {} }
+            }
+        } }));
+        let content =
+            |path: &str, method: &str| doc["paths"][path][method]["requestBody"]["content"].clone();
+        assert_eq!(
+            content("/a", "post"),
+            json!({ JSON: { "schema": { "type": "string" } } })
+        );
+        assert_eq!(
+            content("/a", "put")[FORM]["schema"]["properties"],
+            json!({ "f": { "type": "string" } })
+        );
+        assert_eq!(
+            content("/a", "patch"),
+            json!({ JSON: { "schema": { "type": "integer" } } })
+        );
+        assert_eq!(
+            content("/b", "post"),
+            json!({ JSON: { "schema": { "type": "string" } } })
+        );
+    }
+
+    #[test]
+    fn empty_media_type_lists_clear_the_global_ones() {
+        let doc = converted(json!({
+            "consumes": ["application/xml"],
+            "produces": ["application/xml"],
+            "responses": { "Gone": { "description": "gone", "schema": { "type": "string" } } },
+            "paths": { "/x": { "post": {
+                "consumes": [],
+                "produces": [],
+                "parameters": [{ "name": "b", "in": "body", "schema": { "type": "string" } }],
+                "responses": {
+                    "200": { "description": "ok", "schema": { "type": "string" } },
+                    "410": { "$ref": "#/responses/Gone" }
+                }
+            } } }
+        }));
+        let op = &doc["paths"]["/x"]["post"];
+        let json = json!({ JSON: { "schema": { "type": "string" } } });
+        assert_eq!(op["requestBody"]["content"], json);
+        assert_eq!(op["responses"]["200"]["content"], json);
+        assert_eq!(op["responses"]["410"]["content"], json);
+        assert!(
+            doc["components"]["responses"]["Gone"]["content"]
+                .get("application/xml")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn form_arrays_keep_their_collection_format() {
+        let fields = json!([
+            { "name": "s", "in": "formData", "type": "array", "items": { "type": "string" },
+              "collectionFormat": "ssv" },
+            { "name": "p", "in": "formData", "type": "array", "items": { "type": "string" },
+              "collectionFormat": "pipes" },
+            { "name": "t", "in": "formData", "type": "array", "items": { "type": "string" },
+              "collectionFormat": "tsv" }
+        ]);
+        let encoding = json!({
+            "s": { "style": "spaceDelimited", "explode": false },
+            "p": { "style": "pipeDelimited", "explode": false },
+            "t": { "style": "form", "explode": false }
+        });
+        let form = operation_of(json!({ "parameters": fields, "responses": {} }));
+        assert_eq!(form["requestBody"]["content"][FORM]["encoding"], encoding);
+        let mut fields = fields;
+        fields
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "name": "f", "in": "formData", "type": "file" }));
+        let multipart = operation_of(json!({ "parameters": fields, "responses": {} }));
+        assert_eq!(
+            multipart["requestBody"]["content"][MULTIPART]["encoding"],
+            encoding
+        );
+    }
+
+    #[test]
+    fn examples_match_media_types_with_parameters() {
+        let op = operation_of(json!({
+            "produces": ["application/json; charset=utf-8"],
+            "responses": { "200": { "description": "ok", "schema": { "type": "string" },
+                "examples": { "application/json": "a" } } }
+        }));
+        assert_eq!(
+            op["responses"]["200"]["content"]["application/json; charset=utf-8"]["example"],
+            "a"
+        );
+    }
+
+    #[test]
+    fn oauth2_schemes_without_a_known_flow_are_rejected() {
+        let error = |scheme: Value| {
+            let mut doc = json!({ "swagger": "2.0", "securityDefinitions": { "o": scheme } });
+            to_3_0(&mut doc).unwrap_err().to_string()
+        };
+        let unknown = error(json!({ "type": "oauth2", "flow": "weird" }));
+        assert!(
+            unknown.contains("`o`") && unknown.contains("flow: weird"),
+            "{unknown}"
+        );
+        let missing = error(json!({ "type": "oauth2" }));
+        assert!(
+            missing.contains("`o`") && missing.contains("no `flow`"),
+            "{missing}"
         );
     }
 

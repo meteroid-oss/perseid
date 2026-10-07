@@ -258,15 +258,23 @@ Swagger 2.0 becomes:
 
 - `host`, `basePath` and `schemes`: a server per scheme, `https` first (the base URL), `https`
   when none is listed.
-- `definitions`, `parameters` and `responses`: components, their `$ref`s following.
+- `definitions`, `parameters` and `responses`: components, their `$ref`s following. Path items,
+  parameters and responses in other files are inlined before the conversion, their schemas
+  bundled as in 3.x.
 - `body` parameters: a request body of each `consumes` media type (JSON by default).
-  `formData` ones: a form body, or a multipart one when a field is a `type: file`.
-- `produces`: the media types of the responses; a `type: file` response is binary.
-- `collectionFormat`: `style` and `explode` (`tsv` is read as `csv`, with a warning).
-- `securityDefinitions`: `basic` is HTTP basic, OAuth2 flows keep their URLs and scopes.
+  `formData` ones: a form body, or a multipart one when a field is a `type: file`. An
+  operation's body or form replaces its path's body.
+- `produces`: the media types of the responses; a `type: file` response is binary. An empty
+  `consumes` or `produces` of an operation clears the global one.
+- `collectionFormat`: `style` and `explode`, of form fields too (`tsv` is read as `csv`, with a
+  warning).
+- `securityDefinitions`: `basic` is HTTP basic, OAuth2 flows keep their URLs and scopes. An
+  OAuth2 scheme without a known `flow` is an error.
 - `x-nullable`: `nullable`. A string `discriminator`: its `propertyName`. Keywords next to a
   `$ref`, which 2.0 ignores, are dropped but for annotations (`description`, `readOnly`...).
-- With `--bump auto`, oasdiff compares the conversions of 2.0 specs.
+- With `--bump auto`, oasdiff compares the conversions of 2.0 specs; the previous version's
+  references to other files are read next to the current spec. A spec that fails to convert is
+  compared as it is, with a warning.
 
 Read as declared:
 

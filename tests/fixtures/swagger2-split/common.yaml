@@ -1,0 +1,19 @@
+swagger: '2.0'
+info:
+  title: Common
+  version: 1.0.0
+paths: {}
+parameters:
+  Owner:
+    name: owner
+    in: body
+    required: true
+    schema:
+      $ref: '#/definitions/Owner'
+definitions:
+  Owner:
+    type: object
+    x-nullable: true
+    properties:
+      name:
+        type: string

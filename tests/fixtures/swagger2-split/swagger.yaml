@@ -1,0 +1,33 @@
+swagger: '2.0'
+info:
+  title: Split Swagger
+  version: 1.0.0
+  description: A Swagger 2.0 spec whose path items, parameters and responses live in other files.
+host: api.example.com
+produces: [application/json]
+parameters:
+  Limit:
+    $ref: 'params.yaml#/limit'
+responses:
+  NotFound:
+    description: Not found.
+paths:
+  /pets:
+    $ref: 'paths/pets.yaml'
+  /things:
+    get:
+      operationId: listThings
+      parameters:
+        - $ref: 'params.yaml#/limit'
+      responses:
+        '200':
+          $ref: 'responses.yaml#/Things'
+  /owners:
+    post:
+      operationId: createOwner
+      parameters:
+        - $ref: 'common.yaml#/parameters/Owner'
+        - $ref: 'swagger.yaml#/parameters/Limit'
+      responses:
+        '204':
+          description: Created.
