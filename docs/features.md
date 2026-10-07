@@ -110,8 +110,8 @@ CustomersListPage page = client.customers().list(); // page.total(), items(), ha
 ```
 
 ```csharp
-await foreach (var customer in client.Customers.ListAutoPagingAsync(new() { PerPage = 100 })) { ... }
-var page = await client.Customers.ListAutoPagingAsync().GetFirstPageAsync(); // Items, GetNextPageAsync()
+await foreach (var customer in client.Customers.ListAsync(new() { PerPage = 100 })) { ... }
+var page = await client.Customers.ListAsync(); // page.Total, Items, HasNextPage, GetNextPageAsync()
 ```
 
 ## Streaming and uploads

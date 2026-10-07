@@ -34,7 +34,7 @@ See [features](features.md) for auth, pagination and encoding, and
 | Python | Python 3.10+ | `Acme(api_key=...)`, `AsyncAcme` | `AcmeError` | iterate `list()` | `client.with_raw_response` |
 | Go | Go 1.23+ | `acme.New(token, opts)` | `SDKError` | `ListAutoPaging(...)` | `WithResponseInto(&resp)` |
 | Java | Java 11+ | `new Acme(AcmeOptions...)` | `AcmeException` | iterate `list()` | `client.withRawResponse()` |
-| C# | .NET 8 | `new AcmeClient(token)` | `AcmeException` | `ListAutoPagingAsync()` | `.WithRawResponse` |
+| C# | .NET 8 | `new AcmeClient(token)` | `AcmeException` | `await foreach` on `ListAsync()` | `.WithRawResponse` |
 
 ## Formats
 
@@ -692,12 +692,18 @@ await client.Customers.RetrieveAsync("cus_1",
 ### Pagination
 
 ```csharp
-await foreach (var customer in client.Customers.ListAutoPagingAsync(new() { PerPage = 100 })) { ... }
-var page = await client.Customers.ListAutoPagingAsync().GetFirstPageAsync();
+await foreach (var customer in client.Customers.ListAsync(new() { PerPage = 100 })) { ... }
+var page = await client.Customers.ListAsync();   // CustomersListPage
+page.Total;                                      // a response property, read on the page
+page.Items; page.HasNextPage; await page.GetNextPageAsync();
 ```
 
-`AsyncPager` gives pages through `AsPagesAsync()` and `GetFirstPageAsync()`. A `Page` has
-`Items`, `Response`, `HasNextPage` and `GetNextPageAsync()`.
+- List methods return an `AsyncPager`: `await` it for the first page, or `await foreach` every
+  item; `AsPagesAsync()` walks the pages. The cancellation token applies to every request.
+- A page, such as `CustomersListPage`, has a property per response property, `Items`,
+  `HasNextPage`, `GetNextPageAsync()`, `AsPagesAsync()` and `Body`, the response as decoded.
+  `await foreach` over it yields every item from this page on.
+- `WithRawResponse` lists return the response of one request, with its status and headers.
 
 ### Streaming
 
