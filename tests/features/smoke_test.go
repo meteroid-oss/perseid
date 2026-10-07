@@ -69,7 +69,34 @@ func TestSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expect(t, records.Body.Total, int64(3))
+	expect(t, records.Total, int64(3))
+	expect(t, records.EntryPage.Total, int64(3))
+	expect(t, records.Items[0].ID, "r1")
+	records, err = records.NextPage(ctx)
+	must(t, err)
+	expect(t, records.Items[0].ID, "r3")
+	expect(t, records.Total, int64(3))
+	expect(t, records.HasNextPage(), false)
+
+	var gadgetPages [][]string
+	var totalPages []int32
+	gadgetPage, err := client.Gadgets().List(ctx, nil)
+	for ; gadgetPage != nil; gadgetPage, err = gadgetPage.NextPage(ctx) {
+		var pageIDs []string
+		for _, gadget := range gadgetPage.Items {
+			pageIDs = append(pageIDs, gadget.ID)
+		}
+		gadgetPages = append(gadgetPages, pageIDs)
+		totalPages = append(totalPages, gadgetPage.Meta.TotalPages)
+		expect(t, gadgetPage.Meta.Page, int32(len(gadgetPages)-1))
+	}
+	must(t, err)
+	expect(t, gadgetPages, [][]string{{"g1", "g2"}, {"g3"}})
+	expect(t, totalPages, []int32{2, 2})
+
+	encoded, err := json.Marshal(records)
+	must(t, err)
+	expect(t, asJSON(t, encoded), map[string]any{"data": []any{map[string]any{"id": "r3"}}, "total": float64(3)})
 
 	_, err = New("", &Options{ServerURL: url}).Widgets().List(ctx, nil)
 	expect(t, errors.Is(err, ErrUnauthorized) && !errors.Is(err, ErrNotFound), true)
@@ -105,6 +132,8 @@ func TestSmokeParity(t *testing.T) {
 	expect(t, resp.StatusCode, 200)
 	expect(t, resp.Header.Get("X-Request-Id"), "req_mock")
 	expect(t, len(page.Items), 2)
+	expect(t, page.NextCursor, Ptr("c2"))
+	expect(t, len(page.WidgetList.Data), 2)
 	expect(t, page.Items[0].ExtraFields["color"], json.RawMessage(`"red"`))
 	encoded, err := json.Marshal(page.Items[0])
 	if err != nil {
@@ -116,6 +145,7 @@ func TestSmokeParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect(t, page.Items[0].ID, "w3")
+	expect(t, page.NextCursor == nil, true)
 	expect(t, page.HasNextPage(), false)
 	if page, err = page.NextPage(ctx); page != nil || err != nil {
 		t.Fatalf("after the last page: %v %v", page, err)
@@ -717,6 +747,13 @@ func TestScenarioErrors(t *testing.T) {
 		expect(t, pager.Next(), false)
 		expect(t, pager.Err() == failure, true)
 		expect(t, requests.Load(), int32(2))
+
+		page, err := client.ErrorsAPI().ListScenariosPages(ctx, nil)
+		must(t, err)
+		expect(t, page.HasNextPage(), true)
+		next, err := page.NextPage(ctx)
+		expect(t, next == nil, true)
+		expect(t, errors.Is(err, ErrConflict), true)
 	})
 	t.Run("an error from the first page", func(t *testing.T) {
 		t.Setenv(APIKeyEnv, "")

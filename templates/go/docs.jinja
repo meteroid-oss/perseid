@@ -26,6 +26,16 @@
 {#- The page type of a paginated example, `WidgetsListPage`. -#}
 {% macro page_type(ex) %}{{ (go_ident(ex.resource) ~ (ex.operation.name | ident("pascal", "go")) ~ "Page") | go_name }}{% endmacro %}
 
+{#- The response type a paginated example's page embeds. -#}
+{% macro body_type(ex) %}{{ go_ident(ex.result) }}{% endmacro %}
+
+{#- A response field the page of a paginated example promotes, `page.Meta.TotalPages`. -#}
+{% macro page_field(ex) -%}
+    {%- set pg = ex.operation.pagination -%}
+    {%- set path = pg.total or pg.total_pages or pg.next_cursor or pg.has_more or pg["items"] -%}
+    page{% for segment in path %}.{{ go_export(segment) }}{% endfor -%}
+{%- endmacro %}
+
 {% macro literal(arg) -%}
     {%- if arg.kind == "uuid" %}uuid.MustParse({{ arg.value | tojson }})
     {%- elif arg.kind == "date" %}{% set parts = arg.value | split("-") | list %}{{ sdk.package_name }}.Date{Year: {{ parts[0] | int }}, Month: {{ parts[1] | int }}, Day: {{ parts[2] | int }}}

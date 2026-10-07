@@ -7,56 +7,29 @@ import (
 	"iter"
 )
 
-// Page is one page of a paginated list operation, as its List method returns
-// it: its items, the response they came in, and the way to the page after it.
-// Each operation names its own, such as CustomersListPage.
-//
-//	for page != nil {
-//		for _, item := range page.Items {
-//			// ...
-//		}
-//		if page, err = page.NextPage(ctx); err != nil {
-//			return err
-//		}
-//	}
-type Page[T, R any] struct {
-	// Items holds the items of this page.
-	Items []T
-
-	// Body is the decoded response of this page, for its fields besides the
-	// items, such as a total.
-	Body R
-
-	next func(ctx context.Context) (*Page[T, R], error)
-}
-
-// HasNextPage reports whether another page follows this one.
-func (p *Page[T, R]) HasNextPage() bool {
-	return p != nil && p.next != nil
-}
-
-// NextPage fetches the page after this one. It returns nil and no error after
-// the last page.
-func (p *Page[T, R]) NextPage(ctx context.Context) (*Page[T, R], error) {
-	if !p.HasNextPage() {
-		return nil, nil
-	}
-	return p.next(ctx)
+// listPage is the page type P of a list operation, such as CustomersListPage,
+// as an [AutoPager] walks it.
+type listPage[T, P any] interface {
+	*P
+	pageItems() []T
+	HasNextPage() bool
+	NextPage(ctx context.Context) (*P, error)
 }
 
 // fetchItems fetches the items of a page, and the way to the page after it.
 type fetchItems[T any] func(ctx context.Context) ([]T, fetchItems[T], error)
 
-func pageItems[T, R any](fetch func(ctx context.Context) (*Page[T, R], error)) fetchItems[T] {
+func pageFetcher[T, P any, PP listPage[T, P]](fetch func(ctx context.Context) (*P, error)) fetchItems[T] {
 	return func(ctx context.Context) ([]T, fetchItems[T], error) {
 		page, err := fetch(ctx)
 		if err != nil || page == nil {
 			return nil, nil, err
 		}
-		if !page.HasNextPage() {
-			return page.Items, nil, nil
+		p := PP(page)
+		if !p.HasNextPage() {
+			return p.pageItems(), nil, nil
 		}
-		return page.Items, pageItems(page.NextPage), nil
+		return p.pageItems(), pageFetcher[T, P, PP](p.NextPage), nil
 	}
 }
 
@@ -72,8 +45,8 @@ type AutoPager[T any] struct {
 	err     error
 }
 
-func newAutoPager[T, R any](ctx context.Context, first func(ctx context.Context) (*Page[T, R], error)) *AutoPager[T] {
-	return &AutoPager[T]{ctx: ctx, fetch: pageItems(first)}
+func newAutoPager[T, P any, PP listPage[T, P]](ctx context.Context, first func(ctx context.Context) (*P, error)) *AutoPager[T] {
+	return &AutoPager[T]{ctx: ctx, fetch: pageFetcher[T, P, PP](first)}
 }
 
 // Next advances to the next item. It returns false once every item has been

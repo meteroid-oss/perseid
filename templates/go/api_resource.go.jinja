@@ -38,6 +38,7 @@ package {{ sdk.package_name }}
 {% set ns = namespace(json=false, time=false, uuid=false, io=false) -%}
 {% for op in resource.operations -%}
 {% if op.request_body_kind == "binary" %}{% set ns.io = true %}{% endif -%}
+{% if op.pagination is defined %}{% set ns.json = true %}{% endif -%}
 {% for field in op.multipart_fields | default([]) if not field.is_file -%}
 {% if "json." in go_field_type(field) %}{% set ns.json = true %}{% endif -%}
 {% if "time." in go_field_type(field) %}{% set ns.time = true %}{% endif -%}
@@ -256,8 +257,40 @@ type {{ resource_type_name }} struct {
 {% set cursor = go_arg(param.ident) if param.required else "params." ~ go_export(param.ident) %}
 {% set pointer = not param.required %}
 {% set page_type = (resource_type_name ~ (op.name | ident("pascal", "go")) ~ "Page") | go_name %}
-// {{ page_type }} is a page of [{{ resource_type_name }}.{{ name }}], whose Body is the whole response.
-type {{ page_type }} = Page[{{ item_type }}, {{ ret_type }}]
+{% set body_type = ret_type[1:] if ret_type is startingwith("*") else ret_type %}
+{% set body_value = "*resp" if ret_type is startingwith("*") else "resp" %}
+// {{ page_type }} is a page of [{{ resource_type_name }}.{{ name }}]. It embeds the
+// decoded [{{ body_type }}], promoting its fields, with the Items of the page; a field
+// named like a page member stays reachable through the embedded {{ body_type }}.
+type {{ page_type }} struct {
+	{{ body_type }}
+
+	// Items holds the items of this page.
+	Items []{{ item_type }}
+
+	next func(ctx context.Context) (*{{ page_type }}, error)
+}
+
+// HasNextPage reports whether another page follows this one.
+func (p *{{ page_type }}) HasNextPage() bool {
+	return p != nil && p.next != nil
+}
+
+// NextPage fetches the page after this one. It returns nil and no error after
+// the last page.
+func (p *{{ page_type }}) NextPage(ctx context.Context) (*{{ page_type }}, error) {
+	if !p.HasNextPage() {
+		return nil, nil
+	}
+	return p.next(ctx)
+}
+
+// MarshalJSON encodes the {{ body_type }} of the page, as received.
+func (p {{ page_type }}) MarshalJSON() ([]byte, error) {
+	return json.Marshal(&p.{{ body_type }})
+}
+
+func (p *{{ page_type }}) pageItems() []{{ item_type }} { return p.Items }
 
 {{ doc }}func (a *{{ resource_type_name }}) {{ name }}(ctx context.Context{{ sig }}{% if has_options %}, options *{{ options_type_name }}{% endif %}, opts ...RequestOption) (*{{ page_type }}, error) {
 {% if has_options %}	var params {{ options_type_name }}
@@ -272,11 +305,11 @@ type {{ page_type }} = Page[{{ item_type }}, {{ ret_type }}]
 		return &{{ page_type }}{}, nil
 	}
 {% endif %}{% set items_guard = go_path_guard("resp", pg.items, opt["items"], false) -%}
-{% if items_guard %}	page := &{{ page_type }}{Body: resp}
+{% if items_guard %}	page := &{{ page_type }}{ {{- body_type }}: {{ body_value }}}
 	if {{ items_guard }} {
 		page.Items = {{ go_path_value("resp", pg.items, opt["items"], false) }}
 	}
-{% else %}	page := &{{ page_type }}{Items: {{ go_path_value("resp", pg.items, opt["items"], false) }}, Body: resp}
+{% else %}	page := &{{ page_type }}{ {{- body_type }}: {{ body_value }}, Items: {{ go_path_value("resp", pg.items, opt["items"], false) }}}
 {% endif %}	if len(page.Items) == 0 {
 		return page, nil
 	}
@@ -334,7 +367,7 @@ type {{ page_type }} = Page[{{ item_type }}, {{ ret_type }}]
 //
 // Deprecated: this operation is deprecated in the {{ sdk.client_name }} API.{% endif %}
 func (a *{{ resource_type_name }}) {{ name }}AutoPaging(ctx context.Context{{ sig }}{% if has_options %}, options *{{ options_type_name }}{% endif %}, opts ...RequestOption) *AutoPager[{{ item_type }}] {
-	return newAutoPager(ctx, func(ctx context.Context) (*{{ page_type }}, error) {
+	return newAutoPager[{{ item_type }}](ctx, func(ctx context.Context) (*{{ page_type }}, error) {
 		return a.{{ name }}(ctx{{ call }}{% if has_options %}, options{% endif %}, opts...)
 	})
 }

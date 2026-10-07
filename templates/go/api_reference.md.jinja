@@ -49,7 +49,7 @@
     {%- elif op.response_body_schema_name is defined %}*{{ go_ident(op.response_body_schema_name) }}{% endif -%}
 {%- endmacro -%}
 {% macro returns(op) -%}
-    {%- if op.pagination is defined %}pages of {{ model(op.pagination.item_schema) }}
+    {%- if op.pagination is defined %}{{ model(op.response_body_schema_name) }} page of {{ model(op.pagination.item_schema) }}
     {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
     {%- elif op.response_is_binary %}bytes
     {%- elif op.response_is_text %}text
