@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import py_ident, resource_module -%}
+{% from "types/macros.py.jinja" import field_ident, page_class, py_ident, py_type, resource_module -%}
 # this file is @generated
 """{{ sdk.client_name }} API resources."""
 {%- set streaming = namespace(used=false) %}
@@ -8,6 +8,18 @@
 {%- endfor %}
 {%- endfor %}
 {%- set client = sdk.client_name %}
+{#- The response model of each paginated operation, once, with the items of its pages. -#}
+{%- set paged = namespace(pairs=[]) %}
+{%- for resource in api.resources %}
+{%- for op in resource.operations if op.pagination is defined %}
+{%- set paged.pairs = paged.pairs + [op.response_body_schema_name ~ " " ~ op.pagination.item_schema] %}
+{%- endfor %}
+{%- endfor %}
+{%- set paged.pairs = paged.pairs | unique | sort | list %}
+{%- set pages = paged.pairs | map("split") | map("first") | list %}
+{%- if pages | unique | list | length != pages | length %}
+{{- panic("two list operations page different items out of one response model, which Python pages do not support") }}
+{%- endif %}
 {%- set error_names = ["APIStatusError", "AuthenticationError", "BadRequestError", "ConflictError", "ErrorBody", "InternalServerError", "NotFoundError", "PermissionDeniedError", "RateLimitError", "UnprocessableEntityError"] %}
 
 from __future__ import annotations
@@ -39,6 +51,9 @@ from .client import Async{{ client }}, {{ client }}
 {%- for op in resource.operations if op.request_body_kind == "multipart" %}
 {%- set lazy.pairs = lazy.pairs + [(cls ~ (op.name | to_upper_camel_case) ~ "Body", module)] %}
 {%- endfor %}
+{%- endfor %}
+{%- for name in pages %}
+{%- set lazy.pairs = lazy.pairs + [(page_class(name, true), "_pages"), (page_class(name), "_pages")] %}
 {%- endfor %}
 {%- if lazy.pairs %}
 
@@ -97,6 +112,10 @@ __all__ = [
 {%- for op in resource.operations if op.request_body_kind == "multipart" %}
     "{{ cls }}{{ op.name | to_upper_camel_case }}Body",
 {%- endfor %}
+{%- endfor %}
+{%- for name in pages %}
+    "{{ page_class(name, true) }}",
+    "{{ page_class(name) }}",
 {%- endfor %}
 ]
 
@@ -544,3 +563,53 @@ def error_class(status_code: int) -> type[APIStatusError]:
     return _BY_STATUS.get(status_code, APIStatusError)
 {% endset %}
 {% set _ = generate_extra_file(output_dir ~ "/_errors.py", errors_py) %}
+{% if pages %}
+{%- set members = ["body", "get_next_page", "has_next_page", "items", "iter_pages"] %}
+{%- set models = (pages + (paged.pairs | map("split") | map("last") | list)) | map("to_upper_camel_case") | unique | sort | list %}
+{% set pages_py %}# this file is @generated
+"""The pages of the list operations, each a subclass of the response model of its request."""
+
+from __future__ import annotations
+
+from ..models import (
+{%- for name in models %}
+    {{ name }},
+{%- endfor %}
+)
+from ._pagination import AsyncPage, SyncPage
+
+__all__ = [
+{%- for name in pages %}
+    "{{ page_class(name, true) }}",
+    "{{ page_class(name) }}",
+{%- endfor %}
+]
+{%- for pair in paged.pairs %}
+{%- set name = (pair | split | list)[0] %}
+{%- set item = (pair | split | list)[1] %}
+{%- set model = name | to_upper_camel_case %}
+{#- Response properties named like a paging member: only an `items` list of the items is
+    not shadowed, and only a required one types like the paging member. -#}
+{%- set clash = namespace(names=[], ignore=false) %}
+{%- for f in api.types[name].fields if field_ident(f) in members %}
+{%- set same = field_ident(f) == "items" and py_type(f.type) == "list[" ~ (item | to_upper_camel_case) ~ "]" %}
+{%- if not same %}{% set clash.names = clash.names + [field_ident(f)] %}{% endif %}
+{%- if not (same and f.required and not f.nullable) %}{% set clash.ignore = true %}{% endif %}
+{%- endfor %}
+{%- for is_async in [false, true] %}
+
+
+class {{ page_class(name, is_async) }}({% if clash.ignore %}  # type: ignore[misc]
+    {% endif %}{{ "AsyncPage" if is_async else "SyncPage" }}[{{ item | to_upper_camel_case }}, {{ model }}], {{ model }}{% if clash.ignore %}
+{% endif %}):
+    """A page of :class:`{{ item | to_upper_camel_case }}`, and the :class:`{{ model }}` response of its request.
+{%- if clash.names %}
+
+    Paging members shadow its {% for n in clash.names %}{% if loop.last and not loop.first %} and {% elif not loop.first %}, {% endif %}``{{ n }}``{% endfor %}, read on :attr:`body`.
+{%- endif %}
+    """
+{%- endfor %}
+{%- endfor %}
+{% endset %}
+{%- set _ = generate_extra_file(output_dir ~ "/_pages.py", pages_py) %}
+{%- endif %}

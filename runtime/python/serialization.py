@@ -671,6 +671,10 @@ class BaseModel:
             out.setdefault(key, value)
         return out
 
+    def _field_value(self, name: str) -> t.Any:
+        """The value of the field ``name``, which a page reads from its body when it shadows it."""
+        return getattr(self, name)
+
     def _fields_to_dict(self, skip: t.Container[str] = ()) -> dict[str, t.Any]:
         out: dict[str, t.Any] = {}
         hints = _type_hints(type(self))
@@ -678,7 +682,7 @@ class BaseModel:
         for field in dataclasses.fields(self):
             if field.name in skip:
                 continue
-            value = getattr(self, field.name)
+            value = self._field_value(field.name)
             # `None` leaves out an optional field defaulting to `None` rather than UNSET,
             # unless it was received as `null`.
             if value is UNSET or (value is None and field.default is None and field.name not in nulls):
