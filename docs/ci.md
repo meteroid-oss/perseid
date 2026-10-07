@@ -513,8 +513,9 @@ Every SDK has its own version, in its own manifest, and is released on its own.
 
 1. `generate --pr` titles its pull request as a conventional commit sized by
    [oasdiff](https://github.com/oasdiff/oasdiff): `feat(api)!:` for breaking changes,
-   `feat(api):` for other API changes, `fix(api):` otherwise. Each API change oasdiff finds
-   is listed in the description, and nested in the commit as its own conventional commit.
+   `feat(api):` for other API changes, `fix(api):` otherwise. Its changelog entries are nested
+   in the commit as conventional commits, and every change oasdiff finds is listed, folded, in
+   the description.
 2. Merging it, or any `fix:` or `feat:` commit touching an SDK, opens a release PR that bumps the
    touched SDKs and their changelogs. Before 1.0, breaking changes bump the minor version.
 3. Merging the release PR tags each SDK and publishes it.
@@ -526,10 +527,12 @@ Sizing the change:
 - Without a previous spec, or without oasdiff, the pull request asks for a minor release.
 - `--bump major|minor|patch` skips the comparison.
 - An open pull request keeps its largest bump, and the API changes it already lists.
+- SDKs generated for the first time get no API changes: everything in them is new.
 - `--relax-enum-additions`, on by default, counts enum values added to responses as minor
   changes. Generated SDKs accept unknown enum values, which makes this safe.
 
-The SDK changelogs list each API change, breaking ones under "⚠ BREAKING CHANGES":
+The SDK changelogs name each breaking change (up to 10), then sum up the endpoints added,
+removed after deprecation and updated, naming up to 5 of each:
 
 ```markdown
 ### ⚠ BREAKING CHANGES
@@ -538,7 +541,8 @@ The SDK changelogs list each API change, breaking ones under "⚠ BREAKING CHANG
 
 ### Features
 
-* **api:** `GET /pets`: added the new optional `query` request parameter `limit`
+* **api:** add `POST /pets`
+* **api:** update `GET /pets`, `GET /owners` and 3 more
 * **api:** update SDKs to Pets 2
 ```
 

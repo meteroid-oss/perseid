@@ -9,11 +9,7 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use crate::{
-    changelog::{Breaking, Entry},
-    config::Source,
-    pr::Bump,
-};
+use crate::{changelog::Changelog, config::Source, pr::Bump};
 
 /// A workflow command in GitHub Actions, a plain line on stderr elsewhere.
 fn annotate(level: &str, message: &str) {
@@ -46,9 +42,9 @@ pub struct Comparison<'a> {
     pub relax_enum_additions: bool,
 }
 
-/// The bump of the change from the base spec to the current one, and its changelog entries.
+/// The bump of the change from the base spec to the current one, and its changelog.
 /// Without a base spec or oasdiff, a minor release.
-pub fn size(c: &Comparison) -> Result<(Bump, Vec<Entry>)> {
+pub fn size(c: &Comparison) -> Result<(Bump, Changelog)> {
     let scratch = tempfile::tempdir()?;
     let current: OsString = match Source::parse(c.spec) {
         Source::File(file) => c.root.join(file).into(),
@@ -70,7 +66,7 @@ pub fn size(c: &Comparison) -> Result<(Bump, Vec<Entry>)> {
                 "notice",
                 "no previous spec to compare with, asking for a minor release",
             );
-            return Ok((Bump::Minor, vec![]));
+            return Ok((Bump::Minor, Changelog::default()));
         }
     };
     if !crate::format::on_path("oasdiff") {
@@ -78,7 +74,7 @@ pub fn size(c: &Comparison) -> Result<(Bump, Vec<Entry>)> {
             "warning",
             "oasdiff isn't installed (`perseid tools install` installs it), asking for a minor release",
         );
-        return Ok((Bump::Minor, vec![]));
+        return Ok((Bump::Minor, Changelog::default()));
     }
     let mut levels: Vec<OsString> = vec![];
     if c.relax_enum_additions {
@@ -101,15 +97,15 @@ pub fn size(c: &Comparison) -> Result<(Bump, Vec<Entry>)> {
                 String::from_utf8_lossy(&output.stderr).trim()
             ),
         );
-        return Ok((Bump::Minor, vec![]));
+        return Ok((Bump::Minor, Changelog::default()));
     }
-    let entries = crate::changelog::of_oasdiff(&output.stdout)?;
-    let bump = match entries.first() {
-        Some(e) if e.breaking == Breaking::Yes => Bump::Major,
-        Some(_) => Bump::Minor,
-        None => Bump::Patch,
+    let changelog = Changelog::of_oasdiff(&output.stdout)?;
+    let bump = match () {
+        _ if changelog.breaking() => Bump::Major,
+        _ if !changelog.is_empty() => Bump::Minor,
+        _ => Bump::Patch,
     };
-    Ok((bump, entries))
+    Ok((bump, changelog))
 }
 
 #[cfg(test)]
@@ -138,7 +134,7 @@ paths:
       responses: { "204": { description: deleted } }
 "#;
 
-    fn size_of(next: &str, relax: bool) -> (Bump, Vec<Entry>) {
+    fn size_of(next: &str, relax: bool) -> (Bump, Changelog) {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("base.yaml"), BASE).unwrap();
         std::fs::write(dir.path().join("openapi.yaml"), next).unwrap();
@@ -158,25 +154,26 @@ paths:
             eprintln!("oasdiff isn't installed, skipped");
             return;
         }
-        assert_eq!(size_of(BASE, true), (Bump::Patch, vec![]));
+        assert_eq!(size_of(BASE, true), (Bump::Patch, Changelog::default()));
         let described = BASE.replace("description: deleted", "description: gone for good");
         assert_eq!(size_of(&described, true).0, Bump::Patch);
         let added = BASE.replace(
             "  /pets/{id}:\n",
             "  /toys:\n    get:\n      operationId: listToys\n      responses: { \"200\": { description: ok } }\n  /pets/{id}:\n",
         );
-        let (bump, entries) = size_of(&added, true);
+        let (bump, changelog) = size_of(&added, true);
         assert_eq!(bump, Bump::Minor);
+        let toys = &changelog.changes[0];
         assert_eq!(
-            entries[0].text, "`GET /toys`: endpoint added",
-            "{entries:?}"
+            (toys.operation.as_deref(), toys.id.as_str()),
+            (Some("GET /toys"), "endpoint-added")
         );
         let removed = BASE.split("  /pets/{id}:").next().unwrap();
-        let (bump, entries) = size_of(removed, true);
+        let (bump, changelog) = size_of(removed, true);
         assert_eq!(bump, Bump::Major);
-        assert!(
-            entries[0].text.starts_with("`DELETE /pets/{id}`: "),
-            "{entries:?}"
+        assert_eq!(
+            changelog.changes[0].operation.as_deref(),
+            Some("DELETE /pets/{id}")
         );
         let enum_added = BASE.replace("[available, sold]", "[available, pending, sold]");
         assert_eq!(size_of(&enum_added, true).0, Bump::Minor);
@@ -192,6 +189,6 @@ paths:
             relax_enum_additions: true,
         })
         .unwrap();
-        assert_eq!(sized, (Bump::Minor, vec![]));
+        assert_eq!(sized, (Bump::Minor, Changelog::default()));
     }
 }

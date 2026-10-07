@@ -404,18 +404,18 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             if pr {
                 let base = base_spec.map(|b| cwd.join(b));
-                let (bump, entries) = match bump {
+                let (bump, changelog) = match bump {
                     Bump::Auto => sizing::size(&sizing::Comparison {
                         root: &root,
                         spec: &location,
                         base: base.as_deref(),
                         relax_enum_additions,
                     })?,
-                    bump => (bump, vec![]),
+                    bump => (bump, Default::default()),
                 };
                 let request = Request {
                     bump,
-                    entries,
+                    changelog,
                     origin: pr::origin(&config, &root, &spec),
                     auto_merge,
                     dispatch: dispatch
@@ -569,8 +569,8 @@ struct Delivery {
 /// What `--pr` asks of each pull request.
 struct Request {
     bump: Bump,
-    /// The API changes, entries of the SDK changelogs.
-    entries: Vec<perseid::changelog::Entry>,
+    /// The API changes, summed up in the SDK changelogs.
+    changelog: perseid::changelog::Changelog,
     /// Where the spec comes from.
     origin: Option<String>,
     auto_merge: bool,
@@ -636,7 +636,7 @@ fn deliver(
             &delivery.files,
             request.bump,
             subject.trim(),
-            &request.entries,
+            &request.changelog,
             |changes| {
                 let summary = generate::summary(&delivery.changes, &BTreeMap::new());
                 let changes = match changes {
