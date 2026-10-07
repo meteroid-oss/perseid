@@ -1,7 +1,8 @@
 # Configuration
 
-`perseid init` writes a `perseid.toml` in the repository that will hold the SDKs. Every key,
-annotated (only `name` and `sdks` are required):
+`perseid init` writes a `perseid.toml` in the repository that will hold the SDKs, or
+`perseid init --from stainless.yml` from a [Stainless config](migrating-from-stainless.md). Every
+key, annotated (only `name` and `sdks` are required):
 
 ```toml
 #:schema https://raw.githubusercontent.com/meteroid-oss/perseid/main/perseid.schema.json

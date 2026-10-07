@@ -159,6 +159,7 @@ signs in with `GH_TOKEN`, `GITHUB_TOKEN`, the token `gh` stores, or a browser lo
 - [Auth, pagination, streaming, raw responses and encoding](docs/features.md)
 - [Customizing](docs/customizing.md): handwritten code, middleware, snippets, templates, webhooks
 - [Testing](docs/testing.md): how perseid itself is tested, for contributors
+- [Migrating from Stainless](docs/migrating-from-stainless.md): `perseid init --from stainless.yml`, and what changes for your users
 
 ## Status
 

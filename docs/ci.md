@@ -137,6 +137,8 @@ pull request.
   whose first line, ``# Written by `perseid init` ``, you removed.
 - Without a terminal, pass `--sdks`, and optionally `--repo`, `--spec`, `--name`, `--base-url`
   and `--license` (an SPDX expression; the spec's by default).
+- `--from stainless.yml` imports a Stainless config without asking, and lists what it can't
+  carry over. See [migrating from Stainless](migrating-from-stainless.md).
 - Without a spec in the repository, it asks where the spec is: at a URL, in a file, or in another
   repository. For the last, `spec` defaults to `openapi.json`, where `perseid connect` pushes it.
   `perseid generate --spec <path|url> --out /tmp/sdks` previews the SDKs meanwhile.
