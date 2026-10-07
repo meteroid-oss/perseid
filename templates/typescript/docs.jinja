@@ -22,6 +22,17 @@
     {{ fallback if id in ["client", "page", "stream", "response", "error"] else id }}
 {%- endmacro %}
 
+{#- `page.a?.b`: a property of the response of the paginated `op` that no paging member shadows. -#}
+{% macro page_field(op) -%}
+    {%- set pg = op.pagination -%}
+    {%- set members = ["items", "body", "response", "hasNextPage", "getNextPage", "iterPages", "toJSON"] -%}
+    {%- set out = namespace(path=pg.items) -%}
+    {%- for path in [pg.items, pg.has_more, pg.next_cursor, pg.total_pages, pg.total] if path and (path[0] | ident("camel")) not in members -%}
+        {%- set out.path = path -%}
+    {%- endfor -%}
+    page{% for key in out.path %}{{ "." if loop.first else "?." }}{{ key | ident("camel") }}{% endfor -%}
+{%- endmacro %}
+
 {% macro literal(arg) -%}
     {%- if arg.kind == "integer" and arg.int64 and sdk.int64 == "bigint" %}{{ arg.value }}n
     {%- elif arg.kind == "integer" and arg.int64 and sdk.int64 == "string" %}"{{ arg.value }}"

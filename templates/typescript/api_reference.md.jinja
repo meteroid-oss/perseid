@@ -56,7 +56,7 @@
     {{ docs.resource(resource.name) }}.{{ docs.method(op) }}({{ params.list | join(", ") }}): {{ returned }}
 {%- endmacro -%}
 {% macro returns(op) -%}
-    {%- if op.pagination is defined %}pages of {{ model(op.pagination.item_schema) }}
+    {%- if op.pagination is defined %}{{ model(op.response_body_schema_name) }} pages of {{ model(op.pagination.item_schema) }}
     {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
     {%- elif op.response_is_binary | default(false) %}bytes
     {%- elif op.response_is_text | default(false) %}text
@@ -79,6 +79,16 @@ resource. Each method also takes a last `requestOptions?: RequestOptions` argume
 `query`, `timeout`, `maxRetries`, `idempotencyKey` and `signal` for that call. Methods return an
 `APIPromise`, awaited for the body or asked for the response with `.withResponse()`. Models are
 in [`src/models`](src/models).
+{%- set paged = namespace(any=false) %}
+{%- for resource in api.resources %}
+    {%- for r in [resource] + (resource.subresources | items | map(attribute=1) | list) if r.operations | selectattr("pagination", "defined") | list %}{% set paged.any = true %}{% endfor %}
+{%- endfor %}
+{%- if paged.any %}
+
+List methods return a `PagePromise`. Awaited, it gives the first `Page`: the response body, its
+properties read on the page, with `items`, `hasNextPage()`, `getNextPage()` and `iterPages()`.
+Iterated with `for await`, it yields every item of every page.
+{%- endif %}
 {% if api.resources | length > 1 %}
 {{ docs.contents(api.resources) }}
 {% endif %}

@@ -78,18 +78,22 @@ const raw: Response = await {{ call_of() }}.asResponse(); // body unread
 {% if list %}
 ## Pagination
 
-List methods return a `PagePromise`. Iterate it to get every item, pages being fetched on demand,
-or await it for the first `Page`, with `items`, `body` (the response), `hasNextPage()`,
-`getNextPage()` and `iterPages()`.
+List methods return a `PagePromise`. Await it for the first `Page`: the response body, whose
+properties are read on the page, with `items` (the items of the page), `hasNextPage()`,
+`getNextPage()` and `iterPages()`. A property named like one of these stays on `page.body`, the
+decoded body, next to `page.response`. Iterating a `PagePromise` or a `Page` with `for await`
+yields every item, the next pages being fetched on demand.
 
 ```ts
+const page = await {{ docs.call(list) }};
+console.log(page.items, {{ docs.page_field(list.operation) }});
+
 for await (const {{ docs.var(list.item, "item") }} of {{ docs.call(list) }}) {
   console.log({{ docs.var(list.item, "item") }});
 }
 
-let page = await {{ docs.call(list) }};
-while (page.hasNextPage()) {
-  page = await page.getNextPage();
+for await (const each of page.iterPages()) {
+  console.log(each.items.length, each.hasNextPage());
 }
 ```
 {% endif %}

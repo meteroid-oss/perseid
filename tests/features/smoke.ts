@@ -355,18 +355,42 @@ async function main() {
 
   const first = await client.widgets.list();
   assert.deepEqual(first.items.map((widget: Widget) => widget.id), ["w1", "w2"]);
+  assert.deepEqual(first.data.map((widget: Widget) => widget.id), ["w1", "w2"]);
+  assert.equal(first.nextCursor, "c2");
   assert.equal((first.items[0] as Widget & { color?: string }).color, "red");
+  assert.equal(first.response.status, 200);
+  assert.deepEqual(JSON.parse(JSON.stringify(first)), JSON.parse(JSON.stringify(first.body)));
   assert.ok(first.hasNextPage());
   const second = await first.getNextPage();
   assert.deepEqual(second.items.map((widget: Widget) => widget.id), ["w3"]);
+  assert.equal(second.nextCursor, null);
   assert.equal(second.body.nextCursor, null);
   assert.ok(!second.hasNextPage());
   const pageIds = [];
   for await (const page of first.iterPages()) {
     pageIds.push(page.items.length);
+    assert.equal(page.data.length, page.items.length);
   }
   assert.deepEqual(pageIds, [2, 1]);
+  assert.deepEqual(await collect(first), ["w1", "w2", "w3"]);
   assert.deepEqual(await collect(client.widgets.list()), ["w1", "w2", "w3"]);
+
+  const gadgets = await client.gadgets.list();
+  assert.equal(Number(gadgets.meta.totalPages), 2);
+  assert.deepEqual(gadgets.items.map((gadget) => gadget.id), ["g1", "g2"]);
+  assert.deepEqual(gadgets.body.items.map((gadget) => gadget.id), ["g1", "g2"]);
+  const lastGadgets = await gadgets.getNextPage();
+  assert.deepEqual(lastGadgets.items.map((gadget) => gadget.id), ["g3"]);
+  assert.ok(!lastGadgets.hasNextPage());
+
+  const records = await client.records.list();
+  assert.equal(Number(records.total), 3);
+  assert.deepEqual(records.data.map((entry) => entry.id), ["r1", "r2"]);
+  const pageSizes = [];
+  for await (const page of records.iterPages()) {
+    pageSizes.push(page.items.length);
+  }
+  assert.deepEqual(pageSizes, [2, 1]);
 
   const { data: health, response, requestId } = await client.account
     .checkHealth()

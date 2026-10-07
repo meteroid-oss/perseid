@@ -163,7 +163,7 @@ export class {{ resource_type_name }} {
         {% for p in op.query_params if p.name == pg.param and pg.style != "cursor" and m.is_int64(p.type) -%}
             {% set pv.value = ("BigInt(" if sdk.int64 == "bigint" else "String(") ~ pg.style ~ ")" -%}
         {% endfor -%}
-        {{ op_doc(op, "Await it for the first page, or iterate it with `for await` over every item of every\npage, fetched on demand.") }}public {{ method }}({{ params }}): {{ runtime("PagePromise") }}<{{ page_type }}, {{ item_type }}> {
+        {{ op_doc(op, "Await it for the first page: the response body, its properties read on the page, with\n`items`, `hasNextPage()`, `getNextPage()` and `iterPages()`. Or iterate it with `for await`\nover every item of every page, fetched on demand.") }}public {{ method }}({{ params }}): {{ runtime("PagePromise") }}<{{ page_type }}, {{ item_type }}> {
             return new {{ runtime("PagePromise") }}<{{ page_type }}, {{ item_type }}>(
                 {
                     style: "{{ pg.style }}",
