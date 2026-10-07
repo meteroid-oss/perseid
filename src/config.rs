@@ -715,7 +715,7 @@ impl Config {
         let kebab = self.name.to_kebab_case();
         let package = self.package(sdk);
         let version = manifest_version(dir)
-            .or_else(|| released_version(dir))
+            .or_else(|| released_version(dir, &sdk.path))
             .unwrap_or_else(|| "0.1.0".into());
         let pick = |own: &Option<String>, shared: &Option<String>, default: &str| {
             own.clone()
@@ -884,26 +884,23 @@ pub(crate) fn manifest_version(dir: &Path) -> Option<String> {
     read("version.txt").map(|v| v.trim().to_owned())
 }
 
-/// The version `.release-please-manifest.json` holds for the package at `dir`, in a folder above
-/// it within the repository: that of an SDK whose old manifest was deleted to regenerate it.
-fn released_version(dir: &Path) -> Option<String> {
-    let dir = std::path::absolute(dir).ok()?;
-    for top in dir.ancestors() {
-        if let Ok(text) = std::fs::read_to_string(top.join(".release-please-manifest.json")) {
-            let manifest: Value = serde_json::from_str(&text).ok()?;
-            let path = dir
-                .strip_prefix(top)
-                .ok()?
-                .to_string_lossy()
-                .replace('\\', "/");
-            let key = if path.is_empty() { "." } else { path.as_str() };
-            return manifest[key].as_str().map(str::to_owned);
+/// The version `.release-please-manifest.json` holds for the SDK at `path` of the checkout it is
+/// at `dir` of: that of an SDK whose old manifest was deleted to regenerate it.
+fn released_version(dir: &Path, path: &str) -> Option<String> {
+    let path = path.trim_start_matches("./").trim_end_matches('/');
+    let (top, key) = match path {
+        "" | "." => (dir, "."),
+        path => {
+            let depth = Path::new(path).components().count();
+            (
+                dir.ends_with(path).then(|| dir.ancestors().nth(depth))??,
+                path,
+            )
         }
-        if top.join(".git").exists() {
-            break;
-        }
-    }
-    None
+    };
+    let text = std::fs::read_to_string(top.join(".release-please-manifest.json")).ok()?;
+    let manifest: Value = serde_json::from_str(&text).ok()?;
+    manifest[key].as_str().map(str::to_owned)
 }
 
 /// `<Version>` of the first `.csproj` in `dir` or one level below, as `perseid generate` lays out C# SDKs.
@@ -963,17 +960,22 @@ mod tests {
     #[test]
     fn sdks_without_a_manifest_keep_the_version_release_please_released() {
         let repo = tempfile::tempdir().unwrap();
-        std::fs::create_dir(repo.path().join(".git")).unwrap();
         std::fs::create_dir(repo.path().join("typescript")).unwrap();
         let manifest = r#"{ ".": "4.2.0", "typescript": "1.3.0" }"#;
         std::fs::write(repo.path().join(".release-please-manifest.json"), manifest).unwrap();
-        assert_eq!(released_version(repo.path()).as_deref(), Some("4.2.0"));
+        assert_eq!(released_version(repo.path(), ".").as_deref(), Some("4.2.0"));
         let typescript = repo.path().join("typescript");
-        assert_eq!(released_version(&typescript).as_deref(), Some("1.3.0"));
+        assert_eq!(
+            released_version(&typescript, "typescript").as_deref(),
+            Some("1.3.0")
+        );
+        let preview = repo.path().join("out/typescript");
+        std::fs::create_dir_all(&preview).unwrap();
+        assert_eq!(released_version(&preview, "."), None);
         std::fs::write(typescript.join("package.json"), r#"{ "version": "1.4.0" }"#).unwrap();
         assert_eq!(manifest_version(&typescript).as_deref(), Some("1.4.0"));
         let go = repo.path().join("go");
-        assert_eq!(released_version(&go), None);
+        assert_eq!(released_version(&go, "go"), None);
     }
 
     fn layout(toml: &str) -> Vec<(String, Option<String>, String)> {
