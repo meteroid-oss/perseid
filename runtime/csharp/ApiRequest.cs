@@ -38,6 +38,9 @@ internal sealed class ApiRequest(HttpMethod method, string path, string operatio
     /// <summary>The operation's security requirement, when it differs from the API-wide one.</summary>
     public string[][]? Security { get; set; }
 
+    /// <summary>Whether a POST is safe to retry without an <c>Idempotency-Key</c>.</summary>
+    public bool IsRetrySafe { get; init; }
+
     /// <summary>Whether the body can only be sent once, which rules out retries.</summary>
     public bool IsOneShot => _upload?.IsStream == true || _multipart?.IsOneShot == true;
 

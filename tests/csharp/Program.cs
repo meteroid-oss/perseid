@@ -52,7 +52,7 @@ var created = await client.Pets.CreateAsync(
 var post = seen[^1];
 Check(post.Body == """{"name":"Rex","status":"available"}""", $"request body {post.Body}");
 Check(post.Headers["authorization"] == "Bearer sk_test", "bearer token");
-Check(post.Headers["idempotency-key"]?.StartsWith("auto_") == true, "idempotency key");
+Check(post.Headers["idempotency-key"] is null, "no idempotency key unless the API deduplicates by it");
 Check(post.Headers["petstore-req-id"] is not null, "request id");
 Check(
     post.Headers["user-agent"]?.StartsWith("petstore-csharp/") == true,

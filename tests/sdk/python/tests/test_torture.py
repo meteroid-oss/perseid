@@ -33,7 +33,7 @@ def generate(
         (project / "openapi.yaml").write_text(spec)
     base = f'base_url = "{base_url}"\n' if base_url else ""
     (project / "perseid.toml").write_text(
-        f'spec = "openapi.yaml"\nname = "{name.title()}"\nsdks = ["python"]\n{base}[python]\n{python}'
+        f'spec = "openapi.yaml"\nname = "{name.title()}"\nsdks = ["python"]\nidempotency_keys = true\n{base}[python]\n{python}'
     )
     subprocess.run(["perseid", "generate"], cwd=project, check=True, capture_output=True)
     sys.path.insert(0, str(project / "python"))

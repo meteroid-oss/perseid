@@ -51,9 +51,12 @@ pub struct Config {
     pub package: Package,
     /// API base URL the clients default to.
     pub base_url: Option<String>,
-    /// Prefix of the SDK's own headers, such as `{prefix}-idempotency-key`: the kebab-case
-    /// `name` by default.
+    /// Prefix of the SDK's own headers, such as `{prefix}-retry-count`: the kebab-case `name`
+    /// by default.
     pub header_prefix: Option<String>,
+    /// `true` when the API deduplicates POST requests by `Idempotency-Key`: the SDKs then send
+    /// one with every POST, and retry them. Otherwise only POSTs given a key are retried.
+    pub idempotency_keys: Option<bool>,
     /// Prefix of the `User-Agent` header: the kebab-case `name` by default.
     pub user_agent: Option<String>,
     /// Installs the Standard Webhooks signature verifier in every SDK.
@@ -728,6 +731,7 @@ impl Config {
             "has_default_base_url": target.base_url.is_some() || self.base_url.is_some(),
             "user_agent_prefix": pick(&target.user_agent, &self.user_agent, &kebab),
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
+            "idempotency_keys": self.idempotency_keys.unwrap_or(false),
             "env_prefix": self.name.to_shouty_snake_case(),
             "webhooks": target.webhooks.or(self.webhooks).unwrap_or(false),
             "tests": target.tests.or(self.tests).unwrap_or(true),

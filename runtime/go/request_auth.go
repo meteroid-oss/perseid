@@ -168,6 +168,8 @@ func (c *Client) fetchToken(ctx context.Context, target, scope string) (string, 
 	}
 	req := newRequest(http.MethodPost, target, nil)
 	req.security = [][]string{}
+	// Another token is as good as the first: the request is safe to retry.
+	req.replayable = true
 	if oauth.inBody {
 		form.Set("client_id", oauth.clientID)
 		form.Set("client_secret", oauth.clientSecret)

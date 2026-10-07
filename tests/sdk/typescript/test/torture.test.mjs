@@ -15,7 +15,7 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 copyFileSync(join(fixtures, "torture.yaml"), join(dir, "openapi.yaml"));
 writeFileSync(
   join(dir, "perseid.toml"),
-  'spec = "openapi.yaml"\nsdks = ["typescript"]\nname = "Torture"\nbase_url = "https://torture.test/v1"\n[typescript]\nint64 = "bigint"\n'
+  'spec = "openapi.yaml"\nsdks = ["typescript"]\nname = "Torture"\nidempotency_keys = true\nbase_url = "https://torture.test/v1"\n[typescript]\nint64 = "bigint"\n'
 );
 execFileSync("perseid", ["generate"], { cwd: dir, stdio: "ignore" });
 const sdkDir = join(dir, "typescript");

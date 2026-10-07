@@ -79,7 +79,7 @@ successful response the SDK cannot read throws an `ApiDecodeException`.
 
 Connection errors, timeouts, 408, 429 and 5xx responses are retried twice with jittered backoff
 (0.5s, then 1s), honoring `Retry-After` and `retry-after-ms` up to a minute (the backoff
-otherwise), when the request is idempotent or carries an `Idempotency-Key` (POST requests get one). Each attempt times out after @@TIMEOUT@@ seconds.
+otherwise), when the request is idempotent or carries an `Idempotency-Key`. Each attempt times out after @@TIMEOUT@@ seconds.
 
 ```csharp
 var client = new @@CLIENT_NAME@@Client(options: new() { {% if not sdk.has_default_base_url %}BaseUrl = "https://api.example.com", {% endif %}MaxRetries = 5, Timeout = TimeSpan.FromSeconds(20) });

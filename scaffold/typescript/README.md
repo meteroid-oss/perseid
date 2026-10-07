@@ -112,7 +112,7 @@ for await (const event of stream) {
 
 Connection errors, timeouts, 408, 429 and 5xx responses are retried twice with exponential
 backoff, honouring `Retry-After` and `retry-after-ms`, when the request is idempotent or carries
-an `Idempotency-Key` (POST requests get one automatically). Each attempt times out after
+an `Idempotency-Key`. Each attempt times out after
 `timeout` milliseconds (`Infinity` waits forever).
 
 ```ts

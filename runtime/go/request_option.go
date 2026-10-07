@@ -22,7 +22,7 @@ func WithHeader(name, value string) RequestOption {
 }
 
 // WithIdempotencyKey sets the key that lets the server deduplicate retried
-// requests. POST requests get a random one by default.
+// requests, and makes a POST safe to retry.
 func WithIdempotencyKey(key string) RequestOption {
 	return WithHeader("Idempotency-Key", key)
 }

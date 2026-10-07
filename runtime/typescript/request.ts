@@ -29,6 +29,8 @@ const DEFAULT_RETRIES = 2;
 const INITIAL_RETRY_DELAY_MS = 500;
 const MAX_RETRY_DELAY_MS = 8_000;
 const MAX_RETRY_AFTER_MS = 60_000;
+/** Whether the API deduplicates POSTs by `Idempotency-Key`, so that each gets one to be retried. */
+const AUTO_IDEMPOTENCY_KEY: boolean = @@IDEMPOTENCY_KEYS@@;
 const IDEMPOTENT_METHODS: ReadonlySet<HttpMethod> = new Set([
   "GET",
   "HEAD",
@@ -101,6 +103,8 @@ export async function fetchOAuthToken(ctx: @@CLIENT_NAME@@RequestContext, grant:
     request.setHeaderParam("authorization", basicAuthorization(grant.clientId, grant.clientSecret));
   }
   request.setSecurity([]);
+  // Another token is as good as the first: the request is safe to retry.
+  request.setRetrySafe();
   request.setFormBody(form);
   return await request.send(ctx, (json: any): OAuthToken => {
     const token = json?.access_token;
@@ -254,6 +258,7 @@ function checkedPath(name: string, path: string): string {
 export class @@CLIENT_NAME@@Request {
   private body?: BodyInit;
   private oneShot = false;
+  private retrySafe = false;
   private security?: Security;
   private errors?: ErrorParsers;
   private readonly queryParams: [string, string][] = [];
@@ -328,6 +333,11 @@ export class @@CLIENT_NAME@@Request {
   /** Overrides the API-wide security requirement for this operation. */
   public setSecurity(security: Security) {
     this.security = security;
+  }
+
+  /** Marks a POST as safe to retry without an `Idempotency-Key`. */
+  public setRetrySafe() {
+    this.retrySafe = true;
   }
 
   /** Sets the parsers of the error bodies the operation declares. */
@@ -538,13 +548,13 @@ export class @@CLIENT_NAME@@Request {
     if (headers.cookie && headers.cookie !== authHeaders.cookie) cookies.push(headers.cookie);
     delete headers.cookie;
     if (cookies.length > 0) headers.cookie = cookies.join("; ");
-    if (this.method === "POST" && headers["idempotency-key"] === undefined) {
+    if (AUTO_IDEMPOTENCY_KEY && this.method === "POST" && headers["idempotency-key"] === undefined) {
       headers["idempotency-key"] = `auto_${randomUUID()}`;
     }
 
     const retryable =
       !this.oneShot &&
-      (IDEMPOTENT_METHODS.has(this.method) || headers["idempotency-key"] !== undefined);
+      (this.retrySafe || IDEMPOTENT_METHODS.has(this.method) || headers["idempotency-key"] !== undefined);
     const maxRetries =
       options.maxRetries ?? ctx.maxRetries ?? ctx.retryScheduleInMs?.length ?? DEFAULT_RETRIES;
     const fetchImpl = withMiddleware(ctx.fetch, ctx.middleware) ?? fetch;

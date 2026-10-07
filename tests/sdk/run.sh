@@ -25,6 +25,7 @@ case "$lang" in
     # The tests of tests/sdk/rust/torture run on the SDK of tests/fixtures/torture.yaml.
     (mkdir "$work/torture" && cd "$work/torture" \
       && perseid init --sdks rust --spec "$here/../fixtures/torture.yaml" > /dev/null \
+      && sed -i '/^name = /a idempotency_keys = true' perseid.toml \
       && perseid generate rust > /dev/null \
       && mkdir -p rust/tests && cp "$here/rust/torture/"*.rs rust/tests/ \
       && cd rust && cargo test)
@@ -56,6 +57,7 @@ case "$lang" in
     # The tests of tests/sdk/go/_torture run on the SDK of tests/fixtures/torture.yaml.
     (mkdir "$work/torture" && cd "$work/torture" \
       && perseid init --sdks go --spec "$here/../fixtures/torture.yaml" > /dev/null \
+      && sed -i '/^name = /a idempotency_keys = true' perseid.toml \
       && perseid generate go > /dev/null \
       && cp "$here/go/_torture/"*_test.go go/ \
       && cd go && go vet ./... && go test ./...)
@@ -88,7 +90,8 @@ GRADLE
     # Without servers, the client has no default base URL.
     sed -i '/^servers:/,/^paths:/{/^paths:/!d}' "$work/torture/openapi.yaml"
     # The tests of tests/sdk/java/_torture.
-    (cd "$work/torture" && perseid init --sdks java && perseid generate java \
+    (cd "$work/torture" && perseid init --sdks java \
+      && sed -i '/^name = /a idempotency_keys = true' perseid.toml && perseid generate java \
       && cp -r "$here/java/_torture/." java/ && cd java && gradle_test)
     # The OAuth2 client credentials tests run on the SDK of tests/fixtures/oauth.yaml.
     (mkdir "$work/oauth" && cd "$work/oauth" \
@@ -107,6 +110,7 @@ GRADLE
     # default base URL.
     (mkdir "$work/torture" && cd "$work/torture" \
       && perseid init --sdks csharp --spec "$here/../fixtures/torture.yaml" > /dev/null \
+      && sed -i '/^name = /a idempotency_keys = true' perseid.toml \
       && sed -i '/^base_url/d' perseid.toml \
       && perseid generate csharp > /dev/null \
       && cp -r "$here/csharp/_torture/." csharp/ && cd csharp && dotnet test Tests)

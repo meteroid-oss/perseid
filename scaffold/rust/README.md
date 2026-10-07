@@ -99,7 +99,7 @@ other.
 
 Connection errors, timeouts, 408, 429 and 5xx responses are retried twice with jittered
 backoff, honoring `Retry-After`, when the request is idempotent: GET, PUT, DELETE, or any request
-with an `Idempotency-Key` (POST requests get one automatically). Each attempt times out after 60
+with an `Idempotency-Key`. Each attempt times out after 60
 seconds by default.
 
 ```rust

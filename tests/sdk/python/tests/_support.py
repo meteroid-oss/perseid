@@ -30,8 +30,11 @@ def perseid(project: Path, *args: str) -> str:
     return done.stdout
 
 
-def generate_fixture(fixture: str, name: str, base_url: str | None = "https://api.test") -> Path:
-    """Generates the Python SDK of `tests/fixtures/<fixture>` as the client `name`.
+def generate_fixture(
+    fixture: str, name: str, base_url: str | None = "https://api.test", settings: str = ""
+) -> Path:
+    """Generates the Python SDK of `tests/fixtures/<fixture>` as the client `name`, with the
+    top-level `perseid.toml` keys of `settings`.
 
     Returns the project directory, whose `python` directory holds the package.
     """
@@ -40,7 +43,7 @@ def generate_fixture(fixture: str, name: str, base_url: str | None = "https://ap
     shutil.copy(fixtures() / fixture, project / "openapi.yaml")
     url = f'base_url = "{base_url}"\n' if base_url else ""
     (project / "perseid.toml").write_text(
-        f'spec = "openapi.yaml"\nname = "{name}"\nsdks = ["python"]\n{url}'
+        f'spec = "openapi.yaml"\nname = "{name}"\nsdks = ["python"]\n{url}{settings}'
     )
     perseid(project, "generate")
     return project

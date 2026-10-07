@@ -43,11 +43,17 @@ type request struct {
 	// newBody returns a streamed body for each attempt; oneShot bodies are not retried.
 	newBody func() (io.Reader, error)
 	oneShot bool
+	// replayable marks a POST that is safe to retry without an Idempotency-Key.
+	replayable bool
 	// stream keeps the response open in response, until cancel.
 	stream   bool
 	response *http.Response
 	cancel   context.CancelFunc
 }
+
+// autoIdempotencyKey is whether the API deduplicates POSTs by Idempotency-Key, so that each gets
+// one to be retried.
+const autoIdempotencyKey = @@IDEMPOTENCY_KEYS@@
 
 // queryStyle is how a structured query parameter is serialized.
 type queryStyle int
@@ -460,9 +466,9 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 		req.headers.Set("Cookie", strings.Join(cookies, "; "))
 	}
 
-	// POSTs are made idempotent by default so that a retried request cannot
+	// POSTs get a key when the API deduplicates them by it, so that a retried request cannot
 	// create a duplicate resource.
-	if req.method == http.MethodPost && req.headers.Get("idempotency-key") == "" {
+	if autoIdempotencyKey && req.method == http.MethodPost && req.headers.Get("idempotency-key") == "" {
 		key, err := randomHex(16)
 		if err != nil {
 			return nil, 0, err
@@ -478,7 +484,7 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 	}
 
 	// Replaying a request that is not idempotent could apply it twice.
-	idempotent := req.headers.Get("idempotency-key") != "" ||
+	idempotent := req.replayable || req.headers.Get("idempotency-key") != "" ||
 		slices.Contains([]string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodOptions, http.MethodTrace}, req.method)
 	// An access token the API rejects is replaced once, without using up a retry.
 	renewed := false

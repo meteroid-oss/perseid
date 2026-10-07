@@ -1,8 +1,11 @@
 use bytes::Bytes;
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
-use petstore::api::{
-    middleware::{BoxError, BoxFuture, Middleware, Next, Request, Response},
-    Petstore,
+use petstore::{
+    api::{
+        middleware::{BoxError, BoxFuture, Middleware, Next, Request, Response},
+        Petstore, RequestOptions,
+    },
+    models::PetCreate,
 };
 use std::{
     collections::HashMap,
@@ -123,4 +126,46 @@ async fn middleware_runs_in_order_and_can_change_the_request() {
     let seen = origin.seen_headers.lock().unwrap();
     assert_eq!(seen[0]["x-tag"], "yes");
     assert!(seen[0].contains_key("authorization"));
+}
+
+/// Answers every request with a 503, recording its headers.
+#[derive(Clone, Default)]
+struct Unavailable(Arc<Mutex<Vec<HeaderMap>>>);
+
+impl Middleware for Unavailable {
+    fn handle<'a>(
+        &'a self,
+        request: Request,
+        _next: Next<'a>,
+    ) -> BoxFuture<'a, Result<Response, BoxError>> {
+        self.0.lock().unwrap().push(request.headers().clone());
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", HeaderValue::from_static("0"));
+        Box::pin(async move { Ok(Response::buffered(StatusCode::SERVICE_UNAVAILABLE, headers, Bytes::new())) })
+    }
+}
+
+/// perseid.toml leaves `idempotency_keys` unset: the API may not deduplicate POSTs.
+#[tokio::test]
+async fn posts_without_an_idempotency_key_are_not_retried() {
+    let origin = Unavailable::default();
+    let petstore = Petstore::builder()
+        .base_url("https://pets.example.com")
+        .middleware(origin.clone())
+        .build()
+        .unwrap();
+    let error = petstore.pets().create(PetCreate::new("Rex")).await.unwrap_err();
+    assert_eq!(error.status(), Some(StatusCode::SERVICE_UNAVAILABLE));
+    {
+        let seen = origin.0.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert!(!seen[0].contains_key("idempotency-key"));
+    }
+
+    let keyed = RequestOptions::new().idempotency_key("k1");
+    let error = petstore.pets().with_options(keyed).create(PetCreate::new("Rex")).await.unwrap_err();
+    assert_eq!(error.status(), Some(StatusCode::SERVICE_UNAVAILABLE));
+    let seen = origin.0.lock().unwrap();
+    assert_eq!(seen.len(), 4, "the call given a key is retried twice");
+    assert!(seen[1..].iter().all(|headers| headers["idempotency-key"] == "k1"));
 }

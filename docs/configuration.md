@@ -8,6 +8,7 @@ annotated (only `name` and `sdks` are required):
 spec = "openapi.json"               # path or https:// URL (JSON or YAML), what generate reads
 name = "Acme"                       # any case: "acme-api", "Acme API"... gives AcmeApi, acme_api, acme-api
 sdks = ["typescript", "python", "go"] # among rust, typescript, python, go, java, csharp
+idempotency_keys = false            # true when the API deduplicates POSTs by Idempotency-Key
 
 # Where the SDKs live: here, in a folder per language, unless set
 repo = "acme/acme-{lang}"           # one repository per SDK ({lang}: typescript, python, go...),
@@ -21,7 +22,7 @@ webhooks = false                    # install the Standard Webhooks verifier
 tests = true                        # generate a test per operation
 round_trips = false                 # also decode and encode sample JSON of every model
 untagged_unions = "best-match"       # or "json" for untyped JSON, see "Unions of objects"
-header_prefix = "acme"              # SDK headers: acme-idempotency-key...; kebab-case name by default
+header_prefix = "acme"              # SDK headers: acme-retry-count...; kebab-case name by default
 user_agent = "acme"                 # User-Agent prefix; kebab-case name by default
 
 # Operations
@@ -74,6 +75,7 @@ of every key with its description and allowed values.
 | `spec` | The OpenAPI document, a path relative to `perseid.toml` (`openapi.json` by default) or an `http(s)` URL |
 | `name` | The client name, in any form |
 | `sdks` | Among `rust`, `typescript`, `python`, `go`, `java`, `csharp` |
+| `idempotency_keys` | `true` when the API deduplicates POST requests by `Idempotency-Key`: the SDKs send one with every POST and retry them. `false` by default: a POST is only retried when the caller gives it a key, as replaying it could apply it twice |
 
 - The spec is OpenAPI 3.0, 3.1 or 3.2, JSON or YAML. `$ref`s to other files or URLs are bundled.
 - When another repository holds the spec, `perseid connect` run there pushes it to the `spec`
@@ -108,7 +110,7 @@ Each key is also a key of the [language tables](#language-tables), which overrid
 | `tests` | `true` | `false` leaves out the [generated tests](languages.md#tests) |
 | `round_trips` | `false` | `true` adds the [round trips](languages.md#round-trips) of every model to the generated tests |
 | `untagged_unions` | `"best-match"` | `"json"` types [unions no property tells apart](#unions-of-objects) as untyped JSON |
-| `header_prefix` | kebab-case `name` | Prefix of the headers the SDKs send on their own: `acme-idempotency-key` |
+| `header_prefix` | kebab-case `name` | Prefix of the headers the SDKs send on their own: `acme-retry-count` |
 | `user_agent` | kebab-case `name` | Prefix of the `User-Agent` header |
 | `[methods]` | | Method names by operation id, over the [resource-style names](#method-names) |
 | `[context]` | | Values exposed to templates as `sdk.*` |

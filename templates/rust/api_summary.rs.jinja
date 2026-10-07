@@ -318,9 +318,9 @@ impl {{ client }}Builder {
     }
 
     /// How many times a failed request is retried: on connection errors, timeouts, and
-    /// 408, 429 and 5xx responses. Only idempotent requests are retried; POST requests are
-    /// made idempotent with an automatic `Idempotency-Key`. `Retry-After` is honored up to
-    /// a minute, otherwise delays grow from 500ms to 8s with jitter.
+    /// 408, 429 and 5xx responses. Only idempotent requests are retried, or those
+    /// with an `Idempotency-Key`{% if sdk.idempotency_keys %}, which POST requests get automatically{% endif %}.
+    /// `Retry-After` is honored up to a minute, otherwise delays grow from 500ms to 8s with jitter.
     ///
     /// Default: 2.
     pub fn max_retries(mut self, max_retries: u32) -> Self {

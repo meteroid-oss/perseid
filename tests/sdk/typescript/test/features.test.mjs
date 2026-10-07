@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
 import { generate } from "./_sdk.mjs";
 
-const { sdk, cleanup } = await generate("features.yaml", { name: "Features" });
+const { sdk, cleanup } = await generate("features.yaml", { name: "Features", idempotencyKeys: true });
 after(cleanup);
 
 const json = (body, status = 200, headers = {}) =>

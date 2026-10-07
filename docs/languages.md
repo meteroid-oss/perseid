@@ -8,7 +8,7 @@ Examples use an API named `Acme` with a `customers` resource. Names follow the `
 | Behavior | |
 |---|---|
 | Retries | Connection errors, timeouts, 408, 429 and 5xx, retried twice by default with jittered exponential backoff |
-| Safe retries only | Idempotent methods, or requests with an `Idempotency-Key`. Every POST gets one automatically |
+| Safe retries only | Idempotent methods, or requests with an `Idempotency-Key`. Every POST gets one automatically with [`idempotency_keys = true`](configuration.md#spec-name-and-sdks) |
 | `Retry-After` | `retry-after-ms` and `Retry-After` set the wait when at most 60 seconds, else the backoff applies |
 | Timeout | Per attempt, `timeout` of `perseid.toml` (60 seconds by default), settable per client and per call |
 | Environment | `ACME_API_KEY` for the token, `ACME_BASE_URL` for the base URL, `ACME_CLIENT_ID` and `ACME_CLIENT_SECRET` for OAuth2 client credentials |

@@ -22,6 +22,9 @@ internal sealed class ApiTransport : IDisposable
     private static readonly TimeSpan InitialBackoff = TimeSpan.FromMilliseconds(500);
     private static readonly TimeSpan MaxBackoff = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan MaxRetryAfter = TimeSpan.FromSeconds(60);
+    /// <summary>Whether the API deduplicates POSTs by <c>Idempotency-Key</c>, so that each gets one to
+    /// be retried.</summary>
+    private static readonly bool AutoIdempotencyKey = bool.Parse("@@IDEMPOTENCY_KEYS@@");
 
     internal static readonly string Version =
         typeof(ApiTransport)
@@ -99,7 +102,8 @@ internal sealed class ApiTransport : IDisposable
                 ? new Uri(_baseUrl).GetLeftPart(UriPartial.Authority) + tokenUrl
                 : _baseUrl.TrimEnd('/') + "/" + tokenUrl;
         }
-        var request = new ApiRequest(HttpMethod.Post, endpoint, "oauth.token") { Security = [] };
+        // Another token is as good as the first: the request is safe to retry.
+        var request = new ApiRequest(HttpMethod.Post, endpoint, "oauth.token") { Security = [], IsRetrySafe = true };
         var form = new List<KeyValuePair<string, string>> { new("grant_type", "client_credentials") };
         if (scope.Length > 0)
         {
@@ -320,14 +324,14 @@ internal sealed class ApiTransport : IDisposable
         {
             headers["Cookie"] = string.Join("; ", cookies);
         }
-        if (request.Method == HttpMethod.Post && !headers.ContainsKey("Idempotency-Key"))
+        if (AutoIdempotencyKey && request.Method == HttpMethod.Post && !headers.ContainsKey("Idempotency-Key"))
         {
             headers["Idempotency-Key"] = $"auto_{Guid.NewGuid()}";
         }
 
         var uri = request.BuildUri(_baseUrl, authQuery);
         var retryable =
-            (IsIdempotent(request.Method) || headers.ContainsKey("Idempotency-Key"))
+            (request.IsRetrySafe || IsIdempotent(request.Method) || headers.ContainsKey("Idempotency-Key"))
             && !request.IsOneShot;
         var retries = retryable
             ? Math.Max(0, options?.MaxRetries ?? _retrySchedule?.Count ?? _maxRetries)

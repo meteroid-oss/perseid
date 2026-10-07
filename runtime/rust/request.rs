@@ -27,6 +27,8 @@ use crate::api::{
 use crate::{error::Error, Configuration};
 
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
+/// Whether the API deduplicates POSTs by `Idempotency-Key`, so that each gets one to be retried.
+const AUTO_IDEMPOTENCY_KEY: bool = @@IDEMPOTENCY_KEYS@@;
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// A request that got no usable API response. The crate's `Error` is built from it.
@@ -194,6 +196,8 @@ pub(crate) struct Request {
     #[allow(clippy::option_option)]
     timeout: Option<Option<Duration>>,
     max_retries: Option<u32>,
+    /// A POST that is safe to retry without an `Idempotency-Key`.
+    retry_safe: bool,
 }
 
 impl Request {
@@ -216,6 +220,7 @@ impl Request {
             overrides: HeaderMap::new(),
             timeout: None,
             max_retries: None,
+            retry_safe: false,
         }
     }
 
@@ -624,7 +629,10 @@ impl Request {
         for (name, value) in &self.overrides {
             self.headers.append(name, value.clone());
         }
-        if self.method == Method::POST && !self.headers.contains_key(IDEMPOTENCY_KEY) {
+        if AUTO_IDEMPOTENCY_KEY
+            && self.method == Method::POST
+            && !self.headers.contains_key(IDEMPOTENCY_KEY)
+        {
             let key = format!("auto_{:016x}{:016x}", random(), random());
             self.headers
                 .insert(IDEMPOTENCY_KEY, HeaderValue::try_from(key).map_err(request_error)?);
@@ -634,7 +642,9 @@ impl Request {
             HeaderValue::from(random()),
         );
         // Retrying a non-idempotent request without a key could apply it twice.
-        let idempotent = self.method.is_idempotent() || self.headers.contains_key(IDEMPOTENCY_KEY);
+        let idempotent = self.retry_safe
+            || self.method.is_idempotent()
+            || self.headers.contains_key(IDEMPOTENCY_KEY);
         let replayable = self.upload.as_ref().is_none_or(Upload::replayable)
             && self.multipart.as_ref().is_none_or(Multipart::replayable);
         let max_retries = self.max_retries.unwrap_or(conf.max_retries) as usize;
@@ -862,6 +872,8 @@ async fn fetch_token(
     }
     let mut request = Request::new(Method::POST, "").with_security(&[]);
     request.path = Cow::Owned(endpoint);
+    // Another token is as good as the first: the request is safe to retry.
+    request.retry_safe = true;
     if client.in_body {
         form.insert("client_id".to_owned(), client.client_id.clone().into());
         form.insert("client_secret".to_owned(), client.client_secret.clone().into());

@@ -42,7 +42,6 @@ impl RequestOptions {
     }
 
     /// The `Idempotency-Key` header, which also makes a POST request safe to retry.
-    /// POST requests get a random one by default.
     #[must_use]
     pub fn idempotency_key(mut self, key: impl Into<String>) -> Self {
         self.idempotency_key = Some(key.into());

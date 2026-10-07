@@ -127,7 +127,7 @@ log.Print(resp.Header.Get("X-Request-Id"))
 
 Connection errors, timeouts, 408, 429 and 5xx responses are retried twice with jittered backoff,
 honoring `Retry-After` and `retry-after-ms`, when the request is idempotent or carries an
-`Idempotency-Key` (POST requests get one). Each attempt times out after `DefaultTimeout`.
+`Idempotency-Key`. Each attempt times out after `DefaultTimeout`.
 `Options` sets them for the client (`MaxRetries`, `Timeout`), and request options for one call:
 `@@PACKAGE_NAME@@.WithMaxRetries(0)`, `@@PACKAGE_NAME@@.WithTimeout(time.Minute)`,
 `@@PACKAGE_NAME@@.WithIdempotencyKey(key)`, `@@PACKAGE_NAME@@.WithHeader(name, value)`.

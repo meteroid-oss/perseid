@@ -173,7 +173,7 @@ try {
 
 Connection errors, timeouts, 408, 429 and 5xx responses are retried with jittered backoff,
 honoring `Retry-After` and `retry-after-ms` up to a minute (the backoff otherwise), when the method
-is idempotent or the request carries an `Idempotency-Key` (POST requests get one automatically).
+is idempotent or the request carries an `Idempotency-Key`.
 
 - Source: @@REPOSITORY@@
 - License: @@LICENSE@@

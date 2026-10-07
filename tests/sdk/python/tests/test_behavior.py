@@ -20,7 +20,7 @@ import httpx
 
 from _support import generate_fixture, import_package, instant
 
-features = import_package(generate_fixture("features.yaml", "Features"))
+features = import_package(generate_fixture("features.yaml", "Features", settings="idempotency_keys = true\n"))
 models = features.models
 
 # Credentials and the base URL come from the arguments of the tests only.
