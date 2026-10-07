@@ -3210,6 +3210,31 @@ fn cookie_parameters_are_sent_in_the_cookie_header_in_every_language() {
 }
 
 #[test]
+fn undeclared_security_schemes_fail_unless_their_operations_are_excluded() {
+    let dir = project_from("petstore.yaml", &["typescript"]);
+    let spec = "openapi: 3.1.0\ninfo: {title: Keys, version: 1.0.0}\n\
+        servers: [{url: https://x.example.com}]\n\
+        paths:\n\
+        \x20 /x:\n    get:\n      operationId: get_x\n      tags: [x]\n      \
+        security: [{api_key: []}]\n      responses:\n        '204': {description: ok}\n\
+        \x20 /y:\n    get:\n      operationId: get_y\n      tags: [x]\n      responses:\n        \
+        '204': {description: ok}\n\
+        components:\n  securitySchemes:\n    bearer: {type: http, scheme: bearer}\n\
+        security: [{bearer: []}]\n";
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(
+        !ok && out.contains("operation `get_x` requires the security scheme `api_key`"),
+        "{out}"
+    );
+    let config_path = dir.path().join("perseid.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(&config_path, format!("exclude = [\"get_x\"]\n{config}")).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+}
+
+#[test]
 fn any_json_body_and_multipart_file_lists_are_generated_in_every_language() {
     let languages = ["rust", "typescript", "python", "go", "java", "csharp"];
     let dir = project_from("petstore.yaml", &languages);

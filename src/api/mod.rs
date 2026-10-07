@@ -105,7 +105,8 @@ impl Api {
 
         types::set_discriminator_defaults(&mut types);
 
-        let security = security::Security::from_spec(raw_spec)?;
+        let generated = operation_ids(&resources);
+        let security = security::Security::from_spec(raw_spec, |id| generated.contains(id))?;
         for resource in resources.values_mut() {
             resource.resolve_extensions(&security, &filters.pagination, &types)?;
         }
@@ -232,6 +233,16 @@ impl Api {
 
 /// Fewest operations that must share an error schema for it to type every API error.
 const MIN_DEFAULT_ERROR_USES: usize = 3;
+
+fn operation_ids(resources: &Resources) -> std::collections::BTreeSet<String> {
+    let mut stack: Vec<&Resource> = resources.values().collect();
+    let mut ids = std::collections::BTreeSet::new();
+    while let Some(resource) = stack.pop() {
+        stack.extend(resource.subresources.values());
+        ids.extend(resource.operations.iter().map(|op| op.id.clone()));
+    }
+    ids
+}
 
 /// The error schema shared by a clear majority of the operations declaring errors, and by at
 /// least a few of them, so that one operation declaring `404: Item` never types the errors of

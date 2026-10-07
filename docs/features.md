@@ -24,6 +24,9 @@ new Acme({ tokenProvider: () => oauth.accessToken() });
 - Without a token, clients read `ACME_API_KEY`. `ACME_BASE_URL` overrides the base URL.
 - The prefix is the `name` in SCREAMING_SNAKE_CASE, or `env_prefix` under `[context]`.
 - A spec without `securitySchemes` sends `Authorization: Bearer <token>`.
+- A requirement naming a scheme `securitySchemes` does not declare fails generation, unless another
+  of its alternatives can be sent: that alternative is then dropped with a warning. Operations
+  left out with `exclude` or `x-internal` are not checked.
 
 ### OAuth2 client credentials
 
