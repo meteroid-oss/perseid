@@ -1277,12 +1277,10 @@ fn drop_clashes(operations: &[(String, &Operation)], names: &mut BTreeMap<String
 }
 
 /// Whether the methods of the Stainless resource `stainless` are those of the perseid resource
-/// `perseid`: a top-level one, named alike, or renamed `<name>_api` as a type is named like it.
+/// `perseid`: its last segment is named alike, or `<name>_api` as a type is named like it.
 fn same_resource(stainless: &str, perseid: &str) -> bool {
-    let name = snake(stainless);
-    !stainless.contains('.')
-        && !stainless.starts_with('$')
-        && (perseid == name || perseid == format!("{name}_api"))
+    let name = snake(stainless.rsplit('.').next().unwrap_or(stainless));
+    !stainless.starts_with('$') && (perseid == name || perseid == format!("{name}_api"))
 }
 
 /// Methods of Stainless resources, grouped by resource and by why they differ in perseid.
@@ -1578,7 +1576,7 @@ mod tests {
     }
 
     #[test]
-    fn only_top_level_resources_rename_the_methods_of_their_perseid_resource() {
+    fn client_and_nested_methods_rename_no_resource_named_otherwise() {
         let op = |id: &str, tag: &str| json!({ "operationId": id, "tags": [tag], "responses": { "204": { "description": "ok" } } });
         let spec = json!({
             "openapi": "3.1.0",
@@ -1612,6 +1610,37 @@ mod tests {
             "{keys:?}"
         );
         assert!(import.exclude.is_empty() && import.warnings.is_empty());
+    }
+
+    #[test]
+    fn nested_resources_rename_the_methods_of_the_perseid_resource_named_like_them() {
+        let op = |id: &str, tag: &str| json!({ "operationId": id, "tags": [tag], "responses": { "204": { "description": "ok" } } });
+        let spec = json!({
+            "openapi": "3.1.0",
+            "info": { "title": "Acme", "version": "1" },
+            "paths": {
+                "/workspaces/{id}/peers": { "post": op("getOrCreatePeer", "peers") },
+                "/workspaces/{id}/sessions/{sid}/peers": { "post": op("addSessionPeers", "sessions") },
+            },
+        });
+        let mut import = Import::from_config(
+            &json!({ "resources": { "workspaces": { "subresources": {
+                "peers": { "methods": { "get_or_create": "post /workspaces/{workspace_id}/peers" } },
+                "sessions": { "subresources": { "peers": { "methods": {
+                    "add": "post /workspaces/{workspace_id}/sessions/{session_id}/peers",
+                }}}},
+            }}}}),
+        );
+        import.with_spec(&spec.to_string());
+        assert_eq!(
+            import.methods,
+            BTreeMap::from([("getOrCreatePeer".to_owned(), "get_or_create".to_owned())])
+        );
+        let keys: Vec<&str> = import.skipped.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(
+            keys.contains(&"resources.workspaces.sessions.peers (1 method)"),
+            "{keys:?}"
+        );
     }
 
     #[test]

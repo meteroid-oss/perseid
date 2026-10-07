@@ -25,7 +25,7 @@ These hold for the TypeScript and Python SDKs, checked against SDKs generated fr
 | Install | Same package names, on the same registries |
 | Client | `new Knock({ apiKey })`, `Knock(api_key=...)`, `AsyncKnock` in Python |
 | Environment | `KNOCK_API_KEY` and `KNOCK_BASE_URL` |
-| Resources | `client.users.list()`, `client.messages.markAsArchived(id)`: method names come from `stainless.yml` for its top-level resources whose operations perseid groups under the same name (their first tag) |
+| Resources | `client.users.list()`, `client.messages.markAsArchived(id)`: method names come from `stainless.yml` for the resources whose operations perseid groups under the same name (their first tag): `client.workspaces.peers.chat()` becomes `client.peers.chat()`, but `client.sessions.peers.add()` keeps perseid's name in `client.sessions` |
 | Arguments | Path parameters first, then objects (TypeScript) or keyword arguments (Python) |
 | Pagination | `for await (const user of client.users.list())`, `for user in client.users.list()`, `hasNextPage()`/`getNextPage()`, `has_next_page()`/`get_next_page()` |
 | Errors | `APIError`, `NotFoundError`, `RateLimitError`, `APIConnectionError`... by status, with `status` / `status_code`. `Knock.NotFoundError` works in TypeScript |
@@ -187,7 +187,7 @@ Preview the SDKs with `npx perseid generate --out /tmp/sdks`, and compare the me
 | `client_settings.default_env_prefix`, `client_settings.opts.*.read_env` | `env_prefix` under `[context]`, when it isn't the `name`'s |
 | `settings.license` | `[metadata] license`, over the spec's |
 | `pagination` | `[[pagination]]`, one rule per scheme |
-| `resources.*.methods` | `[methods]`, for each name perseid would give otherwise, in top-level resources perseid names alike |
+| `resources.*.methods` | `[methods]`, for each name perseid would give otherwise, in the resources (or the last level of nested ones) perseid names alike |
 | Endpoints no resource lists, `unspecified_endpoints`, `skip: true` | `exclude`. When fewer than 80% of the endpoints `stainless.yml` lists are in the spec, it warns and excludes only `unspecified_endpoints` and `skip: true` |
 | `skip` or `only` naming languages | `exclude` of the language tables |
 
