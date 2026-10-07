@@ -37,24 +37,26 @@
     {%- elif arg.kind == "uuid" -%}java.util.UUID.fromString({{ arg.value | tojson }})
     {%- elif arg.kind == "date" -%}java.time.LocalDate.parse({{ arg.value | tojson }})
     {%- elif arg.kind == "enum" -%}{{ sdk.java_package }}.models.{{ arg.schema | to_upper_camel_case }}.of({{ arg.value | tojson }})
+    {%- elif arg.kind == "list" -%}java.util.List.of({% for item in arg["items"] %}{{ literal(item) }}{% if not loop.last %}, {% endif %}{% endfor %})
+    {%- elif arg.kind == "object" -%}
+        {%- set names = m.member_names(arg.fields, "schema `" ~ arg.schema ~ "`") | split(" ") | reject("equalto", "") | list -%}
+        {{ arg.schema | to_upper_camel_case }}.builder(){% for f in arg.fields %}.{{ names[loop.index0] }}({{ literal(f) }}){% endfor %}.build()
     {%- else -%}{{ arg.value | tojson }}{% if arg.type in ["Int64", "UInt16"] %}L{% elif arg.type == "Float" %}f{% endif %}{% endif %}
 {%- endmacro %}
 
-{#- The `import` of the model an example's body needs, with its line break. -#}
-{% macro uses(ex) %}{% if ex.body %}import {{ sdk.java_package }}.models.{{ ex.body.schema | to_upper_camel_case }};
-{% endif %}{% endmacro %}
+{#- The schemas of the structs among the literals `args` and those they nest, space-separated. -#}
+{% macro structs(args) %}{% for a in args %}{% if a.kind == "object" %} {{ a.schema | to_upper_camel_case }}{{ structs(a.fields) }}{% elif a.kind == "list" %}{{ structs(a["items"]) }}{% endif %}{% endfor %}{% endmacro %}
+
+{#- The `import`s of the models an example's body needs, each with its line break. -#}
+{% macro uses(ex) %}{% if ex.body %}{% for name in ([ex.body.schema | to_upper_camel_case] + (structs(ex.body.fields) | split | list)) | unique | sort %}import {{ sdk.java_package }}.models.{{ name }};
+{% endfor %}{% endif %}{% endmacro %}
 
 {#- The call of an example: through `withRawResponse()` with `raw`, and with `request_options` as
     its last argument when given. -#}
 {% macro call(ex, raw=false, request_options="") -%}
     {%- set out = namespace(args=[]) -%}
     {%- for a in ex.path_args %}{% set out.args = out.args + [literal(a)] %}{% endfor -%}
-    {%- if ex.body -%}
-        {%- set names = m.member_names(ex.body.fields, "schema `" ~ ex.body.schema ~ "`") | split(" ") | reject("equalto", "") | list -%}
-        {%- set setters = namespace(text="") -%}
-        {%- for f in ex.body.fields %}{% set setters.text = setters.text ~ "." ~ names[loop.index0] ~ "(" ~ literal(f) ~ ")" %}{% endfor -%}
-        {%- set out.args = out.args + [(ex.body.schema | to_upper_camel_case) ~ ".builder()" ~ setters.text ~ ".build()"] -%}
-    {%- endif -%}
+    {%- if ex.body %}{% set out.args = out.args + [literal({"kind": "object", "schema": ex.body.schema, "fields": ex.body.fields})] %}{% endif -%}
     {%- if request_options %}{% set out.args = out.args + [request_options] %}{% endif -%}
     client.{{ "withRawResponse()." if raw }}{{ accessor(ex.resource) }}().{{ method(ex.operation) }}({{ out.args | join(", ") }})
 {%- endmacro %}

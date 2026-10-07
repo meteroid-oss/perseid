@@ -2997,6 +2997,99 @@ fn java_enums_keep_unknown_values_and_docs_are_html() {
 
 const LANGUAGES: [&str; 6] = ["rust", "typescript", "python", "go", "java", "csharp"];
 
+#[test]
+fn readme_examples_build_lists_and_nested_models_in_every_language() {
+    let languages = ["rust", "typescript", "python", "go", "java", "csharp"];
+    let dir = project_from("petstore.yaml", &languages);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Shop, version: "1" }
+servers: [{ url: https://x.example.com }]
+paths:
+  /orders:
+    post:
+      operationId: create_order
+      tags: [orders]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/OrderCreate' } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/OrderCreate' } } } }
+components:
+  schemas:
+    OrderCreate:
+      type: object
+      required: [tags, lines, shipping]
+      properties:
+        tags: { type: array, items: { type: string } }
+        lines: { type: array, items: { $ref: '#/components/schemas/Line' } }
+        shipping: { $ref: '#/components/schemas/Address' }
+    Line:
+      type: object
+      required: [sku, quantity, size]
+      properties:
+        sku: { type: string }
+        quantity: { type: integer, format: int64 }
+        size: { type: string, enum: [small, large] }
+        parent: { $ref: '#/components/schemas/Line' }
+    Address:
+      type: object
+      required: [city]
+      properties:
+        city: { type: string, example: Paris }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let calls = [
+        (
+            "rust",
+            "OrderCreate::new(vec![Line::new(1, \"small\".into(), \"sku\")], Address::new(\"Paris\"), vec![\"tags\".to_owned()])",
+        ),
+        (
+            "typescript",
+            "{ lines: [{ quantity: 1, size: \"small\", sku: \"sku\" }], shipping: { city: \"Paris\" }, tags: [\"tags\"] }",
+        ),
+        (
+            "python",
+            "lines=[Line(quantity=1, size=LineSize(\"small\"), sku=\"sku\")], shipping=Address(city=\"Paris\"), tags=[\"tags\"]",
+        ),
+        (
+            "go",
+            "petstore.OrderCreate{Lines: []petstore.Line{{Quantity: 1, Size: petstore.LineSize(\"small\"), Sku: \"sku\"}}, Shipping: petstore.Address{City: \"Paris\"}, Tags: []string{\"tags\"}}",
+        ),
+        (
+            "java",
+            "OrderCreate.builder().lines(java.util.List.of(Line.builder().quantity(1L).size(com.petstore.models.LineSize.of(\"small\")).sku(\"sku\").build())).shipping(Address.builder().city(\"Paris\").build()).tags(java.util.List.of(\"tags\")).build()",
+        ),
+        (
+            "csharp",
+            "new OrderCreate { Lines = [new Line { Quantity = 1, Size = \"small\", Sku = \"sku\" }], Shipping = new Address { City = \"Paris\" }, Tags = [\"tags\"] }",
+        ),
+    ];
+    let imports = [
+        (
+            "rust",
+            "use petstore::models::{Address, Line, OrderCreate};",
+        ),
+        (
+            "python",
+            "from petstore.models import Address, Line, LineSize\n",
+        ),
+        (
+            "java",
+            "import com.petstore.models.Address;\nimport com.petstore.models.Line;\n",
+        ),
+    ];
+    for (language, needle) in calls.iter().chain(&imports) {
+        let readme = fs::read_to_string(dir.path().join(language).join("README.md")).unwrap();
+        assert!(
+            readme.contains(needle),
+            "no `{needle}` in the {language} {readme}"
+        );
+    }
+}
+
 /// `(METHOD, path)` of every operation `language` generates.
 fn operations(dir: &Path, language: &str) -> Vec<(String, String)> {
     let (ok, out) = perseid(dir, &["inspect", language]);

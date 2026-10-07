@@ -51,7 +51,7 @@ The fields of a JSON or form request body are keyword arguments, next to the que
 parameters; path parameters come first{% if with_body %}:
 
 ```python
-{{ docs.call(with_body) }}
+{{ docs.imports([with_body]) }}{{ docs.call(with_body) }}
 ```
 {% else %}.
 {% endif %}

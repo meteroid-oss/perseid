@@ -44,7 +44,11 @@
 {% macro literal(arg) -%}
     {%- if arg.kind == "boolean" %}{{ "true" if arg.value else "false" }}
     {%- elif arg.kind == "uuid" %}Guid.Parse({{ arg.value | tojson }})
-    {%- elif arg.kind == "date" %}{% set parts = arg.value | split("-") | list %}new DateOnly({{ parts[0] | int }}, {{ parts[1] | int }}, {{ parts[2] | int }}){% else %}{{ arg.value | tojson }}{% if arg.type == "Float" %}f{% endif %}{% endif -%}
+    {%- elif arg.kind == "date" %}{% set parts = arg.value | split("-") | list %}new DateOnly({{ parts[0] | int }}, {{ parts[1] | int }}, {{ parts[2] | int }})
+    {%- elif arg.kind == "list" %}[{% for item in arg["items"] %}{{ literal(item) }}{% if not loop.last %}, {% endif %}{% endfor %}]
+    {%- elif arg.kind == "object" %}{% set owner = arg.schema | to_upper_camel_case %}new {{ model_name(arg.schema) }}
+        {%- if arg.fields %} { {% for f in arg.fields %}{{ m.member(f.name, owner) }} = {{ literal(f) }}{% if not loop.last %}, {% endif %}{% endfor %} }{% else %}(){% endif %}
+    {%- else %}{{ arg.value | tojson }}{% if arg.type == "Float" %}f{% endif %}{% endif -%}
 {%- endmacro %}
 
 {#- The call of an example, through `WithRawResponse` with `raw`, with `request_options` as a named
@@ -52,12 +56,7 @@
 {% macro call(ex, raw=false, request_options="") -%}
     {%- set out = namespace(args=[]) -%}
     {%- for a in ex.path_args %}{% set out.args = out.args + [literal(a)] %}{% endfor -%}
-    {%- if ex.body -%}
-        {%- set owner = ex.body.schema | to_upper_camel_case -%}
-        {%- set fields = namespace(list=[]) -%}
-        {%- for f in ex.body.fields %}{% set fields.list = fields.list + [m.member(f.name, owner) ~ " = " ~ literal(f)] %}{% endfor -%}
-        {%- set out.args = out.args + ["new " ~ model_name(ex.body.schema) ~ (" { " ~ (fields.list | join(", ")) ~ " }" if fields.list else "()")] -%}
-    {%- endif -%}
+    {%- if ex.body %}{% set out.args = out.args + [literal({"kind": "object", "schema": ex.body.schema, "fields": ex.body.fields})] %}{% endif -%}
     {%- if request_options %}{% set out.args = out.args + ["requestOptions: " ~ request_options] %}{% endif -%}
     {{ resource(ex.resource) }}{{ ".WithRawResponse" if raw }}.{{ method(ex.operation) }}({{ out.args | join(", ") }})
 {%- endmacro %}

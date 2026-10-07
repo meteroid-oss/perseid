@@ -36,6 +36,9 @@
 {% macro literal(arg) -%}
     {%- if arg.kind == "integer" and arg.int64 and sdk.int64 == "bigint" %}{{ arg.value }}n
     {%- elif arg.kind == "integer" and arg.int64 and sdk.int64 == "string" %}"{{ arg.value }}"
+    {%- elif arg.kind == "list" %}[{% for item in arg["items"] %}{{ literal(item) }}{% if not loop.last %}, {% endif %}{% endfor %}]
+    {%- elif arg.kind == "object" and arg.fields %}{ {% for f in arg.fields %}{{ f.name | ident("camel") }}: {{ literal(f) }}{% if not loop.last %}, {% endif %}{% endfor %} }
+    {%- elif arg.kind == "object" %}{}
     {%- else %}{{ arg.value | tojson }}{% endif -%}
 {%- endmacro %}
 
@@ -43,11 +46,7 @@
 {% macro call(ex, request_options="") -%}
     {%- set out = namespace(args=[]) -%}
     {%- for a in ex.path_args %}{% set out.args = out.args + [literal(a)] %}{% endfor -%}
-    {%- if ex.body -%}
-        {%- set fields = namespace(list=[]) -%}
-        {%- for f in ex.body.fields %}{% set fields.list = fields.list + [(f.name | ident("camel")) ~ ": " ~ literal(f)] %}{% endfor -%}
-        {%- set out.args = out.args + (["{ " ~ (fields.list | join(", ")) ~ " }"] if fields.list else ["{}"]) -%}
-    {%- endif -%}
+    {%- if ex.body %}{% set out.args = out.args + [literal({"kind": "object", "fields": ex.body.fields})] %}{% endif -%}
     {%- if request_options -%}
         {%- if ex.operation | has_query_or_header_params %}{% set out.args = out.args + ["undefined"] %}{% endif -%}
         {%- set out.args = out.args + [request_options] -%}

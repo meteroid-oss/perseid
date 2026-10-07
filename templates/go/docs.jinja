@@ -36,17 +36,34 @@
     page{% for segment in path %}.{{ go_export(segment) }}{% endfor -%}
 {%- endmacro %}
 
-{% macro literal(arg) -%}
+{#- A literal, without its type when `typed` is false, as the items of a list leave it out. -#}
+{% macro literal(arg, typed=true) -%}
     {%- if arg.kind == "uuid" %}uuid.MustParse({{ arg.value | tojson }})
-    {%- elif arg.kind == "date" %}{% set parts = arg.value | split("-") | list %}{{ sdk.package_name }}.Date{Year: {{ parts[0] | int }}, Month: {{ parts[1] | int }}, Day: {{ parts[2] | int }}}
+    {%- elif arg.kind == "date" %}{% set parts = arg.value | split("-") | list %}{{ sdk.package_name ~ ".Date" if typed }}{Year: {{ parts[0] | int }}, Month: {{ parts[1] | int }}, Day: {{ parts[2] | int }}}
     {%- elif arg.kind == "enum" %}{{ sdk.package_name }}.{{ go_ident(arg.schema) }}({{ arg.value | tojson }})
+    {%- elif arg.kind == "list" %}{{ type_of(arg) if typed }}{{ "{" }}{% for item in arg["items"] %}{{ literal(item, item.kind not in ["list", "object", "date"]) }}{% if not loop.last %}, {% endif %}{% endfor %}}
+    {%- elif arg.kind == "object" %}{{ type_of(arg) if typed }}{{ "{" }}{% for f in arg.fields %}{{ go_export(f.name) }}: {{ literal(f) }}{% if not loop.last %}, {% endif %}{% endfor %}}
     {%- else %}{{ arg.value | tojson }}{% endif -%}
+{%- endmacro %}
+
+{#- The Go type of a literal, or of the `item` of a list literal. -#}
+{% macro type_of(arg) -%}
+    {%- if arg.kind == "list" %}[]{{ type_of(arg.item) }}
+    {%- elif arg.kind in ["object", "enum"] %}{{ sdk.package_name }}.{{ go_ident(arg.schema) }}
+    {%- elif arg.kind == "uuid" %}uuid.UUID
+    {%- elif arg.kind == "date" %}{{ sdk.package_name }}.Date
+    {%- else %}{{ {"Int16": "int16", "UInt16": "uint16", "Int32": "int32", "Int64": "int64", "UInt64": "uint64", "Float": "float32", "Double": "float64", "Bool": "bool"}[arg.type] or "string" }}{% endif -%}
+{%- endmacro %}
+
+{#- The kinds of the literals `args` and of those they nest, space-separated. -#}
+{% macro kinds(args) -%}
+    {%- for a in args %} {{ a.kind }}{% if a.kind == "object" %}{{ kinds(a.fields) }}{% elif a.kind == "list" %}{{ kinds(a["items"]) }}{% endif %}{% endfor -%}
 {%- endmacro %}
 
 {#- The imports the literals of the examples `exs` need, each on its line. -#}
 {% macro imports(exs) -%}
     {%- set ns = namespace(uuid=false) -%}
-    {%- for ex in exs if ex %}{% for a in ex.path_args if a.kind == "uuid" %}{% set ns.uuid = true %}{% endfor %}{% endfor -%}
+    {%- for ex in exs if ex and "uuid" in (kinds(ex.path_args + (ex.body.fields if ex.body and ex.body.fields else [])) | split | list) %}{% set ns.uuid = true %}{% endfor -%}
     {%- if ns.uuid %}import "github.com/google/uuid"
 {% endif -%}
 {%- endmacro %}
@@ -60,11 +77,7 @@
 {% macro call(ex, opts="", suffix="") -%}
     {%- set out = namespace(args=["ctx"]) -%}
     {%- for a in ex.path_args %}{% set out.args = out.args + [literal(a)] %}{% endfor -%}
-    {%- if ex.body -%}
-        {%- set fields = namespace(list=[]) -%}
-        {%- for f in ex.body.fields %}{% set fields.list = fields.list + [go_export(f.name) ~ ": " ~ literal(f)] %}{% endfor -%}
-        {%- set out.args = out.args + [sdk.package_name ~ "." ~ go_ident(ex.body.schema) ~ "{" ~ (fields.list | join(", ")) ~ "}"] -%}
-    {%- endif -%}
+    {%- if ex.body %}{% set out.args = out.args + [literal({"kind": "object", "schema": ex.body.schema, "fields": ex.body.fields})] %}{% endif -%}
     {%- if has_options(ex.operation) %}{% set out.args = out.args + ["nil"] %}{% endif -%}
     {%- if opts %}{% set out.args = out.args + [opts] %}{% endif -%}
     {{ resource(ex.resource) }}.{{ method(ex.operation) }}{{ suffix }}({{ out.args | join(", ") }})

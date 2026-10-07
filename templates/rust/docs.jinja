@@ -22,21 +22,32 @@
     {{ fallback if id in ["client", "page", "stream", "response", "error"] or id is startingwith("r#") else id }}
 {%- endmacro %}
 
-{% macro literal(arg) %}{% if arg.kind == "string" %}{{ arg.value | rust_str }}{% elif arg.kind in ["uuid", "date"] %}{{ arg.value | rust_str }}.parse().unwrap(){% elif arg.kind == "enum" %}{{ arg.value | rust_str }}.into(){% else %}{{ arg.value | tojson }}{% endif %}{% endmacro %}
+{#- A literal; the strings of a list are owned, as `new` converts only its own arguments. -#}
+{% macro literal(arg) -%}
+    {%- if arg.kind == "string" %}{{ arg.value | rust_str }}
+    {%- elif arg.kind in ["uuid", "date"] %}{{ arg.value | rust_str }}.parse().unwrap()
+    {%- elif arg.kind == "enum" %}{{ arg.value | rust_str }}.into()
+    {%- elif arg.kind == "list" %}vec![{% for item in arg["items"] %}{{ literal(item) }}{% if item.kind == "string" %}{{ ".to_owned()" if item.type == "String" else ".into()" }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}]
+    {%- elif arg.kind == "object" %}{{ arg.schema | to_upper_camel_case }}::new({% for f in arg.fields %}{{ literal(f) }}{% if not loop.last %}, {% endif %}{% endfor %})
+    {%- else %}{{ arg.value | tojson }}{% endif -%}
+{%- endmacro %}
 
-{#- The `use` of the model an example's body needs, with its line break. -#}
-{% macro uses(ex) %}{% if ex.body %}use {{ sdk.rust_crate }}::models::{{ ex.body.schema | to_upper_camel_case }};
-{% endif %}{% endmacro %}
+{#- The schemas of the structs among the literals `args` and those they nest, space-separated. -#}
+{% macro structs(args) %}{% for a in args %}{% if a.kind == "object" %} {{ a.schema | to_upper_camel_case }}{{ structs(a.fields) }}{% elif a.kind == "list" %}{{ structs(a["items"]) }}{% endif %}{% endfor %}{% endmacro %}
+
+{#- The `use` of the models an example's body needs, with its line break. -#}
+{% macro uses(ex) -%}
+    {%- if ex.body -%}
+        {%- set names = ([ex.body.schema | to_upper_camel_case] + (structs(ex.body.fields) | split | list)) | unique | sort | list -%}
+        use {{ sdk.rust_crate }}::models::{{ names[0] if names | length == 1 else "{" ~ (names | join(", ")) ~ "}" }};
+{% endif -%}
+{%- endmacro %}
 
 {#- The call of an example, before `.await`; `options` are request options it is called with. -#}
 {% macro call(ex, options="") -%}
     {%- set out = namespace(args=[]) -%}
     {%- for a in ex.path_args %}{% set out.args = out.args + [literal(a)] %}{% endfor -%}
-    {%- if ex.body -%}
-        {%- set fields = namespace(list=[]) -%}
-        {%- for f in ex.body.fields %}{% set fields.list = fields.list + [literal(f)] %}{% endfor -%}
-        {%- set out.args = out.args + [(ex.body.schema | to_upper_camel_case) ~ "::new(" ~ (fields.list | join(", ")) ~ ")"] -%}
-    {%- endif -%}
+    {%- if ex.body %}{% set out.args = out.args + [literal({"kind": "object", "schema": ex.body.schema, "fields": ex.body.fields})] %}{% endif -%}
     {%- if ex.operation | has_query_or_header_params %}{% set out.args = out.args + ["None"] %}{% endif -%}
     {{ resource(ex.resource) }}{{ ".with_options(" ~ options ~ ")" if options }}.{{ method(ex.operation) }}({{ out.args | join(", ") }})
 {%- endmacro %}

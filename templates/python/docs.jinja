@@ -40,18 +40,28 @@
     {%- elif arg.kind == "uuid" %}UUID({{ arg.value | tojson }})
     {%- elif arg.kind == "date" %}date.fromisoformat({{ arg.value | tojson }})
     {%- elif arg.kind == "enum" %}{{ arg.schema | to_upper_camel_case }}({{ arg.value | tojson }})
+    {%- elif arg.kind == "list" %}[{% for item in arg["items"] %}{{ literal(item) }}{% if not loop.last %}, {% endif %}{% endfor %}]
+    {%- elif arg.kind == "object" %}{{ arg.schema | to_upper_camel_case }}({% for f in arg.fields %}{{ field_ident(f) }}={{ literal(f) }}{% if not loop.last %}, {% endif %}{% endfor %})
     {%- else %}{{ arg.value | tojson }}{% endif -%}
+{%- endmacro %}
+
+{#- The kinds of the literals `args` and of those they nest, space-separated, with `model:Name`
+    for the enums and models they construct. -#}
+{% macro kinds(args) -%}
+    {%- for a in args %} {{ a.kind }}{% if a.kind in ["enum", "object"] %} model:{{ a.schema | to_upper_camel_case }}{% endif -%}
+    {%- if a.kind == "object" %}{{ kinds(a.fields) }}{% elif a.kind == "list" %}{{ kinds(a["items"]) }}{% endif %}{% endfor -%}
 {%- endmacro %}
 
 {#- The imports the literals of the examples `exs` need, each on its line. -#}
 {% macro imports(exs) -%}
-    {%- set ns = namespace(kinds=[], enums=[]) -%}
-    {%- for ex in exs if ex %}{% for a in ex.path_args %}{% set ns.kinds = ns.kinds + [a.kind] %}{% if a.kind == "enum" %}{% set ns.enums = ns.enums + [a.schema | to_upper_camel_case] %}{% endif %}{% endfor %}{% endfor -%}
+    {%- set ns = namespace(kinds=[]) -%}
+    {%- for ex in exs if ex %}{% set ns.kinds = ns.kinds + (kinds(ex.path_args + (ex.body.fields if ex.body and ex.body.fields else [])) | split | list) %}{% endfor -%}
+    {%- set models = ns.kinds | select("startingwith", "model:") | map("replace", "model:", "") | unique | sort | list -%}
     {%- if "date" in ns.kinds %}from datetime import date
 {% endif -%}
     {%- if "uuid" in ns.kinds %}from uuid import UUID
 {% endif -%}
-    {%- if ns.enums %}from {{ package() }}.models import {{ ns.enums | unique | join(", ") }}
+    {%- if models %}from {{ package() }}.models import {{ models | join(", ") }}
 {% endif -%}
 {%- endmacro %}
 

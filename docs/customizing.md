@@ -124,6 +124,9 @@ perseid eject typescript   # copies the templates and runtime to .perseid/
 - Generated Markdown is never formatted. `generate --check` compares it like the code.
 - The scaffolded `README.md` is rendered once, with `examples`: `call`, `list`, `stream` and
   `create`, the operations its snippets call, each `null` when none fits.
+- `docs.call(example)` writes the call of an example, whose `path_args` and `body.fields` are
+  literals: `{name, kind, type, value}`, a `list` with its `items` and their `item` type, or an
+  `object` with the struct's `schema` and its required `fields`.
 
 ### Filters
 
