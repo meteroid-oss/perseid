@@ -3,10 +3,12 @@ use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
+use super::swagger2;
+
 const SCHEMA_MAPS: [&str; 4] = ["properties", "patternProperties", "$defs", "definitions"];
 const SCHEMA_VALUES: [&str; 6] = ["items", "additionalProperties", "not", "if", "then", "else"];
 const SCHEMA_LISTS: [&str; 4] = ["allOf", "anyOf", "oneOf", "prefixItems"];
-const ANNOTATIONS: [&str; 7] = [
+pub(super) const ANNOTATIONS: [&str; 7] = [
     "description",
     "title",
     "default",
@@ -16,13 +18,10 @@ const ANNOTATIONS: [&str; 7] = [
     "writeOnly",
 ];
 
-/// Upgrades an OpenAPI 3.0.x document to 3.1 in place, and rejects anything that is not 3.x.
+/// Upgrades a Swagger 2.0 or OpenAPI 3.0.x document to 3.1 in place, and rejects anything else.
 pub(super) fn to_3_1(doc: &mut Value) -> Result<()> {
-    if doc.get("swagger").is_some() {
-        bail!(
-            "Swagger 2.0 is not supported, convert it to OpenAPI 3.x first \
-             (for example with `npx swagger2openapi`)"
-        );
+    if swagger2::is_swagger(doc) {
+        swagger2::to_3_0(doc)?;
     }
     let version = doc.get("openapi").and_then(Value::as_str).unwrap_or("");
     if version.starts_with("3.1") || version.starts_with("3.2") {
@@ -35,7 +34,10 @@ pub(super) fn to_3_1(doc: &mut Value) -> Result<()> {
     }
     if !version.starts_with("3.0") {
         if version.is_empty() {
-            bail!("the document has no `openapi` version: perseid reads OpenAPI 3.0, 3.1 and 3.2");
+            bail!(
+                "the document has no `openapi` version: perseid reads Swagger 2.0 and OpenAPI \
+                 3.0, 3.1 and 3.2"
+            );
         }
         bail!("OpenAPI {version} is not supported; perseid reads 3.0, 3.1 and 3.2");
     }
@@ -347,16 +349,21 @@ fn type_union(map: &mut Map<String, Value>) {
     map.insert("oneOf".into(), Value::Array(variants));
 }
 
-/// Warnings already printed: every SDK of a run loads the spec, on threads of its own.
+/// Messages already printed: every SDK of a run loads the spec, on threads of its own.
 static WARNED: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
 
 /// Prints a warning once per run.
-fn warn_once(message: String) {
+pub(super) fn warn_once(message: String) {
+    print_once("warning", message);
+}
+
+/// Prints `level: message` once per run.
+pub(super) fn print_once(level: &str, message: String) {
     let mut warned = WARNED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if warned.insert(message.clone()) {
-        eprintln!("warning: {message}");
+        eprintln!("{level}: {message}");
     }
 }
 
@@ -730,9 +737,17 @@ mod tests {
     }
 
     #[test]
-    fn swagger_2_is_rejected_with_a_hint() {
-        let err = to_3_1(&mut json!({ "swagger": "2.0" })).unwrap_err();
-        assert!(err.to_string().contains("swagger2openapi"), "{err}");
+    fn swagger_2_is_read_as_3_0() {
+        let mut doc = json!({ "swagger": "2.0", "definitions": {
+            "A": { "type": "string", "x-nullable": true }
+        } });
+        to_3_1(&mut doc).unwrap();
+        assert_eq!(doc["openapi"], "3.1.0");
+        assert_eq!(
+            doc["components"]["schemas"]["A"],
+            json!({ "type": ["string", "null"] })
+        );
+        assert!(to_3_1(&mut json!({ "swagger": "1.2" })).is_err());
     }
 
     #[test]

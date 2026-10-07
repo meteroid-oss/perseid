@@ -606,12 +606,7 @@ fn spec_license(doc: &Value) -> Option<String> {
 }
 
 fn read_spec(spec: &str, root: &Path) -> Result<Value> {
-    let doc: Value = serde_json::from_str(&spec::read(spec, root)?)?;
-    ensure!(
-        doc.get("swagger").is_none(),
-        "Swagger 2.0 isn't supported, convert it with `npx swagger2openapi`"
-    );
-    Ok(doc)
+    Ok(serde_json::from_str(&spec::read(spec, root)?)?)
 }
 
 /// The first absolute server URL, its `{variables}` set to their defaults.

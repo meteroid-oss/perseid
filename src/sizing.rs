@@ -76,6 +76,17 @@ pub fn size(c: &Comparison) -> Result<(Bump, Changelog)> {
         );
         return Ok((Bump::Minor, Changelog::default()));
     }
+    let current = match converted(scratch.path(), "spec.json", c.spec, c.root)? {
+        Some(path) => path.into(),
+        None => current,
+    };
+    let base = converted(
+        scratch.path(),
+        "base-spec.json",
+        &base.to_string_lossy(),
+        c.root,
+    )?
+    .unwrap_or(base);
     let mut levels: Vec<OsString> = vec![];
     if c.relax_enum_additions {
         let path = scratch.path().join("oasdiff-levels");
@@ -106,6 +117,17 @@ pub fn size(c: &Comparison) -> Result<(Bump, Changelog)> {
         _ => Bump::Patch,
     };
     Ok((bump, changelog))
+}
+
+/// The spec at `location`, converted to OpenAPI 3.0 into `scratch` when it is Swagger 2.0: oasdiff
+/// reads 2.0 as 3.0, missing its request bodies.
+fn converted(scratch: &Path, name: &str, location: &str, root: &Path) -> Result<Option<PathBuf>> {
+    let Ok(Some(text)) = crate::spec::swagger_2_as_3_0(location, root) else {
+        return Ok(None);
+    };
+    let path = scratch.join(name);
+    std::fs::write(&path, text)?;
+    Ok(Some(path))
 }
 
 #[cfg(test)]
@@ -177,6 +199,63 @@ paths:
         );
         let enum_added = BASE.replace("[available, sold]", "[available, pending, sold]");
         assert_eq!(size_of(&enum_added, true).0, Bump::Minor);
+    }
+
+    const SWAGGER: &str = r##"swagger: "2.0"
+info: { title: Pets, version: "1" }
+host: pets.example.com
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      consumes: [application/json]
+      parameters:
+        - { name: pet, in: body, required: true, schema: { $ref: "#/definitions/Pet" } }
+      responses: { "204": { description: created } }
+definitions:
+  Pet: { type: object, required: [name], properties: { name: { type: string } } }
+"##;
+
+    const OPENAPI: &str = r##"openapi: 3.0.3
+info: { title: Pets, version: "1" }
+servers: [{ url: "https://pets.example.com" }]
+paths:
+  /pets:
+    post:
+      operationId: createPet
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Pet" } } }
+      responses: { "204": { description: created } }
+components:
+  schemas:
+    Pet: { type: object, required: [name], properties: { name: { type: string } } }
+"##;
+
+    fn size_between(base: &str, next: &str) -> Bump {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("base.yaml"), base).unwrap();
+        std::fs::write(dir.path().join("openapi.yaml"), next).unwrap();
+        let base = dir.path().join("base.yaml");
+        let comparison = Comparison {
+            root: dir.path(),
+            spec: "openapi.yaml",
+            base: Some(&base),
+            relax_enum_additions: true,
+        };
+        size(&comparison).unwrap().0
+    }
+
+    #[test]
+    fn swagger_2_specs_are_compared_as_their_openapi_3_conversion() {
+        if !crate::format::on_path("oasdiff") {
+            eprintln!("oasdiff isn't installed, skipped");
+            return;
+        }
+        assert_eq!(size_between(SWAGGER, OPENAPI), Bump::Patch);
+        assert_eq!(size_between(OPENAPI, SWAGGER), Bump::Patch);
+        let integer = SWAGGER.replace("name: { type: string }", "name: { type: integer }");
+        assert_eq!(size_between(SWAGGER, &integer), Bump::Major);
     }
 
     #[test]

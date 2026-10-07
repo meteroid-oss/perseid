@@ -27,6 +27,7 @@ use crate::api::Api;
 
 mod external;
 mod normalize;
+mod swagger2;
 mod upgrade;
 
 /// Which operations are generated, before `exclude`.
@@ -88,16 +89,37 @@ fn is_url(location: &str) -> bool {
     location.starts_with("https://") || location.starts_with("http://")
 }
 
-/// Reads an OpenAPI document (JSON or YAML) from a path or an http(s) URL, as JSON text, upgraded to 3.1 when it is 3.0.
-/// References to other files are bundled into its components.
+/// Reads a Swagger 2.0 or OpenAPI document (JSON or YAML) from a path or an http(s) URL, as JSON text, upgraded to
+/// 3.1 when it is 2.0 or 3.0. References to other files are bundled into its components.
 pub(crate) fn read(location: &str, root: &Path) -> Result<String> {
     let mut value = load(location, root)?;
-    let from_3_0 = value["openapi"]
-        .as_str()
-        .is_some_and(|v| v.starts_with("3.0"));
+    let from_2_0 = swagger2::is_swagger(&value);
+    let from_3_0 = from_2_0
+        || value["openapi"]
+            .as_str()
+            .is_some_and(|v| v.starts_with("3.0"));
     upgrade::to_3_1(&mut value).with_context(|| location.to_owned())?;
-    external::bundle(&mut value, location, root, from_3_0)?;
+    if from_2_0 {
+        upgrade::print_once(
+            "note",
+            format!("{location} is Swagger 2.0, converted to OpenAPI 3 in memory"),
+        );
+    }
+    external::bundle(&mut value, location, root, from_3_0, from_2_0)?;
     Ok(serde_json::to_string(&value)?)
+}
+
+/// A Swagger 2.0 document converted to OpenAPI 3.0, as JSON text, for the tools that only read
+/// OpenAPI 3; `None` for any other document. Its references to other files are absolute, so that
+/// the text can be written anywhere.
+pub(crate) fn swagger_2_as_3_0(location: &str, root: &Path) -> Result<Option<String>> {
+    let mut value = load(location, root)?;
+    if !swagger2::is_swagger(&value) {
+        return Ok(None);
+    }
+    swagger2::to_3_0(&mut value).with_context(|| location.to_owned())?;
+    external::absolute_refs(&mut value, location, root);
+    Ok(Some(serde_json::to_string(&value)?))
 }
 
 pub(crate) fn api(spec: &str, filters: &Filters) -> Result<Api> {

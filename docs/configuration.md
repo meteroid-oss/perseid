@@ -77,7 +77,8 @@ of every key with its description and allowed values.
 | `sdks` | Among `rust`, `typescript`, `python`, `go`, `java`, `csharp` |
 | `idempotency_keys` | `true` when the API deduplicates POST requests by `Idempotency-Key`: the SDKs send one with every POST and retry them. `false` by default: a POST is only retried when the caller gives it a key, as replaying it could apply it twice |
 
-- The spec is OpenAPI 3.0, 3.1 or 3.2, JSON or YAML. `$ref`s to other files or URLs are bundled.
+- The spec is Swagger 2.0 or OpenAPI 3.0, 3.1 or 3.2, JSON or YAML. `$ref`s to other files or URLs
+  are bundled.
 - When another repository holds the spec, `perseid connect` run there pushes it to the `spec`
   path, with `.perseid/source.json` naming its commit.
 - `perseid generate --spec <path|url>` reads another spec.
@@ -249,9 +250,23 @@ a value as another variant than the one picked (see [languages](languages.md)).
 |---|---|
 | OpenAPI 3.0 | Upgraded to 3.1 on load (`nullable`, boolean `exclusiveMinimum`/`exclusiveMaximum`) |
 | OpenAPI 3.2 | Read as 3.1. The `QUERY` method and `additionalOperations` are skipped with a warning |
-| Swagger 2.0 | Rejected. Convert it first, for example with `npx swagger2openapi` |
+| Swagger 2.0 | Converted to OpenAPI 3.0 in memory, with a note, then read as 3.0 (see below) |
 | `$ref`s to other files or URLs | Bundled into `components.schemas` under names that collide with none. Escaped pointers (`~1`, `%7B`) resolve |
 | Only `webhooks` (or `x-webhooks`) and components | Models, and a client without resources |
+
+Swagger 2.0 becomes:
+
+- `host`, `basePath` and `schemes`: a server per scheme, `https` first (the base URL), `https`
+  when none is listed.
+- `definitions`, `parameters` and `responses`: components, their `$ref`s following.
+- `body` parameters: a request body of each `consumes` media type (JSON by default).
+  `formData` ones: a form body, or a multipart one when a field is a `type: file`.
+- `produces`: the media types of the responses; a `type: file` response is binary.
+- `collectionFormat`: `style` and `explode` (`tsv` is read as `csv`, with a warning).
+- `securityDefinitions`: `basic` is HTTP basic, OAuth2 flows keep their URLs and scopes.
+- `x-nullable`: `nullable`. A string `discriminator`: its `propertyName`. Keywords next to a
+  `$ref`, which 2.0 ignores, are dropped but for annotations (`description`, `readOnly`...).
+- With `--bump auto`, oasdiff compares the conversions of 2.0 specs.
 
 Read as declared:
 

@@ -492,18 +492,36 @@ fn openapi_3_0_generates_the_same_sdks_as_the_3_1_equivalent() {
 }
 
 #[test]
-fn swagger_2_still_gets_a_perseid_toml_and_a_hint() {
+fn swagger_2_specs_are_converted_in_memory() {
     let dir = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("openapi.yaml"), "swagger: '2.0'\n").unwrap();
-    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "rust"]);
+    fs::copy(
+        "tests/fixtures/petstore-swagger2.json",
+        dir.path().join("swagger.json"),
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "typescript,python"]);
+    assert!(ok, "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(
+        config.contains("spec = \"swagger.json\"")
+            && config.contains("base_url = \"https://petstore.swagger.io/v2\""),
+        "{config}"
+    );
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
     assert!(ok, "{out}");
     assert!(
-        out.contains("! openapi.yaml can't be read") && out.contains("swagger2openapi"),
+        out.contains("note: swagger.json is Swagger 2.0, converted to OpenAPI 3 in memory"),
         "{out}"
     );
-    assert!(dir.path().join("perseid.toml").exists());
-    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
-    assert!(!ok && out.contains("swagger2openapi"), "{out}");
+    let pets = fs::read_to_string(dir.path().join("typescript/src/api/petApi.ts")).unwrap();
+    for call in [
+        "setMultipartBody(form)",
+        "setFormBody(",
+        "setBody(PetSerializer.serialize(pet))",
+        "setExplodedQueryParam(\"status\"",
+    ] {
+        assert!(pets.contains(call), "{call}: {pets}");
+    }
 }
 
 #[test]
