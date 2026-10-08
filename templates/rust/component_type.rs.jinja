@@ -23,7 +23,10 @@
     {{ union_imports() }}
     {% set type_name = type.name | to_upper_camel_case -%}
     {% if type.target.is_union() -%}
+    {% if doc_comment -%}
     {{ doc_comment }}
+    ///
+    {% endif -%}
     {{ union_enum(type_name, type.target) }}
     {% else -%}
     {% set union = union_name(type_name, "item", type.target) -%}

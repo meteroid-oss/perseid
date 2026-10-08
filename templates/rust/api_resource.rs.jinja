@@ -289,7 +289,7 @@ impl {{ resource_type_name }} {
         {% for p in op.path_params -%}
             {% if p in op.path_styles -%}
             {% set ps = op.path_styles[p] -%}
-            .with_styled_path_param("{{ p }}", {% if ps.type is defined %}&{{ p | to_rust_ident }}{% else %}{{ p | to_rust_ident }}.to_string(){% endif %}, "{{ ps.style }}", {{ ps.explode | lower }})
+            .with_styled_path_param("{{ p }}", {% if ps.type is defined %}{{ p | to_rust_ident }}{% else %}{{ p | to_rust_ident }}.to_string(){% endif %}, "{{ ps.style }}", {{ ps.explode | lower }})
             {% else -%}
             {% set alias = path_alias(op, p) -%}
             .with_path_param("{{ p }}", {% if alias %}Into::<{{ alias }}>::into({{ p | to_rust_ident }}){% else %}{{ p | to_rust_ident }}{% endif %})

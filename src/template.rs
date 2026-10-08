@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 pub(crate) mod go;
 pub(crate) mod ident;
+pub(crate) mod rust;
 
 pub fn env_with_dir(
     tpl_dir: &Utf8Path,

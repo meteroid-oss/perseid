@@ -263,6 +263,7 @@ impl Generator<'_> {
             .collect();
         let errors = errors_context(&api);
         let recursive_aliases = types::recursive_aliases(&api.types);
+        let rust_sizes = template::rust::Sizes::new(&api.types);
         for (name, ty) in &api.types {
             let mut referenced_components = ty.referenced_components();
             // A recursive type refers to itself, which is not an import.
@@ -272,6 +273,10 @@ impl Generator<'_> {
             let patch_body = patch_bodies.contains(name.as_str());
             let inherited_fields = ty.inherited_fields(&api.types);
             let declared_tags = declared_tags(&api.types, ty);
+            let boxed_variants = match self.tpl_file_ext {
+                "rs" => rust_sizes.boxed_variants(ty),
+                _ => BTreeSet::new(),
+            };
             // Type names, as templates render them, of the schemas `ty` embeds or unites that
             // are not objects (a union, say).
             let non_struct_refs: BTreeSet<String> = ty
@@ -296,6 +301,7 @@ impl Generator<'_> {
                     patch_body,
                     inherited_fields,
                     declared_tags,
+                    boxed_variants,
                     non_struct_refs,
                     output_dir,
                     type_names => type_names.clone(),
