@@ -2983,6 +2983,93 @@ fn python_types_errors_unions_and_discriminator_defaults() {
 }
 
 #[test]
+fn python_takes_all_of_and_multipart_bodies_as_keyword_arguments() {
+    let dir = project_from("petstore.yaml", &["python"]);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Kw, version: "1.0.0" }
+servers: [{ url: https://x.example.com }]
+paths:
+  /chat:
+    post:
+      operationId: create_chat
+      tags: [chat]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ChatRequest" } } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Shared" } }
+            text/event-stream: { schema: { $ref: "#/components/schemas/Shared" } }
+  /transcribe:
+    post:
+      operationId: transcribe
+      tags: [audio]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, model]
+              properties:
+                file: { type: string, format: binary }
+                model: { $ref: "#/components/schemas/Model" }
+                stream: { type: boolean }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Shared" } }
+            text/event-stream: { schema: { $ref: "#/components/schemas/Shared" } }
+components:
+  schemas:
+    Model: { type: string, enum: [small, large] }
+    Shared:
+      type: object
+      properties: { temperature: { type: number } }
+    ChatRequest:
+      allOf:
+        - $ref: "#/components/schemas/Shared"
+        - type: object
+          required: [prompt]
+          properties: { prompt: { type: string }, stream: { type: boolean } }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let read =
+        |path: &str| fs::read_to_string(dir.path().join("python/petstore").join(path)).unwrap();
+    let chat = read("api/chat.py");
+    for text in [
+        "prompt: str,",
+        "temperature: float | None = None,",
+        "ChatRequest(temperature=temperature, prompt=prompt, ), ChatRequest), \"stream\": True}",
+    ] {
+        assert!(chat.contains(text), "no `{text}` in {chat}");
+    }
+    assert!(!chat.contains("        body: "), "{chat}");
+    assert!(!read("models/chat_request.py").contains("_FLATTENED"));
+    let audio = read("api/audio.py");
+    for text in [
+        "file: FileInput,",
+        "model: Model | ModelLiteral,",
+        "(\"file\", file, True, None),",
+        "(\"stream\", True, False, None),",
+    ] {
+        assert!(audio.contains(text), "no `{text}` in {audio}");
+    }
+    assert!(
+        !audio.contains("stream: bool")
+            && !audio.contains("(\"stream\", stream")
+            && !audio.contains("class AudioTranscribeBody"),
+        "{audio}"
+    );
+}
+
+#[test]
 fn go_types_unions_initialisms_and_error_bodies() {
     let dir = project_from("realworld.yaml", &["go"]);
     let config = dir.path().join("perseid.toml");

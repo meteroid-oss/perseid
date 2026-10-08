@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import arg_type, docstring, in_class, literal_type, field_ident, field_type, field_decl, has_object_union, is_flat_union, named_type, page_class, py_str, py_field, py_ident, py_type, param_type, resource_module, type_refs, union_type -%}
+{% from "types/macros.py.jinja" import arg_type, docstring, flat_multipart, in_class, literal_type, field_ident, field_type, field_decl, has_object_union, is_flat_union, named_type, page_class, py_str, py_field, py_ident, py_type, param_type, resource_module, type_refs, union_type -%}
 # this file is @generated
 {% set _ = set_summary_filename(resource_module(resource.name) ~ ".py") -%}
 {% set resource_class_name = resource.name | to_upper_camel_case -%}
@@ -47,6 +47,11 @@ from __future__ import annotations
             {% if has_object_union(f.type) %}{% set extra_models.object_unions = true %}{% endif -%}
         {% endfor -%}
     {% endif -%}
+    {% if flat_multipart(op) | trim -%}
+        {% for f in op.multipart_fields if not f.is_file and f.type.is_schema_ref() and f.type.to_python() in enums -%}
+            {% set extra_models.names = extra_models.names + [f.type.to_python() ~ "Literal"] -%}
+        {% endfor -%}
+    {% endif -%}
     {% if op.event_schema_name is defined and op.response_is_event_stream -%}
         {% set extra_models.names = extra_models.names + [op.event_schema_name | to_upper_camel_case] -%}
     {% endif -%}
@@ -60,7 +65,9 @@ from __future__ import annotations
 {% endfor -%}
 {#- `extra_models` holds class names already: camel-casing `AB` again would make it `Ab`. -#}
 {% set models = ((referenced_components | map("to_upper_camel_case") | list) + extra_models.names) | unique | sort | list -%}
-{% if "multipart" in body_kinds %}import dataclasses
+{% set multipart_bodies = namespace(any=false) -%}
+{% for op in resource.operations if op.request_body_kind == "multipart" and not flat_multipart(op) | trim %}{% set multipart_bodies.any = true %}{% endfor -%}
+{% if multipart_bodies.any %}import dataclasses
 {% endif -%}
 {% if resource.children %}import functools
 {% endif -%}
@@ -178,7 +185,7 @@ from ._streaming import (
     {%- endfor -%}
     {{ expr.text }}
 {%- endmacro %}
-{%- for op in resource.operations if op.request_body_kind == "multipart" %}
+{%- for op in resource.operations if op.request_body_kind == "multipart" and not flat_multipart(op) | trim %}
 
 
 @dataclasses.dataclass
@@ -265,7 +272,15 @@ class {{ class_name }}({{ base_class }}):
 {%- set param_names = (op.path_params | list) + (op.query_params | map(attribute="ident") | list) + (op.header_params | map(attribute="ident") | list) %}
 {%- set arg_names = namespace(list=param_names | map("ident", "snake", "python") | list) %}
 {%- for f in flat_fields.list %}{% set arg_names.list = arg_names.list + [field_ident(f)] %}{% endfor %}
-{%- set body_param = ("request_body" if "body" in arg_names.list else "body") if not flat else none %}
+{%- set flat_parts = op.multipart_fields if flat_multipart(op) | trim else [] %}
+{#- Like a JSON body's, the boolean `stream` part of a `_stream` twin is set by the twins, not the caller. #}
+{%- set stream_twin = op.response_is_event_stream and op.name is endingwith "_stream" and resource.operations | selectattr("name", "equalto", op.name[:-7]) | list %}
+{%- set has_stream_twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("response_is_event_stream") | list %}
+{%- set stream_part = (flat_parts | selectattr("name", "equalto", "stream") | first) if stream_twin or has_stream_twin else none %}
+{%- if stream_part and py_type(stream_part.type) != "bool" %}{% set stream_part = none %}{% endif %}
+{%- set flat_parts = flat_parts | rejectattr("name", "equalto", "stream") | list if stream_part else flat_parts %}
+{%- for f in flat_parts %}{% set arg_names.list = arg_names.list + [py_field(f.name)] %}{% endfor %}
+{%- set body_param = ("request_body" if "body" in arg_names.list else "body") if not flat and not flat_parts else none %}
 {%- if op.request_body_json_type is defined %}
 {%- set body_type = named_type(op.request_body_json_type, op.request_body_union | to_upper_camel_case) if op.request_body_union is defined and (op.request_body_union | to_upper_camel_case in declared.names or op.request_body_union | to_upper_camel_case in names) else py_type(op.request_body_json_type) %}
 {%- elif op.request_body_schema_name is defined %}
@@ -303,6 +318,9 @@ class {{ class_name }}({{ base_class }}):
 {%- for f in flat_fields.list if (f.required and f.name not in defaults) == required_pass %}
         {{ field_ident(f) }}: {{ unshadow(field_decl(f, true, literal_type(f) or arg_type(f.type, enums))) }}
         {%- if f.required and f.name in defaults %} = {{ py_str(defaults[f.name]) }}{% endif %},
+{%- endfor %}
+{%- for f in flat_parts if (f.required and not f.nullable) == required_pass %}
+        {{ py_field(f.name) }}: {% if f.is_file and f.is_file_list %}{{ unshadow("list[FileInput]") }}{% elif f.is_file %}FileInput{% else %}{{ unshadow(arg_type(f.type, enums)) }}{% endif %}{% if not required_pass %} | None = None{% endif %},
 {%- endfor %}
 {%- for p in op.query_params if p.required == required_pass %}
         {{ py_ident(p.ident) }}: {{ unshadow(param_type(p)) }}{% if not p.required %} | None = None{% endif %},
@@ -419,9 +437,9 @@ class {{ class_name }}({{ base_class }}):
                 upload_content_type={{ py_str(op.request_body_content_type) }},
 {%- endif %}
 {%- elif op.request_body_kind == "multipart" %}
-                multipart={% if op.request_body_optional %}None if {{ body_param }} is None else {% endif %}[
-{%- for field in op.multipart_fields %}
-                    ({{ py_str(field.name) }}, {{ body_param }}.{{ py_field(field.name) }}, {{ "True" if field.is_file else "False" }}, {{ py_str(field.content_type) if field.content_type is defined else "None" }}),
+                multipart={% if op.request_body_optional and not flat_parts %}None if {{ body_param }} is None else {% endif %}[
+{%- for field in op.multipart_fields if not (stream_part and field.name == "stream" and not stream_twin) %}
+                    ({{ py_str(field.name) }}, {% if stream_part and field.name == "stream" %}True{% elif flat_parts %}{{ py_field(field.name) }}{% else %}{{ body_param }}.{{ py_field(field.name) }}{% endif %}, {{ "True" if field.is_file else "False" }}, {{ py_str(field.content_type) if field.content_type is defined else "None" }}),
 {%- endfor %}
                 ],
 {%- elif json_value is not none %}
@@ -471,6 +489,9 @@ class {{ class_name }}({{ base_class }}):
 {%- set params_doc %}
 {%- for f in flat_fields.list if f.description is defined %}
 :param {{ field_ident(f) }}: {{ f.description | replace("\n", " ") }}
+{%- endfor %}
+{%- for f in flat_parts if f.description is defined %}
+:param {{ py_field(f.name) }}: {{ f.description | replace("\n", " ") }}
 {%- endfor %}
 {%- for p in op.query_params if p.description is defined %}
 :param {{ py_ident(p.ident) }}: {{ p.description | replace("\n", " ") }}

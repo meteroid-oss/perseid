@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import field_ident, page_class, py_ident, py_type, resource_module -%}
+{% from "types/macros.py.jinja" import field_ident, flat_multipart, page_class, py_ident, py_type, resource_module -%}
 # this file is @generated
 """{{ sdk.client_name }} API resources."""
 {%- set streaming = namespace(used=false) %}
@@ -44,7 +44,7 @@ from .client import Async{{ client }}, {{ client }}
 {%- set cls = resource.name | to_upper_camel_case %}
 {%- set module = resource_module(resource.name) %}
 {%- set lazy.pairs = lazy.pairs + [("Async" ~ cls, module), (cls, module)] %}
-{%- for op in resource.operations if op.request_body_kind == "multipart" %}
+{%- for op in resource.operations if op.request_body_kind == "multipart" and not flat_multipart(op) | trim %}
 {%- set lazy.pairs = lazy.pairs + [(cls ~ (op.name | to_upper_camel_case) ~ "Body", module)] %}
 {%- endfor %}
 {%- endfor %}
@@ -105,7 +105,7 @@ __all__ = [
 {%- set cls = resource.name | to_upper_camel_case %}
     "Async{{ cls }}",
     "{{ cls }}",
-{%- for op in resource.operations if op.request_body_kind == "multipart" %}
+{%- for op in resource.operations if op.request_body_kind == "multipart" and not flat_multipart(op) | trim %}
     "{{ cls }}{{ op.name | to_upper_camel_case }}Body",
 {%- endfor %}
 {%- endfor %}

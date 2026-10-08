@@ -51,6 +51,17 @@
     {{- py_field(field.type.to_python() if field.flatten else field.name) -}}
 {%- endmacro %}
 
+{#- "M" when the method of multipart `op` takes its fields as keyword arguments: its body is
+    required, and no field is named like a parameter. -#}
+{% macro flat_multipart(op) -%}
+    {%- if op.request_body_kind == "multipart" and not op.request_body_optional -%}
+        {%- set params = (op.path_params | list) + (op.query_params | map(attribute="ident") | list) + (op.header_params | map(attribute="ident") | list) -%}
+        {%- set taken = (params | map("ident", "snake", "python") | list) + ["self", "t"] -%}
+        {%- set idents = op.multipart_fields | map(attribute="name") | map("ident", "snake", "python_field") | list -%}
+        {%- if not (idents | select("in", taken) | list) and (idents | unique | list | length) == (idents | length) %}M{% endif -%}
+    {%- endif -%}
+{%- endmacro %}
+
 {#- The annotation of one variant of a union: its `""` variant is `t.Literal[""]`, a free-form
     object `dict[str, t.Any]`. -#}
 {% macro variant_type(variant) -%}
