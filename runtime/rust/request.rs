@@ -80,7 +80,7 @@ pub(crate) fn decode_error(error: impl Into<BoxError>) -> Error {
 /// The body of a successful response: read whole, or left open for an event stream.
 pub(crate) enum ResponseBody {
     Buffered(Bytes),
-    Events(Option<hyper::body::Incoming>, Bytes),
+    Events(Box<EventStream>),
 }
 
 impl ResponseBody {
@@ -122,7 +122,7 @@ fn text(body: ResponseBody) -> Result<String, Error> {
 
 fn events(body: ResponseBody) -> Result<EventStream, Error> {
     match body {
-        ResponseBody::Events(body, buffered) => Ok(EventStream::new(body, buffered)),
+        ResponseBody::Events(stream) => Ok(*stream),
         ResponseBody::Buffered(_) => Err(decode_error("expected an event stream")),
     }
 }
@@ -930,7 +930,8 @@ fn open_event_stream(response: Response) -> Result<Attempt, Failure> {
     }
     let (status, headers) = (response.status(), response.headers().clone());
     let (body, buffered) = response.into_events();
-    Ok(Attempt::Done(status, headers, ResponseBody::Events(body, buffered)))
+    let stream = EventStream::new(status, headers.clone(), body, buffered);
+    Ok(Attempt::Done(status, headers, ResponseBody::Events(Box::new(stream))))
 }
 
 /// Exponential backoff from 500ms up to 8s with jitter.

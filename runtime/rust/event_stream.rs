@@ -5,6 +5,7 @@ use crate::{
     request::{decode_error, transport_error},
 };
 use bytes::{Buf, Bytes};
+use http::{HeaderMap, StatusCode};
 use hyper::body::{Body as _, Incoming};
 use serde::de::DeserializeOwned;
 use std::{
@@ -65,7 +66,10 @@ impl SseEvent {
 /// What one raw event decodes to.
 enum Step<T> {
     Item(T),
+    Skip,
     Done,
+    /// The API reported an error in the stream, with this body.
+    Failed(Bytes),
 }
 
 type Decode<T> = fn(&SseEvent) -> Result<Step<T>, Error>;
@@ -75,10 +79,27 @@ fn raw(event: &SseEvent) -> Result<Step<SseEvent>, Error> {
     Ok(Step::Item(event.clone()))
 }
 
+/// An `error` event, or data that is not a `T` but an object with an `error`, is the API's error;
+/// a keepalive that is not a `T` is skipped.
 fn json<T: DeserializeOwned>(event: &SseEvent) -> Result<Step<T>, Error> {
-    match event.data.as_str() {
-        "[DONE]" => Ok(Step::Done),
-        data => serde_json::from_str(data).map(Step::Item).map_err(decode_error),
+    if event.data == "[DONE]" {
+        return Ok(Step::Done);
+    }
+    if event.event == "error" {
+        return Ok(Step::Failed(Bytes::from(event.data.clone())));
+    }
+    match serde_json::from_str(&event.data) {
+        Ok(item) => Ok(Step::Item(item)),
+        Err(_) if matches!(event.event.as_str(), "ping" | "keepalive") => Ok(Step::Skip),
+        Err(error) => {
+            let reported = serde_json::from_str::<serde_json::Value>(&event.data)
+                .is_ok_and(|value| value.get("error").is_some_and(|error| !error.is_null()));
+            if reported {
+                Ok(Step::Failed(Bytes::from(event.data.clone())))
+            } else {
+                Err(decode_error(error))
+            }
+        }
     }
 }
 
@@ -88,10 +109,15 @@ fn json<T: DeserializeOwned>(event: &SseEvent) -> Result<Step<T>, Error> {
 /// A typed stream ends at a `[DONE]` event, and [`last_event`](Self::last_event) gives the raw
 /// event of the last item, with its type and id.
 ///
+/// An error the API sends in a typed stream, as an `error` event or an object with an `error`,
+/// is returned as [`Error::Api`](crate::error::Error::Api) with the response's status.
+///
 /// The client timeout covers opening this stream. Use `tokio::time::timeout`
-/// around `next()` when an idle timeout is desired. On a body or parsing error,
-/// one error is returned and the stream terminates. EOF discards incomplete events.
+/// around `next()` when an idle timeout is desired. On an error, one error is
+/// returned and the stream terminates. EOF discards incomplete events.
 pub struct EventStream<T = SseEvent> {
+    status: StatusCode,
+    headers: HeaderMap,
     body: Option<Incoming>,
     pending: Bytes,
     parser: Parser,
@@ -101,8 +127,15 @@ pub struct EventStream<T = SseEvent> {
 
 impl EventStream<SseEvent> {
     /// The stream of `pending` bytes, then of `body` when the server left it open.
-    pub(crate) fn new(body: Option<Incoming>, pending: Bytes) -> Self {
+    pub(crate) fn new(
+        status: StatusCode,
+        headers: HeaderMap,
+        body: Option<Incoming>,
+        pending: Bytes,
+    ) -> Self {
         Self {
+            status,
+            headers,
             body,
             pending,
             parser: Parser::default(),
@@ -119,6 +152,8 @@ impl EventStream<SseEvent> {
 impl<T> EventStream<T> {
     fn decoding<U>(self, decode: Decode<U>) -> EventStream<U> {
         EventStream {
+            status: self.status,
+            headers: self.headers,
             body: self.body,
             pending: self.pending,
             parser: self.parser,
@@ -164,24 +199,30 @@ impl<T> EventStream<T> {
     }
 
     fn poll_item(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<T, Error>>> {
-        let event = match std::task::ready!(self.poll_event(cx)) {
-            Some(Ok(event)) => event,
-            Some(Err(error)) => return Poll::Ready(Some(Err(error))),
-            None => return Poll::Ready(None),
-        };
-        let step = (self.decode)(&event);
-        self.last = Some(event);
-        Poll::Ready(match step {
-            Ok(Step::Item(item)) => Some(Ok(item)),
-            Ok(Step::Done) => {
-                self.close();
-                None
+        loop {
+            let event = match std::task::ready!(self.poll_event(cx)) {
+                Some(Ok(event)) => event,
+                Some(Err(error)) => return Poll::Ready(Some(Err(error))),
+                None => return Poll::Ready(None),
+            };
+            let step = (self.decode)(&event);
+            if !matches!(step, Ok(Step::Skip)) {
+                self.last = Some(event);
             }
-            Err(error) => {
-                self.close();
-                Some(Err(error))
-            }
-        })
+            let error = match step {
+                Ok(Step::Item(item)) => return Poll::Ready(Some(Ok(item))),
+                Ok(Step::Skip) => continue,
+                Ok(Step::Done) => None,
+                Ok(Step::Failed(body)) => Some(Error::from_response(
+                    self.status,
+                    self.headers.clone(),
+                    body,
+                )),
+                Err(error) => Some(error),
+            };
+            self.close();
+            return Poll::Ready(error.map(Err));
+        }
     }
 
     fn close(&mut self) {
