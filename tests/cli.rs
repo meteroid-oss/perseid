@@ -29,6 +29,10 @@ fn project_from(fixture: &str, languages: &[&str]) -> tempfile::TempDir {
     .unwrap();
     let (ok, out) = perseid(dir.path(), &["init", "--sdks", &languages.join(",")]);
     assert!(ok, "{out}");
+    // Tests check the generators' default timeout, not the one init gives streaming APIs.
+    let config = dir.path().join("perseid.toml");
+    let toml = fs::read_to_string(&config).unwrap();
+    fs::write(&config, toml.replace("timeout = 600\n", "")).unwrap();
     dir
 }
 
