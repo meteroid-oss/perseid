@@ -20,8 +20,11 @@
 
 from __future__ import annotations
 
-import importlib
-import typing as t
+# Importing a submodule (`list.py`, `t.py`) binds its name here, so this module's own names
+# are kept clear of them.
+import builtins as _builtins
+import importlib as _importlib
+import typing as _t
 
 from .._exceptions import (
     APIConnectionError,
@@ -53,31 +56,31 @@ from .client import Async{{ client }}, {{ client }}
 {%- endfor %}
 {%- if lazy.pairs %}
 
-if t.TYPE_CHECKING:
+if _t.TYPE_CHECKING:
 {%- for name, module in lazy.pairs %}
     from .{{ module }} import {{ name }}
 {%- endfor %}
 {%- endif %}
 
 # Each resource's module is imported the first time it is used.
-_MODULES: dict[str, str] = {
+_MODULES: _builtins.dict[_builtins.str, _builtins.str] = {
 {%- for name, module in lazy.pairs %}
     "{{ name }}": "{{ module }}",
 {%- endfor %}
 }
 
 
-def __getattr__(name: str) -> t.Any:
+def __getattr__(name: _builtins.str) -> _t.Any:
     module = _MODULES.get(name)
     if module is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(importlib.import_module(f".{module}", __name__), name)
-    globals()[name] = value
+    value = _builtins.getattr(_importlib.import_module(f".{module}", __name__), name)
+    _builtins.globals()[name] = value
     return value
 
 
-def __dir__() -> list[str]:
-    return sorted({*globals(), *_MODULES})
+def __dir__() -> _builtins.list[_builtins.str]:
+    return _builtins.sorted({*_builtins.globals(), *_MODULES})
 
 
 __all__ = [
