@@ -88,6 +88,13 @@ pub(crate) fn generate_with_output_context(
         "param_types",
         minijinja::Value::from_serialize(param_types(&api)),
     );
+    let request_only: BTreeSet<String> = (request_only_schemas(&api).into_iter())
+        .map(|name| name.to_upper_camel_case())
+        .collect();
+    minijinja_env.add_global(
+        "request_only_types",
+        minijinja::Value::from_serialize(request_only),
+    );
     minijinja_env.add_template(tpl_path, &tpl_source)?;
     let tpl = minijinja_env.get_template(tpl_path)?;
 

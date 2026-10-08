@@ -1,9 +1,9 @@
 {% from "types/macros.py.jinja" import py_str, docstring, arg_literals, arg_type, attr_names, field_decl, field_ident, has_object_union, in_class, input_refs, input_type, literal_type, model_imports, py_type -%}
-{#- In a model only requests send, an enum field also takes its values as literals, and an open
-    one any string. -#}
+{#- A field of a model only requests send takes what the argument it fills takes: an enum's
+    values, a model's `Param` dict, any sequence. -#}
 {% macro wide_type(field) -%}
     {%- if request_only and field.literal is not defined -%}
-        {%- set wide = arg_type(field.type, enum_literals, open_enums) -%}
+        {%- set wide = input_type(field.type, enum_literals, open_enums) -%}
         {%- if wide != py_type(field.type) %}{{ wide }}{% endif -%}
     {%- endif -%}
 {%- endmacro -%}
@@ -12,7 +12,7 @@
 {% set keys = type.fields | rejectattr("read_only") | list if param else [] -%}
 {% set literals = namespace(names=[]) -%}
 {% for field in type.fields if request_only and field.literal is not defined -%}
-    {% set literals.names = literals.names + (arg_literals(field.type, enum_literals) | split | list) -%}
+    {% set literals.names = literals.names + (input_refs(field.type, enum_literals) | split | list) -%}
 {% endfor -%}
 {% for field in keys -%}
     {% set literals.names = literals.names + (input_refs(field.type, enum_literals) | split | list) -%}

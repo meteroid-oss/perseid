@@ -366,7 +366,7 @@ class {{ class_name }}({{ base_class }}):
 {%- set body_value %}{{ body_type }}(
 {%- for f in flat_fields.list %}
 {%- set ident = field_ident(f) %}
-{%- if input_type(f.type, enums, open_enums) != py_type(f.type) %}{{ ident }}=t.cast({{ py_str(field_type(f)) }}, {{ ident }}), {% else %}{{ ident }}={{ ident }}, {% endif %}
+{%- if body_type not in request_only_types and input_type(f.type, enums, open_enums) != py_type(f.type) %}{{ ident }}=t.cast({{ py_str(field_type(f)) }}, {{ ident }}), {% else %}{{ ident }}={{ ident }}, {% endif %}
 {%- endfor %}
 {%- set twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("stream_property", "defined") | first %}
 {%- set skipped = op.stream_property if op.stream_property is defined else (twin.stream_property if twin else none) %}

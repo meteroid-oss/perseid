@@ -20,6 +20,7 @@ and dependency free.
 
 from __future__ import annotations
 
+import collections.abc as _abc
 import dataclasses
 import datetime as _datetime
 import enum
@@ -194,6 +195,15 @@ class Discriminator:
 
 _NoneType = type(None)
 _UNION_TYPES: tuple[t.Any, ...] = (t.Union, types.UnionType)
+# Arguments and models only requests send also take `t.Sequence` and `t.Mapping` of them.
+_LISTS: tuple[t.Any, ...] = (list, set, frozenset, tuple, _abc.Sequence)
+_DICTS: tuple[t.Any, ...] = (dict, _abc.Mapping)
+
+
+def _members(args: t.Iterable[t.Any]) -> list[t.Any]:
+    """The members of a union that values are decoded and encoded as: a model's ``Param``
+    ``TypedDict`` is the same JSON as the model, and ``None`` is handled apart."""
+    return [a for a in args if a not in (_NoneType, Unset) and not t.is_typeddict(a)]
 
 
 def to_json_value(value: t.Any, annotation: t.Any = t.Any) -> t.Any:
@@ -210,7 +220,7 @@ def to_json_value(value: t.Any, annotation: t.Any = t.Any) -> t.Any:
                 return meta.serialize(value)
         return to_json_value(value, base)
     if origin in _UNION_TYPES:
-        members = [a for a in t.get_args(annotation) if a not in (_NoneType, Unset)]
+        members = _members(t.get_args(annotation))
         if len(members) == 1:
             return to_json_value(value, members[0])
         return to_json_value(value, _union_member(members, value) or t.Any)
@@ -232,10 +242,10 @@ def to_json_value(value: t.Any, annotation: t.Any = t.Any) -> t.Any:
         return str(value)
     args = t.get_args(annotation)
     if isinstance(value, (list, tuple, set, frozenset)):
-        inner = args[0] if origin in (list, set, frozenset) and args else t.Any
+        inner = args[0] if origin in _LISTS and origin is not tuple and args else t.Any
         return [to_json_value(v, inner) for v in t.cast("t.Iterable[t.Any]", value)]
     if isinstance(value, t.Mapping):
-        inner = args[1] if origin is dict and len(args) == 2 else t.Any
+        inner = args[1] if origin in _DICTS and len(args) == 2 else t.Any
         entries = t.cast("t.Mapping[object, object]", value).items()
         return {str(k): to_json_value(v, inner) for k, v in entries}
     return value
@@ -379,7 +389,7 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
     if origin in _UNION_TYPES:
         if value is None and _NoneType in args:
             return None
-        members = [a for a in args if a not in (_NoneType, Unset)]
+        members = _members(args)
         if len(members) == 1:
             return _from_json_value(members[0], value, ctx)
         candidates = _union_candidates(members, _value_kind(value))
@@ -397,7 +407,7 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
                 failure = exc
         raise failure or ModelParseError(f"{ctx}: {value!r} matches no member of {annotation!r}")
 
-    if origin in (list, set, frozenset, tuple):
+    if origin in _LISTS:
         inner = args[0] if args else t.Any
         if not isinstance(value, list):
             raise ModelParseError(f"{ctx}: expected a list, got {type(value).__name__}")
@@ -405,7 +415,7 @@ def _from_json_value(annotation: t.Any, value: t.Any, ctx: str) -> t.Any:
         items = [_from_json_value(inner, v, f"{ctx}[{i}]") for i, v in enumerate(values)]
         return set(items) if origin in (set, frozenset) else items
 
-    if origin is dict:
+    if origin in _DICTS:
         inner = args[1] if len(args) == 2 else t.Any
         if not isinstance(value, dict):
             raise ModelParseError(f"{ctx}: expected an object, got {type(value).__name__}")
@@ -479,9 +489,9 @@ def _json_kind(annotation: t.Any) -> str | None:
         return _json_kind(base)
     if origin is t.Literal:
         return _value_kind(t.get_args(annotation)[0])
-    if origin in (list, set, frozenset, tuple):
+    if origin in _LISTS:
         return "array"
-    if origin is dict:
+    if origin in _DICTS:
         return "object"
     if isinstance(annotation, type):
         if issubclass(annotation, bool):
@@ -538,12 +548,14 @@ def _fits(annotation: t.Any, value: t.Any) -> bool:
         return any(_fits(a, value) for a in args)
     if origin is t.Literal:
         return value in args
-    if origin in (list, set, frozenset, tuple):
+    if t.is_typeddict(annotation):
+        return isinstance(value, t.Mapping) and not isinstance(value, BaseModel)
+    if origin in _LISTS:
         if not isinstance(value, (list, tuple, set, frozenset)):
             return False
         first = next(iter(t.cast("t.Iterable[t.Any]", value)), None)
         return first is None or not args or _fits(args[0], first)
-    if origin is dict:
+    if origin in _DICTS:
         return isinstance(value, (t.Mapping, BaseModel))
     if isinstance(annotation, type):
         if annotation is float:
@@ -756,7 +768,7 @@ class BaseModel:
 def _model_of(annotation: t.Any) -> type[BaseModel] | None:
     """The model class of an annotation such as ``Address`` or ``Address | None``."""
     if t.get_origin(annotation) in _UNION_TYPES:
-        members = [a for a in t.get_args(annotation) if a not in (_NoneType, Unset)]
+        members = _members(t.get_args(annotation))
         annotation = members[0] if len(members) == 1 else None
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         return annotation
