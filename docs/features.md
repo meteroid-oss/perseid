@@ -165,7 +165,7 @@ Every SDK can return the status, headers and request id of a successful call wit
 | Language | Usage |
 |---|---|
 | TypeScript | `const { data, response, requestId } = await client.customers.retrieve(id).withResponse()` |
-| Python | `raw = client.with_raw_response.customers.retrieve(id)`, then `raw.headers`, `raw.parse()` |
+| Python | `raw = client.with_raw_response.customers.retrieve(id)`, then `raw.request_id`, `raw.parse()` |
 | Go | `client.Customers().Retrieve(ctx, id, acme.WithResponseInto(&resp))` |
 | Rust | `client.customers().retrieve(id).with_response().await?`, then `.request_id()`, `.into_data()` |
 | Java | `client.withRawResponse().customers().retrieve(id)`, an `ApiResponse<Customer>` |

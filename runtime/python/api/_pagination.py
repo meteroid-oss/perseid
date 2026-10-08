@@ -145,7 +145,7 @@ class _Page(BaseModel, t.Generic[_Item, _M]):
         return tuple(self._field_value(f.name) for f in dataclasses.fields(self) if f.compare)
 
     def __eq__(self, other: object) -> bool:
-        if type(other) is not type(self) or not isinstance(other, _Page):
+        if type(other) is not type(self):
             return NotImplemented
         return self._field_values() == other._field_values()
 

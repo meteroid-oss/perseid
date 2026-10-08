@@ -12,6 +12,9 @@ for any request carrying an ``idempotency-key``, which every POST gets
 automatically when the API deduplicates by it. A timed-out request can therefore take up to
 ``timeout * (1 + max_retries)`` plus the backoff delays before
 :class:`APITimeoutError` is raised.
+
+Logging: the ``@@PACKAGE_NAME@@`` logger records each attempt at DEBUG and each retry at INFO,
+without headers, query or body. ``@@ENV_PREFIX@@_LOG=debug`` (or ``info``) sends them to stderr.
 """
 
 from __future__ import annotations
@@ -22,6 +25,8 @@ import datetime as _datetime
 import email.utils
 import enum
 import json
+import logging
+import os
 import random
 import time
 import typing as t
@@ -99,6 +104,25 @@ MAX_RETRY_DELAY = 8.0
 _MAX_RETRY_AFTER = 60.0
 _REPLAYABLE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE", "PUT", "DELETE"})
 
+_logger = logging.getLogger("@@PACKAGE_NAME@@")
+
+
+def _setup_logging() -> None:
+    """Logs at the level of ``@@ENV_PREFIX@@_LOG``, to stderr unless a handler is configured."""
+    level = {"debug": logging.DEBUG, "info": logging.INFO}.get(
+        os.environ.get("@@ENV_PREFIX@@_LOG", "").lower()
+    )
+    if level is None or _logger.level != logging.NOTSET:
+        return
+    _logger.setLevel(level)
+    if not _logger.hasHandlers():
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+        _logger.addHandler(handler)
+
+
+_setup_logging()
+
 QueryParams: t.TypeAlias = "list[tuple[str, str]]"
 Timeout: t.TypeAlias = "float | httpx.Timeout | None"
 """Seconds, an ``httpx.Timeout`` for finer control, or ``None`` to wait forever."""
@@ -170,7 +194,7 @@ def header_value(value: object) -> str | None:
     if value is None or value is UNSET:
         return None
     if isinstance(value, (list, tuple, set, frozenset)):
-        return ",".join(_serialize_scalar(item) for item in value)
+        return ",".join(_serialize_scalar(item) for item in t.cast("t.Iterable[object]", value))
     return _serialize_scalar(value)
 
 
@@ -221,14 +245,15 @@ def _encode_styled_path_param(name: str, value: t.Any, style: str, explode: bool
     head, separator = {"label": (".", "."), "matrix": (";", ";")}.get(style, ("", ","))
     key = _quote_unreserved(name)
     if isinstance(value, list):
-        values = [quote(item) for item in value]
+        values = [quote(item) for item in t.cast("list[object]", value)]
         if style == "matrix":
             if explode:
                 return "".join(f";{key}={item}" for item in values)
             return f";{key}=" + ",".join(values)
         return head + (separator if explode else ",").join(values)
     if isinstance(value, dict):
-        pairs = [(_quote_unreserved(field), quote(item)) for field, item in value.items()]
+        fields = t.cast("dict[str, t.Any]", value).items()
+        pairs = [(_quote_unreserved(field), quote(item)) for field, item in fields]
         flat = ",".join(part for pair in pairs for part in pair)
         if style == "matrix":
             if explode:
@@ -373,9 +398,10 @@ def _with_extra_body(
         raise TypeError("extra_body needs a JSON, form or multipart request body")
     if spec.json_body is None:
         return extra, None, None
-    if not isinstance(spec.json_body, dict):
+    body = spec.json_body
+    if not isinstance(body, dict):
         raise TypeError("extra_body needs a JSON object request body")
-    return {**t.cast("dict[str, JSONValue]", spec.json_body), **extra}, None, None
+    return {**t.cast("dict[str, JSONValue]", body), **extra}, None, None
 
 
 def _raise_for_status(response: httpx.Response, error_types: ErrorTypes | None) -> None:
@@ -464,6 +490,11 @@ def _retry_after(response: httpx.Response) -> float | None:
 
 def _retryable_status(status: int) -> bool:
     return status in (408, 429) or status >= 500
+
+
+def _log_url(request: httpx.Request) -> httpx.URL:
+    # The query and user info may carry credentials.
+    return request.url.copy_with(query=None, userinfo=b"")
 
 
 class _Replay(t.NamedTuple):
@@ -633,12 +664,14 @@ class ApiBase:
                 response, f"the token endpoint response has no usable access_token: {exc}"
             ) from exc
 
+    def _max_retries(self, spec: ApiRequest) -> int:
+        return self._cfg.max_retries if spec.max_retries is None else spec.max_retries
+
     def _retry_delay(
         self, spec: ApiRequest, attempt: int, replay: _Replay, response: httpx.Response | None
     ) -> float | None:
         """Seconds to wait before retrying, or ``None`` to give up."""
-        max_retries = self._cfg.max_retries if spec.max_retries is None else spec.max_retries
-        if attempt >= max_retries or not replay.resendable:
+        if attempt >= self._max_retries(spec) or not replay.resendable:
             return None
         if response is None and not replay.safe:
             return None
@@ -651,6 +684,34 @@ class ApiBase:
                 return retry_after
         backoff = min(INITIAL_RETRY_DELAY * 2.0**attempt, MAX_RETRY_DELAY)
         return backoff * (1 - 0.25 * random.random())
+
+    @staticmethod
+    def _log_attempt(
+        request: httpx.Request, attempt: int, started: float, outcome: httpx.Response | Exception
+    ) -> None:
+        if not _logger.isEnabledFor(logging.DEBUG):
+            return
+        result = outcome.status_code if isinstance(outcome, httpx.Response) else type(outcome).__name__
+        _logger.debug(
+            "%s %s -> %s in %.3fs (retry %d)",
+            request.method,
+            _log_url(request),
+            result,
+            time.monotonic() - started,
+            attempt,
+        )
+
+    def _log_retry(self, request: httpx.Request, spec: ApiRequest, attempt: int, delay: float) -> None:
+        if not _logger.isEnabledFor(logging.INFO):
+            return
+        _logger.info(
+            "Retrying %s %s in %.2fs (retry %d of %d)",
+            request.method,
+            _log_url(request),
+            delay,
+            attempt + 1,
+            self._max_retries(spec),
+        )
 
     @staticmethod
     def _finish(response: httpx.Response, spec: ApiRequest) -> None:
@@ -700,13 +761,16 @@ class ApiBaseSync(ApiBase):
         attempt = 0
         renewed = False
         while True:
+            started = time.monotonic()
             try:
                 response = self._send(request, spec.stream)
             except httpx.RequestError as exc:
+                self._log_attempt(request, attempt, started, exc)
                 delay = self._retry_delay(spec, attempt, replay, None)
                 if delay is None:
                     raise connection_error(exc) from exc
             else:
+                self._log_attempt(request, attempt, started, response)
                 if scheme is not None and self._rejected_token(
                     response, request, used, renewed, replay.safe and replay.resendable
                 ):
@@ -726,6 +790,7 @@ class ApiBaseSync(ApiBase):
                         raise
                     return response
                 response.close()
+            self._log_retry(request, spec, attempt, delay)
             time.sleep(delay)
             attempt += 1
             request.headers["@@HEADER_PREFIX@@-retry-count"] = str(attempt)
@@ -772,13 +837,16 @@ class ApiBaseAsync(ApiBase):
         attempt = 0
         renewed = False
         while True:
+            started = time.monotonic()
             try:
                 response = await self._send(request, spec.stream)
             except httpx.RequestError as exc:
+                self._log_attempt(request, attempt, started, exc)
                 delay = self._retry_delay(spec, attempt, replay, None)
                 if delay is None:
                     raise connection_error(exc) from exc
             else:
+                self._log_attempt(request, attempt, started, response)
                 if scheme is not None and self._rejected_token(
                     response, request, used, renewed, replay.safe and replay.resendable
                 ):
@@ -798,6 +866,7 @@ class ApiBaseAsync(ApiBase):
                         raise
                     return response
                 await response.aclose()
+            self._log_retry(request, spec, attempt, delay)
             await asyncio.sleep(delay)
             attempt += 1
             request.headers["@@HEADER_PREFIX@@-retry-count"] = str(attempt)

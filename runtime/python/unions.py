@@ -72,12 +72,13 @@ class ObjectUnion(Discriminator):
             if self.others is None:
                 raise ModelParseError(f"{ctx}: expected an object, got {type(value).__name__}")
             return from_json_value(self.others, value)
-        for model in self.candidates(value):
+        fields = t.cast("t.Mapping[str, t.Any]", value)
+        for model in self.candidates(fields):
             try:
-                return from_json_value(model, dict(value))
+                return from_json_value(model, dict(fields))
             except ModelParseError:
                 continue
-        return UnknownVariant("", dict(value))
+        return UnknownVariant("", dict(fields))
 
     def serialize(self, value: t.Any) -> t.Any:
         return to_json_value(value)
