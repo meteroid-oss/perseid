@@ -131,7 +131,7 @@ fn tests_dir(language: &str, context: &Value) -> PathBuf {
     })
 }
 
-fn extension(language: &str) -> &str {
+pub(crate) fn extension(language: &str) -> &str {
     match language {
         "rust" => "rs",
         "typescript" => "ts",
@@ -185,6 +185,34 @@ fn scan_sources(
     Ok(())
 }
 
+/// The API model of `sdk`, before each template kind shapes it further.
+pub(crate) fn sdk_api(
+    config: &Config,
+    sdk: &Sdk,
+    context: &Value,
+    spec: &str,
+) -> Result<crate::api::Api> {
+    let mut api = spec::api(spec, &config.filters_for(sdk))?;
+    if sdk.language == "go" {
+        api.hoist_inline_variants();
+    }
+    api.drop_unsendable(sdk.language);
+    let (best_match, untyped) = api.settle_object_unions(context);
+    if best_match > 0 {
+        tracing::warn!(
+            "unions of objects that no property tells apart, decoded as their best-matching \
+             variant: {best_match}"
+        );
+    }
+    if untyped > 0 {
+        tracing::warn!(
+            "unions of objects that no property tells apart, left as untyped JSON: {untyped} \
+             (`untagged_unions = \"best-match\"` types them)"
+        );
+    }
+    Ok(api)
+}
+
 /// Renders templates, then runtime files, into `stage`. Returns their paths relative to it.
 fn render(
     config: &Config,
@@ -203,26 +231,8 @@ fn render(
     )?;
     let (runtime, tasks) = layout(language, context);
     let extension = extension(language);
-    let filters = config.filters_for(sdk);
     let mut produced = Vec::new();
-    let mut api = spec::api(spec, &filters)?;
-    if language == "go" {
-        api.hoist_inline_variants();
-    }
-    api.drop_unsendable(language);
-    let (best_match, untyped) = api.settle_object_unions(context);
-    if best_match > 0 {
-        tracing::warn!(
-            "unions of objects that no property tells apart, decoded as their best-matching \
-             variant: {best_match}"
-        );
-    }
-    if untyped > 0 {
-        tracing::warn!(
-            "unions of objects that no property tells apart, left as untyped JSON: {untyped} \
-             (`untagged_unions = \"best-match\"` types them)"
-        );
-    }
+    let api = sdk_api(config, sdk, context, spec)?;
     for (template, output) in tasks {
         let output_extension = match template {
             API_REFERENCE => "md",

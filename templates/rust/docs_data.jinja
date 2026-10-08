@@ -1,0 +1,58 @@
+{#- How the SDK names and calls each operation, for `perseid docs-data`: each macro renders one
+    value of its JSON. An example is the `{resource, operation, path_args, body, result, item}`
+    of docs.jinja. -#}
+{% import "docs.jinja" as docs %}
+{% import "api_reference.md.jinja" as ref %}
+
+{% macro install() %}cargo add {{ sdk.package_name }}{% endmacro %}
+
+{% macro setup() -%}
+use {{ sdk.rust_crate }}::api::{{ sdk.client_name }};
+
+let client = {{ sdk.client_name }}::builder()
+    .token(std::env::var("{{ sdk.env_prefix }}_API_KEY")?)
+    .build()?;
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro signature(resource, op) %}{{ ref.signature(resource, op) }}{% endmacro %}
+
+{#- `[[wire name, name], ...]` of the parameters of `op`, as JSON. -#}
+{% macro param_names(resource, op) -%}
+    {%- set ns = namespace(pairs=[]) -%}
+    {%- for p in op.path_params %}{% set ns.pairs = ns.pairs + [[p, p | to_rust_ident]] %}{% endfor -%}
+    {%- for p in op.query_params + op.header_params %}{% set ns.pairs = ns.pairs + [[p.name, p.ident | to_rust_ident]] %}{% endfor -%}
+    {{ ns.pairs | tojson }}
+{%- endmacro %}
+
+{% macro type_name(name) %}{{ name | to_upper_camel_case }}{% endmacro %}
+
+{#- `[[wire name, name], ...]` of the fields of the schema `name`, as JSON. -#}
+{% macro field_names(name, ty) -%}
+    {%- set ns = namespace(pairs=[]) -%}
+    {%- for f in ty.fields | default([]) if not f.flatten %}{% set ns.pairs = ns.pairs + [[f.name, f.name | to_rust_ident]] %}{% endfor -%}
+    {{ ns.pairs | tojson }}
+{%- endmacro %}
+
+{% macro sample(ex) -%}
+    {%- set op = ex.operation -%}
+    {%- if op.pagination is defined or op.response_is_event_stream %}use futures_util::StreamExt;
+{% endif -%}
+{{ docs.uses(ex) }}
+    {%- if op.pagination is defined -%}
+let mut items = {{ docs.call(ex) }}.items();
+while let Some({{ docs.var(ex.item, "item") }}) = items.next().await {
+    println!("{:?}", {{ docs.var(ex.item, "item") }}?);
+}
+    {%- elif op.response_is_event_stream -%}
+let mut events = {{ docs.call(ex) }}.await?;
+while let Some(event) = events.next().await {
+    println!("{:?}", event?);
+}
+    {%- elif ex.result -%}
+let {{ docs.var(ex.result, "result") }} = {{ docs.call(ex) }}.await?;
+    {%- else -%}
+{{ docs.call(ex) }}.await?;
+    {%- endif -%}
+{%- endmacro %}

@@ -3090,6 +3090,112 @@ components:
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn docs_data_names_and_calls_every_operation_in_every_sdk() {
+    let dir = project_from("petstore.yaml", &LANGUAGES);
+    let spec = fs::read_to_string(dir.path().join("openapi.yaml")).unwrap();
+    let spec = spec.replace(
+        "{ name: pet_id, in: path, required: true, schema: { type: string } }",
+        "{ name: pet_id, in: path, required: true, schema: { type: string }, example: pet_7n42 }",
+    );
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["docs-data", "--out", "docs.json"]);
+    assert!(ok, "{out}");
+    let data: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join("docs.json")).unwrap()).unwrap();
+    assert_eq!(data["name"], "Petstore");
+    assert_eq!(data["base_url"], "https://petstore.example.com");
+    assert_eq!(
+        data["resources"][0]["operations"],
+        json!(["list_pets", "create_pet", "get_pet", "delete_pet"])
+    );
+    let expected = [
+        (
+            "typescript",
+            "npm install petstore",
+            "client.pets.retrieve(petId: string): APIPromise<Pet>",
+            "const pet = await client.pets.retrieve(\"pet_7n42\");",
+            "petId",
+        ),
+        (
+            "python",
+            "pip install petstore",
+            "client.pets.retrieve(pet_id: str) -> Pet",
+            "pet = client.pets.retrieve(\"pet_7n42\")",
+            "pet_id",
+        ),
+        (
+            "go",
+            "go get petstore",
+            "client.Pets().Retrieve(ctx, petID string) (*Pet, error)",
+            "pet, err := client.Pets().Retrieve(ctx, \"pet_7n42\")\nif err != nil {\n\treturn err\n}",
+            "petID",
+        ),
+        (
+            "java",
+            "implementation(\"com.petstore:petstore:latest.release\")",
+            "Pet client.pets().retrieve(String petId)",
+            "var pet = client.pets().retrieve(\"pet_7n42\");",
+            "petId",
+        ),
+        (
+            "csharp",
+            "dotnet add package Petstore",
+            "Task<Pet> client.Pets.RetrieveAsync(string petId)",
+            "var pet = await client.Pets.RetrieveAsync(\"pet_7n42\");",
+            "petId",
+        ),
+        (
+            "rust",
+            "cargo add petstore",
+            "client.pets().retrieve(pet_id: &str) -> Call<Pet>",
+            "let pet = client.pets().retrieve(\"pet_7n42\").await?;",
+            "pet_id",
+        ),
+    ];
+    for (language, install, signature, sample, param) in expected {
+        let sdk = &data["languages"][language];
+        let get = &sdk["operations"]["get_pet"];
+        assert_eq!(sdk["install"], install, "{language}");
+        assert_eq!(get["signature"], signature, "{language}");
+        assert!(
+            get["sample"].as_str().unwrap().starts_with(sample),
+            "{language}: {get}"
+        );
+        assert_eq!(get["complete"], true, "{language}");
+        assert_eq!(get["params"]["pet_id"], param, "{language}");
+        let setup = sdk["setup"].as_str().unwrap();
+        assert!(
+            setup.contains("PETSTORE_API_KEY") || setup.ends_with("Petstore.fromEnv();"),
+            "{language}: {setup}"
+        );
+    }
+    let python = &data["languages"]["python"];
+    assert_eq!(python["types"]["Pet"]["fields"]["created_at"], "created_at");
+    assert_eq!(
+        python["operations"]["create_pet"]["sample"],
+        "pet = client.pets.create(name=\"name\")"
+    );
+
+    let (ok, out) = perseid(dir.path(), &["docs-data", "go"]);
+    assert!(ok, "{out}");
+    let go: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(go["languages"].as_object().unwrap().len(), 1);
+    assert_eq!(
+        go["languages"]["go"]["types"]["Pet"]["fields"]["created_at"],
+        "CreatedAt"
+    );
+
+    let (ok, out) = perseid(dir.path(), &["generate", "typescript", "--no-format"]);
+    assert!(ok, "{out}");
+    let readme = fs::read_to_string(dir.path().join("typescript/README.md")).unwrap();
+    assert!(
+        readme.contains("client.pets.retrieve(\"pet_7n42\")"),
+        "{readme}"
+    );
+}
+
 /// `(METHOD, path)` of every operation `language` generates.
 fn operations(dir: &Path, language: &str) -> Vec<(String, String)> {
     let (ok, out) = perseid(dir, &["inspect", language]);

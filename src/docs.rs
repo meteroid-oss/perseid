@@ -67,7 +67,7 @@ fn pick(model: &Value) -> Value {
 }
 
 /// Every `(resource, operation)`, resources in order, subresources after their parent's.
-fn collect<'a>(resources: &'a Value, out: &mut Vec<(&'a str, &'a Value)>) {
+pub(crate) fn collect<'a>(resources: &'a Value, out: &mut Vec<(&'a str, &'a Value)>) {
     let resources: Vec<&Value> = match resources {
         Value::Array(list) => list.iter().collect(),
         Value::Object(map) => map.values().collect(),
@@ -84,144 +84,189 @@ fn collect<'a>(resources: &'a Value, out: &mut Vec<(&'a str, &'a Value)>) {
 
 /// The example of `op`, when its required arguments can all be written as literals.
 fn example(types: &Value, resource: &str, op: &Value) -> Option<Value> {
+    build(types, resource, op, false).map(|(example, _)| example)
+}
+
+/// The example of `op` with the arguments literals can hold, and whether it holds every
+/// required one.
+pub(crate) fn partial_example(types: &Value, resource: &str, op: &Value) -> Option<(Value, bool)> {
+    build(types, resource, op, true)
+}
+
+fn build(types: &Value, resource: &str, op: &Value, partial: bool) -> Option<(Value, bool)> {
+    let mut fill = Fill {
+        types,
+        partial,
+        complete: true,
+    };
     let required = |key: &str| {
         op[key]
             .as_array()
             .is_some_and(|params| params.iter().any(|p| p["required"] == true))
     };
     if required("query_params") || required("header_params") {
-        return None;
+        fill.missing()?;
     }
     let mut path_args = Vec::new();
     for param in op["typed_path_params"].as_array().into_iter().flatten() {
-        let name = param["name"].as_str()?;
-        path_args.push(path_literal(op, types, name, &param["type"])?);
+        match path_literal(op, types, param) {
+            Some(arg) => path_args.push(arg),
+            None => fill.missing()?,
+        }
     }
-    let body = match op["request_body_kind"].as_str() {
-        Some("none") => Value::Null,
-        Some("json") => json_body(types, op)?,
-        _ => return None,
+    let body = match op["request_body_kind"].as_str()? {
+        "none" => Value::Null,
+        "json" => fill.json_body(op)?,
+        _ => {
+            fill.missing()?;
+            Value::Null
+        }
     };
     let schema = |key: &str| op.get(key).cloned().unwrap_or(Value::Null);
     let result = match op["response_body_is_list"] == true {
         true => Value::Null,
         false => schema("response_body_schema_name"),
     };
-    Some(json!({
+    let example = json!({
         "resource": resource,
         "operation": op,
         "path_args": path_args,
         "body": body,
         "result": result,
         "item": op["pagination"]["item_schema"],
-    }))
-}
-
-/// A required JSON body of a named object schema, with its required fields as literals.
-fn json_body(types: &Value, op: &Value) -> Option<Value> {
-    if op["request_body_optional"] == true || op["request_body_is_list"] == true {
-        return None;
-    }
-    let name = op["request_body_schema_name"].as_str()?;
-    // Python takes the fields as keyword arguments, unless one is named like a parameter.
-    let mut taken = vec!["self".to_owned(), "t".to_owned()];
-    let params = ["path_params", "query_params", "header_params"]
-        .iter()
-        .flat_map(|key| op[key].as_array().into_iter().flatten())
-        .filter_map(|p| {
-            (p.as_str())
-                .or_else(|| p["ident"].as_str())
-                .or_else(|| p["name"].as_str())
-        });
-    taken.extend(params.map(|p| p.to_snake_case()));
-    for field in types[name]["fields"].as_array()? {
-        if taken.contains(&field["name"].as_str()?.to_snake_case()) {
-            return None;
-        }
-    }
-    let fields = struct_fields(types, name, &[])?;
-    if fields.iter().any(|f| op["stream_property"] == f["name"]) {
-        return None;
-    }
-    Some(json!({ "schema": name, "fields": fields }))
+    });
+    Some((example, fill.complete))
 }
 
 /// How many structs deep an example nests at most.
 const MAX_DEPTH: usize = 3;
 
-/// The required fields of the struct `name` as literals, `outer` the structs it is nested in.
-fn struct_fields(types: &Value, name: &str, outer: &[&str]) -> Option<Vec<Value>> {
-    let schema = &types[name];
-    if schema["kind"] != "struct" || outer.contains(&name) || outer.len() >= MAX_DEPTH {
-        return None;
-    }
-    let outer = [outer, &[name]].concat();
-    let defaults = schema["discriminator_defaults"].as_object();
-    let mut fields = Vec::new();
-    for field in schema["fields"].as_array()? {
-        let name = field["name"].as_str()?;
-        if field["flatten"] == true {
-            return None;
-        }
-        if field["required"] != true {
-            continue;
-        }
-        let defaulted = defaults.is_some_and(|d| d.contains_key(name));
-        if field["nullable"] == true || defaulted {
-            return None;
-        }
-        let value = value(types, name, &field["type"], &field["example"], &outer)?;
-        fields.push(value);
-    }
-    Some(fields)
+/// Writes the literals of an example. Where no literal fits, it gives up, or with `partial`
+/// leaves the argument out; either way the example is no longer `complete`.
+struct Fill<'a> {
+    types: &'a Value,
+    partial: bool,
+    complete: bool,
 }
 
-/// The literal of a value named `name` of type `ty`, its spec `example` when one fits: a
-/// scalar, an enum, a list of one item or a struct of its required fields.
-fn value(types: &Value, name: &str, ty: &Value, example: &Value, outer: &[&str]) -> Option<Value> {
-    let id = ty["id"].as_str()?;
-    let schema = &types[ty["name"].as_str().unwrap_or_default()];
-    let value = match (id, schema["kind"].as_str()) {
-        ("String", _) | ("SchemaRef", Some("string_alias")) => {
-            match example.as_str().filter(|s| plain_text(s)) {
-                Some(example) => json!(example),
-                None => text(name),
+impl Fill<'_> {
+    /// Marks an argument missing: `None` to give up, unless `partial`.
+    fn missing(&mut self) -> Option<()> {
+        self.complete = false;
+        self.partial.then_some(())
+    }
+
+    /// A JSON body of a named object schema, with its required fields as literals.
+    fn json_body(&mut self, op: &Value) -> Option<Value> {
+        if op["request_body_optional"] == true {
+            self.missing()?;
+        }
+        let name = op["request_body_schema_name"].as_str();
+        let Some(name) = name
+            .filter(|n| op["request_body_is_list"] != true && self.types[*n]["kind"] == "struct")
+        else {
+            self.missing()?;
+            return Some(Value::Null);
+        };
+        // Python takes the fields as keyword arguments, unless one is named like a parameter.
+        let mut taken = vec!["self".to_owned(), "t".to_owned()];
+        let params = ["path_params", "query_params", "header_params"]
+            .iter()
+            .flat_map(|key| op[key].as_array().into_iter().flatten())
+            .filter_map(|p| {
+                (p.as_str())
+                    .or_else(|| p["ident"].as_str())
+                    .or_else(|| p["name"].as_str())
+            });
+        taken.extend(params.map(|p| p.to_snake_case()));
+        let fields = self.types[name]["fields"].as_array().into_iter().flatten();
+        if fields
+            .filter_map(|f| f["name"].as_str())
+            .any(|f| taken.contains(&f.to_snake_case()))
+        {
+            self.missing()?;
+        }
+        let mut fields = self.struct_fields(name, &[])?;
+        if fields.iter().any(|f| op["stream_property"] == f["name"]) {
+            self.missing()?;
+            fields.retain(|f| op["stream_property"] != f["name"]);
+        }
+        Some(json!({ "schema": name, "fields": fields }))
+    }
+
+    /// The required fields of the struct `name` as literals, `outer` the structs it is nested in.
+    fn struct_fields(&mut self, name: &str, outer: &[&str]) -> Option<Vec<Value>> {
+        let schema = &self.types[name];
+        if schema["kind"] != "struct" || outer.contains(&name) || outer.len() >= MAX_DEPTH {
+            return None;
+        }
+        let outer = [outer, &[name]].concat();
+        let defaults = schema["discriminator_defaults"].as_object();
+        let mut fields = Vec::new();
+        for field in schema["fields"].as_array()? {
+            let name = field["name"].as_str()?;
+            if field["flatten"] == true {
+                self.missing()?;
+                continue;
+            }
+            if field["required"] != true {
+                continue;
+            }
+            let defaulted = defaults.is_some_and(|d| d.contains_key(name));
+            if field["nullable"] == true || defaulted {
+                self.missing()?;
+                continue;
+            }
+            match self.value(name, &field["type"], &field["example"], &outer) {
+                Some(value) => fields.push(value),
+                None => self.missing()?,
             }
         }
-        ("Int16" | "UInt16" | "Int32" | "Int64" | "UInt64", _) => {
-            json!(example.as_i64().filter(|n| *n >= 0).unwrap_or(1))
-        }
-        ("Float" | "Double", _) => json!(1.5),
-        ("Bool", _) => json!(example.as_bool().unwrap_or(true)),
-        ("Uuid", _) => json!("3fa85f64-5717-4562-b3fc-2c963f66afa6"),
-        ("Date", _) => json!("2024-01-02"),
-        ("List", _) => {
-            let item = value(types, name, &ty["inner"], &example[0], outer)?;
-            let item_type = item_type(&item);
-            return Some(json!({
-                "name": name, "kind": "list", "type": "List", "item": item_type, "items": [item],
-            }));
-        }
-        ("SchemaRef", Some("string_enum")) => {
-            let values = schema["values"].as_array()?;
-            let value = (values.iter().find(|v| *v == example))
-                .or(values.first())
-                .filter(|v| v.as_str().is_some_and(plain_text))?;
-            let mut lit = literal(name, "Enum", value.clone())?;
-            lit["schema"] = ty["name"].clone();
-            return Some(lit);
-        }
-        ("SchemaRef", Some("struct")) => {
-            let schema = ty["name"].as_str()?;
-            let fields = struct_fields(types, schema, outer)?;
-            return Some(json!({
-                "name": name, "kind": "object", "type": "SchemaRef", "schema": schema,
-                "fields": fields,
-            }));
-        }
-        _ => return None,
-    };
-    literal(name, id, value)
+        Some(fields)
+    }
+
+    /// The literal of a value named `name` of type `ty`, its spec `example` when one fits: a
+    /// scalar, an enum, a list of one item or a struct of its required fields.
+    fn value(&mut self, name: &str, ty: &Value, example: &Value, outer: &[&str]) -> Option<Value> {
+        let id = ty["id"].as_str()?;
+        let schema = &self.types[ty["name"].as_str().unwrap_or_default()];
+        let value = match (id, schema["kind"].as_str()) {
+            ("String", _) | ("SchemaRef", Some("string_alias")) => text(name, example),
+            ("Int16" | "UInt16" | "Int32" | "Int64" | "UInt64", _) => {
+                json!(example.as_i64().filter(|n| *n >= 0).unwrap_or(1))
+            }
+            ("Float" | "Double", _) => json!(1.5),
+            ("Bool", _) => json!(example.as_bool().unwrap_or(true)),
+            ("Uuid", _) => json!("3fa85f64-5717-4562-b3fc-2c963f66afa6"),
+            ("Date", _) => json!("2024-01-02"),
+            ("List", _) => {
+                let item = self.value(name, &ty["inner"], &example[0], outer)?;
+                let item_type = item_type(&item);
+                return Some(json!({
+                    "name": name, "kind": "list", "type": "List", "item": item_type, "items": [item],
+                }));
+            }
+            ("SchemaRef", Some("string_enum")) => {
+                let values = schema["values"].as_array()?;
+                let value = (values.iter().find(|v| *v == example))
+                    .or(values.first())
+                    .filter(|v| v.as_str().is_some_and(plain_text))?;
+                let mut lit = literal(name, "Enum", value.clone())?;
+                lit["schema"] = ty["name"].clone();
+                return Some(lit);
+            }
+            ("SchemaRef", Some("struct")) => {
+                let schema = ty["name"].as_str()?;
+                let fields = self.struct_fields(schema, outer)?;
+                return Some(json!({
+                    "name": name, "kind": "object", "type": "SchemaRef", "schema": schema,
+                    "fields": fields,
+                }));
+            }
+            _ => return None,
+        };
+        literal(name, id, value)
+    }
 }
 
 /// `{kind, type, schema, item}` of the literal `lit`, which names its type.
@@ -235,10 +280,11 @@ fn item_type(lit: &Value) -> Value {
     Value::Object(ty)
 }
 
-/// The argument for the path parameter `name` of type `ty`, when every language can write
-/// it as a literal: text, or a scalar sent in the `simple` style, among which the first
-/// value of a string enum of `types`.
-pub(crate) fn path_literal(op: &Value, types: &Value, name: &str, ty: &Value) -> Option<Value> {
+/// The argument for the path parameter `param`, when every language can write it as a
+/// literal: text, its spec example when it has one, or a scalar sent in the `simple` style,
+/// among which the first value of a string enum of `types`.
+pub(crate) fn path_literal(op: &Value, types: &Value, param: &Value) -> Option<Value> {
+    let (name, ty) = (param["name"].as_str()?, &param["type"]);
     let style = &op["path_styles"][name];
     if style["type"].is_object() && style["style"] != "simple" {
         return None;
@@ -246,7 +292,7 @@ pub(crate) fn path_literal(op: &Value, types: &Value, name: &str, ty: &Value) ->
     let id = ty["id"].as_str()?;
     let schema = &types[ty["name"].as_str().unwrap_or_default()];
     let value = match id {
-        "String" | "SchemaRef" if !style["type"].is_object() => text(name),
+        "String" | "SchemaRef" if !style["type"].is_object() => text(name, &param["example"]),
         "SchemaRef" if schema["kind"] == "string_enum" => {
             let value = schema["values"]
                 .get(0)
@@ -289,9 +335,11 @@ pub(crate) fn literal(name: &str, id: &str, value: Value) -> Option<Value> {
     Some(Value::Object(map))
 }
 
-/// The example value of a string named `name`: its name, when a literal can hold it as is.
-fn text(name: &str) -> Value {
-    json!(if plain_text(name) { name } else { "string" })
+/// The example value of a string named `name`: its spec `example`, else its name, when a
+/// literal can hold it as is.
+fn text(name: &str, example: &Value) -> Value {
+    let text = example.as_str().filter(|e| plain_text(e));
+    json!(text.unwrap_or(if plain_text(name) { name } else { "string" }))
 }
 
 /// Text every language's string literal holds as is.
@@ -309,7 +357,12 @@ mod tests {
     use crate::spec::Filters;
 
     fn examples_of(spec: &str) -> Value {
-        let spec = crate::spec::read(spec, std::path::Path::new(".")).unwrap();
+        examples(&api_of(
+            &crate::spec::read(spec, std::path::Path::new(".")).unwrap(),
+        ))
+    }
+
+    fn api_of(spec: &str) -> Api {
         let filters = Filters {
             include_mode: Default::default(),
             excluded: Default::default(),
@@ -319,8 +372,7 @@ mod tests {
             names: Default::default(),
             uuid_strings: false,
         };
-        let api = crate::spec::api(&spec, &filters).unwrap();
-        examples(&api)
+        crate::spec::api(spec, &filters).unwrap()
     }
 
     fn summary(example: &Value) -> String {
@@ -461,5 +513,81 @@ mod tests {
         assert!(!plain_text("say \"hi\""));
         assert!(!plain_text("${HOME}"));
         assert!(!plain_text("é"));
+    }
+
+    #[test]
+    fn path_parameters_take_their_spec_example() {
+        let id = |example: Value| {
+            json!({ "name": "id", "in": "path", "required": true,
+                "schema": { "$ref": "#/components/schemas/CustomerId" }, "example": example })
+        };
+        let spec = json!({
+            "openapi": "3.1.0",
+            "info": { "title": "Shop", "version": "1" },
+            "paths": {
+                "/customers/{id}": { "get": {
+                    "operationId": "get_customer", "tags": ["customers"],
+                    "parameters": [id(Value::Null)],
+                    "responses": { "200": { "description": "ok" } },
+                } },
+                "/carts/{id}": { "get": {
+                    "operationId": "get_cart", "tags": ["carts"],
+                    "parameters": [id(json!("cart \"7\""))],
+                    "responses": { "200": { "description": "ok" } },
+                } },
+            },
+            "components": { "schemas": {
+                "CustomerId": { "type": "string", "examples": ["cus_7n42"] },
+            } },
+        });
+        let model = serde_json::to_value(api_of(&spec.to_string())).unwrap();
+        let mut ops = Vec::new();
+        collect(&model["resources"], &mut ops);
+        let arg = |id: &str| {
+            let (resource, op) = ops.iter().find(|(_, op)| op["id"] == id).unwrap();
+            let (example, complete) = partial_example(&model["types"], resource, op).unwrap();
+            assert!(complete);
+            example["path_args"][0]["value"].clone()
+        };
+        assert_eq!(arg("get_customer"), "cus_7n42", "the schema's example");
+        assert_eq!(arg("get_cart"), "id", "no literal holds the quotes as is");
+    }
+
+    #[test]
+    fn partial_examples_leave_out_what_no_literal_holds() {
+        let model = json!({
+            "types": {
+                "Order": { "kind": "struct", "fields": [
+                    { "name": "sku", "type": { "id": "String" }, "required": true },
+                    { "name": "meta", "type": { "id": "JsonObject" }, "required": true },
+                ] },
+            },
+            "resources": [{ "name": "orders", "subresources": {}, "operations": [
+                { "id": "create_order", "name": "create", "method": "post",
+                  "request_body_kind": "json", "request_body_schema_name": "Order",
+                  "path_params": ["shop"], "header_params": [],
+                  "typed_path_params": [{ "name": "shop", "type": { "id": "String" } }],
+                  "query_params": [{ "name": "dry_run", "ident": "dry_run", "required": true }] },
+                { "id": "upload", "name": "upload", "method": "post",
+                  "request_body_kind": "multipart", "path_params": [], "typed_path_params": [],
+                  "query_params": [], "header_params": [] },
+            ] }],
+        });
+        assert_eq!(
+            pick(&model)["create"],
+            Value::Null,
+            "READMEs show complete calls only"
+        );
+        let ops = model["resources"][0]["operations"].as_array().unwrap();
+        let (create, complete) = partial_example(&model["types"], "orders", &ops[0]).unwrap();
+        assert!(!complete);
+        assert_eq!(create["path_args"][0]["value"], "shop");
+        assert_eq!(
+            create["body"],
+            json!({ "schema": "Order", "fields": [{ "name": "sku", "kind": "string",
+                "type": "String", "int64": false, "unsigned64": false, "value": "sku" }] })
+        );
+        let (upload, complete) = partial_example(&model["types"], "orders", &ops[1]).unwrap();
+        assert!(!complete && upload["body"].is_null());
     }
 }

@@ -1,0 +1,56 @@
+{#- How the SDK names and calls each operation, for `perseid docs-data`: each macro renders one
+    value of its JSON. An example is the `{resource, operation, path_args, body, result, item}`
+    of docs.jinja. -#}
+{% import "docs.jinja" as docs %}
+{% import "api_reference.md.jinja" as ref %}
+{% from "types/macros.py.jinja" import field_ident, py_ident %}
+
+{% macro install() %}pip install {{ sdk.package_name }}{% endmacro %}
+
+{% macro setup() -%}
+import os
+from {{ docs.package() }} import {{ sdk.client_name }}
+
+client = {{ sdk.client_name }}(api_key=os.environ["{{ sdk.env_prefix }}_API_KEY"])
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro signature(resource, op) %}{{ ref.signature(resource, op) }}{% endmacro %}
+
+{#- `[[wire name, name], ...]` of the parameters of `op`, as JSON. -#}
+{% macro param_names(resource, op) -%}
+    {%- set ns = namespace(pairs=[]) -%}
+    {%- for p in op.path_params %}{% set ns.pairs = ns.pairs + [[p, py_ident(p)]] %}{% endfor -%}
+    {%- for p in op.query_params + op.header_params %}{% set ns.pairs = ns.pairs + [[p.name, py_ident(p.ident)]] %}{% endfor -%}
+    {{ ns.pairs | tojson }}
+{%- endmacro %}
+
+{% macro type_name(name) %}{{ name | to_upper_camel_case }}{% endmacro %}
+
+{#- `[[wire name, name], ...]` of the fields of the schema `name`, as JSON. -#}
+{% macro field_names(name, ty) -%}
+    {%- set ns = namespace(pairs=[]) -%}
+    {%- for f in ty.fields | default([]) if not f.flatten %}{% set ns.pairs = ns.pairs + [[f.name, field_ident(f)]] %}{% endfor -%}
+    {{ ns.pairs | tojson }}
+{%- endmacro %}
+
+{% macro sample(ex) -%}
+    {%- set op = ex.operation -%}
+    {%- set call = docs.call(ex) -%}
+{{ docs.imports([ex]) }}
+    {%- if op.pagination is defined -%}
+for {{ docs.var(ex.item, "item") }} in {{ call }}:
+    print({{ docs.var(ex.item, "item") }})
+    {%- elif op.response_is_event_stream -%}
+with {{ call }} as stream:
+    for event in stream:
+        print(event)
+    {%- elif ex.result -%}
+{{ docs.var(ex.result, "result") }} = {{ call }}
+    {%- elif op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_text or op.response_is_binary -%}
+result = {{ call }}
+    {%- else -%}
+{{ call }}
+    {%- endif -%}
+{%- endmacro %}

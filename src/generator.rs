@@ -52,16 +52,7 @@ pub(crate) fn generate_with_output_context(
         .rsplit_once(".")
         .context("template name must contain '.'")?;
 
-    if language != "rs" {
-        api.inline_aliases()?;
-    }
-    api.settle_object_unions(&sdk);
-    if language == "java" {
-        api.inline_string_alias_bodies()?;
-    }
-    if matches!(language, "cs" | "go" | "rs") {
-        api.inline_flattened_fields()?;
-    }
+    for_language(&mut api, &sdk, language)?;
 
     let tpl_kind = match tpl_base_name {
         "api_resource" => TemplateKind::ApiResource,
@@ -133,6 +124,25 @@ pub(crate) fn generate_with_output_context(
     }
 
     Ok(generated_paths)
+}
+
+/// Shapes `api` as the templates of `language` (`rs`, `ts`...) receive it.
+pub(crate) fn for_language(
+    api: &mut Api,
+    sdk: &serde_json::Value,
+    language: &str,
+) -> anyhow::Result<()> {
+    if language != "rs" {
+        api.inline_aliases()?;
+    }
+    api.settle_object_unions(sdk);
+    if language == "java" {
+        api.inline_string_alias_bodies()?;
+    }
+    if matches!(language, "cs" | "go" | "rs") {
+        api.inline_flattened_fields()?;
+    }
+    Ok(())
 }
 
 struct Generator<'a> {

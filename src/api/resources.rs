@@ -779,6 +779,7 @@ impl Operation {
                     typed_path_params.push(TypedParam {
                         name: parameter_data.name.clone(),
                         r#type,
+                        example: parameter_example(&parameter_data, component_schemas),
                     });
                     path_styles.extend(path_style.map(|style| (name.clone(), style)));
                     path_params.push(parameter_data.name);
@@ -886,6 +887,7 @@ impl Operation {
             typed_path_params.push(TypedParam {
                 name: name.clone(),
                 r#type: FieldType::String,
+                example: None,
             });
         }
         disambiguate_parameters(&path_params, &mut query_params, &mut header_params);
@@ -1465,6 +1467,37 @@ fn is_collection_schema(
     false
 }
 
+/// The `example` of a parameter, else its first `examples` value, else its schema's example.
+fn parameter_example(
+    data: &openapi::ParameterData,
+    schemas: &IndexMap<String, openapi::SchemaObject>,
+) -> Option<serde_json::Value> {
+    let named = data
+        .examples
+        .values()
+        .find_map(|e| e.as_item()?.value.clone());
+    if let Some(example) = data.example.clone().or(named) {
+        return Some(example);
+    }
+    let openapi::ParameterSchemaOrContent::Schema(schema) = &data.format else {
+        return None;
+    };
+    let mut schema = schema;
+    for _ in 0..16 {
+        let Schema::Object(obj) = &schema.json_schema else {
+            return None;
+        };
+        let own = (schema.example.clone())
+            .or_else(|| obj.extensions.get("example").cloned())
+            .or_else(|| obj.metadata.as_ref()?.examples.first().cloned());
+        if own.is_some() {
+            return own;
+        }
+        schema = schemas.get(&get_schema_name(obj.reference.as_deref())?)?;
+    }
+    None
+}
+
 /// How a path parameter is serialized, or `None` for a plain `simple` text scalar, which SDKs
 /// take as a string. Other scalars keep their type, like the fields they are read from.
 fn path_parameter_style(
@@ -1865,6 +1898,9 @@ pub(crate) struct TypedParam {
     pub(crate) name: String,
     #[serde(serialize_with = "serialize_field_type")]
     pub(crate) r#type: FieldType,
+    /// The example of the parameter, else of its schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) example: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]

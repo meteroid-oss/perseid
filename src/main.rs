@@ -203,6 +203,19 @@ enum Command {
         #[arg(long)]
         spec: Option<String>,
     },
+    /// Print how each SDK installs, sets up and names its client, and names and calls every
+    /// operation (signature, sample), as JSON for docs sites showing the reader's SDK language.
+    DocsData {
+        /// Languages to describe (default: all configured).
+        #[arg(value_parser = LANGUAGES)]
+        languages: Vec<String>,
+        /// OpenAPI document to read, path or URL, over `spec` of perseid.toml.
+        #[arg(long)]
+        spec: Option<String>,
+        /// Write the JSON to this file instead.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
     /// The pinned formatters the SDKs need, and oasdiff sizing their releases.
     Tools {
         #[command(subcommand)]
@@ -490,6 +503,32 @@ fn run(cli: Cli) -> Result<ExitCode> {
             println!("wrote the samples of {models} models to {}", out.display());
         }
         Command::Tools { command } => tools_command(&config_path, &cwd, command)?,
+        Command::DocsData {
+            languages,
+            spec,
+            out,
+        } => {
+            let (config, root) = Config::load(&config_path)?;
+            let spec = generate::load_spec(&config, &root, spec.as_deref())?;
+            let sdks = config.sdks(&languages)?;
+            // Templates recurse through nested types, as when generating.
+            let data = std::thread::scope(|scope| {
+                std::thread::Builder::new()
+                    .stack_size(64 << 20)
+                    .spawn_scoped(scope, || {
+                        perseid::docs_data::run(&config, &root, &sdks, &spec)
+                    })
+                    .expect("spawning a docs data thread")
+                    .join()
+                    .expect("docs data thread panicked")
+            })?;
+            let text = serde_json::to_string_pretty(&data)? + "\n";
+            match out {
+                Some(out) => std::fs::write(cwd.join(&out), text)
+                    .with_context(|| format!("writing {}", out.display()))?,
+                None => print!("{text}"),
+            }
+        }
         Command::Inspect { language, spec } => {
             let (config, root) = Config::load(&config_path)?;
             let spec = generate::load_spec(&config, &root, spec.as_deref())?;

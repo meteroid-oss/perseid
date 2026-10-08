@@ -1,0 +1,71 @@
+{#- How the SDK names and calls each operation, for `perseid docs-data`: each macro renders one
+    value of its JSON. An example is the `{resource, operation, path_args, body, result, item}`
+    of docs.jinja. -#}
+{% import "docs.jinja" as docs %}
+{% import "api_reference.md.jinja" as ref %}
+{% import "types/macros.java.jinja" as m %}
+
+{% macro install() %}implementation("{{ sdk.java_package }}:{{ sdk.npm_package }}:latest.release"){% endmacro %}
+
+{% macro setup() -%}
+import {{ sdk.java_package }}.{{ sdk.client_name }};
+
+{{ sdk.client_name }} client = {{ sdk.client_name }}.fromEnv();
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro signature(resource, op) %}{{ ref.signature(resource, op) }}{% endmacro %}
+
+{#- `[[wire name, name], ...]` of the parameters of `op`, as JSON: required ones are arguments,
+    others setters of its options. -#}
+{% macro param_names(resource, op) -%}
+    {%- set owner = "operation `" ~ op.id ~ "`" -%}
+    {%- set all = op.query_params + op.header_params -%}
+    {%- set positional = op.path_params + (all | selectattr("required") | map(attribute="ident") | list) -%}
+    {%- set names = positional | idents("camel", "java", owner) -%}
+    {%- set accessors = all | map(attribute="ident") | list | idents("camel", "java", owner) -%}
+    {%- set ns = namespace(pairs=[], next=op.path_params | length) -%}
+    {%- for p in op.path_params %}{% set ns.pairs = ns.pairs + [[p, names[loop.index0]]] %}{% endfor -%}
+    {%- for p in all -%}
+        {%- if p.required -%}
+            {%- set ns.pairs = ns.pairs + [[p.name, names[ns.next]]] -%}
+            {%- set ns.next = ns.next + 1 -%}
+        {%- else -%}
+            {%- set name = accessors[loop.index0] -%}
+            {%- set ns.pairs = ns.pairs + [[p.name, name ~ "_" if name in ["builder", "toBuilder", "hashCode", "toString", "getClass", "build"] else name]] -%}
+        {%- endif -%}
+    {%- endfor -%}
+    {{ ns.pairs | tojson }}
+{%- endmacro %}
+
+{% macro type_name(name) %}{{ name | to_upper_camel_case }}{% endmacro %}
+
+{#- `[[wire name, name], ...]` of the fields of the schema `name`, as JSON. -#}
+{% macro field_names(name, ty) -%}
+    {%- set fields = ty.fields | default([]) -%}
+    {%- set names = m.member_names(fields, "schema `" ~ name ~ "`") | split(" ") | reject("equalto", "") | list -%}
+    {%- set ns = namespace(pairs=[]) -%}
+    {%- for f in fields %}{% if not f.flatten %}{% set ns.pairs = ns.pairs + [[f.name, names[loop.index0]]] %}{% endif %}{% endfor -%}
+    {{ ns.pairs | tojson }}
+{%- endmacro %}
+
+{% macro sample(ex) -%}
+    {%- set op = ex.operation -%}
+{{ docs.uses(ex) }}
+    {%- if op.pagination is defined -%}
+for (var {{ docs.var(ex.item, "item") }} : {{ docs.call(ex) }}) {
+    System.out.println({{ docs.var(ex.item, "item") }});
+}
+    {%- elif op.response_is_event_stream -%}
+try (var events = {{ docs.call(ex) }}) {
+    for (var event : events) {
+        System.out.println(event);
+    }
+}
+    {%- elif ex.result -%}
+var {{ docs.var(ex.result, "result") }} = {{ docs.call(ex) }};
+    {%- else -%}
+{{ docs.call(ex) }};
+    {%- endif -%}
+{%- endmacro %}

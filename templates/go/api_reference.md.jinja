@@ -57,17 +57,21 @@
     {%- elif op.response_body_json_type is defined %}`{{ go_type(op.response_body_json_type) }}`
     {%- else %}nothing{% endif -%}
 {%- endmacro -%}
-{% macro row(resource, op, suffix, result, returns) -%}
-| `{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{{ suffix }}{{ params(resource, op) }} {{ result }}`{% if op.deprecated %} (deprecated){% endif %} | `{{ op.method | upper }} {{ op.path }}` | {{ returns }} |
+{#- A method, `suffix` ("AutoPaging") naming its twin, which returns `result`. -#}
+{% macro signature(resource, op, suffix="", result=none) -%}
+    {%- set result = result or returned(resource, op) -%}
+    {{ docs.resource(resource.name) }}.{{ docs.method(op) }}{{ suffix }}{{ params(resource, op) }} {{ result if suffix else ("(" ~ result ~ ", error)" if result else "error") }}
+{%- endmacro -%}
+{% macro row(op, signature, returns) -%}
+| `{{ signature }}`{% if op.deprecated %} (deprecated){% endif %} | `{{ op.method | upper }} {{ op.path }}` | {{ returns }} |
 {%- endmacro -%}
 {% macro table(resource) -%}
 | Method | Request | Returns |
 | --- | --- | --- |
 {% for op in resource.operations -%}
-{% set result = returned(resource, op) -%}
-{{ row(resource, op, "", "(" ~ result ~ ", error)" if result else "error", returns(op)) }}
+{{ row(op, signature(resource, op), returns(op)) }}
 {% if op.pagination is defined -%}
-{{ row(resource, op, "AutoPaging", "*AutoPager[" ~ go_ident(op.pagination.item_schema) ~ "]", "every " ~ model(op.pagination.item_schema)) }}
+{{ row(op, signature(resource, op, "AutoPaging", "*AutoPager[" ~ go_ident(op.pagination.item_schema) ~ "]"), "every " ~ model(op.pagination.item_schema)) }}
 {% endif -%}
 {% endfor -%}
 {%- endmacro -%}

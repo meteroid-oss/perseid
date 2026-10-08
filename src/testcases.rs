@@ -38,7 +38,7 @@ fn case(types: &Types, models: &Value, op: &Value) -> Option<Value> {
     let mut path_args = Vec::new();
     for param in op["typed_path_params"].as_array()? {
         let name = param["name"].as_str()?;
-        let mut arg = docs::path_literal(op, models, name, &param["type"])?;
+        let mut arg = docs::path_literal(op, models, param)?;
         if arg["kind"] == "string" {
             arg["value"] = segment(name).into();
         }

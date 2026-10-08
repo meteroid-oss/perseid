@@ -5,6 +5,7 @@ pub mod client_name;
 mod codesamples;
 pub mod config;
 mod docs;
+pub mod docs_data;
 mod format;
 mod fsx;
 pub mod generate;

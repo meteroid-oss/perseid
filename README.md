@@ -144,6 +144,7 @@ See [repository layouts](docs/ci.md#repository-layouts).
 | `app` | Set up a GitHub App of your own instead of the perseid App. |
 | `status` | Check the setup: secrets, workflows, last spec pushed, open pull requests, last runs. |
 | `inspect` | Print the model the templates receive, as JSON. |
+| `docs-data` | Print how each SDK names and calls every operation, as JSON for a docs site. See [docs data](docs/customizing.md#docs-data). |
 | `eject <lang>` | Copy the built-in templates and runtime of a language to `.perseid/` to edit them. |
 | `tools list`, `tools install` | List or download the pinned formatters and oasdiff. |
 

@@ -1,0 +1,58 @@
+{#- How the SDK names and calls each operation, for `perseid docs-data`: each macro renders one
+    value of its JSON. An example is the `{resource, operation, path_args, body, result, item}`
+    of docs.jinja. -#}
+{% import "docs.jinja" as docs %}
+{% import "api_reference.md.jinja" as ref %}
+{% import "macros.cs.jinja" as m %}
+
+{% macro install() %}dotnet add package {{ sdk.package_name }}{% endmacro %}
+
+{% macro setup() -%}
+using {{ sdk.package_name }};
+using {{ sdk.package_name }}.Models;
+
+using var client = new {{ sdk.client_name }}Client(Environment.GetEnvironmentVariable("{{ sdk.env_prefix }}_API_KEY"));
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro signature(resource, op) %}{{ ref.signature(resource, op) }}{% endmacro %}
+
+{#- `[[wire name, name], ...]` of the parameters of `op`, as JSON: its path parameters are
+    arguments, the others properties of its options. -#}
+{% macro param_names(resource, op) -%}
+    {%- set options = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Options" -%}
+    {%- set ns = namespace(pairs=[]) -%}
+    {%- for p in op.path_params %}{% set ns.pairs = ns.pairs + [[p, m.param(p)]] %}{% endfor -%}
+    {%- for p in op.query_params + op.header_params %}{% set ns.pairs = ns.pairs + [[p.name, m.member(p.ident, options)]] %}{% endfor -%}
+    {{ ns.pairs | tojson }}
+{%- endmacro %}
+
+{% macro type_name(name) %}{{ docs.model_name(name) }}{% endmacro %}
+
+{#- `[[wire name, name], ...]` of the fields of the schema `name`, as JSON. -#}
+{% macro field_names(name, ty) -%}
+    {%- set ns = namespace(pairs=[]) -%}
+    {%- for f in ty.fields | default([]) if not f.flatten %}{% set ns.pairs = ns.pairs + [[f.name, m.member(f.name, name | to_upper_camel_case)]] %}{% endfor -%}
+    {{ ns.pairs | tojson }}
+{%- endmacro %}
+
+{% macro sample(ex) -%}
+    {%- set op = ex.operation -%}
+    {%- if op.pagination is defined -%}
+await foreach (var {{ docs.var(ex.item, "item") }} in {{ docs.call(ex) }})
+{
+    Console.WriteLine({{ docs.var(ex.item, "item") }});
+}
+    {%- elif op.response_is_event_stream -%}
+await using var stream = await {{ docs.call(ex) }};
+await foreach (var item in stream)
+{
+    Console.WriteLine(item);
+}
+    {%- elif ex.result -%}
+var {{ docs.var(ex.result, "result") }} = await {{ docs.call(ex) }};
+    {%- else -%}
+await {{ docs.call(ex) }};
+    {%- endif -%}
+{%- endmacro %}

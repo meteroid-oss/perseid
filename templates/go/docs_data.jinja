@@ -1,0 +1,80 @@
+{#- How the SDK names and calls each operation, for `perseid docs-data`: each macro renders one
+    value of its JSON. An example is the `{resource, operation, path_args, body, result, item}`
+    of docs.jinja. -#}
+{% import "docs.jinja" as docs %}
+{% import "api_reference.md.jinja" as ref %}
+{% from "types/macros.go.jinja" import go_arg, go_export, go_ident %}
+
+{% macro install() %}go get {{ sdk.go_module }}{% endmacro %}
+
+{% macro setup() -%}
+import (
+	"context"
+	"os"
+
+	{{ sdk.package_name }} "{{ sdk.go_module }}"
+)
+
+ctx := context.Background()
+client := {{ sdk.package_name }}.New(os.Getenv("{{ sdk.env_prefix }}_API_KEY"), nil)
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro signature(resource, op) %}{{ ref.signature(resource, op) }}{% endmacro %}
+
+{#- `[[wire name, name], ...]` of the parameters of `op`, as JSON: required ones are arguments,
+    others fields of its options. -#}
+{% macro param_names(resource, op) -%}
+    {%- set ns = namespace(pairs=[]) -%}
+    {%- for p in op.path_params %}{% set ns.pairs = ns.pairs + [[p, go_arg(p)]] %}{% endfor -%}
+    {%- for p in op.query_params + op.header_params %}{% set ns.pairs = ns.pairs + [[p.name, go_arg(p.ident) if p.required else go_export(p.ident)]] %}{% endfor -%}
+    {{ ns.pairs | tojson }}
+{%- endmacro %}
+
+{% macro type_name(name) %}{{ go_ident(name) }}{% endmacro %}
+
+{#- `[[wire name, name], ...]` of the fields of the schema `name`, as JSON. -#}
+{% macro field_names(name, ty) -%}
+    {%- set ns = namespace(pairs=[]) -%}
+    {%- for f in ty.fields | default([]) if not f.flatten %}{% set ns.pairs = ns.pairs + [[f.name, go_export(f.name)]] %}{% endfor -%}
+    {{ ns.pairs | tojson }}
+{%- endmacro %}
+
+{% macro sample(ex) -%}
+    {%- set op = ex.operation -%}
+    {%- set item = docs.var(ex.item, "item") -%}
+    {%- set result = docs.var(ex.result, "result") -%}
+{{ docs.imports([ex]) }}
+    {%- if op.pagination is defined -%}
+for {{ item }}, err := range {{ docs.call(ex, suffix="AutoPaging") }}.All() {
+	if err != nil {
+		return err
+	}
+	fmt.Println({{ item }})
+}
+    {%- elif op.response_is_event_stream -%}
+stream, err := {{ docs.call(ex) }}
+if err != nil {
+	return err
+}
+defer stream.Close()
+for event, err := range stream.All() {
+	if err != nil {
+		return err
+	}
+	fmt.Println(event)
+}
+    {%- elif ex.result or op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_text or op.response_is_binary -%}
+{{ result }}, err := {{ docs.call(ex) }}
+if err != nil {
+	return err
+}
+fmt.Println({{ result }})
+    {%- else -%}
+err := {{ docs.call(ex) }}
+if err != nil {
+	return err
+}
+    {%- endif -%}
+{%- endmacro %}
