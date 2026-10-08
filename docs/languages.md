@@ -123,6 +123,10 @@ let client = Acme::builder()
   `new` take nothing from them.
 - The builder also takes `header`, `middleware`, `http_client`, and `connector` for any hyper
   connector (custom TLS roots, client certificates, a proxy).
+- The default client goes through the proxy of `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` (or
+  their lowercase names), read when the client is built: an `http://` proxy, CONNECT tunnelling
+  HTTPS, or `socks5://`. Hosts, domains with their subdomains, IPs and networks listed in
+  `NO_PROXY` connect directly, and so does a client given its own `connector` or `http_client`.
 - Credentials: `token_provider`, `client_credentials(id, secret)`, `basic_auth`,
   `api_key(scheme, key)`.
 - Building fails with `Error::Request` without a base URL, or with one that is not absolute
