@@ -30,14 +30,14 @@ use super::{
 {% endif -%}
 {% set extra = extra_name(type.fields) -%}
 pub struct {{ type_name }} {
-    {{ struct_fields(type.fields, recursive, patch_body, owner=type_name) }}
+    {{ struct_fields(type.fields, recursive, request_schema, owner=type_name) }}
     {{- extra_field(extra, extra_type) }}
 }
 
 impl {{ type_name }} {
     {{ struct_new(type.fields, recursive, owner=type_name, defaults=defaults, extra=extra, extra_type=extra_type) }}
     {%- if request_schema %}
-    {{ struct_setters(type.fields, recursive, patch_body, owner=type_name) }}
+    {{ struct_setters(type.fields, recursive, request_schema, owner=type_name) }}
     {%- endif %}
 }
 {% if has_default and defaulted %}

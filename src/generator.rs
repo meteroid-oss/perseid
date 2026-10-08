@@ -324,7 +324,10 @@ impl Generator<'_> {
     }
 
     fn generate_summary(&self, api: Api) -> anyhow::Result<Vec<Utf8PathBuf>> {
-        self.render_tpl(None, context! { api })
+        let request_schemas: BTreeSet<String> = (request_schemas(&api).into_iter())
+            .map(str::to_owned)
+            .collect();
+        self.render_tpl(None, context! { api, request_schemas })
     }
 
     fn render_tpl(
