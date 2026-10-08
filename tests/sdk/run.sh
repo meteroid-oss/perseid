@@ -11,7 +11,7 @@ cp "$here/../fixtures/petstore.yaml" "$work/openapi.yaml"
 cd "$work"
 perseid init --sdks "$lang"
 sed -i '/^name = /a webhooks = true' perseid.toml
-if [ "$lang" = rust ]; then sed -i '/^base_url = /d' perseid.toml; fi
+if [ "$lang" = rust ]; then sed -i 's/^base_url = .*/base_url = ""/' perseid.toml; fi
 if [ "$lang" = go ]; then sed -i '/^\[go\]$/a module = "github.com/petstore/petstore-go"' perseid.toml; fi
 if [ "$lang" = csharp ]; then printf '\n[csharp.context]\ndependency_injection = true\n' >> perseid.toml; fi
 perseid generate "$lang"
@@ -111,7 +111,7 @@ GRADLE
     (mkdir "$work/torture" && cd "$work/torture" \
       && perseid init --sdks csharp --spec "$here/../fixtures/torture.yaml" > /dev/null \
       && sed -i '/^name = /a idempotency_keys = true' perseid.toml \
-      && sed -i '/^base_url/d' perseid.toml \
+      && sed -i 's/^base_url = .*/base_url = ""/' perseid.toml \
       && perseid generate csharp > /dev/null \
       && cp -r "$here/csharp/_torture/." csharp/ && cd csharp && dotnet test Tests)
     # The OAuth2 client credentials tests run on the SDK of tests/fixtures/oauth.yaml.

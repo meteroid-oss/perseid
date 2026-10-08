@@ -12,7 +12,7 @@
       "type": "boolean"
     },
     "base_url": {
-      "description": "API base URL the clients default to.",
+      "description": "API base URL the clients default to: the spec's first absolute server unless set, none for `\"\"`.",
       "type": "string"
     },
     "context": {
@@ -233,7 +233,7 @@
       "type": "object",
       "properties": {
         "base_url": {
-          "description": "API base URL this client defaults to, over the top-level one.",
+          "description": "API base URL this client defaults to, over the top-level one; none for `\"\"`.",
           "type": "string"
         },
         "context": {
@@ -311,7 +311,7 @@
       "type": "object",
       "properties": {
         "base_url": {
-          "description": "API base URL this client defaults to, over the top-level one.",
+          "description": "API base URL this client defaults to, over the top-level one; none for `\"\"`.",
           "type": "string"
         },
         "context": {
@@ -420,7 +420,7 @@
       "type": "object",
       "properties": {
         "base_url": {
-          "description": "API base URL this client defaults to, over the top-level one.",
+          "description": "API base URL this client defaults to, over the top-level one; none for `\"\"`.",
           "type": "string"
         },
         "context": {
@@ -642,7 +642,7 @@
       "type": "object",
       "properties": {
         "base_url": {
-          "description": "API base URL this client defaults to, over the top-level one.",
+          "description": "API base URL this client defaults to, over the top-level one; none for `\"\"`.",
           "type": "string"
         },
         "context": {
@@ -720,7 +720,7 @@
       "type": "object",
       "properties": {
         "base_url": {
-          "description": "API base URL this client defaults to, over the top-level one.",
+          "description": "API base URL this client defaults to, over the top-level one; none for `\"\"`.",
           "type": "string"
         },
         "context": {
@@ -875,7 +875,7 @@
       "type": "object",
       "properties": {
         "base_url": {
-          "description": "API base URL this client defaults to, over the top-level one.",
+          "description": "API base URL this client defaults to, over the top-level one; none for `\"\"`.",
           "type": "string"
         },
         "context": {

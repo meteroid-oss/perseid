@@ -377,9 +377,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             dispatch,
             no_format,
         } => {
-            let (config, root) = Config::load(&config_path)?;
+            let (mut config, root) = Config::load(&config_path)?;
             let location = spec.unwrap_or_else(|| config.spec.clone());
             let spec = generate::load_spec(&config, &root, Some(&location))?;
+            config.default_to_spec_server(&spec);
             let options = Options {
                 check,
                 format: !no_format,
@@ -606,8 +607,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             spec,
             out,
         } => {
-            let (config, root) = Config::load(&config_path)?;
+            let (mut config, root) = Config::load(&config_path)?;
             let spec = generate::load_spec(&config, &root, spec.as_deref())?;
+            config.default_to_spec_server(&spec);
             let sdks = config.sdks(&languages)?;
             let data = perseid::docs_data::run(&config, &root, &sdks, &spec, &BTreeMap::new())?;
             let text = serde_json::to_string_pretty(&data)? + "\n";
