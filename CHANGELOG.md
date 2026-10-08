@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.13.0](https://github.com/meteroid-oss/perseid/compare/v0.12.1...v0.13.0) (2026-10-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** SDK call paths move into child resources: `client.workspaces.listPeers()` becomes `client.workspaces.peers.list()`. A collection-level PUT or DELETE next to an item-level one is named `set` or `delete_all`. Pin a method with `[resources]` or `x-perseid-resource` to keep its call path.
+* query parameters that are unions with an object variant, such as Stripe's `created`, change type in the generated SDKs: Go's `json.RawMessage` becomes a union type (`*WireSearchCreated`), Java's `Object` a union class of the options (`WireSearchOptions.Created`), and TypeScript's `unknown` the union of its variants. In Rust, the model of the object variant (`RangeQuerySpecs`) is a request model: no longer `#[non_exhaustive]`, with a setter per field.
+
+### Features
+
+* **api:** nested resources from the paths within each tag ([#108](https://github.com/meteroid-oss/perseid/issues/108)) ([1e76db1](https://github.com/meteroid-oss/perseid/commit/1e76db1761219ea062e48477c88ad9a29548a98c))
+* **docs:** examples with list and object arguments ([#105](https://github.com/meteroid-oss/perseid/issues/105)) ([c012367](https://github.com/meteroid-oss/perseid/commit/c012367fff509c70291bfcdcf2de89d6ea495b92))
+* **init:** import a Stainless config with --from ([#101](https://github.com/meteroid-oss/perseid/issues/101)) ([2ea8874](https://github.com/meteroid-oss/perseid/commit/2ea8874cc123e42e0fc5b36fe11cb21fae3747b9))
+* perseid docs-data, each SDK's names and calls for docs sites ([#106](https://github.com/meteroid-oss/perseid/issues/106)) ([989fcbe](https://github.com/meteroid-oss/perseid/commit/989fcbe61a8eac1f6af7dee3491bbe60d3913c9e))
+* **spec:** read Swagger 2.0 specs directly ([#100](https://github.com/meteroid-oss/perseid/issues/100)) ([262bd53](https://github.com/meteroid-oss/perseid/commit/262bd5341d81fb702b53cd69cf4d3d8cdfe978e2))
+* Stripe-style pagination, typed query unions and Azure discriminator hierarchies ([#107](https://github.com/meteroid-oss/perseid/issues/107)) ([467dd22](https://github.com/meteroid-oss/perseid/commit/467dd22b127746f84bded1b89eeb69ec80775c3f))
+
 ## [0.12.1](https://github.com/meteroid-oss/perseid/compare/v0.12.0...v0.12.1) (2026-10-07)
 
 
