@@ -318,3 +318,19 @@ async fn a_success_body_that_does_not_decode_is_a_decode_error() {
         assert_eq!(script.attempts(), 1, "a decode error is not retried");
     }
 }
+
+#[tokio::test]
+async fn error_messages_show_the_message_of_the_body() {
+    let cases = [
+        (r#"{"error":{"message":"No such thing","code":"missing"}}"#, "No such thing"),
+        (r#"{"message":"Thing not found"}"#, "Thing not found"),
+        (r#"{"detail":"Not found."}"#, "Not found."),
+        (r#"{"error":{"code":404}}"#, r#"{"error":{"code":404}}"#),
+    ];
+    for (body, shown) in cases {
+        let script = Script::new(vec![reply(404, body)]);
+        let error = script.client(0).things().retrieve("t").await.unwrap_err();
+        assert_eq!(error.to_string(), format!("API error (404 Not Found): {shown}"));
+        assert_eq!(error.api().unwrap().text(), body, "the raw body stays available");
+    }
+}

@@ -191,7 +191,10 @@ match client.customers().retrieve("cus_1").await {
 
 - `Error` has `Api`, `Timeout`, `Connection`, `Decode` and `Request` variants.
 - `ApiError` has `kind()` (`NotFound`, `RateLimited`, `InternalServer`...), `request_id()`,
-  `payload()` (the API's common error schema, `api::ErrorBody`) and `json::<T>()`.
+  `payload()` (the API's common error schema, `api::ErrorBody`), `json::<T>()`, `text()` and
+  `message()`: the body's `error.message`, `message` or `detail` string.
+- An API error displays as `API error (404 Not Found): No such customer`, its `message()`, else
+  its body.
 - Methods list their documented error bodies under `# Errors`.
 
 ### Raw responses
