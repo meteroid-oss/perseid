@@ -466,6 +466,14 @@ def _retryable_status(status: int) -> bool:
     return status in (408, 429) or status >= 500
 
 
+class _Replay(t.NamedTuple):
+    """Whether a request can be sent again (``resendable``), and whether that cannot apply it
+    twice (``safe``). A 429 needs the first only: the server refused the request."""
+
+    safe: bool
+    resendable: bool
+
+
 class ApiBase:
     """Turns one operation into ``httpx`` requests and decides on retries."""
 
@@ -476,8 +484,8 @@ class ApiBase:
 
     def _build(
         self, client: httpx.Client | httpx.AsyncClient, spec: ApiRequest, token: str | None
-    ) -> tuple[httpx.Request, bool]:
-        """The ``httpx`` request of ``spec``, and whether it is safe to send again."""
+    ) -> tuple[httpx.Request, _Replay]:
+        """The ``httpx`` request of ``spec``, and whether it can be sent again."""
         path = spec.path
         if spec.path_params:
             path = path.format(
@@ -565,7 +573,7 @@ class ApiBase:
             timeout=timeout,
         )
         safe = spec.replayable or method in _REPLAYABLE_METHODS or "idempotency-key" in headers
-        return request, safe and replayable(content, files)
+        return request, _Replay(safe, replayable(content, files))
 
     def _needs_token(self, spec: ApiRequest) -> bool:
         security = self._cfg.security if spec.security is None else spec.security
@@ -626,14 +634,17 @@ class ApiBase:
             ) from exc
 
     def _retry_delay(
-        self, spec: ApiRequest, attempt: int, replayable: bool, response: httpx.Response | None
+        self, spec: ApiRequest, attempt: int, replay: _Replay, response: httpx.Response | None
     ) -> float | None:
         """Seconds to wait before retrying, or ``None`` to give up."""
         max_retries = self._cfg.max_retries if spec.max_retries is None else spec.max_retries
-        if attempt >= max_retries or not replayable:
+        if attempt >= max_retries or not replay.resendable:
+            return None
+        if response is None and not replay.safe:
             return None
         if response is not None:
-            if not _retryable_status(response.status_code):
+            status = response.status_code
+            if not _retryable_status(status) or not (replay.safe or status == 429):
                 return None
             retry_after = _retry_after(response)
             if retry_after is not None and 0 <= retry_after <= _MAX_RETRY_AFTER:
@@ -685,19 +696,19 @@ class ApiBaseSync(ApiBase):
         if scheme is not None:
             used = self._oauth_token(scheme)
             token = used[1]
-        request, replayable = self._build(self._httpx_client, spec, token)
+        request, replay = self._build(self._httpx_client, spec, token)
         attempt = 0
         renewed = False
         while True:
             try:
                 response = self._send(request, spec.stream)
             except httpx.RequestError as exc:
-                delay = self._retry_delay(spec, attempt, replayable, None)
+                delay = self._retry_delay(spec, attempt, replay, None)
                 if delay is None:
                     raise connection_error(exc) from exc
             else:
                 if scheme is not None and self._rejected_token(
-                    response, request, used, renewed, replayable
+                    response, request, used, renewed, replay.safe and replay.resendable
                 ):
                     # The API rejected the access token: one request with a new one, which
                     # does not use up a retry.
@@ -706,7 +717,7 @@ class ApiBaseSync(ApiBase):
                     used = self._oauth_token(scheme)
                     request.headers["authorization"] = f"Bearer {used[1]}"
                     continue
-                delay = self._retry_delay(spec, attempt, replayable, response)
+                delay = self._retry_delay(spec, attempt, replay, response)
                 if delay is None:
                     try:
                         self._finish(response, spec)
@@ -757,19 +768,19 @@ class ApiBaseAsync(ApiBase):
         if scheme is not None:
             used = await self._oauth_token(scheme)
             token = used[1]
-        request, replayable = self._build(self._httpx_client, spec, token)
+        request, replay = self._build(self._httpx_client, spec, token)
         attempt = 0
         renewed = False
         while True:
             try:
                 response = await self._send(request, spec.stream)
             except httpx.RequestError as exc:
-                delay = self._retry_delay(spec, attempt, replayable, None)
+                delay = self._retry_delay(spec, attempt, replay, None)
                 if delay is None:
                     raise connection_error(exc) from exc
             else:
                 if scheme is not None and self._rejected_token(
-                    response, request, used, renewed, replayable
+                    response, request, used, renewed, replay.safe and replay.resendable
                 ):
                     # The API rejected the access token: one request with a new one, which
                     # does not use up a retry.
@@ -778,7 +789,7 @@ class ApiBaseAsync(ApiBase):
                     used = await self._oauth_token(scheme)
                     request.headers["authorization"] = f"Bearer {used[1]}"
                     continue
-                delay = self._retry_delay(spec, attempt, replayable, response)
+                delay = self._retry_delay(spec, attempt, replay, response)
                 if delay is None:
                     try:
                         self._finish(response, spec)

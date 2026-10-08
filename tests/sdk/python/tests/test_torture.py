@@ -554,12 +554,17 @@ class ClientTest(unittest.TestCase):
             self.assertEqual(len(self.requests), 2)
             self.assertEqual(api.things.retrieve("t", max_retries=1).id, "a/b")
 
-    def test_non_idempotent_requests_are_not_replayed_on_429(self) -> None:
-        responses = (httpx.Response(429, headers={"retry-after": "0"}), httpx.Response(200))
+    def test_every_request_is_replayed_on_429_as_the_server_refused_it(self) -> None:
+        responses = (httpx.Response(429, headers={"retry-after": "0"}), httpx.Response(200, json=THING))
+        with client(self.respond(*responses), max_retries=1) as api:
+            self.assertEqual(api.things.update("t").id, "a/b")
+        self.assertEqual(len(self.requests), 2)
+        self.assertNotIn("idempotency-key", self.requests[1].headers)
+        responses = (httpx.Response(429, headers={"retry-after": "0"}),) * 2
         with client(self.respond(*responses), max_retries=1) as api:
             with self.assertRaises(RateLimitError):
                 api.things.update("t")
-        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(len(self.requests), 4)
 
     def test_non_idempotent_requests_are_not_replayed_on_5xx(self) -> None:
         responses = (
