@@ -995,7 +995,7 @@ pub(crate) fn promote_inline_enums(
         by_values: types
             .iter()
             .filter_map(|(name, ty)| match &ty.data {
-                TypeData::StringEnum { values } => Some((values.clone(), name.clone())),
+                TypeData::StringEnum { values, .. } => Some((values.clone(), name.clone())),
                 _ => None,
             })
             .collect(),
@@ -1159,7 +1159,12 @@ fn promote_field_type(
     new_types: &mut BTreeMap<String, Type>,
 ) -> anyhow::Result<()> {
     match ft {
-        FieldType::StringEnum { values, title } => {
+        FieldType::StringEnum {
+            values,
+            title,
+            open,
+        } => {
+            let open = *open;
             let values = std::mem::take(values);
             if let Some(existing_name) = existing.by_values.get(&values) {
                 *ft = FieldType::SchemaRef {
@@ -1169,7 +1174,7 @@ fn promote_field_type(
                 return Ok(());
             }
             let title = title.take();
-            let data = TypeData::StringEnum { values };
+            let data = TypeData::StringEnum { values, open };
             let name = add_promoted(
                 title.as_deref().unwrap_or(base_name),
                 data,
@@ -1272,6 +1277,10 @@ pub(crate) struct Type {
 
 /// Whether a `oneOf`/`anyOf` part only states which properties are required, which constrains
 /// values without adding a type.
+fn is_open_enum(extensions: &BTreeMap<String, serde_json::Value>) -> bool {
+    extensions.get(crate::spec::OPEN_ENUM) == Some(&serde_json::Value::Bool(true))
+}
+
 fn is_required_only(part: &Schema) -> bool {
     let Schema::Object(obj) = part else {
         return false;
@@ -1350,7 +1359,7 @@ impl Type {
         };
         let alias = |s: SchemaObject| -> anyhow::Result<Self> {
             Ok(ty(match FieldType::from_schema_object(s)? {
-                FieldType::StringEnum { values, .. } => TypeData::StringEnum { values },
+                FieldType::StringEnum { values, open, .. } => TypeData::StringEnum { values, open },
                 target => TypeData::Alias {
                     target: Box::new(target),
                 },
@@ -1408,7 +1417,7 @@ impl Type {
                 TypeData::from_integer_enum(values, enum_varnames(&s.extensions)?)?
             }
             Some(InstanceType::String) => match s.enum_values {
-                Some(values) => TypeData::from_string_enum(values)?,
+                Some(values) => TypeData::from_string_enum(values, is_open_enum(&s.extensions))?,
                 // A `format` types the alias like an inline schema of it: a date, a decimal...
                 None if !matches!(FieldType::from_schema_object(s.clone())?, FieldType::String) => {
                     return alias(s);
@@ -1598,6 +1607,9 @@ pub(crate) enum TypeData {
     },
     StringEnum {
         values: Vec<String>,
+        /// Any other string is valid too: the spec lists the values next to a plain string.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        open: bool,
     },
     IntegerEnum {
         variants: Vec<(String, i64)>,
@@ -1918,8 +1930,9 @@ impl TypeData {
         })
     }
 
-    fn from_string_enum(values: Vec<serde_json::Value>) -> anyhow::Result<TypeData> {
+    fn from_string_enum(values: Vec<serde_json::Value>, open: bool) -> anyhow::Result<TypeData> {
         Ok(Self::StringEnum {
+            open,
             values: values
                 .into_iter()
                 .enumerate()
@@ -2419,6 +2432,8 @@ pub(crate) enum FieldType {
         /// Title from the OpenAPI schema, used as the promoted type name when set.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        open: bool,
     },
     /// An inline integer enum, promoted like a [`FieldType::StringEnum`].
     IntegerEnum {
@@ -2634,7 +2649,15 @@ impl FieldType {
                         return Ok((Self::String, nullable));
                     }
                     let title = obj.metadata.as_ref().and_then(|m| m.title.clone());
-                    return Ok((Self::StringEnum { values, title }, nullable));
+                    let open = is_open_enum(&obj.extensions);
+                    return Ok((
+                        Self::StringEnum {
+                            values,
+                            title,
+                            open,
+                        },
+                        nullable,
+                    ));
                 }
                 match obj.format.as_deref() {
                     Some("decimal") => Self::Decimal,
@@ -4344,13 +4367,15 @@ mod tests {
         assert_eq!(
             types["Unit"].data,
             TypeData::StringEnum {
-                values: vec!["bps".into(), "Bps".into()]
+                values: vec!["bps".into(), "Bps".into()],
+                open: false,
             }
         );
         assert_eq!(
             types["Operator"].data,
             TypeData::StringEnum {
-                values: vec!["lt".into(), "gt".into()]
+                values: vec!["lt".into(), "gt".into()],
+                open: false,
             }
         );
     }

@@ -228,16 +228,29 @@
     {%- if alias not in names %}{{ alias }}{% endif -%}
 {%- endmacro %}
 
-{#- The annotation of an argument holding `ty`: an enum also takes its values as literals.
-    `enums` lists the class names of the enums with a `literal_alias`. -#}
-{% macro arg_type(ty, enums) -%}
-    {{ py_type(ty) }}{% if ty.is_schema_ref() and ty.to_python() in enums %} | {{ ty.to_python() }}Literal{% endif %}
+{#- The annotation of an argument holding `ty`: an enum also takes its values as literals, and
+    an open one any string. `enums` lists the class names of the enums with a `literal_alias`,
+    `open_enums` those of the open ones. Lists keep the enum alone, as `list` is invariant. -#}
+{% macro arg_type(ty, enums, open_enums=[]) -%}
+    {%- if ty.is_nullable() and ty.inner_type().is_schema_ref() -%}
+        {{ arg_type(ty.inner_type(), enums, open_enums) }} | None
+    {%- else -%}
+        {{ py_type(ty) }}
+        {%- if ty.is_schema_ref() and ty.to_python() in enums %} | {{ ty.to_python() }}Literal{% endif %}
+        {%- if ty.is_schema_ref() and ty.to_python() in open_enums %} | str{% endif %}
+    {%- endif -%}
+{%- endmacro %}
+
+{#- The `XLiteral` aliases `arg_type` names for `ty`, each followed by a space. -#}
+{% macro arg_literals(ty, enums) -%}
+    {%- set inner = ty.inner_type() if ty.is_nullable() else ty -%}
+    {%- if inner.is_schema_ref() and inner.to_python() in enums %}{{ inner.to_python() }}Literal {% endif -%}
 {%- endmacro %}
 
 {#- `from __future__` and imports shared by the model modules. Other models are
     imported for type checkers only, which keeps recursive schemas importable:
     the runtime resolves their names in the models package. -#}
-{% macro model_imports(referenced_components, runtime_names, union_refs=[]) -%}
+{% macro model_imports(referenced_components, runtime_names, union_refs=[], literals=[]) -%}
 {%- set referenced_components = (referenced_components | list) + (union_refs | reject("in", referenced_components | list) | sort | list) -%}
 from __future__ import annotations
 
@@ -256,7 +269,7 @@ from ..unions import ObjectUnion
 
 if t.TYPE_CHECKING:
 {%- for c in referenced_components %}
-    from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
+    from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}{% if (c | to_upper_camel_case) ~ "Literal" in literals %}, {{ c | to_upper_camel_case }}Literal{% endif %}
 {%- endfor %}
 {%- endif %}
 {%- endmacro %}

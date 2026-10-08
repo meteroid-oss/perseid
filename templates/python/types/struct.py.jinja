@@ -1,4 +1,16 @@
-{% from "types/macros.py.jinja" import py_str, docstring, attr_names, field_decl, field_ident, has_object_union, in_class, model_imports, py_type -%}
+{% from "types/macros.py.jinja" import py_str, docstring, arg_literals, arg_type, attr_names, field_decl, field_ident, has_object_union, in_class, model_imports, py_type -%}
+{#- In a model only requests send, an enum field also takes its values as literals, and an open
+    one any string. -#}
+{% macro wide_type(field) -%}
+    {%- if request_only and field.literal is not defined -%}
+        {%- set wide = arg_type(field.type, enum_literals, open_enums) -%}
+        {%- if wide != py_type(field.type) %}{{ wide }}{% endif -%}
+    {%- endif -%}
+{%- endmacro -%}
+{% set literals = namespace(names=[]) -%}
+{% for field in type.fields if request_only and field.literal is not defined -%}
+    {% set literals.names = literals.names + (arg_literals(field.type, enum_literals) | split | list) -%}
+{% endfor -%}
 {#- A union variant's discriminator defaults to its tag: `Circle(radius=1)`. -#}
 {% set defaults = type.discriminator_defaults if type.discriminator_defaults is defined else {} -%}
 {% set runtime_names = ["BaseModel"] -%}
@@ -15,7 +27,7 @@
 {% if objects.any -%}
     {% set runtime_names = runtime_names + ["ObjectUnion", "UnknownVariant"] -%}
 {% endif -%}
-{{ model_imports(referenced_components, runtime_names, union_refs | reject("in", [type.name]) | list) }}
+{{ model_imports(referenced_components, runtime_names, union_refs | reject("in", [type.name]) | list, literals.names) }}
 
 {% set json_keys %}
     {#- Keyed by the attribute name: a keyword field `class` is exposed as `class_`. -#}
@@ -58,7 +70,7 @@ class {{ type.name | to_upper_camel_case }}(BaseModel):
     {%- for required_pass in [true, false] %}
         {%- for field in type.fields if field.required == required_pass %}
 
-    {{ field_ident(field) }}: {{ in_class(field_decl(field, request_schema), attrs) }}
+    {{ field_ident(field) }}: {{ in_class(field_decl(field, request_schema, wide_type(field) or none), attrs) }}
             {%- if field.required and not field.nullable and field.name in defaults and field.type.to_python() == "str" %} = {{ py_str(defaults[field.name]) }}{% endif %}
             {%- if field.description is defined or field.deprecated %}
     {{ docstring(((field.description if field.description is defined else "") ~ ("\n\n.. deprecated:: This field is deprecated." if field.deprecated else "")) | trim) | indent(4) }}

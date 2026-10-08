@@ -2983,7 +2983,7 @@ fn python_types_errors_unions_and_discriminator_defaults() {
 }
 
 #[test]
-fn python_takes_all_of_and_multipart_bodies_as_keyword_arguments() {
+fn python_bodies_are_keyword_arguments_and_enums_take_their_values() {
     let dir = project_from("petstore.yaml", &["python"]);
     let spec = r##"
 openapi: 3.1.0
@@ -2994,6 +2994,8 @@ paths:
     post:
       operationId: create_chat
       tags: [chat]
+      parameters:
+        - { name: order, in: query, schema: { $ref: "#/components/schemas/Model" } }
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/ChatRequest" } } }
@@ -3035,7 +3037,11 @@ components:
         - $ref: "#/components/schemas/Shared"
         - type: object
           required: [prompt]
-          properties: { prompt: { type: string }, stream: { type: boolean } }
+          properties:
+            prompt: { type: string }
+            stream: { type: boolean }
+            tier: { anyOf: [{ type: string }, { type: string, enum: [auto, flex] }] }
+            size: { $ref: "#/components/schemas/Model" }
 "##;
     fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
@@ -3046,12 +3052,27 @@ components:
     for text in [
         "prompt: str,",
         "temperature: float | None = None,",
-        "ChatRequest(temperature=temperature, prompt=prompt, ), ChatRequest), \"stream\": True}",
+        "order: Model | ModelLiteral | None = None,",
+        "tier: ChatRequestTier | ChatRequestTierLiteral | str | None = None,",
+        "ChatRequest(temperature=temperature, prompt=prompt, size=",
+        "), ChatRequest), \"stream\": True}",
     ] {
         assert!(chat.contains(text), "no `{text}` in {chat}");
     }
     assert!(!chat.contains("        body: "), "{chat}");
-    assert!(!read("models/chat_request.py").contains("_FLATTENED"));
+    let request = read("models/chat_request.py");
+    for text in [
+        "tier: ChatRequestTier | ChatRequestTierLiteral | str | None = None",
+        "size: Model | ModelLiteral | None = None",
+        "from .model import Model, ModelLiteral",
+    ] {
+        assert!(request.contains(text), "no `{text}` in {request}");
+    }
+    assert!(!request.contains("_FLATTENED"), "{request}");
+    assert!(
+        read("models/shared.py").contains("temperature: float | None = None"),
+        "a model responses carry keeps its types"
+    );
     let audio = read("api/audio.py");
     for text in [
         "file: FileInput,",

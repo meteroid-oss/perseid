@@ -213,6 +213,26 @@ impl Generator<'_> {
                 .collect::<std::collections::BTreeMap<_, _>>(),
         );
         let request_schemas = request_schemas(&api);
+        let request_only_schemas = request_only_schemas(&api);
+        // The enums with a `Literal` alias of their values (no schema takes its name), and the open ones.
+        let enum_literals: BTreeSet<String> = (api.types.values())
+            .filter(|t| {
+                matches!(
+                    t.data,
+                    TypeData::StringEnum { .. } | TypeData::IntegerEnum { .. }
+                )
+            })
+            .map(|t| t.name.to_upper_camel_case())
+            .filter(|name| {
+                !api.types
+                    .keys()
+                    .any(|k| k.to_upper_camel_case() == format!("{name}Literal"))
+            })
+            .collect();
+        let open_enums: BTreeSet<String> = (api.types.values())
+            .filter(|t| matches!(t.data, TypeData::StringEnum { open: true, .. }))
+            .map(|t| t.name.to_upper_camel_case())
+            .collect();
         let errors = errors_context(&api);
         let recursive_aliases = types::recursive_aliases(&api.types);
         for (name, ty) in &api.types {
@@ -251,6 +271,9 @@ impl Generator<'_> {
                     type_names => type_names.clone(),
                     is_error_schema => api.error_schemas.contains(name),
                     request_schema => request_schemas.contains(name.as_str()),
+                    request_only => request_only_schemas.contains(name.as_str()),
+                    enum_literals => &enum_literals,
+                    open_enums => &open_enums,
                     ..errors.clone()
                 },
             )?);
@@ -340,10 +363,31 @@ fn errors_context(api: &Api) -> minijinja::Value {
 
 /// Schemas a request can carry: the ones operations send and every schema they reach.
 fn request_schemas(api: &Api) -> BTreeSet<&str> {
-    let mut stack: Vec<&str> = request_and_response_roots(&api.resources)
-        .0
-        .into_iter()
-        .collect();
+    reachable(api, request_and_response_roots(&api.resources).0)
+}
+
+/// Schemas only requests carry: none the SDK decodes (responses, errors, events) reaches them,
+/// nor any schema outside requests, such as a webhook payload.
+fn request_only_schemas(api: &Api) -> BTreeSet<&str> {
+    let requests = request_schemas(api);
+    let mut received = request_and_response_roots(&api.resources).1;
+    received.extend(
+        (api.resources.values().flat_map(|r| &r.operations))
+            .filter_map(|op| op.event_schema_name.as_deref()),
+    );
+    received.extend(
+        api.types
+            .keys()
+            .map(String::as_str)
+            .filter(|name| !requests.contains(name)),
+    );
+    let received = reachable(api, received);
+    requests.difference(&received).copied().collect()
+}
+
+/// `roots` and every schema they reach.
+fn reachable<'a>(api: &'a Api, roots: BTreeSet<&'a str>) -> BTreeSet<&'a str> {
+    let mut stack: Vec<&str> = roots.into_iter().collect();
     let mut seen = BTreeSet::new();
     while let Some(name) = stack.pop() {
         if seen.insert(name) {
