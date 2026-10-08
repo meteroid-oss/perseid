@@ -15,7 +15,7 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 copyFileSync(join(fixtures, "realworld.yaml"), join(dir, "openapi.yaml"));
 writeFileSync(
   join(dir, "perseid.toml"),
-  'spec = "openapi.yaml"\nsdks = ["typescript"]\nname = "RealWorld"\ntimeout = 15\n[typescript]\n'
+  'spec = "openapi.yaml"\nsdks = ["typescript"]\nname = "RealWorld"\nbase_url = ""\ntimeout = 15\n[typescript]\n'
 );
 execFileSync("perseid", ["generate"], { cwd: dir, stdio: "ignore" });
 const sdkDir = join(dir, "typescript");
@@ -67,7 +67,7 @@ describe("client", () => {
     assert.equal(realWorld.charges, realWorld.charges);
   });
 
-  it("requires a base URL when perseid.toml sets none", () => {
+  it("requires a base URL when perseid.toml sets `base_url = \"\"`", () => {
     assert.throws(
       () => new sdk.RealWorld({ apiKey: "sk_test" }),
       (error) =>
