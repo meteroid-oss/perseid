@@ -398,8 +398,9 @@ fn param_types(api: &Api) -> BTreeSet<String> {
     let free = |name: &str| !names.contains(&format!("{}Param", name.to_upper_camel_case()));
     let mut params = BTreeSet::new();
     for name in requests.iter().copied().filter(|n| free(n)) {
+        // A `TypedDict` cannot name a key `""`.
         if let Some(TypeData::Struct { fields, .. }) = api.types.get(name).map(|t| &t.data)
-            && !fields.iter().any(|f| f.flatten)
+            && !fields.iter().any(|f| f.flatten || f.name.is_empty())
         {
             params.insert(name.to_upper_camel_case());
         }
