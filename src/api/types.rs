@@ -241,6 +241,57 @@ pub(crate) fn hoist_inline_variants(types: &mut Types) {
     }
 }
 
+/// Drops the shared fields of the tagged unions that a variant declares too. Rust flattens the
+/// variant next to the shared fields, and serde gives each property to only one of them, so a
+/// variant requiring it would never see it.
+pub(crate) fn leave_shared_fields_to_variants(types: &mut Types) {
+    let owned: BTreeMap<String, BTreeSet<String>> = types
+        .iter()
+        .filter_map(|(name, ty)| {
+            let TypeData::StructEnum { fields, repr, .. } = &ty.data else {
+                return None;
+            };
+            let (StructEnumRepr::AdjacentlyTagged { variants, .. }
+            | StructEnumRepr::InternallyTagged { variants }) = repr;
+            let declared: BTreeSet<&str> = variants
+                .iter()
+                .flat_map(|v| match &v.content {
+                    EnumVariantType::Struct { fields } => {
+                        fields.iter().map(|f| f.name.as_str()).collect()
+                    }
+                    EnumVariantType::Ref {
+                        schema_ref: Some(target),
+                        ..
+                    } => match types.get(target) {
+                        Some(
+                            variant @ Type {
+                                data: TypeData::Struct { fields, .. },
+                                ..
+                            },
+                        ) => (fields.iter().filter(|f| !f.flatten))
+                            .map(|f| f.name.as_str())
+                            .chain(variant.inherited_fields(types))
+                            .collect(),
+                        _ => Vec::new(),
+                    },
+                    EnumVariantType::Ref { .. } => Vec::new(),
+                })
+                .collect();
+            let dropped: BTreeSet<String> = (fields.iter())
+                .filter(|f| declared.contains(f.name.as_str()))
+                .map(|f| f.name.clone())
+                .collect();
+            (!dropped.is_empty()).then(|| (name.clone(), dropped))
+        })
+        .collect();
+    for (name, dropped) in owned {
+        if let Some(TypeData::StructEnum { fields, .. }) = types.get_mut(&name).map(|t| &mut t.data)
+        {
+            fields.retain(|f| !dropped.contains(&f.name));
+        }
+    }
+}
+
 /// Settles the JSON type of the variants of every union referencing a schema, and how they are
 /// told apart, typing as untyped JSON the unions with a variant of unknown type. Operations
 /// keep the unions of their query parameters (in `typed_union`) and bodies.
@@ -561,7 +612,14 @@ pub(crate) fn declared_tag<'a>(
         return None;
     };
     (tag == target)
-        .then(|| fields.iter().find(|f| f.name == field)?.constant.as_ref()?.as_str())
+        .then(|| {
+            fields
+                .iter()
+                .find(|f| f.name == field)?
+                .constant
+                .as_ref()?
+                .as_str()
+        })
         .flatten()
         .filter(|constant| *constant != tag)
 }

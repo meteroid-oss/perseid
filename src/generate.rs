@@ -197,6 +197,9 @@ pub(crate) fn sdk_api(
     if sdk.language == "go" {
         api.hoist_inline_variants();
     }
+    if sdk.language == "rust" {
+        api.leave_shared_fields_to_variants();
+    }
     api.drop_unsendable(sdk.language);
     let (best_match, untyped) = api.settle_object_unions(context);
     if best_match > 0 {

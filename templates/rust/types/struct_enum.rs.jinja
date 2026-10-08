@@ -19,6 +19,11 @@ use super::{
 {% set enum_name = type_name ~ "Content" if shared else type_name -%}
 {% set variant_names = type.variants | map(attribute="name") | map("to_rust_variant") | list -%}
 {% set unknown = unknown_variant(variant_names) -%}
+{#- The tag a variant is sent with: the constant it declares, which several may share. -#}
+{% set wire = namespace(tags=[]) -%}
+{% for variant in type.variants -%}
+{% set wire.tags = wire.tags + [declared_tags[variant.name] if variant.name in declared_tags else variant.name] -%}
+{% endfor -%}
 
 {% if shared -%}
 {{ doc_comment }}
@@ -80,7 +85,7 @@ impl {{ enum_name }} {
     pub fn tag(&self) -> Option<&str> {
         match self {
             {% for variant in type.variants -%}
-                Self::{{ variant.name | to_rust_variant }}{% if payload(variant) %}(_){% endif %} => Some({{ variant.name | rust_str }}),
+                Self::{{ variant.name | to_rust_variant }}{% if payload(variant) %}(_){% endif %} => Some({{ wire.tags[loop.index0] | rust_str }}),
             {% endfor -%}
             Self::{{ unknown }}(value) => value.get({{ tag | rust_str }})?.as_str(),
         }
@@ -92,12 +97,13 @@ impl Serialize for {{ enum_name }} {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self {
             {% for variant in type.variants -%}
+            {% set variant_tag = wire.tags[loop.index0] -%}
             {% if payload(variant) -%}
             Self::{{ variant.name | to_rust_variant }}(value) => {
                 {% if adjacent -%}
                 codec::adjacently_tagged(serializer, {{ tag | rust_str }}, {{ variant.name | rust_str }}, {{ type.content_field | rust_str }}, Some(value))
                 {% else -%}
-                codec::internally_tagged(serializer, {{ tag | rust_str }}, {{ variant.name | rust_str }}, value)
+                codec::internally_tagged(serializer, {{ tag | rust_str }}, {{ variant_tag | rust_str }}, value)
                 {% endif -%}
             }
             {% else -%}
@@ -111,15 +117,43 @@ impl Serialize for {{ enum_name }} {
     }
 }
 
+{% macro variant_value(variant, value) -%}
+{% if adjacent %}codec::take(&mut value, {{ type.content_field | rust_str }}){% elif variant.type == "struct" and variant.fields %}codec::without({{ value }}, {{ tag | rust_str }}){% else %}{{ value }}{% endif -%}
+{%- endmacro %}
 impl<'de> Deserialize<'de> for {{ enum_name }} {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let (tag, {% if adjacent %}mut {% endif %}value) = codec::split_tag(deserializer, {{ tag | rust_str }})?;
         Ok(match tag.as_str() {
+            {% for wire_tag in wire.tags | unique -%}
+            {% set sharing = namespace(variants=[]) -%}
             {% for variant in type.variants -%}
-            {% if payload(variant) -%}
-            {{ variant.name | rust_str }} => Self::{{ variant.name | to_rust_variant }}(codec::from_value({% if adjacent %}codec::take(&mut value, {{ type.content_field | rust_str }}){% elif variant.type == "struct" and variant.fields %}codec::without(value, {{ tag | rust_str }}){% else %}value{% endif %})?),
+            {% if wire.tags[loop.index0] == wire_tag and payload(variant) -%}
+            {% set sharing.variants = sharing.variants + [variant] if variant.name in declared_tags else [variant] + sharing.variants -%}
+            {% endif -%}
+            {% endfor -%}
+            {% set lead = sharing.variants | first if sharing.variants else none -%}
+            {% if sharing.variants | length > 1 -%}
+            {# The variant the tag names first, then those declaring it too, as the data allows. -#}
+            {{ wire_tag | rust_str }} => match codec::from_value::<_, D::Error>({{ variant_value(lead, "value.clone()") }}) {
+                Ok(decoded) => Self::{{ lead.name | to_rust_variant }}(decoded),
+                Err(error) => {
+                    {% for other in sharing.variants[1:] -%}
+                    {% if not loop.first %}} else {% endif %}if let Ok(decoded) = codec::from_value::<_, D::Error>({{ variant_value(other, "value.clone()") }}) {
+                        Self::{{ other.name | to_rust_variant }}(decoded)
+                    {% endfor -%}
+                    } else {
+                        return Err(error);
+                    }
+                }
+            },
+            {% elif lead -%}
+            {{ wire_tag | rust_str }} => Self::{{ lead.name | to_rust_variant }}(codec::from_value({{ variant_value(lead, "value") }})?),
             {% else -%}
-            {{ variant.name | rust_str }} => Self::{{ variant.name | to_rust_variant }},
+            {% for variant in type.variants -%}
+            {% if wire.tags[loop.index0] == wire_tag -%}
+            {{ wire_tag | rust_str }} => Self::{{ variant.name | to_rust_variant }},
+            {% endif -%}
+            {% endfor -%}
             {% endif -%}
             {% endfor -%}
             _ => Self::{{ unknown }}(value),
