@@ -179,6 +179,10 @@ while let Some(customer) = customers.next().await {
 Event streams are `Stream`s of the model each event carries, ending at `[DONE]`, or of raw
 `SseEvent`s. `last_event()` gives the raw event, `into_raw()` the raw stream.
 
+- An `error` event, or data that is not the model but an object with an `error`, ends the stream
+  with an `Error::Api` holding that data and the response's status and headers.
+- Comments are skipped, and so are `ping` and `keepalive` events that are not the model.
+
 ### Errors
 
 ```rust
