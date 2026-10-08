@@ -10,6 +10,7 @@ homepage = "@@HOMEPAGE@@"
 authors = @@AUTHORS_JSON@@
 readme = "README.md"
 categories = ["api-bindings"]
+exclude = [".perseid/"]
 
 [dependencies]
 # HTTP & Networking
