@@ -37,6 +37,24 @@ pub(crate) struct SecurityScheme {
     /// The space-separated scopes the operations require of an OAuth2 scheme, asked for with the
     /// token. Empty when no requirement names one.
     pub(crate) scope: String,
+    /// The OAuth2 flows a person logs in with, for programs such as CLIs: `authorization_code`
+    /// and `device_authorization` (OpenAPI 3.2), by name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) flows: BTreeMap<String, Flow>,
+}
+
+/// An OAuth2 flow of a scheme, its URLs as written: absolute, or relative to the server URL.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub(crate) struct Flow {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) authorization_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) device_authorization_url: Option<String>,
+    pub(crate) token_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) refresh_url: Option<String>,
+    /// The scopes the flow declares, sorted.
+    pub(crate) scopes: Vec<String>,
 }
 
 pub(crate) struct Security {
@@ -73,6 +91,7 @@ impl Security {
                 description: None,
                 token_url: None,
                 scope: String::new(),
+                flows: BTreeMap::new(),
             }],
         };
         let known = |name: &String| {
@@ -310,7 +329,39 @@ fn parse_scheme(name: &str, scheme: &Value) -> Result<SecurityScheme, String> {
         description: text("description"),
         token_url,
         scope: String::new(),
+        flows: interactive_flows(scheme),
     })
+}
+
+/// The `authorizationCode` and `deviceAuthorization` flows of an `oauth2` scheme with a token URL.
+fn interactive_flows(scheme: &Value) -> BTreeMap<String, Flow> {
+    let text = |flow: &Value, key: &str| {
+        (flow[key].as_str())
+            .filter(|url| !url.is_empty())
+            .map(str::to_owned)
+    };
+    [
+        ("authorizationCode", "authorization_code"),
+        ("deviceAuthorization", "device_authorization"),
+    ]
+    .into_iter()
+    .filter(|_| scheme["type"] == "oauth2")
+    .filter_map(|(key, name)| {
+        let flow = &scheme["flows"][key];
+        let mut scopes: Vec<String> = (flow["scopes"].as_object())
+            .map(|scopes| scopes.keys().cloned().collect())
+            .unwrap_or_default();
+        scopes.sort();
+        let flow = Flow {
+            authorization_url: text(flow, "authorizationUrl"),
+            device_authorization_url: text(flow, "deviceAuthorizationUrl"),
+            token_url: text(flow, "tokenUrl")?,
+            refresh_url: text(flow, "refreshUrl"),
+            scopes,
+        };
+        Some((name.to_owned(), flow))
+    })
+    .collect()
 }
 
 #[cfg(test)]
@@ -392,6 +443,32 @@ mod tests {
         let plain = security.schemes.iter().find(|s| s.name == "plain").unwrap();
         assert_eq!(plain.token_url, None);
         assert_eq!(plain.scope, "");
+        assert!(oauth.flows.is_empty());
+        let code = &plain.flows["authorization_code"];
+        assert_eq!(
+            (code.authorization_url.as_deref(), code.token_url.as_str()),
+            (Some("/a"), "/t")
+        );
+    }
+
+    #[test]
+    fn interactive_flows_are_kept_for_programs_logging_people_in() {
+        let scheme = parse_scheme(
+            "o",
+            &json!({"type": "oauth2", "flows": {
+                "authorizationCode": {"authorizationUrl": "https://a/authorize", "tokenUrl": "https://a/token", "refreshUrl": "https://a/refresh", "scopes": {"write": "", "read": ""}},
+                "deviceAuthorization": {"deviceAuthorizationUrl": "https://a/device", "tokenUrl": "https://a/token", "scopes": {}},
+                "implicit": {"authorizationUrl": "https://a/authorize", "scopes": {}},
+            }}),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&scheme.flows).unwrap(),
+            json!({
+                "authorization_code": {"authorization_url": "https://a/authorize", "token_url": "https://a/token", "refresh_url": "https://a/refresh", "scopes": ["read", "write"]},
+                "device_authorization": {"device_authorization_url": "https://a/device", "token_url": "https://a/token", "scopes": []},
+            })
+        );
     }
 
     #[test]
