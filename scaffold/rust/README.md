@@ -158,7 +158,11 @@ while let Some(event) = events.next().await {
 {% endif %}
 ## Features
 
-`rustls-tls` (default) or `native-tls`, `http2`, and `webhooks` for the webhook verifier.
+`rustls-tls` (default) or `native-tls`, `http2`, `webhooks` for the webhook verifier, and
+`tracing` for debug logs of each attempt and retry.
+
+The default client goes through the proxy of `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY`, except
+for the hosts of `NO_PROXY`.
 
 - Source: @@REPOSITORY@@
 - License: @@LICENSE@@
