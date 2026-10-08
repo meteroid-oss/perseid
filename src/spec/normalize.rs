@@ -516,8 +516,10 @@ fn canonicalize_value(
 
 /// Models a discriminator declared on a base schema as a union of its subtypes. The base's own
 /// fields move to `{Base}Base`, which the subtypes' `allOf` parts reference instead, and the
-/// base itself becomes the `oneOf` of its subtypes: those named by the discriminator mapping or,
-/// for the ones left out of it, those that reference the base in `allOf`.
+/// base itself becomes the `oneOf` of its subtypes: those named by the discriminator mapping,
+/// plus those that reference the base or another subtype in `allOf`. A subtype that others
+/// extend, as in Azure's hierarchies, becomes the union of itself (as `{Subtype}Base`) and of
+/// its own subtypes in turn.
 fn lower_base_discriminators(doc: &mut Value) {
     let Some(Value::Object(schemas)) = doc.pointer_mut("/components/schemas") else {
         return;
@@ -535,7 +537,6 @@ fn lower_base_discriminators(doc: &mut Value) {
     let mut redirects = Vec::new();
     for base in bases {
         let snapshot = schemas.clone();
-        let target = format!("{SCHEMA_PREFIX}{base}");
         let mut variants: Vec<String> = Vec::new();
         let mapped = snapshot[&base]
             .pointer("/discriminator/mapping")
@@ -548,26 +549,43 @@ fn lower_base_discriminators(doc: &mut Value) {
                 variants.push(name.to_owned());
             }
         }
-        for (name, schema) in &snapshot {
-            let extends = schema
-                .get("allOf")
-                .and_then(Value::as_array)
-                .is_some_and(|parts| {
-                    parts
-                        .iter()
-                        .any(|p| p.get("$ref").and_then(Value::as_str) == Some(target.as_str()))
-                });
-            if extends && *name != base && !variants.contains(name) {
-                variants.push(name.clone());
+        let mut parent_of: BTreeMap<String, String> = BTreeMap::new();
+        let mut parents: Vec<String> = std::iter::once(base.clone())
+            .chain(variants.iter().cloned())
+            .collect();
+        while let Some(parent) = parents.pop() {
+            let target = format!("{SCHEMA_PREFIX}{parent}");
+            for (name, schema) in &snapshot {
+                if *name == base || parent_of.contains_key(name) || !extends(schema, &target) {
+                    continue;
+                }
+                parent_of.insert(name.clone(), parent.clone());
+                if !variants.contains(name) {
+                    variants.push(name.clone());
+                    // A subtype with a discriminator of its own is a base of its own.
+                    if schema.get("discriminator").is_none() {
+                        parents.push(name.clone());
+                    }
+                }
             }
         }
         if variants.is_empty() {
             continue;
         }
-        let mut base_name = format!("{base}Base");
-        while schemas.contains_key(&base_name) {
-            base_name.push('_');
-        }
+        let unique = |name: &str| {
+            let mut unique = format!("{name}Base");
+            while snapshot.contains_key(&unique) {
+                unique.push('_');
+            }
+            unique
+        };
+        let renamed: BTreeMap<String, String> = variants
+            .iter()
+            .filter(|v| parent_of.values().any(|p| p == *v))
+            .map(|v| (v.clone(), unique(v)))
+            .collect();
+        let as_variant = |name: &str| renamed.get(name).map_or(name, String::as_str).to_owned();
+        let base_name = unique(&base);
         let mut fields = snapshot[&base].clone();
         let discriminator = fields
             .as_object_mut()
@@ -579,43 +597,103 @@ fn lower_base_discriminators(doc: &mut Value) {
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        for variant in &variants {
-            let is_mapped = mapping
-                .values()
-                .filter_map(Value::as_str)
-                .any(|m| m.rsplit('/').next() == Some(variant.as_str()));
-            if is_mapped {
-                continue;
-            }
-            let values = discriminator_values(&snapshot[variant], property, |t| {
-                snapshot.get(t.strip_prefix(SCHEMA_PREFIX)?)
-            });
-            if values.is_empty() {
-                mapping.insert(variant.clone(), reference(variant)["$ref"].clone());
+        let resolve = |t: &str| snapshot.get(t.strip_prefix(SCHEMA_PREFIX)?);
+        let unmapped: Vec<(&String, Vec<String>)> = variants
+            .iter()
+            .filter(|variant| {
+                !mapping
+                    .values()
+                    .filter_map(Value::as_str)
+                    .any(|m| m.rsplit('/').next() == Some(variant.as_str()))
+            })
+            .map(|v| (v, discriminator_values(&snapshot[v], property, resolve)))
+            .collect();
+        for (variant, values) in &unmapped {
+            // Values that several variants share, such as the base's enum they inherit, tell
+            // none of them apart.
+            let shared = unmapped.iter().filter(|(_, other)| other == values).count() > 1;
+            let value = match snapshot[*variant]["x-ms-discriminator-value"].as_str() {
+                Some(value) => value,
+                None if values.is_empty() || shared => variant,
+                None => continue,
+            };
+            mapping.insert(value.to_owned(), reference(variant)["$ref"].clone());
+        }
+        for target in mapping.values_mut() {
+            let name = target.as_str().and_then(|t| t.rsplit('/').next());
+            if let Some(renamed) = name.and_then(|name| renamed.get(name)) {
+                *target = reference(renamed)["$ref"].clone();
             }
         }
-        let mut union = Map::new();
-        for key in ["title", "description"] {
-            if let Some(value) = fields.get(key) {
-                union.insert(key.into(), value.clone());
+        let union = |fields: &Value, members: &[String], mapping: Map<String, Value>| {
+            let mut union = Map::new();
+            for key in ["title", "description"] {
+                if let Some(value) = fields.get(key) {
+                    union.insert(key.into(), value.clone());
+                }
             }
+            union.insert(
+                "oneOf".into(),
+                members.iter().map(|v| reference(v)).collect(),
+            );
+            let mut discriminator = discriminator.clone();
+            discriminator.as_object_mut().map(|d| d.remove("mapping"));
+            if !mapping.is_empty() {
+                discriminator["mapping"] = Value::Object(mapping);
+            }
+            union.insert("discriminator".into(), discriminator);
+            Value::Object(union)
+        };
+        for (intermediate, base_name) in &renamed {
+            let mut members = vec![base_name.clone()];
+            for variant in &variants {
+                let mut ancestor = parent_of.get(variant);
+                while let Some(a) = ancestor.filter(|a| *a != intermediate && **a != base) {
+                    ancestor = parent_of.get(a);
+                }
+                if ancestor == Some(intermediate) {
+                    members.push(as_variant(variant));
+                }
+            }
+            let mapping = mapping
+                .iter()
+                .filter(|(_, t)| {
+                    let name = t.as_str().and_then(|t| t.rsplit('/').next());
+                    name.is_some_and(|name| members.iter().any(|m| m == name))
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            let lowered = union(&snapshot[intermediate], &members, mapping);
+            schemas.insert(base_name.clone(), snapshot[intermediate].clone());
+            schemas.insert(intermediate.clone(), lowered);
+            redirects.push((
+                format!("{SCHEMA_PREFIX}{intermediate}"),
+                format!("{SCHEMA_PREFIX}{base_name}"),
+            ));
         }
-        union.insert(
-            "oneOf".into(),
-            variants.iter().map(|v| reference(v)).collect(),
-        );
-        let mut discriminator = discriminator;
-        if !mapping.is_empty() {
-            discriminator["mapping"] = Value::Object(mapping);
-        }
-        union.insert("discriminator".into(), discriminator);
+        let members: Vec<String> = variants.iter().map(|v| as_variant(v)).collect();
+        schemas.insert(base.clone(), union(&fields, &members, mapping));
         schemas.insert(base_name.clone(), fields);
-        schemas.insert(base.clone(), Value::Object(union));
-        redirects.push((target, format!("{SCHEMA_PREFIX}{base_name}")));
+        redirects.push((
+            format!("{SCHEMA_PREFIX}{base}"),
+            format!("{SCHEMA_PREFIX}{base_name}"),
+        ));
     }
     for (from, to) in &redirects {
         redirect_all_of(doc, from, to, false);
     }
+}
+
+/// Whether `schema` references `target` in `allOf`.
+fn extends(schema: &Value, target: &str) -> bool {
+    schema
+        .get("allOf")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| {
+            parts
+                .iter()
+                .any(|p| p.get("$ref").and_then(Value::as_str) == Some(target))
+        })
 }
 
 /// Points the `allOf` parts referencing `from` at `to`. `names` tells that the keys of `value`
@@ -2920,6 +2998,119 @@ mod tests {
             json!([{ "$ref": "#/components/schemas/PetBase" }])
         );
         assert_eq!(s["Cat"]["properties"]["meow"], json!({ "type": "boolean" }));
+    }
+
+    #[test]
+    fn subtypes_at_every_level_are_mapped_by_their_azure_value_or_name() {
+        let base = "#/components/schemas/Rule";
+        let doc = normalized(json!({ "components": { "schemas": {
+            "Rule": {
+                "type": "object", "required": ["kind"],
+                "properties": { "kind": { "type": "string", "enum": ["Nat", "Filter", "Dnat"] } },
+                "discriminator": { "propertyName": "kind" }
+            },
+            "NatRule": {
+                "allOf": [{ "$ref": base }],
+                "x-ms-discriminator-value": "Nat",
+                "properties": { "port": { "type": "integer" } }
+            },
+            "FilterRule": { "allOf": [{ "$ref": base }] },
+            "Other": { "allOf": [{ "$ref": base }] },
+            "DnatRule": {
+                "allOf": [{ "$ref": "#/components/schemas/NatRule" }],
+                "x-ms-discriminator-value": "Dnat"
+            }
+        } } }));
+        let s = &doc["components"]["schemas"];
+        let r = |name: &str| json!({ "$ref": format!("#/components/schemas/{name}") });
+        assert_eq!(
+            s["Rule"]["discriminator"]["mapping"],
+            json!({
+                "Nat": "#/components/schemas/NatRuleBase",
+                "FilterRule": "#/components/schemas/FilterRule",
+                "Other": "#/components/schemas/Other",
+                "Dnat": "#/components/schemas/DnatRule"
+            })
+        );
+        let members = s["Rule"]["oneOf"].as_array().unwrap();
+        assert_eq!(members.len(), 4);
+        for name in ["NatRuleBase", "FilterRule", "Other", "DnatRule"] {
+            assert!(members.contains(&r(name)), "{name}: {members:?}");
+        }
+        // The intermediate subtype is the union of itself and of its own subtypes.
+        assert_eq!(
+            s["NatRule"]["oneOf"],
+            json!([r("NatRuleBase"), r("DnatRule")])
+        );
+        assert_eq!(
+            s["NatRule"]["discriminator"],
+            json!({ "propertyName": "kind", "mapping": {
+                "Nat": "#/components/schemas/NatRuleBase",
+                "Dnat": "#/components/schemas/DnatRule"
+            } })
+        );
+        assert_eq!(s["NatRuleBase"]["allOf"], json!([r("RuleBase")]));
+        assert_eq!(
+            s["NatRuleBase"]["properties"]["port"],
+            json!({ "type": "integer" })
+        );
+        assert_eq!(s["DnatRule"]["$ref"], "#/components/schemas/NatRuleBase");
+    }
+
+    #[test]
+    fn subtypes_inheriting_the_base_enum_keep_its_values_unless_several_share_them() {
+        let animal = |subtypes: &[&str]| {
+            let mut schemas = json!({ "Animal": {
+                "type": "object", "required": ["petType"],
+                "properties": { "petType": { "type": "string", "enum": ["dog", "wolf"] } },
+                "discriminator": { "propertyName": "petType" }
+            } });
+            for name in subtypes {
+                schemas[*name] = json!({ "allOf": [{ "$ref": "#/components/schemas/Animal" }] });
+            }
+            let doc = normalized(json!({ "components": { "schemas": schemas } }));
+            doc["components"]["schemas"]["Animal"]["discriminator"]["mapping"].clone()
+        };
+        assert_eq!(
+            animal(&["Canine"]),
+            json!({
+                "dog": "#/components/schemas/Canine",
+                "wolf": "#/components/schemas/Canine"
+            })
+        );
+        assert_eq!(
+            animal(&["Dog", "Wolf"]),
+            json!({
+                "Dog": "#/components/schemas/Dog",
+                "Wolf": "#/components/schemas/Wolf"
+            })
+        );
+    }
+
+    #[test]
+    fn subtypes_of_mapped_variants_join_the_union() {
+        let doc = normalized(json!({ "components": { "schemas": {
+            "Pet": {
+                "type": "object", "required": ["petType"],
+                "properties": { "petType": { "type": "string" } },
+                "discriminator": { "propertyName": "petType",
+                    "mapping": { "cat": "#/components/schemas/Cat" } }
+            },
+            "Cat": { "type": "object", "properties": { "meow": { "type": "boolean" } } },
+            "Lion": { "allOf": [{ "$ref": "#/components/schemas/Cat" }] }
+        } } }));
+        let s = &doc["components"]["schemas"];
+        assert_eq!(
+            s["Pet"]["discriminator"]["mapping"],
+            json!({
+                "cat": "#/components/schemas/CatBase",
+                "Lion": "#/components/schemas/Lion"
+            })
+        );
+        assert_eq!(
+            s["Cat"]["oneOf"],
+            json!([{ "$ref": "#/components/schemas/CatBase" }, { "$ref": "#/components/schemas/Lion" }])
+        );
     }
 
     #[test]

@@ -292,10 +292,13 @@ Read as declared:
 Discriminators and `allOf`:
 
 - A discriminator on a base schema whose subtypes reference it in `allOf` makes the base a union
-  of its subtypes: those of the `mapping`, plus those referencing the base.
-- The base's own fields move to `{Base}Base`.
-- A variant missing from the `mapping` is tagged with the `const` or `enum` of its discriminator
-  property, else its schema name.
+  of its subtypes: those of the `mapping`, plus those referencing the base or another subtype.
+- The base's own fields move to `{Base}Base`. A subtype that other subtypes extend becomes the
+  union of its own fields, as `{Subtype}Base`, and of its subtypes: a list of it decodes each
+  one as its actual subtype.
+- A variant missing from the `mapping` is tagged with its `x-ms-discriminator-value`, else the
+  `const` or `enum` of its discriminator property, else its schema name. Variants sharing the
+  same values, such as the `enum` of the base they inherit, take their schema name.
 - An `allOf` of parts declaring the same property keeps the narrower schema.
 
 Untyped JSON and skipped operations, each with a warning naming the operation or schema:
