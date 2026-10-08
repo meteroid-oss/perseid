@@ -678,7 +678,10 @@ impl Request {
                     continue;
                 }
             }
-            if !(idempotent && replayable && attempt.retryable()) || retries >= max_retries {
+            // A 429 was refused before being processed, so resending it cannot apply it twice.
+            let safe = idempotent
+                || matches!(attempt, Attempt::Status(StatusCode::TOO_MANY_REQUESTS, ..));
+            if !(safe && replayable && attempt.retryable()) || retries >= max_retries {
                 return Err(attempt.into_error());
             }
             let delay = attempt

@@ -406,9 +406,9 @@ export class @@CLIENT_NAME@@Request {
    *
    * A non-2xx response throws an `APIError`, of a subclass such as `NotFoundError` for common
    * statuses; no response an `APIConnectionError`, or `APIConnectionTimeoutError` once the
-   * last attempt timed out. Connection errors, timeouts, 408, 429 and 5xx responses are
-   * retried with exponential backoff, honouring `Retry-After`, when the request is idempotent
-   * or carries an `Idempotency-Key`.
+   * last attempt timed out. Connection errors, timeouts, 408 and 5xx responses are retried with
+   * exponential backoff, honouring `Retry-After`, when the request is idempotent or carries an
+   * `Idempotency-Key`; 429 responses whatever the method.
    */
   public send<R>(
     ctx: @@CLIENT_NAME@@RequestContext,
@@ -552,8 +552,9 @@ export class @@CLIENT_NAME@@Request {
       headers["idempotency-key"] = `auto_${randomUUID()}`;
     }
 
+    const replayable = !this.oneShot;
     const retryable =
-      !this.oneShot &&
+      replayable &&
       (this.retrySafe || IDEMPOTENT_METHODS.has(this.method) || headers["idempotency-key"] !== undefined);
     const maxRetries =
       options.maxRetries ?? ctx.maxRetries ?? ctx.retryScheduleInMs?.length ?? DEFAULT_RETRIES;
@@ -632,7 +633,7 @@ export class @@CLIENT_NAME@@Request {
           attempt--;
           continue;
         }
-        if (attempt >= maxRetries || !shouldRetry(response.status, retryable)) {
+        if (attempt >= maxRetries || !shouldRetry(response.status, retryable, replayable)) {
           throw await this.error(ctx, response, options.signal);
         }
         response.body?.cancel().catch(() => {});
@@ -713,8 +714,9 @@ function errorParser(errors: ErrorParsers | undefined, status: number) {
   return errors?.[status] ?? errors?.[`${Math.floor(status / 100)}XX`] ?? errors?.default;
 }
 
-function shouldRetry(status: number, retryable: boolean): boolean {
-  return retryable && (status === 408 || status === 429 || status >= 500);
+// A 429 was refused before being processed, so resending it cannot apply it twice.
+function shouldRetry(status: number, retryable: boolean, replayable: boolean): boolean {
+  return status === 429 ? replayable : retryable && (status === 408 || status >= 500);
 }
 
 function retryDelay(attempt: number, schedule?: number[], response?: Response): number {
