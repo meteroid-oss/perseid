@@ -176,17 +176,51 @@ class Discriminator:
         model = self.mapping.get(tag)
         if model is None:
             return UnknownVariant(tag, dict(data))
-        variant = model.from_dict(data)
+        try:
+            variant = model.from_dict(data)
+        except ModelParseError:
+            variant = self._other_variant_of(tag, model, data)
         # The tag is written back on serialization, from the variant's type.
         variant.__dict__.get("_extra", {}).pop(self.property, None)
         return variant
 
+    def _other_variant_of(self, tag: str, tried: type[BaseModel], data: t.Mapping[str, t.Any]) -> t.Any:
+        """``data`` as another variant declaring ``tag``, when the one it maps to rejects it."""
+        for model in dict.fromkeys(self.mapping.values()):
+            if model is not tried and _declared_tag(model, self.property) == tag:
+                try:
+                    return model.from_dict(data)
+                except ModelParseError:
+                    continue
+        return tried.from_dict(data)
+
     def serialize(self, value: t.Any) -> t.Any:
         data = to_json_value(value)
-        tag = self.tags.get(type(t.cast(object, value)))
+        cls = type(t.cast(object, value))
+        tag = _declared_tag(cls, self.property) or self.tags.get(cls)
         if tag is not None and isinstance(data, dict):
             t.cast("dict[str, t.Any]", data)[self.property] = tag
         return t.cast(t.Any, data)
+
+
+def _declared_tag(cls: type, property: str) -> str | None:
+    """The one value a model declares for ``property`` (``type: t.Literal["message"]``), which
+    wins over its tag in a union: several variants may share it."""
+    if not (isinstance(cls, type) and issubclass(cls, BaseModel)):
+        return None
+    hints = _type_hints(cls)
+    for field in dataclasses.fields(cls):
+        if cls._json_key(field.name) == property:
+            hint = hints[field.name]
+            union = t.get_origin(hint) in _UNION_TYPES
+            values = [
+                arg
+                for member in (_members(t.get_args(hint)) if union else [hint])
+                if t.get_origin(member) is t.Literal
+                for arg in t.get_args(member)
+            ]
+            return values[0] if len(values) == 1 and isinstance(values[0], str) else None
+    return None
 
 
 # --------------------------------------------------------------------------
