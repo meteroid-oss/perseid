@@ -214,6 +214,16 @@ pub(crate) fn sdk_api(
     Ok(api)
 }
 
+/// What renders into a generated tree, relative to its root: each template with its folder and
+/// the extension of its files, then the runtime.
+pub(crate) struct Layout {
+    /// The folder holding each `<template>.<extension>.jinja`.
+    pub templates: PathBuf,
+    pub tasks: Vec<(String, PathBuf, String)>,
+    /// The folder of runtime files, if any, and where they go.
+    pub runtime: (PathBuf, PathBuf),
+}
+
 /// Renders templates, then runtime files, into `stage`. Returns their paths relative to it.
 fn render(
     config: &Config,
@@ -232,32 +242,22 @@ fn render(
     )?;
     let (runtime, tasks) = layout(language, context);
     let extension = extension(language);
-    let mut produced = Vec::new();
+    let layout = Layout {
+        templates: assets_dir.path().join("templates").join(language),
+        tasks: (tasks.into_iter())
+            .map(|(template, output)| {
+                let output_extension = match template {
+                    API_REFERENCE => "md",
+                    _ => extension,
+                };
+                (template.to_owned(), output, output_extension.to_owned())
+            })
+            .collect(),
+        runtime: (assets_dir.path().join("runtime").join(language), runtime),
+    };
     let api = sdk_api(config, sdk, context, spec)?;
-    for (template, output) in tasks {
-        let output_extension = match template {
-            API_REFERENCE => "md",
-            _ => extension,
-        };
-        let template = assets_dir.path().join(format!(
-            "templates/{language}/{template}.{output_extension}.jinja"
-        ));
-        let template = template.to_str().context("non UTF-8 path")?.to_owned();
-        let out = Utf8PathBuf::from_path_buf(stage.join(&output))
-            .map_err(|p| anyhow::anyhow!("non UTF-8 path {}", p.display()))?;
-        let paths = generator::generate_with_output_context(
-            api.clone(),
-            template,
-            &out,
-            true,
-            context.clone(),
-            Some(output.to_str().unwrap()),
-            extension,
-        )?;
-        for path in paths {
-            produced.push(clean(path.as_std_path().strip_prefix(stage)?));
-        }
-    }
+    let globals = serde_json::Map::from_iter([("sdk".to_owned(), context.clone())]);
+    let mut produced = draw(&api, &globals, &layout, context, extension, stage)?;
     if context["tests"] == true && context["round_trips"] == true && !api.types.is_empty() {
         let path = clean(&round_trips_data(language, context));
         fsx::write(
@@ -266,22 +266,62 @@ fn render(
         )?;
         produced.push(path);
     }
-    let runtime_dir = assets_dir.path().join("runtime").join(language);
+    checked(stage, &produced)?;
+    Ok(produced)
+}
+
+/// Renders the templates of `layout` against `api` as the SDK of `extension` sees it, then copies
+/// its runtime with `tokens` substituted, into `stage`. Returns their paths relative to it.
+pub(crate) fn draw(
+    api: &crate::api::Api,
+    globals: &serde_json::Map<String, Value>,
+    layout: &Layout,
+    tokens: &Value,
+    extension: &str,
+    stage: &Path,
+) -> Result<Vec<PathBuf>> {
+    let mut produced = Vec::new();
+    for (template, output, output_extension) in &layout.tasks {
+        let template = layout
+            .templates
+            .join(format!("{template}.{output_extension}.jinja"));
+        let template = template.to_str().context("non UTF-8 path")?.to_owned();
+        let out = Utf8PathBuf::from_path_buf(stage.join(output))
+            .map_err(|p| anyhow::anyhow!("non UTF-8 path {}", p.display()))?;
+        let paths = generator::generate_with_output_context(
+            api.clone(),
+            template,
+            &out,
+            true,
+            globals.clone(),
+            Some(output.to_str().unwrap()),
+            extension,
+        )?;
+        for path in paths {
+            produced.push(clean(path.as_std_path().strip_prefix(stage)?));
+        }
+    }
+    let (runtime_dir, runtime) = &layout.runtime;
     if runtime_dir.is_dir() {
-        for file in assets::walk(&runtime_dir)? {
-            let relative = file.strip_prefix(&runtime_dir)?;
-            let Some(relative) = feature_path(relative, context) else {
+        for file in assets::walk(runtime_dir)? {
+            let relative = file.strip_prefix(runtime_dir)?;
+            let Some(relative) = feature_path(relative, tokens) else {
                 continue;
             };
-            let name = tokens(relative.to_str().unwrap(), context)?;
-            let content = tokens(&std::fs::read_to_string(&file)?, context)?;
+            let name = self::tokens(relative.to_str().unwrap(), tokens)?;
+            let content = self::tokens(&std::fs::read_to_string(&file)?, tokens)?;
             let path = clean(&runtime.join(name));
             fsx::write(&stage.join(&path), content.as_bytes())?;
             produced.push(path);
         }
     }
+    Ok(produced)
+}
+
+/// Fails unless each of `produced` is generated once and carries the `@generated` marker.
+pub(crate) fn checked(stage: &Path, produced: &[PathBuf]) -> Result<()> {
     let mut seen = BTreeSet::new();
-    for path in &produced {
+    for path in produced {
         ensure!(seen.insert(path), "{} is generated twice", path.display());
         ensure!(
             generated(&stage.join(path)),
@@ -289,7 +329,7 @@ fn render(
             path.display()
         );
     }
-    Ok(produced)
+    Ok(())
 }
 
 /// Runtime files under `features/<name>/` are only installed when `sdk.<name>` is true.
@@ -334,7 +374,7 @@ pub(crate) fn tokens(source: &str, context: &Value) -> Result<String> {
     Ok(out)
 }
 
-fn clean(path: &Path) -> PathBuf {
+pub(crate) fn clean(path: &Path) -> PathBuf {
     path.components()
         .filter(|c| *c != std::path::Component::CurDir)
         .collect()
@@ -364,38 +404,82 @@ pub fn sdk(
             context["go_module"].as_str().unwrap_or_default()
         );
     }
-    let stage = tempfile::Builder::new()
+    let stage = stage(dir)?;
+    let produced = logged(sdk.language, || {
+        render(config, root, sdk, &context, spec, stage.path())
+    })?;
+    if options.format {
+        format::format(sdk.language, dir, &staged(dir, stage.path(), &produced))?;
+    }
+    let (runtime, _) = layout(sdk.language, &context);
+    // Tests left over after `tests = false` or `round_trips = false`.
+    let scan = Scan {
+        roots: vec![
+            runtime,
+            tests_dir(sdk.language, &context),
+            round_trips_dir(sdk.language, &context),
+        ],
+        extensions: vec![extension(sdk.language).to_owned()],
+        files: vec![clean(&round_trips_data(sdk.language, &context))],
+    };
+    settle(dir, stage.path(), produced, &scan, options.check)
+}
+
+/// A folder under `dir` that generated files are staged in before they replace those of `dir`.
+pub(crate) fn stage(dir: &Path) -> Result<tempfile::TempDir> {
+    Ok(tempfile::Builder::new()
         .prefix("perseid-stage-")
-        .tempdir_in(dir)?;
+        .tempdir_in(dir)?)
+}
+
+/// The paths `render` produced in `stage`, relative to `dir`.
+pub(crate) fn staged(dir: &Path, stage: &Path, produced: &[PathBuf]) -> Vec<PathBuf> {
+    let stage = stage.strip_prefix(dir).unwrap();
+    produced.iter().map(|p| stage.join(p)).collect()
+}
+
+/// The sorted paths `render` produced, failing when generating `name` logged errors.
+pub(crate) fn logged(
+    name: &str,
+    render: impl FnOnce() -> Result<Vec<PathBuf>>,
+) -> Result<Vec<PathBuf>> {
     let failed = Arc::new(AtomicBool::new(false));
     let subscriber = tracing_subscriber::registry()
         .with(Report)
         .with(FailOnError(failed.clone()));
-    let produced = tracing::subscriber::with_default(subscriber, || {
-        render(config, root, sdk, &context, spec, stage.path())
-    });
+    let produced = tracing::subscriber::with_default(subscriber, render);
     spec::report_held_back();
     let mut produced = produced?;
     produced.sort();
     if failed.load(Ordering::SeqCst) {
-        bail!("{} generation logged errors", sdk.language);
+        bail!("{name} generation logged errors");
     }
-    if options.format {
-        format::format(
-            sdk.language,
-            dir,
-            &produced
-                .iter()
-                .map(|p| stage.path().strip_prefix(dir).unwrap().join(p))
-                .collect::<Vec<_>>(),
-        )?;
-    }
+    Ok(produced)
+}
+
+/// Where generated files no longer produced may be left, relative to the generated root.
+pub(crate) struct Scan {
+    /// Folders searched for files of `extensions`, through their subfolders.
+    pub roots: Vec<PathBuf>,
+    pub extensions: Vec<String>,
+    pub files: Vec<PathBuf>,
+}
+
+/// Brings the files `produced` in `stage` to `dir`, removes the generated files of `dir` it no
+/// longer produces, and records the generation. With `check`, only reports what would change.
+pub(crate) fn settle(
+    dir: &Path,
+    stage: &Path,
+    produced: Vec<PathBuf>,
+    scan: &Scan,
+    check: bool,
+) -> Result<Vec<Change>> {
     let mut changes = Vec::new();
     let mut handwritten = Vec::new();
     let mut dirs = BTreeSet::new();
     let mut digest = sha2::Sha256::new();
     for path in &produced {
-        let new = std::fs::read(stage.path().join(path))?;
+        let new = std::fs::read(stage.join(path))?;
         digest.update(path.to_string_lossy().as_bytes());
         digest.update([0]);
         digest.update(&new);
@@ -427,16 +511,12 @@ pub fn sdk(
             candidates.insert(relative.join(entry?.file_name()));
         }
     }
-    let (runtime, _) = layout(sdk.language, &context);
-    scan_sources(dir, &runtime, extension(sdk.language), &mut candidates)?;
-    // Tests left over after `tests = false` or `round_trips = false`.
-    for tests in [
-        tests_dir(sdk.language, &context),
-        round_trips_dir(sdk.language, &context),
-    ] {
-        scan_sources(dir, &tests, extension(sdk.language), &mut candidates)?;
+    for root in &scan.roots {
+        for extension in &scan.extensions {
+            scan_sources(dir, root, extension, &mut candidates)?;
+        }
     }
-    candidates.insert(clean(&round_trips_data(sdk.language, &context)));
+    candidates.extend(scan.files.iter().cloned());
     for path in candidates {
         if dir.join(&path).is_file() && !produced.contains(&path) && generated(&dir.join(&path)) {
             changes.push((Change::Removed(path), None));
@@ -453,7 +533,7 @@ pub fn sdk(
             Err(_) => changes.push((Change::Added(marker), Some(content))),
         }
     }
-    if !options.check {
+    if !check {
         for (change, content) in &changes {
             match (change, content) {
                 (Change::Removed(path), _) => {

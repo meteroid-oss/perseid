@@ -12,7 +12,8 @@ where they live (`repo`) and the spec they come from (`spec`).
 | [A separate SDKs repository](#a-separate-sdks-repository) | The API repository must grant nothing else | in the SDKs repository |
 | [A spec at a URL](#a-spec-at-a-url) | The spec is served, not committed | `spec = "https://..."` |
 
-[Targets](#targets) add repositories perseid writes one folder of, such as a docs site's.
+[Targets](#targets) add repositories perseid writes one folder of, such as a docs site's, or
+generates a program wrapping an SDK in, such as a CLI.
 
 perseid never creates repositories. Create the ones `repo` names with `gh repo create`.
 `perseid init` and `perseid status` print the commands.
@@ -657,12 +658,30 @@ writes, and changes nothing outside it. The repository needs no setup beyond the
 of `sdks.yml` reaching it: `perseid sync` installs the perseid App there, and `perseid status`
 reports a target repository it can't reach.
 
+A [pack](customizing.md#packs) target generates a program wrapping one SDK, such as a CLI over the
+Rust SDK, in a repository of its own, once that SDK is released:
+
+```toml
+[targets.cli]
+pack = "packs/cli"   # the pack's folder, relative to perseid.toml
+wraps = "rust"
+repo = "acme/acme-cli"
+after = "rust"
+```
+
+Its templates see the API as the Rust SDK's templates do, and the version of the Rust SDK the
+program depends on: the released one. Its pull requests replace the files it marked
+`@generated` and write its scaffold once, as for an SDK. The repository releases it on its own,
+with what the pack's scaffold sets up: perseid writes no release workflow there. In the Action,
+`pack` must be a folder of the checkout, such as a submodule: perseid doesn't fetch packs yet.
+
 ### `after`
 
 - `after = "generate"`: `generate --pr` opens or updates the target's pull request right after
   the SDK pull requests. `version` is `null` in `docs-data.json` for an SDK that run changes.
 - `after = "sdks"`: the pull request opens once every SDK generated from the current spec is
   released, and `docs-data.json` holds the `version` of each.
+- `after = "<language>"`, such as `"rust"`: the same, waiting for that SDK only.
 
 With `after = "sdks"`:
 
@@ -679,7 +698,8 @@ spec change. Each run decides anew, so a missed event only delays the pull reque
 next run, and a run with nothing new changes nothing.
 
 `perseid init` adds the `repository_dispatch` trigger to `sdks.yml`, and `perseid init` and
-`perseid sync` add the `report` job to `sdk-release.yml`, once a target waits for releases. Run
+`perseid sync` add the `report` job to `sdk-release.yml`, once a target waits for releases
+(`after` other than `"generate"`). Run
 both after adding one.
 
 ### When an SDK is released
@@ -700,9 +720,10 @@ perseid recorded it count as released until their next change.
 ### The pull request
 
 - Its title is a conventional commit sized like an SDK pull request's, comparing the spec with the
-  `openapi.json` already in `path`: `feat(api): update the API reference to Acme 1.2.0`.
-- Its description lists the files changed, the API changes, the version of each SDK and where
-  the spec comes from.
+  `openapi.json` already in `path`: `feat(api): update the API reference to Acme 1.2.0`. A pack
+  compares it with its `.perseid/openapi.json`: `feat(api): update to Acme 1.2.0`.
+- Its description lists the files changed, the API changes, the version of each SDK (of the SDK
+  it wraps, for a pack) and where the spec comes from.
 - `auto-merge: true` enables auto-merge on it as on the SDK pull requests.
 
 ### Credentials of the report
@@ -725,7 +746,9 @@ the next run of `sdks.yml`.
 
 | Flag | Effect |
 |---|---|
-| `--out <dir>` | Writes each target to `<dir>/<name>`, without cloning its repository. `version` is `null` |
+| `--out <dir>` | Writes each target to `<dir>/<name>`, without cloning its repository. `version` is `null`, and a pack depends on the version of the SDK where `generate` writes it |
+| `--check` | With `--out`, fails when the targets there differ from what the spec gives, without writing |
+| `--no-format` | Skips the formatters of packs |
 | `--pr` | Opens or updates the pull request of each target whose `after` holds, as `generate --pr` does after the SDK pull requests |
 | `--spec <path\|url>` | Reads another spec |
 | `--bump`, `--auto-merge`, `--relax-enum-additions` | As for `generate --pr` |

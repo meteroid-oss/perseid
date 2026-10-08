@@ -17,6 +17,14 @@ pub fn env_with_dir(
 ) -> Result<minijinja::Environment<'static>, minijinja::Error> {
     let mut env = minijinja::Environment::new();
     env.set_loader(path_loader(tpl_dir));
+    // A pack reaches the templates of the SDK it wraps under `sdk/`, where they import each other.
+    env.set_path_join_callback(|name, parent| {
+        let prefix = crate::pack::SDK_TEMPLATES;
+        match parent.starts_with(prefix) && !name.starts_with(prefix) {
+            true => format!("{prefix}{name}").into(),
+            false => name.into(),
+        }
+    });
     populate_env(env)
 }
 

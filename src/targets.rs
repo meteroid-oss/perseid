@@ -1,8 +1,12 @@
 //! `[targets]`: what perseid writes besides the SDKs, each into the one folder of a repository it
 //! owns there, through pull requests. A `docs` target writes the spec and the docs data, once
-//! the SDKs they describe are released, or with the SDK pull requests.
+//! the SDKs they describe are released, or with the SDK pull requests. A pack target renders a
+//! program wrapping one SDK, such as a CLI, once that SDK is released.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
@@ -10,7 +14,8 @@ use serde_json::Value;
 use crate::{
     changelog::Changelog,
     config::{After, Config, Sdk, TargetKind, TargetTable},
-    generate::{self, Change, GENERATION},
+    generate::{self, Change, GENERATION, Options},
+    pack,
     pr::{self, Bump},
     scaffold::package_path,
     sizing,
@@ -20,11 +25,22 @@ use crate::{
 #[derive(Clone, Debug, PartialEq)]
 pub struct Target {
     pub name: String,
-    pub kind: TargetKind,
+    pub kind: Kind,
     pub repo: String,
-    /// The folder of `repo` perseid owns, without a trailing `/`.
+    /// The folder of `repo` perseid owns, without a trailing `/`: `.` for the whole repository.
     pub path: String,
     pub after: After,
+}
+
+/// What a target writes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Docs,
+    /// The pack at `dir`, relative to perseid.toml, wrapping the SDK of `wraps`.
+    Pack {
+        dir: String,
+        wraps: &'static str,
+    },
 }
 
 impl Target {
@@ -38,24 +54,57 @@ impl Target {
             "{at}: name targets in lowercase letters, digits and dashes"
         );
         let kinds = TargetKind::ALL.map(TargetKind::name).join(", ");
-        let kind = match table.kind {
-            Some(kind) => kind,
-            None => match TargetKind::ALL.into_iter().find(|k| k.name() == name) {
-                Some(kind) => kind,
+        let kind = match (&table.pack, table.kind) {
+            (Some(_), Some(kind)) => bail!(
+                "{at}: `pack` makes it a pack target, delete `kind = \"{}\"`",
+                kind.name()
+            ),
+            (Some(dir), None) => {
+                ensure!(
+                    !dir.is_empty()
+                        && !["gh:", "github:", "git@", "http://", "https://"]
+                            .iter()
+                            .any(|p| dir.starts_with(p)),
+                    "{at}: `pack = {dir:?}`: perseid reads packs from a folder for now, set its path relative to perseid.toml, such as \"../perseid-ext/packs/cli\""
+                );
+                let wraps = table.wraps.with_context(|| {
+                    format!("{at}: set `wraps`, the language of the SDK the pack wraps")
+                })?;
+                Kind::Pack {
+                    dir: dir.clone(),
+                    wraps: wraps.name(),
+                }
+            }
+            (None, _) if table.wraps.is_some() => {
+                bail!("{at}: `wraps` names the SDK a pack wraps, set `pack` too")
+            }
+            (None, Some(TargetKind::Docs)) => Kind::Docs,
+            (None, None) => match TargetKind::ALL.into_iter().find(|k| k.name() == name) {
+                Some(TargetKind::Docs) => Kind::Docs,
                 None => bail!(
-                    "{at}: no target kind is named `{name}`. Name the table after its kind, or set `kind`, among {kinds}"
+                    "{at}: no target kind is named `{name}`. Name the table after its kind, or set `kind`, among {kinds}, or set `pack`"
                 ),
             },
         };
-        let path = table.path.as_deref().unwrap_or("api").trim_end_matches('/');
+        let path = match (&kind, table.path.as_deref()) {
+            (Kind::Pack { .. }, None | Some(".")) => ".",
+            (Kind::Pack { .. }, Some(path)) => path.trim_end_matches('/'),
+            (Kind::Docs, path) => path.unwrap_or("api").trim_end_matches('/'),
+        };
         let parts: Vec<&str> = path.split('/').collect();
+        let what = match kind {
+            Kind::Docs => "such as \"api\" or \"docs/api\": perseid replaces it whole",
+            Kind::Pack { .. } => "such as \"cli\", or \".\" for the whole repository",
+        };
         ensure!(
-            !path.is_empty()
-                && !path.starts_with('/')
-                && parts
-                    .iter()
-                    .all(|p| !p.is_empty() && *p != "." && *p != ".." && !p.starts_with(".git")),
-            "{at}: `path = {path:?}` must be a folder of {}, such as \"api\" or \"docs/api\": perseid replaces it whole",
+            path == "." && matches!(kind, Kind::Pack { .. })
+                || !path.is_empty()
+                    && !path.starts_with('/')
+                    && parts.iter().all(|p| !p.is_empty()
+                        && *p != "."
+                        && *p != ".."
+                        && !p.starts_with(".git")),
+            "{at}: `path = {path:?}` must be a folder of {}, {what}",
             table.repo
         );
         ensure!(!table.repo.is_empty(), "{at}: set `repo`, `owner/name`");
@@ -91,8 +140,9 @@ pub fn docs_files(spec: &str, data: &Value) -> Result<Vec<(String, Vec<u8>)>> {
     ])
 }
 
-/// Replaces the folder `dir` with `files`: the changes, by path relative to `dir`.
-pub fn write_folder(dir: &Path, files: &[(String, Vec<u8>)]) -> Result<Vec<Change>> {
+/// Replaces the folder `dir` with `files`: the changes, by path relative to `dir`. With `check`,
+/// only reports them.
+pub fn write_folder(dir: &Path, files: &[(String, Vec<u8>)], check: bool) -> Result<Vec<Change>> {
     let mut changes = Vec::new();
     let existing = match dir.is_dir() {
         true => crate::assets::walk(dir)?,
@@ -101,7 +151,9 @@ pub fn write_folder(dir: &Path, files: &[(String, Vec<u8>)]) -> Result<Vec<Chang
     for path in existing {
         let relative = path.strip_prefix(dir)?.to_path_buf();
         if !files.iter().any(|(f, _)| Path::new(f) == relative) {
-            std::fs::remove_file(&path)?;
+            if !check {
+                std::fs::remove_file(&path)?;
+            }
             changes.push(Change::Removed(relative));
         }
     }
@@ -112,9 +164,13 @@ pub fn write_folder(dir: &Path, files: &[(String, Vec<u8>)]) -> Result<Vec<Chang
             Ok(_) => changes.push(Change::Modified(path.into())),
             Err(_) => changes.push(Change::Added(path.into())),
         }
-        crate::fsx::write(&target, content)?;
+        if !check {
+            crate::fsx::write(&target, content)?;
+        }
     }
-    remove_empty(dir)?;
+    if dir.is_dir() {
+        remove_empty(dir)?;
+    }
     changes.sort_by_key(|c| match c {
         Change::Added(p) | Change::Modified(p) | Change::Removed(p) => p.clone(),
     });
@@ -286,35 +342,58 @@ pub fn versions(releases: &BTreeMap<String, Release>) -> BTreeMap<String, String
         .collect()
 }
 
-/// The files `target` writes into its folder.
-pub fn files(
+/// The files a docs target writes into its folder.
+fn docs(
     config: &Config,
     root: &Path,
-    target: &Target,
     spec: &str,
     versions: &BTreeMap<String, String>,
 ) -> Result<Vec<(String, Vec<u8>)>> {
-    match target.kind {
-        TargetKind::Docs => {
-            let sdks = config.sdks(&[])?;
-            let data = crate::docs_data::run(config, root, &sdks, spec, versions)?;
-            docs_files(spec, &data)
+    let sdks = config.sdks(&[])?;
+    let data = crate::docs_data::run(config, root, &sdks, spec, versions)?;
+    docs_files(spec, &data)
+}
+
+/// Writes `target` into `dir`, its folder, depending on the SDKs at `versions`, the released
+/// ones: the changes, and the files besides the generated ones to commit, relative to `dir`.
+fn write(
+    config: &Config,
+    root: &Path,
+    target: &Target,
+    dir: &Path,
+    spec: &str,
+    versions: &BTreeMap<String, String>,
+    options: &Options,
+) -> Result<(Vec<Change>, Vec<PathBuf>)> {
+    match &target.kind {
+        Kind::Docs => {
+            let files = docs(config, root, spec, versions)?;
+            Ok((write_folder(dir, &files, options.check)?, vec![]))
+        }
+        Kind::Pack { wraps, .. } => {
+            let released = versions.get(*wraps).map(String::as_str);
+            let generated = pack::generate(config, root, target, dir, spec, released, options)?;
+            let mut files = generated.scaffold;
+            files.push(pack::SPEC.into());
+            Ok((generated.changes, files))
         }
     }
 }
 
-/// Writes each of `targets` into `<out>/<name>`: what changed there.
+/// Writes each of `targets` into `<out>/<name>`: what changed there. With `check`, only
+/// reports it.
 pub fn preview(
     config: &Config,
     root: &Path,
     targets: &[Target],
     spec: &str,
     out: &Path,
+    options: &Options,
 ) -> Result<BTreeMap<String, Vec<Change>>> {
     let mut changes = BTreeMap::new();
     for target in targets {
-        let files = files(config, root, target, spec, &BTreeMap::new())?;
-        let written = write_folder(&out.join(&target.name), &files)?;
+        let dir = out.join(&target.name);
+        let (written, _) = write(config, root, target, &dir, spec, &BTreeMap::new(), options)?;
         changes.insert(target.name.clone(), written);
     }
     Ok(changes)
@@ -326,6 +405,23 @@ pub struct Request {
     pub bump: Bump,
     pub relax_enum_additions: bool,
     pub auto_merge: bool,
+    /// Runs the formatters of pack targets.
+    pub format: bool,
+}
+
+/// The SDKs of `releases` that `after` waits for and are not released, with why.
+fn waiting(after: After, releases: &BTreeMap<String, Release>) -> Vec<String> {
+    (releases.iter())
+        .filter(|(language, _)| match after {
+            After::Generate => false,
+            After::Sdks => true,
+            After::Sdk(awaited) => awaited.name() == language.as_str(),
+        })
+        .filter_map(|(language, release)| match release {
+            Release::Pending(why) => Some(format!("{language} ({why})")),
+            Release::Released(_) => None,
+        })
+        .collect()
 }
 
 /// Opens or updates the pull request of each of `targets` whose `after` holds.
@@ -342,16 +438,15 @@ pub fn deliver(
     }
     let releases = releases(github, config)?;
     let versions = versions(&releases);
-    let pending: Vec<String> = (releases.iter())
-        .filter_map(|(language, release)| match release {
-            Release::Pending(why) => Some(format!("{language} ({why})")),
-            Release::Released(_) => None,
-        })
-        .collect();
     let origin = pr::origin(config, root, spec);
+    let options = Options {
+        check: false,
+        format: request.format,
+    };
     for target in targets {
         let at = format!("[targets.{}]", target.name);
-        if target.after == After::Sdks && !pending.is_empty() {
+        let pending = waiting(target.after, &releases);
+        if !pending.is_empty() {
             println!(
                 "{at}: waits for the release of {}, then opens its pull request on {}",
                 pending.join(", "),
@@ -361,47 +456,74 @@ pub fn deliver(
         }
         let checkout = pr::checkout(&target.repo, root, true)?;
         let dir = checkout.join(&target.path);
+        let (snapshot, subject, described) = match &target.kind {
+            Kind::Docs => (
+                "openapi.json",
+                format!("update the API reference to {}", api_name(spec)),
+                releases.clone(),
+            ),
+            Kind::Pack { wraps, .. } => (
+                pack::SPEC,
+                format!("update to {}", api_name(spec)),
+                (releases.iter())
+                    .filter(|(language, _)| language == wraps)
+                    .map(|(l, r)| (l.clone(), r.clone()))
+                    .collect(),
+            ),
+        };
         let scratch = tempfile::tempdir()?;
         let previous = scratch.path().join("openapi.json");
-        let had_spec = std::fs::copy(dir.join("openapi.json"), &previous).is_ok();
-        let files = files(config, root, target, spec, &versions)?;
-        let changes = write_folder(&dir, &files)?;
+        let had_spec = std::fs::copy(dir.join(snapshot), &previous).is_ok();
+        let (changes, files) = write(config, root, target, &dir, spec, &versions, &options)?;
         pr::record(&checkout)?;
         if changes.is_empty() {
-            println!("{at}: {} is up to date in {}", target.path, target.repo);
+            println!("{at}: up to date in {}", target.repo);
             continue;
         }
         let (bump, changelog) = match (request.bump, had_spec) {
             (Bump::Auto, true) => sizing::size(&sizing::Comparison {
                 root: &dir,
-                spec: "openapi.json",
+                spec: snapshot,
                 base: Some(&previous),
                 relax_enum_additions: request.relax_enum_additions,
             })?,
             (Bump::Auto, false) => (Bump::Minor, Changelog::default()),
             (bump, _) => (bump, Changelog::default()),
         };
-        let owned = [target.path.clone()];
-        let update = pr::Update {
-            branch: &target.branch(),
-            paths: &[],
-            files: &[],
-            shared: &[],
-            owned: &owned,
+        let within = |p: &Path| generate::clean(&Path::new(&target.path).join(p));
+        let folder = [target.path.clone()];
+        let files: Vec<String> = (files.iter())
+            .filter(|f| dir.join(f).is_file())
+            .map(|f| within(f).to_string_lossy().into_owned())
+            .collect();
+        let update = match target.kind {
+            Kind::Docs => pr::Update {
+                branch: &target.branch(),
+                paths: &[],
+                files: &[],
+                shared: &[],
+                owned: &folder,
+            },
+            Kind::Pack { .. } => pr::Update {
+                branch: &target.branch(),
+                paths: &folder,
+                files: &files,
+                shared: &[],
+                owned: &[],
+            },
         };
         let shown = (changes.into_iter())
             .map(|c| match c {
-                Change::Added(p) => Change::Added(Path::new(&target.path).join(p)),
-                Change::Modified(p) => Change::Modified(Path::new(&target.path).join(p)),
-                Change::Removed(p) => Change::Removed(Path::new(&target.path).join(p)),
+                Change::Added(p) => Change::Added(within(&p)),
+                Change::Modified(p) => Change::Modified(within(&p)),
+                Change::Removed(p) => Change::Removed(within(&p)),
             })
             .collect();
         let summary = generate::summary(
             &BTreeMap::from([(target.name.clone(), shown)]),
             &BTreeMap::new(),
         );
-        let describe = |listed: &str| describe(&summary, listed, &releases, origin.as_deref());
-        let subject = format!("update the API reference to {}", api_name(spec));
+        let describe = |listed: &str| describe(&summary, listed, &described, origin.as_deref());
         let changelog = &changelog;
         match pr::open(
             github, &checkout, &update, bump, &subject, changelog, describe,
@@ -468,6 +590,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::config::Language;
 
     fn config(toml: &str) -> Result<Config> {
         let text = format!("name = \"Acme\"\nsdks = [\"typescript\", \"go\"]\n{toml}");
@@ -490,14 +613,14 @@ mod tests {
             [
                 Target {
                     name: "docs".into(),
-                    kind: TargetKind::Docs,
+                    kind: Kind::Docs,
                     repo: "acme/docs".into(),
                     path: "api".into(),
                     after: After::Sdks,
                 },
                 Target {
                     name: "public".into(),
-                    kind: TargetKind::Docs,
+                    kind: Kind::Docs,
                     repo: "acme/site".into(),
                     path: "reference/api".into(),
                     after: After::Generate,
@@ -536,8 +659,8 @@ mod tests {
         assert!(name.contains("lowercase letters"), "{name}");
         assert!(error("[targets.docs]\npath = \"api\"\n").contains("missing field `repo`"));
         assert!(
-            error("[targets.docs]\nrepo = \"a/b\"\npack = \"cli\"\n")
-                .contains("unknown field `pack`")
+            error("[targets.docs]\nrepo = \"a/b\"\nhost = \"x\"\n")
+                .contains("unknown field `host`")
         );
         let unreleased = error("release = false\n[targets.docs]\nrepo = \"acme/docs\"\n");
         assert!(
@@ -547,6 +670,158 @@ mod tests {
         let config =
             config("release = false\n[targets.docs]\nrepo = \"a/b\"\nafter = \"generate\"\n");
         assert!(!config.unwrap().awaits_releases());
+    }
+
+    #[test]
+    fn pack_targets_wrap_an_sdk_and_may_wait_for_its_release_alone() {
+        let config = config(
+            "[targets.cli]\npack = \"../ext/packs/cli\"\nwraps = \"typescript\"\nrepo = \"acme/cli\"\nafter = \"typescript\"\n\
+             [targets.tools]\npack = \"packs/tools\"\nwraps = \"go\"\nrepo = \"acme/tools\"\npath = \"tools/\"\nafter = \"generate\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config.targets(&[]).unwrap(),
+            [
+                Target {
+                    name: "cli".into(),
+                    kind: Kind::Pack {
+                        dir: "../ext/packs/cli".into(),
+                        wraps: "typescript",
+                    },
+                    repo: "acme/cli".into(),
+                    path: ".".into(),
+                    after: After::Sdk(Language::Typescript),
+                },
+                Target {
+                    name: "tools".into(),
+                    kind: Kind::Pack {
+                        dir: "packs/tools".into(),
+                        wraps: "go",
+                    },
+                    repo: "acme/tools".into(),
+                    path: "tools".into(),
+                    after: After::Generate,
+                },
+            ]
+        );
+        assert!(config.awaits_releases());
+
+        let releases = BTreeMap::from([
+            (
+                "go".to_owned(),
+                Release::Pending("it has no release yet".into()),
+            ),
+            ("typescript".to_owned(), Release::Released("1.4.0".into())),
+        ]);
+        let go = ["go (it has no release yet)".to_owned()];
+        assert!(waiting(After::Sdk(Language::Typescript), &releases).is_empty());
+        assert_eq!(waiting(After::Sdk(Language::Go), &releases), go);
+        assert_eq!(waiting(After::Sdks, &releases), go);
+        assert!(waiting(After::Generate, &releases).is_empty());
+    }
+
+    #[test]
+    fn pack_targets_name_a_folder_and_an_sdk_perseid_toml_lists() {
+        let cli = |table: &str| error(&format!("[targets.cli]\nrepo = \"acme/cli\"\n{table}"));
+        let pack = "pack = \"packs/cli\"\n";
+        for (table, expected) in [
+            (
+                format!("{pack}wraps = \"rust\"\n"),
+                "[targets.cli] `wraps = \"rust\"` names an SDK that `sdks` doesn't list",
+            ),
+            (
+                format!("{pack}wraps = \"go\"\nafter = \"python\"\n"),
+                "[targets.cli] `after = \"python\"` names an SDK that `sdks` doesn't list",
+            ),
+            (
+                format!("{pack}wraps = \"go\"\nafter = \"ruby\"\n"),
+                "`after = \"ruby\"`: expected \"sdks\", \"generate\" or a language, among rust,",
+            ),
+            (
+                format!("{pack}wraps = \"go\"\nkind = \"docs\"\n"),
+                "[targets.cli]: `pack` makes it a pack target, delete `kind = \"docs\"`",
+            ),
+            (
+                "wraps = \"go\"\n".to_owned(),
+                "[targets.cli]: `wraps` names the SDK a pack wraps, set `pack` too",
+            ),
+            (
+                pack.to_owned(),
+                "[targets.cli]: set `wraps`, the language of the SDK the pack wraps",
+            ),
+            (
+                "pack = \"gh:meteroid-oss/perseid-ext/packs/cli@v0\"\nwraps = \"go\"\n".to_owned(),
+                "perseid reads packs from a folder for now",
+            ),
+            (
+                format!("{pack}wraps = \"go\"\npath = \"../cli\"\n"),
+                "`path = \"../cli\"` must be a folder of acme/cli, such as \"cli\"",
+            ),
+        ] {
+            let text = cli(&table);
+            assert!(text.contains(expected), "{table}: {text}");
+        }
+        let unreleased = error(
+            "release = false\n[targets.cli]\nrepo = \"a/b\"\npack = \"p\"\nwraps = \"go\"\nafter = \"go\"\n",
+        );
+        assert!(
+            unreleased.contains("(`after = \"go\"`), which `release = false` leaves to you"),
+            "{unreleased}"
+        );
+    }
+
+    #[test]
+    fn a_pack_target_depends_on_the_released_version_of_its_sdk() {
+        let root = tempfile::tempdir().unwrap();
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let toy = fixtures.join("packs/toy");
+        let toml = format!(
+            "name = \"Acme\"\nsdks = [\"rust\"]\n[targets.cli]\npack = {:?}\nwraps = \"rust\"\nrepo = \"acme/cli\"\nafter = \"rust\"\n",
+            toy.display()
+        );
+        let config = Config::parse(&toml, "perseid.toml").unwrap();
+        let target = config.targets(&[]).unwrap().remove(0);
+        let spec = fixtures.join("petstore.yaml");
+        let spec = crate::spec::read(spec.to_str().unwrap(), root.path()).unwrap();
+        let options = Options {
+            check: false,
+            format: false,
+        };
+        let render = |dir: &Path, versions: &BTreeMap<String, String>| {
+            write(
+                &config,
+                root.path(),
+                &target,
+                dir,
+                &spec,
+                versions,
+                &options,
+            )
+            .unwrap()
+        };
+        let released = root.path().join("released");
+        let versions = BTreeMap::from([("rust".to_owned(), "1.4.0".to_owned())]);
+        let (changes, files) = render(&released, &versions);
+        assert!(changes.contains(&Change::Added("src/commands/pets.rs".into())));
+        assert_eq!(
+            files,
+            [
+                PathBuf::from("Cargo.toml"),
+                "src/main.rs".into(),
+                pack::SPEC.into()
+            ]
+        );
+        let read = |dir: &Path, file: &str| std::fs::read_to_string(dir.join(file)).unwrap();
+        assert!(
+            read(&released, "api.md").ends_with("Wraps `acme` 1.4.0, as released."),
+            "{}",
+            read(&released, "api.md")
+        );
+        assert!(read(&released, "Cargo.toml").contains("acme = \"1.4.0\"\n"));
+
+        let current = root.path().join("current");
+        render(&current, &BTreeMap::new());
+        assert!(read(&current, "api.md").ends_with("Wraps `acme` 0.1.0."));
     }
 
     #[test]
@@ -571,7 +846,7 @@ mod tests {
         );
 
         let dir = repo.path().join("api");
-        let changes = write_folder(&dir, &files).unwrap();
+        let changes = write_folder(&dir, &files, false).unwrap();
         let shown: Vec<String> = changes.iter().map(ToString::to_string).collect();
         assert_eq!(
             shown,
@@ -588,7 +863,7 @@ mod tests {
             (read("README.md"), read("api.md")),
             ("# Docs\n".into(), "kept\n".into())
         );
-        assert!(write_folder(&dir, &files).unwrap().is_empty());
+        assert!(write_folder(&dir, &files, false).unwrap().is_empty());
         assert!(api_name(spec) == "Acme 1.2.0" && api_name("{}") == "the API");
     }
 

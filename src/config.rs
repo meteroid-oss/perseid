@@ -218,15 +218,23 @@ impl Language {
 #[serde(deny_unknown_fields)]
 pub struct TargetTable {
     /// What the target writes: the table's name by default, so `[targets.docs]` is a `docs`
-    /// target. Set it to name the table otherwise, such as two `docs` targets.
+    /// target. Set it to name the table otherwise, such as two `docs` targets. A pack target
+    /// takes `pack` instead.
     pub kind: Option<TargetKind>,
     /// `owner/name` of the repository the target writes to.
     pub repo: String,
-    /// The only folder perseid writes in `repo`, replaced whole: `api` by default.
+    /// The only folder perseid writes in `repo`: `api` by default, replaced whole. A pack renders
+    /// into the whole repository (`.`) by default.
     pub path: Option<String>,
     /// When its pull request opens: once every SDK generated from the current spec is released
-    /// (`sdks`, the default), or with the SDK pull requests (`generate`).
+    /// (`sdks`, the default), once the SDK of a language is (`rust`), or with the SDK pull
+    /// requests (`generate`).
     pub after: Option<After>,
+    /// The folder of a pack, relative to perseid.toml: a program wrapping the SDK `wraps` names,
+    /// rendered from the pack's templates against that SDK's model.
+    pub pack: Option<String>,
+    /// The SDK the pack wraps, among `sdks`.
+    pub wraps: Option<Language>,
 }
 
 /// What a target writes.
@@ -248,14 +256,73 @@ impl TargetKind {
 }
 
 /// When a target's pull request opens.
-#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum After {
     /// With the SDK pull requests, in the same run.
     Generate,
     /// Once every SDK generated from the current spec is released.
     #[default]
     Sdks,
+    /// Once the SDK of this language is released.
+    Sdk(Language),
+}
+
+impl After {
+    /// As perseid.toml writes it.
+    pub fn name(self) -> &'static str {
+        match self {
+            After::Generate => "generate",
+            After::Sdks => "sdks",
+            After::Sdk(language) => language.name(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for After {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::{Error, IntoDeserializer, value};
+        let text = String::deserialize(d)?;
+        match text.as_str() {
+            "generate" => Ok(After::Generate),
+            "sdks" => Ok(After::Sdks),
+            other => Language::deserialize(other.into_deserializer())
+                .map(After::Sdk)
+                .map_err(|_: value::Error| {
+                    D::Error::custom(format!(
+                        "`after = {other:?}`: expected \"sdks\", \"generate\" or a language, among {}",
+                        LANGUAGES.join(", ")
+                    ))
+                }),
+        }
+    }
+}
+
+impl JsonSchema for After {
+    fn schema_name() -> String {
+        "After".into()
+    }
+
+    fn json_schema(generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        /// When a target's pull request opens.
+        #[derive(JsonSchema)]
+        #[serde(untagged)]
+        #[allow(dead_code)]
+        enum After {
+            Stage(Stage),
+            Sdk(Language),
+        }
+        /// When a target's pull request opens, besides once the SDK of a language is released.
+        #[derive(JsonSchema)]
+        #[serde(rename_all = "lowercase")]
+        #[allow(dead_code)]
+        enum Stage {
+            /// With the SDK pull requests, in the same run.
+            Generate,
+            /// Once every SDK generated from the current spec is released.
+            Sdks,
+        }
+        After::json_schema(generator)
+    }
 }
 
 fn default_spec() -> String {
@@ -609,9 +676,24 @@ impl Config {
         for target in self.targets(&[])? {
             ensure!(
                 target.after == After::Generate || self.release != Some(false),
-                "[targets.{}] waits for the SDK releases (`after = \"sdks\"`), which `release = false` leaves to you: set `after = \"generate\"`",
-                target.name
+                "[targets.{}] waits for the SDK releases (`after = \"{}\"`), which `release = false` leaves to you: set `after = \"generate\"`",
+                target.name,
+                target.after.name()
             );
+        }
+        for (name, table) in &self.targets {
+            let after = match table.after {
+                Some(After::Sdk(language)) => Some(language),
+                _ => None,
+            };
+            for (key, language) in [("wraps", table.wraps), ("after", after)] {
+                let Some(language) = language else { continue };
+                ensure!(
+                    self.sdks.contains(&language),
+                    "[targets.{name}] `{key} = \"{}\"` names an SDK that `sdks` doesn't list",
+                    language.name()
+                );
+            }
         }
         Ok(())
     }
@@ -633,7 +715,7 @@ impl Config {
 
     /// Whether a target waits for the SDK releases, which the release workflows then report.
     pub fn awaits_releases(&self) -> bool {
-        (self.targets.values()).any(|t| t.after.unwrap_or_default() == After::Sdks)
+        (self.targets.values()).any(|t| t.after.unwrap_or_default() != After::Generate)
     }
 
     /// The repository the SDK release workflows report their releases to: the one holding

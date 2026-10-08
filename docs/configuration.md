@@ -66,6 +66,12 @@ repo = "acme/acme-golang"           # its own repository name, over the top-leve
 repo = "acme/docs"                  # the repository it writes to, through pull requests
 path = "api"                        # the only folder perseid writes there, replaced whole
 after = "sdks"                      # once every SDK is released, or "generate": with the SDK PRs
+
+[targets.cli]                       # a pack: a program wrapping one SDK, in a repository of its own
+pack = "../perseid-ext/packs/cli"   # the pack's folder, relative to perseid.toml
+wraps = "rust"                      # the SDK it wraps, among `sdks`
+repo = "acme/acme-cli"
+after = "rust"                      # once that SDK is released
 ```
 
 ## Editor completion
@@ -117,9 +123,11 @@ flow.
 | Key | Default | Description |
 |---|---|---|
 | `repo` | required | `owner/name` of the repository the target writes to |
-| `path` | `"api"` | The only folder perseid writes in `repo`. It owns it: files it no longer writes there are deleted. Nothing outside it is touched |
-| `after` | `"sdks"` | `"sdks"`: the pull request opens once every SDK generated from the current spec is released, with their versions. `"generate"`: with the SDK pull requests, in the same run |
+| `path` | `"api"`, `"."` for a pack | The only folder perseid writes in `repo`. A `docs` target owns it: files it no longer writes there are deleted. A pack only replaces and deletes the files it marked `@generated`. Nothing outside it is touched |
+| `after` | `"sdks"` | `"sdks"`: the pull request opens once every SDK generated from the current spec is released, with their versions. A language, such as `"rust"`: once that SDK is released. `"generate"`: with the SDK pull requests, in the same run |
 | `kind` | the table's name | What the target writes |
+| `pack` | | The folder of a [pack](customizing.md#packs), relative to `perseid.toml`: the table is then a pack target, without `kind` |
+| `wraps` | required with `pack` | The SDK the pack wraps, among `sdks` and the languages its `pack.toml` lists |
 
 The table's name is its kind, so `[targets.docs]` is a `docs` target. `kind` names it otherwise,
 for two targets of a kind:
@@ -134,9 +142,11 @@ path = "reference/api"
 | Kind | Writes in `path` |
 |---|---|
 | `docs` | `openapi.json`, the spec as perseid read it; `docs-data.json`, what [`perseid docs-data`](customizing.md#docs-data) prints for every SDK, with the `version` of each released SDK; `.gitattributes`, marking both as generated so GitHub collapses their diffs |
+| a pack (`pack`) | What its templates, runtime and scaffold render around the SDK it wraps, `.perseid/generation.json`, and `.perseid/openapi.json`, the spec it was generated from, which sizes the next pull request |
 
-Other kinds will take keys of their own in the same table. A name or `kind` perseid doesn't know
-is an error. `after = "sdks"` needs the release workflows, so it can't go with `release = false`.
+A name or `kind` perseid doesn't know is an error. `pack` is a folder for now: a reference to a
+repository, such as `gh:meteroid-oss/perseid-ext/packs/cli@v0`, is an error. `after` other than
+`"generate"` needs the release workflows, so it can't go with `release = false`.
 
 ## SDK defaults
 

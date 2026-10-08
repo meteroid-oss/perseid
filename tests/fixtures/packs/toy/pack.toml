@@ -1,0 +1,10 @@
+# A toy pack wrapping the Rust SDK: a module per resource naming its methods.
+name = "toy"
+wraps = ["rust"]
+model = 1
+runtime = "src/runtime"
+
+[templates]
+api_resource = { dir = "src/commands" }
+api_summary = { dir = "src/commands" }
+api_reference = { dir = ".", extension = "md" }

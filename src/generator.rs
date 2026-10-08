@@ -30,14 +30,29 @@ enum TemplateKind {
     RoundTrips,
 }
 
+/// The names a template's file may take, which say what it renders per.
+pub(crate) const TEMPLATES: [&str; 10] = [
+    "api_resource",
+    "component_type",
+    "operation_options",
+    "api_summary",
+    "component_type_summary",
+    "api_reference",
+    "summary",
+    "api_test",
+    "api_test_summary",
+    "api_round_trips",
+];
+
 /// Renders `tpl_name` with the API model as the SDK of `language` (`rs`, `ts`, `py`...) sees it,
 /// which is also the extension of the code it renders, unless it renders documentation.
+/// `globals` reach the template by name: `sdk`, the SDK's context, and `pack` for a pack.
 pub(crate) fn generate_with_output_context(
     mut api: Api,
     tpl_name: String,
     output_dir: &Utf8Path,
     no_postprocess: bool,
-    sdk: serde_json::Value,
+    globals: serde_json::Map<String, serde_json::Value>,
     output_context: Option<&str>,
     language: &str,
 ) -> anyhow::Result<Vec<Utf8PathBuf>> {
@@ -52,6 +67,7 @@ pub(crate) fn generate_with_output_context(
         .rsplit_once(".")
         .context("template name must contain '.'")?;
 
+    let sdk = globals.get("sdk").cloned().unwrap_or_default();
     for_language(&mut api, &sdk, language)?;
 
     let tpl_kind = match tpl_base_name {
@@ -65,9 +81,8 @@ pub(crate) fn generate_with_output_context(
         "api_round_trips" => TemplateKind::RoundTrips,
         "component_type" => TemplateKind::Type,
         _ => bail!(
-            "template file basename must be one of 'api_resource', 'api_summary', \
-             'api_reference', 'api_test', 'api_test_summary', 'api_round_trips', \
-             'component_type', 'component_type_summary', 'summary'",
+            "template file basename must be one of {}",
+            TEMPLATES.join(", ")
         ),
     };
 
@@ -78,7 +93,9 @@ pub(crate) fn generate_with_output_context(
             .parent()
             .with_context(|| format!("invalid template path `{tpl_path}`"))?,
     )?;
-    minijinja_env.add_global("sdk", minijinja::Value::from_serialize(sdk));
+    for (name, value) in globals {
+        minijinja_env.add_global(name, minijinja::Value::from_serialize(value));
+    }
     minijinja_env.add_global(
         "output_dir",
         output_context.unwrap_or(output_dir.as_str()).to_owned(),

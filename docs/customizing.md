@@ -165,6 +165,53 @@ Union field types, for values of several types such as Stripe's `string | Custom
   `union_refs` lists the schemas they reference.
 - A struct variant with a string `id` has `id` set to `required` or `optional`.
 
+## Packs
+
+A pack renders a program wrapping one SDK, such as a CLI over the Rust SDK, from templates of
+its own against the model of that SDK. A [pack target](configuration.md#targets) names its
+folder, and `perseid targets <name> --out <dir>` previews it.
+
+```
+packs/cli/
+  pack.toml
+  templates/   <template>.<extension>.jinja
+  runtime/     copied into the target, optional
+  scaffold/    written once, optional
+```
+
+```toml
+name = "cli"
+wraps = ["rust"]          # the SDKs it can wrap
+model = 1                 # the version of the model its templates read
+runtime = "src/runtime"   # where runtime/ goes, relative to the target's folder
+# format = ["taplo", "fmt"]  # given the generated files; the wrapped SDK's formatter by default, [] for none
+
+[templates]
+api_resource = { dir = "src/commands" }            # a file per resource
+api_summary = { dir = "src/commands" }             # one file
+api_reference = { dir = ".", extension = "md" }
+```
+
+- A template's name says what it renders per, as an SDK's [templates](#templates) do:
+  `api_resource` and `operation_options` per resource or operation, `component_type` per model,
+  `api_summary`, `component_type_summary`, `api_reference` and `summary` once. `dir` is its
+  folder in the target, `extension` the extension of its files: the wrapped SDK's by default.
+- Templates receive the model as the wrapped SDK's templates do (`perseid inspect rust`), with the
+  same filters, and import that SDK's templates, ejected ones included, under `sdk/`:
+  `{% from "sdk/types/macros.rs.jinja" import rust_type %}`.
+- `sdk` is the wrapped SDK's context, `sdk.version` the version the program depends on: the
+  released one, else the one where `generate` writes the SDK. `pack` holds `name`, `target` (the
+  table's name), `repo`, `path`, and `sdk`: `language`, `package`, `version` and `released`.
+- `runtime/` and `scaffold/` files take the `@@TOKEN@@`s of the SDK, plus `@@PACK_NAME@@`,
+  `@@PACK_TARGET@@`, `@@PACK_REPO@@` and `@@PACK_PATH@@`. Runtime files under
+  `features/<name>/` are copied when `sdk.<name>` is true.
+- Generated files, runtime included, must carry `@generated`. Those no longer generated are
+  deleted, as in an SDK, and `--check` compares them.
+- `scaffold/` is written on the first generation, without overwriting a file: the manifest, the
+  release workflow and a handwritten `main`, which belong to the target's repository afterwards.
+- `model` must be the `model_version` that `perseid inspect` prints: a pack written for another
+  fails, naming what to upgrade.
+
 ## Docs data
 
 `perseid docs-data` prints, as JSON, what a docs site needs to show the API reference in the

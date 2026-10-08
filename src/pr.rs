@@ -194,6 +194,17 @@ pub fn record(dir: &Path) -> Result<()> {
     crate::fsx::write(&dir.join(GENERATED), worktree_tree(dir)?.as_bytes())
 }
 
+/// Where [`checkout`] checks `repo` out.
+pub fn checkout_dir(repo: &str, root: &Path) -> PathBuf {
+    let segments: Vec<_> = repo
+        .trim_end_matches(".git")
+        .split(['/', ':'])
+        .filter(|s| !s.is_empty())
+        .collect();
+    let repos = root.join(".perseid/repos");
+    repos.join(segments[segments.len().saturating_sub(2)..].join("/"))
+}
+
 /// A fresh checkout of the default branch of `repo`, in a disposable directory under `.perseid/`.
 /// Changes there that perseid didn't generate stop it, unless `discard`.
 pub fn checkout(repo: &str, root: &Path, discard: bool) -> Result<PathBuf> {
@@ -202,14 +213,9 @@ pub fn checkout(repo: &str, root: &Path, discard: bool) -> Result<PathBuf> {
     } else {
         format!("https://github.com/{repo}.git")
     };
-    let segments: Vec<_> = repo
-        .trim_end_matches(".git")
-        .split(['/', ':'])
-        .filter(|s| !s.is_empty())
-        .collect();
     let repos = root.join(".perseid/repos");
     crate::fsx::write(&repos.join(".gitignore"), b"*\n")?;
-    let dir = repos.join(segments[segments.len().saturating_sub(2)..].join("/"));
+    let dir = checkout_dir(repo, root);
     if dir.join(".git").is_dir() {
         let pristine = || -> Result<bool> {
             let tree = worktree_tree(&dir)?;

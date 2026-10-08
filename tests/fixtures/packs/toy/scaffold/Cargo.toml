@@ -1,0 +1,7 @@
+[package]
+name = "@@PACK_TARGET@@"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+@@PACKAGE_NAME@@ = "@@VERSION@@"

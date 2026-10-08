@@ -299,7 +299,10 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
     let targets = hub.config.targets(&[])?;
     plan.targets = layout::targets(&sdks, &hub.repo);
     plan.targets
-        .extend(targets.iter().map(|t| format!("{} ({}/)", t.repo, t.path)));
+        .extend(targets.iter().map(|t| match t.path.as_str() {
+            "." => t.repo.clone(),
+            path => format!("{} ({path}/)", t.repo),
+        }));
     let hub_owner = owner_of(&hub.repo).to_owned();
     let owner = remote
         .first()
