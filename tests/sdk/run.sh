@@ -21,7 +21,7 @@ cd "$lang"
 case "$lang" in
   rust)
     export CARGO_TARGET_DIR="$work/target"
-    cargo test --features webhooks
+    cargo test --features webhooks,tracing
     # The tests of tests/sdk/rust/torture run on the SDK of tests/fixtures/torture.yaml.
     (mkdir "$work/torture" && cd "$work/torture" \
       && perseid init --sdks rust --spec "$here/../fixtures/torture.yaml" > /dev/null \
