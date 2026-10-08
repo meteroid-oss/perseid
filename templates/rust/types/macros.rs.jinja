@@ -330,8 +330,8 @@ use super::{{ c | to_rust_ident }}::{{ c | to_upper_camel_case }};
 {%- endmacro %}
 
 {# A struct's fields. Required nullable fields always serialize, `null` included; nullable
-   optional fields of PATCH bodies are `Option<Option<T>>`, where `Some(None)` sends `null`. -#}
-{% macro struct_fields(fields, recursive, patch_body, skip=none, owner=none) -%}
+   optional fields of request schemas are `Option<Option<T>>`, where `Some(None)` sends `null`. -#}
+{% macro struct_fields(fields, recursive, in_request, skip=none, owner=none) -%}
 {% for field in fields if field.name != skip %}
     {% if field.description is defined -%}
         {{ field.description | to_doc_comment(style="rust") }}
@@ -348,7 +348,7 @@ use super::{{ c | to_rust_ident }}::{{ c | to_upper_camel_case }};
     {% if field.required and not field.nullable -%}
     {% elif field.required -%}
         {% set ty %}Option<{{ ty }}>{% endset -%}
-    {% elif field.nullable and patch_body -%}
+    {% elif field.nullable and in_request -%}
         {% set presence = 'default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::models::codec::nullable"' -%}
         {% set ty %}Option<Option<{{ ty }}>>{% endset -%}
     {% else -%}
@@ -361,15 +361,15 @@ use super::{{ c | to_rust_ident }}::{{ c | to_upper_camel_case }};
 {% endfor %}
 {%- endmacro %}
 
-{# Chainable setters of the fields `new` leaves unset; `clear_*` sends `null` for the nullable
-   fields of PATCH bodies. -#}
-{% macro struct_setters(fields, recursive, patch_body, owner=none) -%}
+{# Chainable setters of the fields `new` leaves unset; `clear_*` sends `null` for the optional
+   nullable fields of request schemas. -#}
+{% macro struct_setters(fields, recursive, in_request, owner=none) -%}
 {% set taken = fields | map(attribute="name") | map("to_rust_ident") | list -%}
 {% for field in fields if not (field.required and not field.nullable) -%}
 {% set ident = field.name | to_rust_ident -%}
 {% set bare = ident | replace("r#", "") -%}
 {% set ty = value_type(field.type, recursive, union_name(owner, field.name, field.type)) -%}
-{% set patch = field.nullable and patch_body and not field.required -%}
+{% set tristate = field.nullable and in_request and not field.required -%}
 {% if ident != "new" %}
 /// Sets `{{ bare }}`.
 #[must_use]
@@ -378,11 +378,11 @@ use super::{{ c | to_rust_ident }}::{{ c | to_upper_camel_case }};
 #[allow(deprecated)]
 {% endif -%}
 pub fn {{ ident }}(mut self, {{ ident }}: impl Into<{{ ty }}>) -> Self {
-    self.{{ ident }} = {% if patch %}Some(Some({{ ident }}.into())){% else %}Some({{ ident }}.into()){% endif %};
+    self.{{ ident }} = {% if tristate %}Some(Some({{ ident }}.into())){% else %}Some({{ ident }}.into()){% endif %};
     self
 }
 {% endif -%}
-{% if patch and ("clear_" ~ bare) not in taken %}
+{% if tristate and ("clear_" ~ bare) not in taken %}
 /// Sends `{{ bare }}` as `null`, clearing it.
 #[must_use]
 {% if field.deprecated -%}
@@ -411,8 +411,14 @@ pub fn clear_{{ bare }}(mut self) -> Self {
 {% endif -%}
 {%- endmacro %}
 
-{# `new` takes the required, non-nullable fields but those with a `defaults` value; strings
-   and unions as `impl Into<_>`. -#}
+{# Whether constructors take a value of `ty` as `impl Into<_>`: an enum or a union, which
+   strings or variant payloads convert into. -#}
+{% macro convertible(ty) -%}
+{% if ty.is_schema_ref() and ty.to_rust() in convertible_types %}1{% endif -%}
+{%- endmacro %}
+
+{# `new` takes the required, non-nullable fields but those with a `defaults` value; strings,
+   enums and unions as `impl Into<_>`. -#}
 {% macro struct_new(fields, recursive, skip=none, owner=none, defaults={}, extra="", extra_type="") -%}
 {% set params = fields | selectattr("required") | rejectattr("nullable") | rejectattr("name", "equalto", skip) | rejectattr("name", "in", defaults) | list -%}
 {% if params -%}
@@ -430,6 +436,8 @@ pub fn new(
         {{ field_name(field.name) }}: impl Into<{{ field.type.to_rust() }}>,
         {% elif union and field.type.is_union() -%}
         {{ field_name(field.name) }}: impl Into<{{ union }}>,
+        {% elif convertible(field.type) -%}
+        {{ field_name(field.name) }}: impl Into<{{ field.type.to_rust() }}>,
         {% elif union -%}
         {{ field_name(field.name) }}: {{ rust_type(field.type, union) }},
         {% else -%}
@@ -448,7 +456,9 @@ pub fn new(
                 {% if (field.type.to_rust() == "String" and not field.type.is_datetime() and not field.type.is_date()) or field.type.is_string_alias() or (field.type.is_union() and union_name(owner, field.name, field.type)) -%}
                 {{ field_name(field.name) }}: {{ field_name(field.name) }}.into(),
                 {% elif field.type.is_schema_ref() and field.type.to_rust() in recursive -%}
-                {{ field_name(field.name) }}: Box::new({{ field_name(field.name) }}),
+                {{ field_name(field.name) }}: Box::new({{ field_name(field.name) }}{% if convertible(field.type) %}.into(){% endif %}),
+                {% elif convertible(field.type) -%}
+                {{ field_name(field.name) }}: {{ field_name(field.name) }}.into(),
                 {% else -%}
                 {{ field_name(field.name) }},
                 {% endif -%}

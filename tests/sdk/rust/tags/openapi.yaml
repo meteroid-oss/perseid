@@ -1,0 +1,73 @@
+openapi: 3.1.0
+info:
+  title: Tags
+  version: 1.0.0
+  description: "Variants sharing a tag, as OpenAI's InputItem: three `message` variants, two of them in a nested union, and no mapping."
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /conversations:
+    post:
+      operationId: createConversation
+      tags: [conversations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Conversation'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Conversation'}
+components:
+  schemas:
+    Conversation:
+      type: object
+      required: [turns]
+      properties:
+        turns:
+          type: array
+          items: {$ref: '#/components/schemas/Turn'}
+    Turn:
+      oneOf:
+        - $ref: '#/components/schemas/SimpleTurn'
+        - $ref: '#/components/schemas/TurnItem'
+      discriminator: {propertyName: type}
+    TurnItem:
+      oneOf:
+        - $ref: '#/components/schemas/UserTurn'
+        - $ref: '#/components/schemas/AssistantTurn'
+        - $ref: '#/components/schemas/ToolTurn'
+      discriminator: {propertyName: type}
+    SimpleTurn:
+      type: object
+      required: [content]
+      properties:
+        type: {type: string, enum: [message]}
+        content: {type: string}
+    UserTurn:
+      type: object
+      required: [role, parts]
+      properties:
+        type: {type: string, enum: [message]}
+        role: {type: string, enum: [user]}
+        parts:
+          type: array
+          items: {type: string}
+    AssistantTurn:
+      type: object
+      required: [type, id, parts]
+      properties:
+        type: {type: string, enum: [message]}
+        id: {type: string}
+        parts:
+          type: array
+          items: {type: string}
+    ToolTurn:
+      type: object
+      required: [type, output]
+      properties:
+        type: {type: string, enum: [tool]}
+        output: {type: string}

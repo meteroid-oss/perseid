@@ -315,6 +315,22 @@ paths:
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Image'}
+  /approvals:
+    post:
+      operationId: createApproval
+      tags: [approvals]
+      summary: A union whose shared property its variants declare too.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Approval'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Approval'}
 components:
   securitySchemes:
     oauth:
@@ -760,3 +776,30 @@ components:
       properties:
         id: {type: string}
         ref: {$ref: '#/components/schemas/ImageRef'}
+    # A shared property its variants declare too, as OpenAI's
+    # ComputerUseApprovalResponseParamBrowserAuthentication.
+    Approval:
+      oneOf:
+        - $ref: '#/components/schemas/ApprovalSubmit'
+        - $ref: '#/components/schemas/ApprovalCancel'
+      discriminator:
+        propertyName: action
+        mapping:
+          submit: '#/components/schemas/ApprovalSubmit'
+          cancel: '#/components/schemas/ApprovalCancel'
+      properties:
+        type: {type: string, enum: [browser_authentication]}
+      required: [type]
+    ApprovalSubmit:
+      type: object
+      required: [action, type, code]
+      properties:
+        action: {type: string, enum: [submit]}
+        type: {type: string, enum: [browser_authentication]}
+        code: {type: string}
+    ApprovalCancel:
+      type: object
+      required: [action, type]
+      properties:
+        action: {type: string, enum: [cancel]}
+        type: {type: string, enum: [browser_authentication]}

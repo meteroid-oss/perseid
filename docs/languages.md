@@ -150,6 +150,7 @@ client.customers().with_options(options).list(None).await?;
   or `None`.
 - A path parameter typed by a string schema of the spec takes `impl Into` of its newtype:
   `retrieve("cus_1")` and `retrieve(&customer.id)` both work.
+- An optional body is `impl Into<Option<T>>`: pass the body, or `None`.
 - `with_options` on a resource sets headers, timeout, retries or idempotency key for its calls.
 - An operation that also declares a bodiless 2xx returns `Option<T>`.
 - Files are `Upload`s: `Upload::path("a.csv").await?` reads the file, named after it and typed by
@@ -223,18 +224,25 @@ logged.
 - Structs only found in responses are `#[non_exhaustive]`: build them with `new(required...)` or
   `Default`, then assign fields. Request structs also take struct literals, and a chainable
   setter per field `new` leaves out: `CustomerUpdate::new().name("Ada")`.
+- `new` takes strings, enums and unions as `impl Into<_>`:
+  `CreateChatCompletionRequest::new(vec![UserMessage::new("hi").into()], "gpt-4o")`.
 - `Default` is implemented when every required field has a default.
-- In PATCH bodies, nullable optional fields are `Option<Option<T>>`: `Some(None)` sends `null`.
-  Their setters wrap the value, and `clear_*()` sends `null`.
+- In the structs requests send, nullable optional fields are `Option<Option<T>>`: `Some(None)`
+  sends `null`, `None` leaves the field out. Their setters wrap the value, and `clear_*()` sends
+  `null`.
 - A named string schema, such as `CustomerId`, is a newtype over `String`: built `From` any
   string, read as `&str` through `Deref`, `as_str()` or `Display`, compared with strings. One ID
   type cannot be passed where another is expected.
-- Recursive fields are boxed. Dates are `chrono` types.
+- Recursive fields are boxed, and so are union variants far larger than the others, which
+  clippy's `large_enum_variant` would flag. Dates are `chrono` types.
 - Enums and unions are `#[non_exhaustive]`, with an `Unknown` variant that serializes back
-  unchanged.
+  unchanged. String enums are built `From` a `&str` or `String`, or parsed with `FromStr`.
 - Unions are enums with `From` impls and `as_*` accessors: `ChargeCustomer::String(id)`,
   `ChargeCustomer::Customer(Box<Customer>)`. Expandable fields have `id()`.
-- Union variant structs fill in their discriminator: `Circle::new(1.5)`.
+- Discriminated unions convert `From` each variant's struct when no other variant holds it:
+  `Shape::from(Circle::new(1.5))`. Variant structs fill in their discriminator.
+- Variants declaring the same tag, as OpenAI's three `message` input items, are sent with it,
+  and decoded as the first whose fields the data fits.
 - `decode_as::<DeletedCustomer>()` reads a union of objects as another variant.
 
 ### Notes

@@ -2971,6 +2971,74 @@ fn rust_unions_and_tag_defaults_are_typed() {
 }
 
 #[test]
+fn rust_constructors_convert_large_variants_are_boxed_and_bodies_send_null() {
+    let dir = project_from("petstore.yaml", &["rust"]);
+    let big: String = (1..=12)
+        .map(|i| format!("        f{i}: {{ type: string }}\n"))
+        .collect();
+    let spec = format!(
+        r##"
+openapi: 3.1.0
+info: {{ title: Things, version: "1" }}
+paths:
+  /things:
+    post:
+      operationId: create_thing
+      tags: [things]
+      requestBody:
+        content: {{ application/json: {{ schema: {{ $ref: '#/components/schemas/Thing' }} }} }}
+      responses:
+        '204': {{ description: ok }}
+components:
+  schemas:
+    Thing:
+      type: object
+      required: [kind, shape]
+      properties:
+        kind: {{ type: string, enum: [a, b] }}
+        shape: {{ $ref: '#/components/schemas/Shape' }}
+        note: {{ type: [string, 'null'] }}
+    Shape:
+      oneOf: [{{ $ref: '#/components/schemas/Dot' }}, {{ $ref: '#/components/schemas/Blob' }}]
+      discriminator: {{ propertyName: type }}
+    Dot:
+      type: object
+      required: [type]
+      properties:
+        type: {{ type: string, enum: [dot] }}
+    Blob:
+      type: object
+      required: [type]
+      properties:
+        type: {{ type: string, enum: [blob] }}
+{big}"##
+    );
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let read = |path: &str| {
+        fs::read_to_string(dir.path().join("rust/src").join(path))
+            .unwrap()
+            .split_whitespace()
+            .collect::<String>()
+    };
+    let thing = read("models/thing.rs");
+    assert!(
+        thing.contains("kind:implInto<ThingKind>,shape:implInto<Shape>"),
+        "{thing}"
+    );
+    assert!(thing.contains("pubnote:Option<Option<String>>"), "{thing}");
+    let shape = read("models/shape.rs");
+    assert!(shape.contains("Dot(Dot),Blob(Box<Blob>),"), "{shape}");
+    assert!(shape.contains("implFrom<Blob>forShape"), "{shape}");
+    let things = read("api/things.rs");
+    assert!(
+        things.contains("thing:implInto<Option<crate::models::Thing>>"),
+        "{things}"
+    );
+}
+
+#[test]
 fn rust_timeout_stream_and_error_docs_follow_the_config() {
     let dir = project_from("torture.yaml", &["rust"]);
     let read = |path: &str| {
@@ -3335,7 +3403,7 @@ components:
     let calls = [
         (
             "rust",
-            "OrderCreate::new(vec![Line::new(1, \"small\".into(), \"sku\")], Address::new(\"Paris\"), vec![\"tags\".to_owned()])",
+            "OrderCreate::new(vec![Line::new(1, \"small\", \"sku\")], Address::new(\"Paris\"), vec![\"tags\".to_owned()])",
         ),
         (
             "typescript",
