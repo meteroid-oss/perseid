@@ -278,6 +278,20 @@ pub(crate) fn ident(name: &str, case: &str, language: Option<&str>) -> Result<St
     Ok(out)
 }
 
+/// Whether `name` can be written as is as a Python class attribute: an identifier that is no
+/// keyword and hides no name the generated annotations use.
+pub(crate) fn python_attr(name: &str) -> bool {
+    const ANNOTATIONS: &[&str] = &["date", "Decimal", "UUID", "list", "dict", "set", "tuple"];
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && ![PYTHON, PYTHON_SHADOWING, ANNOTATIONS]
+            .iter()
+            .any(|set| set.contains(&name))
+}
+
 /// The words naming a value made only of punctuation (`-` is `minus`, `*` is `star`), so that such
 /// values stay distinct instead of all becoming `empty`. Operators `ident` already spells (`+`,
 /// `<`, `>`, `=`) and values with any letter or digit are left to it.
@@ -399,6 +413,14 @@ mod tests {
         assert_eq!(ident("type", "camel", Some("go")).unwrap(), "type_");
         assert_eq!(ident("Type", "pascal", Some("go")).unwrap(), "Type");
         assert_eq!(ident("default", "camel", None).unwrap(), "default");
+    }
+
+    #[test]
+    fn python_attrs_are_identifiers_hiding_nothing() {
+        assert!(python_attr("petType") && python_attr("_id"));
+        for name in ["class", "1a", "a-b", "", "str", "date", "list", "t"] {
+            assert!(!python_attr(name), "{name}");
+        }
     }
 
     #[test]

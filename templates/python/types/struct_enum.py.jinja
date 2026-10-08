@@ -15,8 +15,9 @@ from __future__ import annotations
 import typing as t
 
 from ..serialization import Discriminator, UnknownVariant
+{% set param = class_name ~ "Param" if class_name in param_types else none -%}
 {% for c in refs | unique | sort %}
-from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
+from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}{% if param %}, {{ c | to_upper_camel_case }}Param{% endif %}
 {%- endfor %}
 
 {{ class_name }}: t.TypeAlias = t.Annotated[
@@ -31,6 +32,11 @@ from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
     ),
 ]
 {{ docstring((type.description ~ "\n\n" if type.description is defined else "") ~ "Told apart by `" ~ type.discriminator_field ~ "`; a variant this SDK version does not know is an `UnknownVariant`.") }}
+{%- if param %}
+
+{{ param }}: t.TypeAlias = {% for c in refs %}{{ c | to_upper_camel_case }}Param{% if not loop.last %} | {% endif %}{% endfor %}
+"""The JSON of a :data:`{{ class_name }}` variant as a dict, its `{{ type.discriminator_field }}` naming it: methods take either."""
+{%- endif %}
 {%- else -%}
 
 {% set discriminator_attr = py_field(type.discriminator_field) -%}

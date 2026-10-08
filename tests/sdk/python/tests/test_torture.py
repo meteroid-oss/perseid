@@ -481,6 +481,15 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(json.loads(self.requests[0].content), [{"name": "n"}])
         self.assertEqual(self.requests[1].url.params["DateCreated<"], "2024-01-01")
 
+    def test_models_of_arguments_also_take_their_json_as_a_dict(self) -> None:
+        widget = {"id": "w", "name": "n"}
+        with client(self.respond(httpx.Response(200, json=[widget]))) as api:
+            api.widgets.bulk([{"name": "n"}, models.WidgetUpdate(name="m")])
+            api.widgets.bulk((models.WidgetUpdate(name="m"),))
+        bodies = [json.loads(r.content) for r in self.requests]
+        self.assertEqual(bodies, [[{"name": "n"}, {"name": "m"}], [{"name": "m"}]])
+        self.assertIn("name", models.WidgetUpdateParam.__annotations__)
+
     def test_object_bodies_are_keyword_arguments(self) -> None:
         with client(self.respond(httpx.Response(200, json=THING))) as api:
             api.things.create(name="n", kind="beta-2", priority=10)

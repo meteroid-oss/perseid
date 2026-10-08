@@ -3065,6 +3065,9 @@ components:
         "tier: ChatRequestTier | ChatRequestTierLiteral | str | None = None",
         "size: Model | ModelLiteral | None = None",
         "from .model import Model, ModelLiteral",
+        "class _ChatRequestParamRequired(t.TypedDict):\n\n    prompt: str\n",
+        "class ChatRequestParam(_ChatRequestParamRequired, total=False):",
+        "    tier: ChatRequestTier | ChatRequestTierLiteral | str",
     ] {
         assert!(request.contains(text), "no `{text}` in {request}");
     }

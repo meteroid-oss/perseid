@@ -9,6 +9,9 @@ Each model's module is imported the first time the model is used.
 {%- for _, type in api.types | items %}
 {%- set alias = literal_alias(type, names) if type.kind in ["string_enum", "integer_enum"] else "" %}
 {%- set exports.pairs = exports.pairs + [(type.name | to_upper_camel_case, module_name(type.name))] + ([(alias, module_name(type.name))] if alias else []) %}
+{%- if (type.name | to_upper_camel_case) in param_types %}
+{%- set exports.pairs = exports.pairs + [((type.name | to_upper_camel_case) ~ "Param", module_name(type.name))] %}
+{%- endif %}
 {%- endfor %}
 
 from __future__ import annotations

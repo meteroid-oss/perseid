@@ -54,6 +54,7 @@ pub fn populate_env(
     });
     env.add_filter("go_tag", |s: Cow<'_, str>| ident::go_tag(&s));
     env.add_test("go_taggable", |s: Cow<'_, str>| ident::go_tag(&s).is_ok());
+    env.add_test("python_attr", |s: Cow<'_, str>| ident::python_attr(&s));
     env.add_filter("go_name", |s: Cow<'_, str>| go::initialisms(&s));
     // The file a Go model or resource is generated into, without its `.go`.
     env.add_filter("go_file", |s: Cow<'_, str>| {
