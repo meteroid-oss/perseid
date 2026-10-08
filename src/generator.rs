@@ -156,8 +156,8 @@ pub(crate) fn for_language(
     if language == "java" {
         api.inline_string_alias_bodies()?;
     }
-    if matches!(language, "cs" | "go" | "rs") {
-        api.inline_flattened_fields()?;
+    if matches!(language, "cs" | "go" | "rs" | "py") {
+        api.inline_flattened_fields(language != "py")?;
     }
     Ok(())
 }

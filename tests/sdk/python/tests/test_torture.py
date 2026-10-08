@@ -368,7 +368,8 @@ class ModelTest(unittest.TestCase):
 
     def test_unknown_properties_stay_with_the_model_that_owns_them(self) -> None:
         composed = models.Composed.from_dict({**SAMPLES["Composed"], "new": 1})
-        self.assertEqual((composed.extra_fields, composed.base.extra_fields), ({"new": 1}, {}))
+        self.assertEqual(composed.extra_fields, {"new": 1})
+        self.assertEqual((composed.id, composed.extra), ("b1", "e"), "allOf parts are inlined")
         composed.extra = "changed"
         self.assertEqual(composed.to_dict()["extra"], "changed")
         data = {"type": "circle", "radius": 1.0, "color": "red"}

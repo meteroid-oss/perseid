@@ -777,14 +777,15 @@ pub(crate) fn settle_object_unions(types: &mut Types, best_match: bool) -> (usiz
     counts
 }
 
-/// Replaces the embedded `allOf` parts of every struct by their fields, for targets that
-/// cannot flatten a nested object when (de)serializing.
-pub(crate) fn inline_flattened_fields(types: &mut Types) -> anyhow::Result<()> {
+/// Replaces the embedded `allOf` parts of every struct by their fields. `strict` targets cannot
+/// flatten a nested object when (de)serializing, so a part that is not an object fails; the others
+/// keep it embedded.
+pub(crate) fn inline_flattened_fields(types: &mut Types, strict: bool) -> anyhow::Result<()> {
     let snapshot = types.clone();
     for (name, ty) in types.iter_mut() {
         let flat = |fields: &mut Vec<Field>| -> anyhow::Result<()> {
             if fields.iter().any(|f| f.flatten) {
-                *fields = flattened(&snapshot, name, fields, &mut BTreeSet::new())?;
+                *fields = flattened(&snapshot, name, fields, strict, &mut BTreeSet::new())?;
             }
             Ok(())
         };
@@ -821,6 +822,7 @@ fn flattened<'a>(
     types: &'a Types,
     owner: &str,
     fields: &'a [Field],
+    strict: bool,
     seen: &mut BTreeSet<&'a str>,
 ) -> anyhow::Result<Vec<Field>> {
     let mut out: Vec<Field> = Vec::new();
@@ -834,14 +836,18 @@ fn flattened<'a>(
         }
         let part = field.r#type.referenced_schema().unwrap_or_default();
         let Some(TypeData::Struct { fields: inner, .. }) = types.get(part).map(|t| &t.data) else {
-            bail!(
-                "schema `{owner}`: its `allOf` part `{part}` is not an object, which this target cannot embed"
-            );
+            if strict {
+                bail!(
+                    "schema `{owner}`: its `allOf` part `{part}` is not an object, which this target cannot embed"
+                );
+            }
+            out.push(field.clone());
+            continue;
         };
         if !seen.insert(part) {
             continue;
         }
-        for inherited in flattened(types, owner, inner, seen)? {
+        for inherited in flattened(types, owner, inner, strict, seen)? {
             if !out.iter().any(|f| f.name == inherited.name) {
                 out.push(inherited);
             }
@@ -4509,7 +4515,7 @@ mod tests {
         ] {
             types.insert(name.into(), Type::from_schema(name.into(), schema).unwrap());
         }
-        inline_flattened_fields(&mut types).unwrap();
+        inline_flattened_fields(&mut types, true).unwrap();
         let TypeData::Struct { fields, .. } = &types["Composed"].data else {
             panic!("not a struct");
         };
