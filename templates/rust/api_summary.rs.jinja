@@ -450,7 +450,7 @@ impl {{ client }}Builder {
             user_agent: Some(format!("{{ sdk.user_agent_prefix }}-rust/{CRATE_VERSION}")),
             client: self
                 .http_client
-                .unwrap_or_else(|| super::http_client(crate::make_connector())),
+                .unwrap_or_else(crate::connector::default_client),
             timeout: self.timeout,
             base_path,
             bearer_access_token: self.token,

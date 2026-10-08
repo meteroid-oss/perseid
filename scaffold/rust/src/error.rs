@@ -103,6 +103,16 @@ impl ApiError {
         self.json().ok()
     }
 
+    /// The message of a JSON body: its `error.message`, else its `message` or `detail` string.
+    #[must_use]
+    pub fn message(&self) -> Option<String> {
+        let body: serde_json::Value = serde_json::from_slice(&self.body).ok()?;
+        let text = |value: Option<&serde_json::Value>| Some(value?.as_str()?.to_owned());
+        text(body.pointer("/error/message"))
+            .or_else(|| text(body.get("message")))
+            .or_else(|| text(body.get("detail")))
+    }
+
     /// The `x-request-id` (or `request-id`) response header, to quote when reporting an issue.
     #[must_use]
     pub fn request_id(&self) -> Option<&str> {
@@ -168,7 +178,10 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Api(error) => write!(f, "API error ({}): {}", error.status, error.text()),
+            Self::Api(error) => match error.message() {
+                Some(message) => write!(f, "API error ({}): {message}", error.status),
+                None => write!(f, "API error ({}): {}", error.status, error.text()),
+            },
             Self::Timeout => f.write_str("request timed out"),
             Self::Connection(error) => write!(f, "connection error: {error}"),
             Self::Decode(error) => write!(f, "unexpected response body: {error}"),
