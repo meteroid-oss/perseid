@@ -152,6 +152,9 @@ client.customers().with_options(options).list(None).await?;
   `retrieve("cus_1")` and `retrieve(&customer.id)` both work.
 - `with_options` on a resource sets headers, timeout, retries or idempotency key for its calls.
 - An operation that also declares a bodiless 2xx returns `Option<T>`.
+- Files are `Upload`s: `Upload::path("a.csv").await?` reads the file, named after it and typed by
+  its extension; `Upload::bytes(...)` and `Upload::reader(...)` take `with_filename` and
+  `with_content_type`. Readers stream and are not retried.
 
 ### Pagination
 
