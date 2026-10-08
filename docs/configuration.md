@@ -137,7 +137,7 @@ Every operation is generated, except those marked `x-internal: true`.
 | `exclude` | Operation ids left out of every SDK. In a language table, of that SDK only |
 | `only` | The only operation ids generated, `x-internal` or not |
 | `[pagination]` | [Pagination rules](features.md#pagination), one table or an array of tables |
-| `detect_pagination` | `false` leaves unpaged the Stripe-style lists no rule matches, which perseid [detects](features.md#pagination) by default |
+| `detect_pagination` | `false` leaves unpaged the Stripe- and OpenAI-style lists no rule matches, which perseid [detects](features.md#pagination) by default |
 
 ## Package metadata
 

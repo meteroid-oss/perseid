@@ -77,7 +77,8 @@ has them; without any, paging stops at the first empty page.
 
 Operations no rule matches are paged when they have Stripe's list shape: a `starting_after`
 string query parameter, and a response with a `has_more` boolean and a `data` array of items
-with a string `id`. That is the rule
+with a string `id`. Or OpenAI's and Anthropic's: an `after` or `after_id` string query
+parameter, and a response with `has_more`, `data` and a string `last_id`. Those are the rules
 
 ```toml
 [[pagination]]
@@ -85,10 +86,16 @@ cursor = "starting_after"
 item_cursor = "id"
 has_more = "has_more"
 items = "data"
+
+[[pagination]]
+cursor = "after"                # or "after_id"
+next_cursor = "last_id"
+has_more = "has_more"
+items = "data"
 ```
 
-`x-pagination: false` opts an operation out of the `perseid.toml` rules and of this one, and
-`detect_pagination = false` in `perseid.toml` turns this rule off, for a spec you do not own.
+`x-pagination: false` opts an operation out of the `perseid.toml` rules and of these, and
+`detect_pagination = false` in `perseid.toml` turns these rules off, for a spec you do not own.
 
 With `item_cursor`, a list started from the `before` parameter pages backwards, as Stripe's
 `ending_before`: each next page ends before the first item of the last, and the cursor

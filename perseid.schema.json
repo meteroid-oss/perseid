@@ -30,7 +30,7 @@
       ]
     },
     "detect_pagination": {
-      "description": "`false` pages only the operations that `x-pagination` or a `pagination` rule matches, not the Stripe-style lists perseid detects.",
+      "description": "`false` pages only the operations that `x-pagination` or a `pagination` rule matches, not the Stripe- and OpenAI-style lists perseid detects.",
       "type": "boolean"
     },
     "exclude": {

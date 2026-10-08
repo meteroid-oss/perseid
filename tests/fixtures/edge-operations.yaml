@@ -777,6 +777,28 @@ paths:
         required: true
         content: {application/json: {schema: {type: boolean}}}
       responses: {'204': {description: ok}}
+  # OpenAI's list shape, paged without a rule: `after` takes the response's `last_id`.
+  /threads:
+    get:
+      operationId: list_threads
+      tags: [threads]
+      parameters:
+        - {name: after, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer}}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data, has_more]
+                properties:
+                  object: {type: string, const: list}
+                  data: {type: array, items: {$ref: '#/components/schemas/Item'}}
+                  first_id: {type: [string, 'null']}
+                  last_id: {type: [string, 'null']}
+                  has_more: {type: boolean}
 webhooks:
   itemCreated:
     post:
