@@ -53,6 +53,21 @@ fn init_derives_names_from_the_spec() {
 }
 
 #[test]
+fn init_gives_apis_streaming_their_answers_ten_minutes() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = "openapi: 3.1.0\ninfo: {title: Chat, version: '1'}\npaths:\n  /chat:\n    post:\n      \
+        operationId: chat\n      responses:\n        '200':\n          description: ok\n          \
+        content: {text/event-stream: {schema: {type: string}}}\n";
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "python"]);
+    assert!(ok, "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(config.contains("\ntimeout = 600\n"), "{config}");
+    let config = fs::read_to_string(project().path().join("perseid.toml")).unwrap();
+    assert!(!config.contains("timeout"), "{config}");
+}
+
+#[test]
 fn init_keeps_a_title_word_in_mixed_case_one_word() {
     let dir = tempfile::tempdir().unwrap();
     let spec = "openapi: 3.1.0\ninfo: {title: OpenAI API, version: '1'}\npaths: {}\n";
