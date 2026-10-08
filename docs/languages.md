@@ -104,8 +104,8 @@ value. What comes back must be the same JSON, up to the spelling of date-times a
 cargo add acme
 ```
 
-Cargo features: `rustls-tls` (default) or `native-tls`, `http1` (default), `http2`, and
-`webhooks` for the [webhook verifier](customizing.md#webhooks).
+Cargo features: `rustls-tls` (default) or `native-tls`, `http1` (default), `http2`, `webhooks` for
+the [webhook verifier](customizing.md#webhooks), and `tracing` for [logs](#logging).
 
 ### Client
 
@@ -209,6 +209,13 @@ match client.customers().retrieve("cus_1").await {
 `client.customers().retrieve(id).with_response().await?` returns the `status()`, `headers()`,
 `request_id()` and `into_data()`.
 
+### Logging
+
+With the `tracing` feature, each attempt is a `tracing` DEBUG event (method, URL, status or error
+kind, elapsed time, retry count), and each retry an INFO event with its delay, for the subscriber
+the application installs. Headers, the query string, user info, credentials and bodies are never
+logged.
+
 ### Models and unions
 
 - Structs keep undeclared properties in `extra` (`extra_properties` when the schema has an
@@ -234,6 +241,8 @@ match client.customers().retrieve("cus_1").await {
 
 - `src/error.rs` is yours. The runtime only calls `Error::generic(Failure)` and
   `Error::from_response(status, headers, body)`.
+- `Cargo.toml` is yours too. A crate generated before the `tracing` feature declares it with
+  `tracing = { version = "0.1", optional = true }` and `tracing = ["dep:tracing"]`.
 - The `http` crate is re-exported as `acme::api::http`.
 
 ## TypeScript
