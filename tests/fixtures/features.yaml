@@ -41,6 +41,7 @@ paths:
       parameters:
         - { name: widget_id, in: path, required: true, schema: { type: string } }
         - { name: starting_after, in: query, schema: { type: string } }
+        - { name: ending_before, in: query, schema: { type: string } }
         - { name: kind, in: query, required: true, schema: { type: string } }
       responses:
         '200':

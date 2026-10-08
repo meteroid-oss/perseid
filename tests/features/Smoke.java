@@ -14,6 +14,7 @@ import com.features.api.WireBetaSearchOptions;
 import com.features.api.WireSearchOptions;
 import com.features.api.WidgetsListAsyncPage;
 import com.features.api.WidgetsListEventsAsyncPage;
+import com.features.api.WidgetsListEventsOptions;
 import com.features.api.WidgetsListPage;
 import com.features.exceptions.ApiConnectionException;
 import com.features.exceptions.ApiException;
@@ -117,6 +118,8 @@ public class Smoke {
         expect(client.account().retrieveMachine().status(), "Bearer tok||");
         expect(ids(client.widgets().list(), Widget::id), List.of("w1", "w2", "w3"));
         expect(ids(client.widgets().listEvents("w1", "created"), Event::id), List.of("e1", "e2", "e3"));
+        WidgetsListEventsOptions before = WidgetsListEventsOptions.builder().endingBefore("e9").build();
+        expect(ids(client.widgets().listEvents("w1", "created", before), Event::id), List.of("e7", "e8", "e6"));
         expect(ids(client.gadgets().list(), Gadget::id), List.of("g1", "g2", "g3"));
         expect(client.records().list().stream().map(Entry::id).collect(Collectors.toList()), List.of("r1", "r2", "r3"));
 

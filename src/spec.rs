@@ -46,6 +46,8 @@ pub struct Filters {
     pub excluded: BTreeSet<String>,
     pub specified: BTreeSet<String>,
     pub pagination: Vec<crate::config::Pagination>,
+    /// Pages the Stripe-style lists no pagination rule matches.
+    pub detect_pagination: bool,
     /// Type names the SDK's runtime or language already uses, which schemas are renamed from.
     pub reserved: BTreeSet<String>,
     /// Method names by operation id.
@@ -611,6 +613,7 @@ mod tests {
             excluded: Default::default(),
             specified: Default::default(),
             pagination: vec![],
+            detect_pagination: true,
             reserved: Default::default(),
             names: Default::default(),
             uuid_strings: false,
@@ -646,6 +649,7 @@ mod tests {
             excluded: ["PostFiles".to_owned()].into(),
             specified: Default::default(),
             pagination: vec![],
+            detect_pagination: true,
             reserved: Default::default(),
             names: Default::default(),
             uuid_strings: false,

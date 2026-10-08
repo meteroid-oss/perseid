@@ -130,7 +130,7 @@ Not carried over from stainless.yml:
   - targets.ruby: perseid generates no Ruby SDK
   - client_settings.opts.branch: perseid clients take no custom options: send `X-Knock-Branch` with the default headers (`defaultHeaders`, `default_headers`)
   - pagination.slack_channels_cursor: `query_options.cursor` is a nested parameter: perseid pages with a top-level query parameter
-  - resources.users.list_schedules: `paginated: false`, but a pagination rule matches `listUserSchedules`: set `x-pagination: false` on it in the spec
+  - resources.users.list_schedules: `paginated: false`, but perseid pages `listUserSchedules`: set `x-pagination: false` on it in the spec
   - resources.users.feeds (1 method): nested resource: perseid has one level of resources, named after the operations' first tag: users.retrieve_feed
   ...
 ```
@@ -196,12 +196,12 @@ Pagination schemes:
 | Stainless | perseid rule |
 |---|---|
 | `cursor`: `next_cursor_param`, `next_cursor_field` | `cursor`, `next_cursor` |
-| `cursor_id`: `next_cursor_id_param`, `cursor_item_id` | `cursor`, `item_cursor` (`id` by default) |
+| `cursor_id`: `next_cursor_id_param`, `cursor_item_id`, `previous_cursor_id_param` | `cursor`, `item_cursor` (`id` by default), `before` |
 | `offset`: `offset_count_param`, `offset_total_count_field` | `offset`, `total` |
 | `page_number`: `page_number_param`, `total_page_count_field` | `page`, `total_pages` |
 | `items`, `has_next_page` | `items`, `has_more` |
 | `cursor_url`, `fake_page`, `param_location: body` | Not supported, listed |
-| `previous_cursor_*` | Not supported: perseid pages forward only |
+| `previous_cursor_param` | Not supported: perseid pages backwards only from an item cursor |
 
 Everything else is listed with why: `readme`, `openapi`, `query_settings` perseid does not
 follow, `custom_casings`, `codeflow`, `diagnostics`, client options that are not credentials,
@@ -259,7 +259,7 @@ files without its `@generated` marker.
 | Every request retried, POST included, on connection errors, 408, 409, 429 and 5xx | POST retried only with an `Idempotency-Key`: `idempotency_keys = true` sends one with every POST. 409 is not retried |
 | `environment` option between named base URLs | One default base URL, overridden by `baseURL` / `base_url` or `KNOCK_BASE_URL` |
 | Custom client options, sent as headers or parameters | Default headers, or a parameter on each call |
-| Pagination by next-page URL, backwards, or in the body | Forward, by a query parameter |
+| Pagination by next-page URL, backwards, or in the body | By a query parameter, backwards only from an item cursor (`before`) |
 | `stream: true` on a method | A `..._stream` twin method, `createStream()` |
 | Webhook `unwrap()` | The Standard Webhooks verifier, with `webhooks = true` |
 | Positional parameters set per method | Path parameters positional, the rest as one object or keywords |

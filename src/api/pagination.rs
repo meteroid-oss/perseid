@@ -28,6 +28,10 @@ pub(crate) struct Pagination {
     pub(crate) next_cursor: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) item_cursor: Option<String>,
+    /// Query parameter that, when the caller sets it, pages backwards: it takes the
+    /// `item_cursor` of the first item of each page, and `param` stays unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) before: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) has_more: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -43,7 +47,8 @@ pub(crate) struct Pagination {
 
 /// What an operation exposes to pagination.
 pub(crate) struct Candidate<'a> {
-    pub(crate) query_params: Vec<(&'a str, &'a FieldType)>,
+    /// Name, type and whether it is required.
+    pub(crate) query_params: Vec<(&'a str, &'a FieldType, bool)>,
     pub(crate) response: Option<&'a str>,
 }
 
@@ -62,10 +67,10 @@ impl Pagination {
             (None, None, Some(p)) => (Style::Offset, p),
             _ => bail!("exactly one of `cursor`, `page` or `offset` must name the page parameter"),
         };
-        let (_, param_type) = op
+        let (_, param_type, param_required) = op
             .query_params
             .iter()
-            .find(|(name, _)| *name == param)
+            .find(|(name, ..)| *name == param)
             .with_context(|| format!("no `{param}` query parameter"))?;
         match style {
             Style::Cursor => ensure!(
@@ -86,6 +91,10 @@ impl Pagination {
         };
         allowed(&spec.next_cursor, "next_cursor", &[Style::Cursor])?;
         allowed(&spec.item_cursor, "item_cursor", &[Style::Cursor])?;
+        ensure!(
+            spec.before.is_none() || spec.item_cursor.is_some(),
+            "`before` only applies with `item_cursor`"
+        );
         allowed(&spec.total_pages, "total_pages", &[Style::Page])?;
         allowed(&spec.total, "total", &[Style::Offset])?;
         ensure!(
@@ -145,6 +154,25 @@ impl Pagination {
                 "item cursor `{name}` must be a string"
             );
         }
+        let backwards = |name: &str| {
+            let (_, ty, required) = op.query_params.iter().find(|(n, ..)| *n == name)?;
+            Some(is_string(ty, types) && !required && !param_required)
+        };
+        let before = match &spec.before {
+            Some(name) => {
+                ensure!(
+                    backwards(name).with_context(|| format!("no `{name}` query parameter"))?,
+                    "`before` and `{param}` must be optional string query parameters"
+                );
+                Some(name.clone())
+            }
+            None if spec.item_cursor.is_some() && param == "starting_after" => {
+                backwards("ending_before")
+                    .unwrap_or_default()
+                    .then(|| "ending_before".to_owned())
+            }
+            None => None,
+        };
         let item_cursor = spec.item_cursor.clone().map(|name| vec![name]);
         let mut optional = BTreeMap::new();
         for (key, schema, path) in [
@@ -168,12 +196,26 @@ impl Pagination {
             item_schema,
             next_cursor,
             item_cursor: spec.item_cursor.clone(),
+            before,
             has_more,
             total_pages,
             total,
             first_page: spec.first_page.unwrap_or(1),
             optional,
         })
+    }
+}
+
+/// Stripe's list shape, which pages operations no rule matches: a `starting_after` cursor
+/// taking the `id` of the last item of `data`, while `has_more`, and backwards from
+/// `ending_before`.
+pub(crate) fn detected() -> config::Pagination {
+    config::Pagination {
+        cursor: Some("starting_after".to_owned()),
+        item_cursor: Some("id".to_owned()),
+        has_more: Some("has_more".to_owned()),
+        items: Some("data".to_owned()),
+        ..Default::default()
     }
 }
 

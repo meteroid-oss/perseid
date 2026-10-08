@@ -19,6 +19,8 @@ pub(crate) enum Walk<O> {
     Cursor {
         get: fn(&O) -> Option<String>,
         set: fn(&mut O, String),
+        /// The parameter that, set, pages backwards from the first item of each page.
+        before: Option<Cursor<O>>,
     },
     Page {
         first: i64,
@@ -30,6 +32,20 @@ pub(crate) enum Walk<O> {
         set: fn(&mut O, i64),
     },
 }
+
+/// The accessors of a cursor parameter in the options `O`.
+pub(crate) struct Cursor<O> {
+    pub(crate) get: fn(&O) -> Option<String>,
+    pub(crate) set: fn(&mut O, String),
+}
+
+impl<O> Clone for Cursor<O> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<O> Copy for Cursor<O> {}
 
 impl<O> Clone for Walk<O> {
     fn clone(&self) -> Self {
@@ -101,8 +117,11 @@ where
         let total = fields.total.and_then(|total| total(page));
         let mut options = self.options.clone();
         match self.walk {
-            Walk::Cursor { get, set } => {
+            Walk::Cursor { get, set, before } => {
+                let backwards = before.filter(|before| (before.get)(&self.options).is_some());
+                let (get, set) = backwards.map_or((get, set), |before| (before.get, before.set));
                 let next = match (fields.item_cursor, fields.next_cursor) {
+                    (Some(cursor), _) if backwards.is_some() => items.first().and_then(cursor),
                     (Some(cursor), _) => items.last().and_then(cursor),
                     (None, Some(cursor)) => cursor(page),
                     (None, None) => None,

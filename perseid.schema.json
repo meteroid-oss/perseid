@@ -29,6 +29,10 @@
         }
       ]
     },
+    "detect_pagination": {
+      "description": "`false` pages only the operations that `x-pagination` or a `pagination` rule matches, not the Stripe-style lists perseid detects.",
+      "type": "boolean"
+    },
     "exclude": {
       "description": "Operation ids left out of every SDK.",
       "default": [],
@@ -525,6 +529,10 @@
       "description": "How a list operation pages, as `x-pagination` on an operation or `[pagination]` in perseid.toml. Exactly one of `cursor`, `page` or `offset` names the query parameter selecting the page; response values are dotted paths of JSON property names. A perseid.toml rule without `operations` uses `has_more`, `total_pages` and `total` only in responses that have them.",
       "type": "object",
       "properties": {
+        "before": {
+          "description": "With `item_cursor`, query parameter taking the cursor to list the items before, as Stripe's `ending_before`: a list started from it pages backwards, from the first item of each page. `ending_before` by default when `cursor` is `starting_after`.",
+          "type": "string"
+        },
         "cursor": {
           "description": "Query parameter taking the cursor of the page.",
           "type": "string"

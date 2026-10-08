@@ -392,6 +392,15 @@ impl {{ resource_type_name }} {
             get: |options| options.{{ field }}.clone(),
             set: |options, cursor| options.{{ field }} = Some(cursor),
             {% endif -%}
+            {% if pg.before is defined -%}
+            {% set before_field = (op.query_params | selectattr("name", "equalto", pg.before) | first).ident | to_rust_ident -%}
+            before: Some(crate::api::pagination::Cursor {
+                get: |options| options.{{ before_field }}.clone(),
+                set: |options, cursor| options.{{ before_field }} = Some(cursor),
+            }),
+            {% else -%}
+            before: None,
+            {% endif -%}
         };
         {% else -%}
         static WALK: crate::api::pagination::Walk<{{ param_struct_name }}> = crate::api::pagination::Walk::{{ pg.style | to_upper_camel_case }} {

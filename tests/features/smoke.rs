@@ -60,6 +60,9 @@ async fn smoke() {
     let options = WidgetsListEventsOptions::new("created");
     let events = widgets.list_events("w1", options).items();
     assert_eq!(ids(events, |e| e.id).await, ["e1", "e2", "e3"]);
+    let options = WidgetsListEventsOptions::new("created").ending_before("e9");
+    let events = widgets.list_events("w1", options).items();
+    assert_eq!(ids(events, |e| e.id).await, ["e7", "e8", "e6"]);
     let mut gadgets = tok.gadgets().list(None).items();
     let mut gadget_ids = Vec::new();
     while let Some(gadget) = gadgets.next().await {

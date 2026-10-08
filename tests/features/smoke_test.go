@@ -56,6 +56,9 @@ func TestSmoke(t *testing.T) {
 	expect(t, ids(t, client.Widgets().ListAutoPaging(ctx, nil), widget), []string{"w1", "w2", "w3"})
 	events := client.Widgets().ListEventsAutoPaging(ctx, "w1", "created", nil)
 	expect(t, ids(t, events, func(e Event) string { return e.ID }), []string{"e1", "e2", "e3"})
+	before := "e9"
+	events = client.Widgets().ListEventsAutoPaging(ctx, "w1", "created", &WidgetsListEventsOptions{EndingBefore: &before})
+	expect(t, ids(t, events, func(e Event) string { return e.ID }), []string{"e7", "e8", "e6"})
 	gadgets := client.Gadgets().ListAutoPaging(ctx, nil)
 	var gadgetIds []string
 	for gadgets.Next() {

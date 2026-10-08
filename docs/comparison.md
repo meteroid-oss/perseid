@@ -48,7 +48,7 @@ use a GitHub App of your own (`perseid app`) or a token: see [credentials](ci.md
 
 | | Code style | Pagination | Retries | Errors |
 |---|---|---|---|---|
-| perseid | Resource namespaces: `client.customers.list()` | Cursor, page and offset, from `x-pagination` or rules in `perseid.toml`. Lists iterate across pages | Backoff, `Retry-After`, opt-in idempotency keys | A type per status, with the declared error schema decoded |
+| perseid | Resource namespaces: `client.customers.list()` | Cursor, page and offset, from `x-pagination` or rules in `perseid.toml`; Stripe-style lists without either. Lists iterate across pages | Backoff, `Retry-After`, opt-in idempotency keys | A type per status, with the declared error schema decoded |
 | Stainless | Resource namespaces | Cursor, offset and page, configured | Backoff, idempotency keys | A type per status |
 | Fern | Resource namespaces | Offset, cursor and link | Backoff, idempotency headers | Typed errors |
 | Speakeasy | Resource namespaces | `x-speakeasy-pagination` | Configured with `x-speakeasy-retries` | Typed errors |

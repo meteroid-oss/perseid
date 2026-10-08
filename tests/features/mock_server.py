@@ -25,6 +25,8 @@ from urllib.parse import parse_qsl, unquote, unquote_plus
 
 WIDGETS = {None: (["w1", "w2"], "c2"), "c2": (["w3"], None)}
 EVENTS = {None: (["e1", "e2"], True), "e2": (["e3"], False)}
+# By `ending_before`: the events before it, newest first, as Stripe pages backwards.
+EVENTS_BEFORE = {"e9": (["e7", "e8"], True), "e7": (["e6"], False)}
 GADGETS = {0: ["g1", "g2"], 1: ["g3"]}
 RECORDS = {0: ["r1", "r2"], 2: ["r3"]}
 STREAM = [
@@ -245,7 +247,14 @@ def h_list_widget_events(req):
         req.problem(f"path: widget_id must be 'w1', got {req.arg()!r}")
     if req.qd().get("kind") != "created":
         req.problem(f"query: kind must be 'created', got {req.qd().get('kind')!r}")
-    after = req.qd().get("starting_after")
+    after, before = req.qd().get("starting_after"), req.qd().get("ending_before")
+    if before is not None:
+        if after is not None:
+            return req.problem("query: only one of starting_after and ending_before may be sent")
+        if before not in EVENTS_BEFORE:
+            return req.problem(f"query: unexpected ending_before {before!r}")
+        ids, more = EVENTS_BEFORE[before]
+        return js({"data": [{"id": i, "kind": "created"} for i in ids], "has_more": more})
     if after not in EVENTS:
         return req.problem(f"query: unexpected starting_after {after!r}")
     ids, more = EVENTS[after]
@@ -616,7 +625,7 @@ S = "/scenarios"
 ROUTES = [
     Route("list_widgets", "GET", r"/widgets", h_list_widgets, query=("cursor", "limit"), security="default"),
     Route("list_widget_events", "GET", r"/widgets/([^/]+)/events", h_list_widget_events,
-          query=("starting_after",), required=("kind",), security="default"),
+          query=("starting_after", "ending_before"), required=("kind",), security="default"),
     Route("list_gadgets", "GET", r"/gadgets", h_list_gadgets, query=("page", "per_page"), security="default"),
     Route("list_records", "GET", r"/records", h_list_records, query=("offset", "limit"), required=("api_key",), security="query_key"),
     Route("health", "GET", r"/health", h_status_echo_auth),

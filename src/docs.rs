@@ -315,6 +315,7 @@ mod tests {
             excluded: Default::default(),
             specified: Default::default(),
             pagination: vec![],
+            detect_pagination: true,
             reserved: Default::default(),
             names: Default::default(),
             uuid_strings: false,

@@ -93,6 +93,8 @@ assert client.account.check_health().status == "||"
 assert client.account.retrieve_machine().status == "Bearer tok||"
 assert ids(client.widgets.list()) == ["w1", "w2", "w3"]
 assert ids(client.widgets.list_events("w1", kind="created")) == ["e1", "e2", "e3"]
+# From `ending_before`, pages go backwards and never send `starting_after`.
+assert ids(client.widgets.list_events("w1", kind="created", ending_before="e9")) == ["e7", "e8", "e6"]
 assert ids(client.gadgets.list()) == ["g1", "g2", "g3"]
 assert ids(client.records.list()) == ["r1", "r2", "r3"]
 

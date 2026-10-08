@@ -256,6 +256,7 @@ type {{ resource_type_name }} struct {
 {% set item_type = go_ident(pg.item_schema) %}
 {% set cursor = go_arg(param.ident) if param.required else "params." ~ go_export(param.ident) %}
 {% set pointer = not param.required %}
+{% if pg.before is defined %}{% set before = "params." ~ go_export((op.query_params | selectattr("name", "equalto", pg.before) | first).ident) %}{% endif -%}
 {% set page_type = (resource_type_name ~ (op.name | ident("pascal", "go")) ~ "Page") | go_name %}
 {% set body_type = ret_type[1:] if ret_type is startingwith("*") else ret_type %}
 {% set body_value = "*resp" if ret_type is startingwith("*") else "resp" %}
@@ -320,16 +321,33 @@ func (p *{{ page_type }}) pageItems() []{{ item_type }} { return p.Items }
 {%- if pg.style == "cursor" %}
 {%- if pg.next_cursor is defined %}{% set root = "resp" %}{% set path = pg.next_cursor %}{% set flags = opt["next_cursor"] %}
 {%- else %}{% set root = "last" %}{% set path = [pg.item_cursor] %}{% set flags = opt["item_cursor"] %}	last := page.Items[len(page.Items)-1]
-{% endif %}
+{% if pg.before is defined %}	backwards := {{ before }} != nil
+	if backwards {
+		last = page.Items[0]
+	}
+{% endif %}{% endif %}
 {%- set missing = go_path_guard(root, path, flags, true, true) %}
 {%- if missing %}	if {{ missing }} {
 		return page, nil
 	}
 {% endif %}	next := {{ go_path_value(root, path, flags) }}
-	if next == "" || {% if pointer %}({{ cursor }} != nil && *{{ cursor }} == next){% else %}{{ cursor }} == next{% endif %} {
+{% if pg.before is defined %}	current := {{ cursor }}
+	if backwards {
+		current = {{ before }}
+	}
+	if next == "" || (current != nil && *current == next) {
+		return page, nil
+	}
+	if backwards {
+		{{ before }} = &next
+	} else {
+		{{ cursor }} = &next
+	}
+{% else %}	if next == "" || {% if pointer %}({{ cursor }} != nil && *{{ cursor }} == next){% else %}{{ cursor }} == next{% endif %} {
 		return page, nil
 	}
 	{{ cursor }} = {% if pointer %}&{% endif %}next
+{% endif %}
 {% elif pg.style == "page" %}
 {%- set ptype = go_type(param.type) %}
 {%- if pointer %}	current := {{ ptype }}({{ pg.first_page }})

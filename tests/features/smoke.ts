@@ -323,6 +323,11 @@ async function main() {
     await collect(client.widgets.listEvents("w1", { kind: "created" })),
     ["e1", "e2", "e3"]
   );
+  // From `ending_before`, pages go backwards and never send `starting_after`.
+  assert.deepEqual(
+    await collect(client.widgets.listEvents("w1", { kind: "created", endingBefore: "e9" })),
+    ["e7", "e8", "e6"]
+  );
   assert.deepEqual(await collect(client.gadgets.list()), ["g1", "g2", "g3"]);
   assert.deepEqual(await collect(client.records.list()), ["r1", "r2", "r3"]);
 

@@ -48,6 +48,7 @@ pub fn without_config(location: &str, root: &std::path::Path) -> Result<SpecWith
         excluded: Default::default(),
         specified: Default::default(),
         pagination: Vec::new(),
+        detect_pagination: true,
         reserved,
         names: BTreeMap::new(),
         uuid_strings: false,

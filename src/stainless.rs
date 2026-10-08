@@ -722,6 +722,7 @@ impl Import {
                 excluded: BTreeSet::new(),
                 specified: BTreeSet::new(),
                 pagination: pagination.iter().map(|(_, p)| p.clone()).collect(),
+                detect_pagination: true,
                 reserved: BTreeSet::new(),
                 names: names.clone(),
                 uuid_strings: false,
@@ -770,7 +771,7 @@ impl Import {
             match (method.paginated, op.paginated()) {
                 (Some(false), true) => mismatches.push((
                     at.clone(),
-                    format!("`paginated: false`, but a pagination rule matches `{}`: set `x-pagination: false` on it in the spec", op.id),
+                    format!("`paginated: false`, but perseid pages `{}`: set `x-pagination: false` on it in the spec", op.id),
                 )),
                 (Some(true), false) if !self.pagination.is_empty() => mismatches.push((
                     at.clone(),
@@ -956,6 +957,7 @@ impl Import {
                 ("items", &rule.items),
                 ("next_cursor", &rule.next_cursor),
                 ("item_cursor", &rule.item_cursor),
+                ("before", &rule.before),
                 ("has_more", &rule.has_more),
                 ("total_pages", &rule.total_pages),
                 ("total", &rule.total),
@@ -1153,7 +1155,15 @@ fn rule(scheme: &Value) -> Result<(Pagination, Vec<(String, String)>), String> {
                     .find(|p| p.purpose == "cursor_item_id")
                     .map_or_else(|| "id".to_owned(), |p| p.path.clone()),
             );
-            used.extend(["next_cursor_id_param", "cursor_item_id"]);
+            rule.before = request
+                .iter()
+                .find(|p| p.purpose == "previous_cursor_id_param" && typed(p, "string"))
+                .map(|p| p.path.clone());
+            used.extend([
+                "next_cursor_id_param",
+                "cursor_item_id",
+                "previous_cursor_id_param",
+            ]);
         }
         "offset" => {
             rule.offset = param("offset_count_param", &["offset", "skip"], "integer");
@@ -1201,7 +1211,9 @@ fn rule(scheme: &Value) -> Result<(Pagination, Vec<(String, String)>), String> {
         .filter(|(_, p)| !p.purpose.is_empty() && !used.contains(&p.purpose))
         .map(|(side, p)| {
             let why = match p.purpose {
-                purpose if purpose.starts_with("previous_") => "perseid pages forward only",
+                purpose if purpose.starts_with("previous_") => {
+                    "perseid pages backwards only from an item cursor"
+                }
                 _ => "perseid doesn't need it to page",
             };
             (
@@ -1477,24 +1489,37 @@ mod tests {
             ignored,
             [(
                 "request.before".to_owned(),
-                "previous_cursor_param (perseid pages forward only)".to_owned()
+                "previous_cursor_param (perseid pages backwards only from an item cursor)"
+                    .to_owned()
             )]
         );
         let ids = json!({
             "type": "cursor_id",
-            "request": { "after": { "type": "string" }, "limit": { "type": "integer" } },
+            "request": {
+                "after": { "type": "string" },
+                "before": { "type": "string", "x-stainless-pagination-property": { "purpose": "previous_cursor_id_param" } },
+                "limit": { "type": "integer" }
+            },
             "response": { "data": { "type": "array" }, "has_more": { "type": "boolean" } }
         });
-        let (rule, _) = super::rule(&ids).unwrap();
+        let (rule, ignored) = super::rule(&ids).unwrap();
         assert_eq!(
             (
                 rule.cursor.as_deref(),
                 rule.item_cursor.as_deref(),
+                rule.before.as_deref(),
                 rule.items,
                 rule.has_more.as_deref()
             ),
-            (Some("after"), Some("id"), None, Some("has_more"))
+            (
+                Some("after"),
+                Some("id"),
+                Some("before"),
+                None,
+                Some("has_more")
+            )
         );
+        assert!(ignored.is_empty(), "{ignored:?}");
         let offset = json!({
             "type": "offset",
             "request": { "offset": { "type": "integer", "x-stainless-pagination-property": "offset_count_param" } },

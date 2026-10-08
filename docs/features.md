@@ -52,6 +52,7 @@ Mark list operations with `x-pagination`:
 x-pagination:
   cursor: starting_after        # or `page: page`, or `offset: offset`
   item_cursor: id               # next cursor from the last item, or `next_cursor: <path>`
+  before: ending_before         # with `item_cursor`: set by the caller, pages backwards
   has_more: has_more            # optional, as are `total_pages`, `total` and `first_page`
   items: data                   # `data` by default, else the response's only array of objects
 ```
@@ -74,7 +75,25 @@ total = "total"
 A rule without `operations` uses `has_more`, `total_pages` and `total` only where the response
 has them; without any, paging stops at the first empty page.
 
-`x-pagination: false` opts an operation out of the `perseid.toml` rules.
+Operations no rule matches are paged when they have Stripe's list shape: a `starting_after`
+string query parameter, and a response with a `has_more` boolean and a `data` array of items
+with a string `id`. That is the rule
+
+```toml
+[[pagination]]
+cursor = "starting_after"
+item_cursor = "id"
+has_more = "has_more"
+items = "data"
+```
+
+`x-pagination: false` opts an operation out of the `perseid.toml` rules and of this one, and
+`detect_pagination = false` in `perseid.toml` turns this rule off, for a spec you do not own.
+
+With `item_cursor`, a list started from the `before` parameter pages backwards, as Stripe's
+`ending_before`: each next page ends before the first item of the last, and the cursor
+parameter is never sent along. `before` is `ending_before` by default when the cursor is
+`starting_after` and the operation takes it. Items keep the order of each response.
 
 A paginated operation has one method. It gives the first page, and iterating it gives every
 item, fetching the next pages on demand; Go iterates with a `...AutoPaging` twin. A page is the response body, with the paging members:

@@ -335,7 +335,7 @@ class {{ class_name }}({{ base_class }}):
                 query_params=serialize_query_params(
                     {
 {%- for p in op.query_params %}
-                        {{ py_str(p.name) }}: {% if pg and p.name == pg.param %}page_param{% else %}{{ py_ident(p.ident) }}{% endif %},
+                        {{ py_str(p.name) }}: {% if pg and pg.before is defined and p.name == pg.param %}{{ py_ident(p.ident) }} if backwards else page_param{% elif pg and pg.before is defined and p.name == pg.before %}page_param if backwards else {{ py_ident(p.ident) }}{% elif pg and p.name == pg.param %}page_param{% else %}{{ py_ident(p.ident) }}{% endif %},
 {%- endfor %}
                     },
 {%- set comma_joined %}
@@ -475,6 +475,11 @@ class {{ class_name }}({{ base_class }}):
         self,{{ signature }}
     ) -> {{ unshadow(page_type) }}:
         {{ docstring(doc | trim) | indent(8) }}
+{%- if pg.before is defined %}
+{%- set before_query = op.query_params | selectattr("name", "equalto", pg.before) | first %}
+{%- set before_arg = py_ident(before_query.ident) %}
+        backwards = {{ before_arg }} is not None
+{%- endif %}
 
         {% if is_async %}async {% endif %}def fetch(page_param: {{ "str" if pg.style == "cursor" else "int" }} | None) -> {{ response_type }}:
             response = {{ await }}self._request({{ request | indent(4) }}
@@ -492,6 +497,9 @@ class {{ class_name }}({{ base_class }}):
 {%- if pg.item_cursor is defined %}
             item_cursor=lambda item: item.{{ py_field(pg.item_cursor) }},
 {%- endif %}
+{%- if pg.before is defined %}
+            backwards=backwards,
+{%- endif %}
 {%- if pg.total_pages is defined %}
             total_pages=lambda body: {{ accessor("body", pg.total_pages) }},
 {%- endif %}
@@ -504,6 +512,7 @@ class {{ class_name }}({{ base_class }}):
         )
 {%- set pg_query = op.query_params | selectattr("name", "equalto", pg.param) | first %}
 {%- set pg_arg = py_ident(pg_query.ident if pg_query else pg.param) %}
+{%- if pg.before is defined %}{% set pg_arg = before_arg ~ " if backwards else " ~ pg_arg %}{% endif %}
 {%- if is_async %}
         return AsyncPaginator(lambda: {{ page }}._first(fetch, {{ pg_arg }}, paging))
 {%- else %}

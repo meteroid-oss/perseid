@@ -84,6 +84,9 @@ pub struct Config {
     /// Operation ids left out of every SDK.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// `false` pages only the operations that `x-pagination` or a `pagination` rule matches,
+    /// not the Stripe-style lists perseid detects.
+    pub detect_pagination: Option<bool>,
     /// Paginated list operations, detected from their query parameter and response shape.
     #[serde(default, deserialize_with = "one_or_many")]
     #[schemars(with = "OneOrMany")]
@@ -384,6 +387,10 @@ pub struct Pagination {
     pub next_cursor: Option<String>,
     /// Field of the last item that is the next cursor, e.g. `id` for `starting_after`.
     pub item_cursor: Option<String>,
+    /// With `item_cursor`, query parameter taking the cursor to list the items before, as
+    /// Stripe's `ending_before`: a list started from it pages backwards, from the first item of
+    /// each page. `ending_before` by default when `cursor` is `starting_after`.
+    pub before: Option<String>,
     /// Boolean telling whether more pages follow.
     pub has_more: Option<String>,
     /// Number of pages.
@@ -608,6 +615,7 @@ impl Config {
             excluded: self.exclude.iter().cloned().collect(),
             specified: self.only.iter().cloned().collect(),
             pagination: self.pagination.clone(),
+            detect_pagination: self.detect_pagination != Some(false),
             reserved: BTreeSet::new(),
             names: self.names.clone(),
             uuid_strings: self.types.uuid == Some(UuidType::String),

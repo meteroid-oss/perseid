@@ -108,7 +108,12 @@ impl Api {
         let generated = operation_ids(&resources);
         let security = security::Security::from_spec(raw_spec, |id| generated.contains(id))?;
         for resource in resources.values_mut() {
-            resource.resolve_extensions(&security, &filters.pagination, &types)?;
+            resource.resolve_extensions(
+                &security,
+                &filters.pagination,
+                filters.detect_pagination,
+                &types,
+            )?;
         }
 
         let mut api = Self {

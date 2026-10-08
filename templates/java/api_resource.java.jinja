@@ -132,11 +132,13 @@
         {% for p in positional -%}
             {% if loop.index0 >= op.path_params | length and p == page_param.ident %}{% set pp.positional = loop.index0 %}{% endif -%}
         {% endfor -%}
+        {% set before_param = op.query_params | selectattr("name", "equalto", pg.before) | first if pg.before is defined else none -%}
+        {% set bp = namespace(field="") -%}
         {% for p in all_params -%}
-            {% if p.ident == page_param.ident -%}
-                {% set f = field_names[loop.index0] -%}
-                {% set pp.field = f ~ "_" if f in ["builder", "toBuilder", "hashCode", "toString", "getClass", "build"] else f -%}
-            {% endif -%}
+            {% set f = field_names[loop.index0] -%}
+            {% set f = f ~ "_" if f in ["builder", "toBuilder", "hashCode", "toString", "getClass", "build"] else f -%}
+            {% if p.ident == page_param.ident %}{% set pp.field = f %}{% endif -%}
+            {% if before_param and p.ident == before_param.ident %}{% set bp.field = f %}{% endif -%}
         {% endfor -%}
         {% set zero = "0L" if pp.type == "Long" else "BigInteger.ZERO" if pp.type == "BigInteger" else "0" -%}
         {% set first = (pg.first_page ~ "L") if pp.type == "Long" else ("BigInteger.valueOf(" ~ pg.first_page ~ ")") if pp.type == "BigInteger" else (pg.first_page | string) -%}
@@ -146,6 +148,10 @@
             {% set pn = namespace(args="") -%}
             {% for a in arg_names %}{% set pn.args = pn.args ~ ("next" if loop.index0 == pp.positional else a) ~ ", " %}{% endfor -%}
             {% set next_args = pn.args ~ (body_var ~ ", " if has_any_body else "") ~ ("options, " if optional_params else "") -%}
+        {% elif before_param -%}
+            {#- Set, the parameter before pages backwards and the page parameter stays unset. -#}
+            {% set current = "options." ~ bp.field ~ "().or(options::" ~ pp.field ~ ").orElse(null)" -%}
+            {% set next_args = pd.args ~ "(options." ~ bp.field ~ "().isPresent() ? options.toBuilder()." ~ bp.field ~ "(next) : options.toBuilder()." ~ pp.field ~ "(next)).build(), " -%}
         {% else -%}
             {% set current = "options." ~ pp.field ~ "().orElse(" ~ start ~ ")" -%}
             {% set next_args = pd.args ~ "options.toBuilder()." ~ pp.field ~ "(next).build(), " -%}
@@ -157,7 +163,7 @@
             "style": pg.style,
             "item": pg.item_schema | to_upper_camel_case,
             "param_type": pp.type,
-            "current": current,
+            "current": current ~ (", options." ~ bp.field ~ "().isPresent()" if before_param else ""),
             "next_args": next_args,
             "first": first,
             "pg": pg,
@@ -877,7 +883,7 @@ public final class {{ resource_type_name }} {
     }
 
     /** The parameter of the page after {@code response}, null after the last one. */
-    static {{ T }} nextOf{{ o.pascal }}({{ res }} response, List<{{ item }}> items, {{ T }} current) {
+    static {{ T }} nextOf{{ o.pascal }}({{ res }} response, List<{{ item }}> items, {{ T }} current{% if pg.before is defined %}, boolean backwards{% endif %}) {
         if (items.isEmpty(){% if pg.has_more is defined %} || !{{ path_expr("response", pg.has_more) }}.orElse(true){% endif %}) {
             return null;
         }
@@ -885,7 +891,7 @@ public final class {{ resource_type_name }} {
         {% if pg.next_cursor is defined -%}
         String next = {{ path_expr("response", pg.next_cursor) }}.map(Object::toString).orElse(null);
         {% else -%}
-        String next = {{ path_expr("items.get(items.size() - 1)", [pg.item_cursor]) }}.map(Object::toString).orElse(null);
+        String next = {{ path_expr("items.get(" ~ ("backwards ? 0 : " if pg.before is defined else "") ~ "items.size() - 1)", [pg.item_cursor]) }}.map(Object::toString).orElse(null);
         {% endif -%}
         return next == null || next.isEmpty() || next.equals(current) ? null : next;
         {% elif pg.style == "page" -%}

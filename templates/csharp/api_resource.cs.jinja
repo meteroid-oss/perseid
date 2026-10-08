@@ -237,7 +237,13 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
     {{ signature("public " ~ f.pager ~ " " ~ method_name, op, f) }}
     {
 {{- checks(op, f) }}
-{%- if pg.style == "cursor" %}
+{%- if pg.before is defined %}
+{%- set backwards_property = m.member((op.query_params | selectattr("name", "equalto", pg.before) | first).ident, f.options_type) %}
+        var backwards = options{% if not f.required_options %}?{% endif %}.{{ backwards_property }} != null;
+        return Paging.Cursor<{{ f.page_type }}, {{ m.response_type(op, types) }}, {{ m.model(pg.item_schema) }}>(
+            backwards ? options{% if not f.required_options %}?{% endif %}.{{ backwards_property }} : options{% if not f.required_options %}?{% endif %}.{{ property }},
+            (cursor, ct) => WithRawResponse.{{ method_name }}({{ before }}backwards ? {{ first }} with { {{ backwards_property }} = cursor } : {{ first }} with { {{ property }} = cursor }, requestOptions, ct),
+{%- elif pg.style == "cursor" %}
         return Paging.Cursor<{{ f.page_type }}, {{ m.response_type(op, types) }}, {{ m.model(pg.item_schema) }}>(
             options{% if not f.required_options %}?{% endif %}.{{ property }},
             (cursor, ct) => WithRawResponse.{{ method_name }}({{ before }}{{ first }} with { {{ property }} = cursor }, requestOptions, ct),
@@ -255,7 +261,7 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
 {%- if pg.next_cursor is defined %}
             (body, _) => {{ path_expr("body", pg.next_cursor, response_class) }},
 {%- else %}
-            (_, items) => items[^1].{{ m.member(pg.item_cursor, item_class) }},
+            (_, items) => {% if pg.before is defined %}(backwards ? items[0] : items[^1]){% else %}items[^1]{% endif %}.{{ m.member(pg.item_cursor, item_class) }},
 {%- endif %}
 {%- elif pg.style == "page" %}
             {% if pg.total_pages is defined %}body => (long?){{ path_expr("body", pg.total_pages, response_class) }}{% else %}null{% endif %},

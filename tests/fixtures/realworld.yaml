@@ -31,6 +31,9 @@ paths:
         - name: metadata
           in: query
           schema: { $ref: '#/components/schemas/Metadata' }
+        - { name: ending_before, in: query, schema: { type: string, maxLength: 5000 } }
+        - { name: limit, in: query, schema: { type: integer } }
+        - { name: starting_after, in: query, schema: { type: string, maxLength: 5000 } }
       responses:
         '200':
           description: ok
@@ -38,11 +41,15 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [data]
+                title: CustomerResourceCustomerList
+                required: [data, has_more, object, url]
                 properties:
                   data:
                     type: array
                     items: { $ref: '#/components/schemas/Customer' }
+                  has_more: { type: boolean }
+                  object: { type: string, enum: [list] }
+                  url: { type: string, maxLength: 5000 }
     post:
       operationId: PostCustomers
       tags: [customers]

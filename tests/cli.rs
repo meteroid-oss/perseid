@@ -2057,6 +2057,75 @@ fn pagination_rules_use_the_response_values_it_has() {
     assert!(!ok && out.contains("has no `has_more` property"), "{out}");
 }
 
+#[test]
+fn stripe_style_lists_paginate_without_a_rule() {
+    let list = |id: &str, cursor: &str, has_more: bool, extra: &str| {
+        let more = if has_more {
+            ", has_more: { type: boolean }"
+        } else {
+            ""
+        };
+        format!(
+            r#"
+  /{id}:
+    get:
+      operationId: {id}
+      {extra}
+      parameters:
+        - {{ name: {cursor}, in: query, schema: {{ type: string }} }}
+        - {{ name: limit, in: query, schema: {{ type: integer }} }}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties: {{ data: {{ type: array, items: {{ $ref: '#/components/schemas/Item' }} }}{more} }}"#
+        )
+    };
+    let spec = format!(
+        "openapi: 3.1.0\ninfo: {{ title: Shop, version: \"1\" }}\npaths:{}{}{}{}\ncomponents:\n  \
+         schemas:\n    Item: {{ type: object, required: [id], properties: {{ id: {{ type: string }} }} }}\n",
+        list("customers", "starting_after", true, ""),
+        list("completions", "after", true, ""),
+        list("events", "starting_after", false, ""),
+        list("invoices", "starting_after", true, "x-pagination: false"),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let config = "spec = \"openapi.yaml\"\nname = \"Shop\"\nsdks = [\"go\"]\n";
+    fs::write(dir.path().join("perseid.toml"), config).unwrap();
+    let (ok, out) = perseid(dir.path(), &["inspect"]);
+    assert!(ok, "{out}");
+    let api: serde_json::Value = serde_json::from_str(&out).unwrap();
+    let customers = &operation(&api, "customers")["pagination"];
+    assert_eq!(customers["style"], "cursor");
+    assert_eq!(customers["param"], "starting_after");
+    assert_eq!(customers["item_cursor"], "id");
+    assert_eq!(customers["has_more"], serde_json::json!(["has_more"]));
+    assert!(customers.get("before").is_none(), "{customers}");
+    for id in ["completions", "events", "invoices"] {
+        assert!(operation(&api, id).get("pagination").is_none(), "{id}");
+    }
+
+    let rule = "\n[[pagination]]\ncursor = \"after\"\nitem_cursor = \"id\"\nbefore = \"limit\"\noperations = [\"completions\"]\n";
+    fs::write(dir.path().join("perseid.toml"), format!("{config}{rule}")).unwrap();
+    let (ok, out) = perseid(dir.path(), &["inspect"]);
+    assert!(
+        !ok && out.contains("must be optional string query parameters"),
+        "{out}"
+    );
+
+    let config = format!("detect_pagination = false\n{config}");
+    fs::write(dir.path().join("perseid.toml"), config).unwrap();
+    let (ok, out) = perseid(dir.path(), &["inspect"]);
+    assert!(ok, "{out}");
+    let api: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert!(operation(&api, "customers").get("pagination").is_none());
+}
+
 fn operation<'a>(model: &'a serde_json::Value, id: &str) -> &'a serde_json::Value {
     model["resources"]
         .as_array()
@@ -2100,6 +2169,8 @@ fn real_world_constructs_generate_every_language() {
     assert_eq!(params[2]["name"], "metadata");
     assert_eq!(params[2]["structured"], true);
     assert_eq!(params[2]["deep_object"], false);
+    assert_eq!(list["pagination"]["param"], "starting_after");
+    assert_eq!(list["pagination"]["before"], "ending_before");
     let create = operation(&model, "PostCustomers");
     assert_eq!(
         create["form_deep_object"],

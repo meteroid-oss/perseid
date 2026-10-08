@@ -335,15 +335,16 @@ impl Resource {
         &mut self,
         security: &Security,
         rules: &[config::Pagination],
+        detect: bool,
         types: &Types,
     ) -> anyhow::Result<()> {
         for op in &mut self.operations {
             op.security = security.override_for(&op.id);
-            op.resolve_pagination(rules, types)
+            op.resolve_pagination(rules, detect, types)
                 .with_context(|| format!("pagination of `{}`", op.id))?;
         }
         for resource in self.subresources.values_mut() {
-            resource.resolve_extensions(security, rules, types)?;
+            resource.resolve_extensions(security, rules, detect, types)?;
         }
         Ok(())
     }
@@ -1095,17 +1096,19 @@ impl Operation {
         Ok(())
     }
 
-    /// Applies `x-pagination`, or the first perseid.toml rule matching this operation.
+    /// Applies `x-pagination`, or the first perseid.toml rule matching this operation, else
+    /// with `detect` the [detected](super::pagination::detected) list shape.
     fn resolve_pagination(
         &mut self,
         rules: &[config::Pagination],
+        detect: bool,
         types: &Types,
     ) -> anyhow::Result<()> {
         let candidate = Candidate {
             query_params: self
                 .query_params
                 .iter()
-                .map(|p| (p.name.as_str(), &p.r#type))
+                .map(|p| (p.name.as_str(), &p.r#type, p.required))
                 .collect(),
             response: self.response_body_schema_name.as_deref(),
         };
@@ -1136,7 +1139,11 @@ impl Operation {
                         Err(_) => {}
                     }
                 }
-                found
+                let detected = super::pagination::detected();
+                found.or_else(|| {
+                    let detected = detect.then_some(&detected)?;
+                    Pagination::resolve(detected, &candidate, types, true).ok()
+                })
             }
         };
         if let Some(pagination) = &self.pagination {
