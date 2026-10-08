@@ -71,7 +71,7 @@ after = "sdks"                      # once every SDK is released, or "generate":
 pack = "../packs/cli"   # the pack's folder, relative to perseid.toml
 wraps = "rust"                      # the SDK it wraps, among `sdks`
 repo = "acme/acme-cli"
-after = "rust"                      # once that SDK is released
+# after = "rust"                    # once that SDK is released, by default
 ```
 
 ## Editor completion
@@ -123,8 +123,8 @@ flow.
 | Key | Default | Description |
 |---|---|---|
 | `repo` | required | `owner/name` of the repository the target writes to |
-| `path` | `"api"`, `"."` for a pack | The only folder perseid writes in `repo`. A `docs` target owns it: files it no longer writes there are deleted. A pack only replaces and deletes the files it marked `@generated`. Nothing outside it is touched |
-| `after` | `"sdks"` | `"sdks"`: the pull request opens once every SDK generated from the current spec is released, with their versions. A language, such as `"rust"`: once that SDK is released. `"generate"`: with the SDK pull requests, in the same run |
+| `path` | `"api"`, `"."` for a pack | The only folder perseid writes in `repo`. A `docs` target owns it: files it no longer writes there are deleted. A pack only replaces and deletes the files it generated, as `.perseid/generation.json` records them. Nothing outside it is touched |
+| `after` | `"sdks"`, the language of `wraps` for a pack | `"sdks"`: the pull request opens once every SDK generated from the current spec is released, with their versions. A language, such as `"rust"`: once that SDK is released, the one a pack wraps for a pack. `"generate"`: with the SDK pull requests, in the same run |
 | `kind` | the table's name | What the target writes |
 | `pack` | | The folder of a [pack](customizing.md#packs), relative to `perseid.toml`: the table is then a pack target, without `kind` |
 | `wraps` | required with `pack` | The SDK the pack wraps, among `sdks` and the languages its `pack.toml` lists |
@@ -146,7 +146,9 @@ path = "reference/api"
 
 A name or `kind` perseid doesn't know is an error. `pack` is a folder for now: a reference to a
 repository, such as `gh:acme/packs/cli@v0`, is an error. `after` other than
-`"generate"` needs the release workflows, so it can't go with `release = false`.
+`"generate"` needs the release workflows, so it can't go with `release = false`. A pack target
+can't share its folder with an SDK or another target: in the same repository, neither `path`
+may hold the other (`.` holds every folder).
 
 ## SDK defaults
 

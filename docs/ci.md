@@ -666,13 +666,14 @@ Rust SDK, in a repository of its own, once that SDK is released:
 pack = "packs/cli"   # the pack's folder, relative to perseid.toml
 wraps = "rust"
 repo = "acme/acme-cli"
-after = "rust"
 ```
 
 Its templates see the API as the Rust SDK's templates do, and the version of the Rust SDK the
-program depends on: the released one. Its pull requests replace the files it marked
-`@generated` and write its scaffold once, as for an SDK. The repository releases it on its own,
-with what the pack's scaffold sets up: perseid writes no release workflow there. In the Action,
+program depends on: the released one. Its pull requests replace the files it generated, deleting
+those it no longer generates, and write its scaffold once. The repository releases it on its own,
+with what the pack's scaffold sets up: perseid writes no release workflow there. Since CI tokens
+can't push workflows, the pull request leaves out those of the scaffold, and its description lists
+them: write them with `perseid targets cli --out <dir>` and commit them by hand. In the Action,
 `pack` must be a folder of the checkout, such as a submodule: perseid doesn't fetch packs yet.
 
 ### `after`
@@ -681,7 +682,8 @@ with what the pack's scaffold sets up: perseid writes no release workflow there.
   the SDK pull requests. `version` is `null` in `docs-data.json` for an SDK that run changes.
 - `after = "sdks"`: the pull request opens once every SDK generated from the current spec is
   released, and `docs-data.json` holds the `version` of each.
-- `after = "<language>"`, such as `"rust"`: the same, waiting for that SDK only.
+- `after = "<language>"`, such as `"rust"`: the same, waiting for that SDK only. A pack target
+  waits for the SDK it wraps by default, and can't wait for another alone.
 
 With `after = "sdks"`:
 

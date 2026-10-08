@@ -2,7 +2,7 @@
 //! their own against the model of that SDK, into a repository of their own.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -15,7 +15,7 @@ use crate::{
     MODEL_VERSION, assets,
     config::{Config, Language, Sdk},
     format, fsx,
-    generate::{self, Change, GENERATION, Layout, Options, Scan},
+    generate::{self, Change, GENERATION, Layout, Options, Stale},
     generator, pr,
     targets::{Kind, Target},
 };
@@ -152,13 +152,13 @@ impl Pack {
     }
 }
 
-/// Whether `path` is a folder below the one it is relative to, or that one (`.`).
+/// Whether `path` is a folder below the one it is relative to, or that one (`.`), outside the
+/// hidden folders such as `.git` and `.perseid`.
 fn folder(path: &str) -> bool {
     path == "."
         || !path.is_empty()
             && !path.starts_with('/')
-            && (path.trim_end_matches('/').split('/'))
-                .all(|p| !p.is_empty() && p != "." && p != ".." && !p.starts_with(".git"))
+            && (path.trim_end_matches('/').split('/')).all(|p| !p.is_empty() && !p.starts_with('.'))
 }
 
 /// What generating a pack target changed in its folder, and the scaffold files among them.
@@ -212,10 +212,7 @@ fn run(
         tokens[format!("pack_{key}")] = pack_value[key].clone();
     }
     std::fs::create_dir_all(dir)?;
-    let mut scaffold = Vec::new();
-    if !options.check && !dir.join(GENERATION).exists() {
-        scaffold = self::scaffold(&pack, dir, &tokens)?;
-    }
+    let scaffolded = scaffold_files(&pack, &tokens)?;
     let globals = Map::from_iter([
         ("sdk".to_owned(), context.clone()),
         ("pack".to_owned(), pack_value),
@@ -233,6 +230,20 @@ fn run(
             stage.path(),
         )
     })?;
+    let overwritten: Vec<_> = (scaffolded.iter())
+        .filter(|(_, path)| produced.contains(path))
+        .map(|(file, _)| file.display().to_string())
+        .collect();
+    ensure!(
+        overwritten.is_empty(),
+        "the scaffold of the {} pack writes files its templates or runtime generate: {}",
+        pack.manifest.name,
+        overwritten.join(", ")
+    );
+    let mut scaffold = Vec::new();
+    if !options.check && !dir.join(GENERATION).exists() {
+        scaffold = self::scaffold(&pack, dir, &tokens, &scaffolded)?;
+    }
     if options.format {
         let staged = generate::staged(dir, stage.path(), &produced);
         match pack.manifest.format.as_deref() {
@@ -241,8 +252,8 @@ fn run(
             Some(command) => run_format(command, dir, &staged)?,
         }
     }
-    let scan = scan(&pack, sdk.language)?;
-    let mut changes = generate::settle(dir, stage.path(), produced, &scan, options.check)?;
+    let stale = Stale::Recorded;
+    let mut changes = generate::settle(dir, stage.path(), produced, &stale, options.check)?;
     if !changes.is_empty() && !options.check {
         let pretty = serde_json::to_string_pretty(&serde_json::from_str::<Value>(spec)?)? + "\n";
         match std::fs::read_to_string(dir.join(SPEC)) {
@@ -313,7 +324,7 @@ fn render(
     )?;
     let templates = assets_dir.path().join("pack");
     let own = pack.dir.join("templates");
-    for file in assets::walk(&own)? {
+    for file in assets::walk_sources(&own)? {
         fsx::write(
             &templates.join(file.strip_prefix(&own)?),
             &std::fs::read(&file)?,
@@ -341,6 +352,7 @@ fn render(
             pack.dir.join("runtime"),
             PathBuf::from(manifest.runtime.as_deref().unwrap_or(".")),
         ),
+        origin: pack.dir.join("runtime").display().to_string(),
     };
     let api = generate::sdk_api(config, sdk, &globals["sdk"], spec)?;
     let produced = generate::draw(&api, globals, &layout, tokens, extension, stage)?;
@@ -348,59 +360,47 @@ fn render(
     Ok(produced)
 }
 
-/// Where a pack leaves generated files: the folders of its templates and runtime.
-fn scan(pack: &Pack, language: &str) -> Result<Scan> {
-    let manifest = &pack.manifest;
-    let mut roots = BTreeSet::new();
-    let mut extensions = BTreeSet::new();
-    for output in manifest.templates.values() {
-        roots.insert(generate::clean(Path::new(&output.dir)));
-        let extension = output.extension.as_deref();
-        extensions.insert(
-            extension
-                .unwrap_or(generate::extension(language))
-                .to_owned(),
-        );
-    }
-    if let Some(runtime) = &manifest.runtime {
-        roots.insert(generate::clean(Path::new(runtime)));
-        for file in assets::walk(&pack.dir.join("runtime"))? {
-            if let Some(extension) = file.extension() {
-                extensions.insert(extension.to_string_lossy().into_owned());
-            }
-        }
-    }
-    Ok(Scan {
-        roots: roots.into_iter().collect(),
-        extensions: extensions.into_iter().collect(),
-        files: vec![],
-    })
-}
-
-/// Writes the files of the pack's `scaffold/` that `dir` lacks, with `tokens` substituted in
-/// their paths and text. Returns their paths relative to `dir`.
-fn scaffold(pack: &Pack, dir: &Path, tokens: &Value) -> Result<Vec<PathBuf>> {
+/// The files of the pack's `scaffold/`, each with its path in the target: `tokens` substituted.
+fn scaffold_files(pack: &Pack, tokens: &Value) -> Result<Vec<(PathBuf, PathBuf)>> {
     let from = pack.dir.join("scaffold");
     if !from.is_dir() {
         return Ok(vec![]);
     }
+    let mut files = Vec::new();
+    for file in assets::walk_sources(&from)? {
+        let relative = file.strip_prefix(&pack.dir)?.to_owned();
+        let name = (file.strip_prefix(&from)?.to_str()).context("non UTF-8 path")?;
+        let path = generate::tokens(name, tokens)?;
+        ensure!(
+            generate::inside(Path::new(&path)),
+            "{} goes to {path:?}, outside the target",
+            relative.display()
+        );
+        files.push((relative, generate::clean(Path::new(&path))));
+    }
+    Ok(files)
+}
+
+/// Writes the `files` of the pack's scaffold that `dir` lacks, with `tokens` substituted in their
+/// text. Returns their paths relative to `dir`.
+fn scaffold(
+    pack: &Pack,
+    dir: &Path,
+    tokens: &Value,
+    files: &[(PathBuf, PathBuf)],
+) -> Result<Vec<PathBuf>> {
     let mut written = Vec::new();
-    for file in assets::walk(&from)? {
-        let relative = file
-            .strip_prefix(&from)?
-            .to_str()
-            .context("non UTF-8 path")?;
-        let path = PathBuf::from(generate::tokens(relative, tokens)?);
-        if dir.join(&path).exists() {
+    for (file, path) in files {
+        if dir.join(path).exists() {
             continue;
         }
-        let content = std::fs::read(&file)?;
+        let content = std::fs::read(pack.dir.join(file))?;
         let content = match String::from_utf8(content) {
             Ok(text) => generate::tokens(&text, tokens)?.into_bytes(),
             Err(binary) => binary.into_bytes(),
         };
-        fsx::write(&dir.join(&path), &content)?;
-        written.push(path);
+        fsx::write(&dir.join(path), &content)?;
+        written.push(path.clone());
     }
     Ok(written)
 }
@@ -425,10 +425,12 @@ fn run_format(command: &[String], dir: &Path, files: &[PathBuf]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
-    /// The error loading the toy pack for `language` once `edit` changed a copy of it.
-    fn error(language: &str, edit: impl FnOnce(&Path)) -> String {
+    /// A copy of the toy pack, changed by `edit`.
+    fn toy(edit: impl FnOnce(&Path)) -> tempfile::TempDir {
         let toy = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/packs/toy");
         let copy = tempfile::tempdir().unwrap();
         for file in assets::walk(&toy).unwrap() {
@@ -436,8 +438,286 @@ mod tests {
             fsx::write(&to, &std::fs::read(&file).unwrap()).unwrap();
         }
         edit(copy.path());
+        copy
+    }
+
+    /// The error loading the toy pack for `language` once `edit` changed a copy of it.
+    fn error(language: &str, edit: impl FnOnce(&Path)) -> String {
+        let copy = toy(edit);
         let error = Pack::load(copy.path(), language).expect_err("an invalid pack");
         format!("{error:#}")
+    }
+
+    /// A project generating the pack at `pack` as `[targets.cli]`, from the petstore spec into
+    /// `cli/`, with `settings` at the top of its perseid.toml.
+    struct Project {
+        root: tempfile::TempDir,
+        config: Config,
+        spec: String,
+    }
+
+    impl Project {
+        fn new(pack: &Path, settings: &str) -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let toml = format!(
+                "name = \"Acme\"\nsdks = [\"rust\"]\n{settings}\n[targets.cli]\npack = {:?}\nwraps = \"rust\"\nrepo = \"acme/cli\"\n",
+                pack.display()
+            );
+            let config = Config::parse(&toml, "perseid.toml").unwrap();
+            let petstore =
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/petstore.yaml");
+            let spec = crate::spec::read(petstore.to_str().unwrap(), root.path()).unwrap();
+            Project { root, config, spec }
+        }
+
+        fn dir(&self) -> PathBuf {
+            self.root.path().join("cli")
+        }
+
+        fn generate(&self, check: bool, format: bool) -> Result<Generated> {
+            let target = self.config.targets(&[])?.remove(0);
+            let options = Options { check, format };
+            let root = self.root.path();
+            generate(
+                &self.config,
+                root,
+                &target,
+                &self.dir(),
+                &self.spec,
+                None,
+                &options,
+            )
+        }
+
+        fn shown(&self, check: bool) -> Vec<String> {
+            let generated = self.generate(check, false).unwrap();
+            generated.changes.iter().map(ToString::to_string).collect()
+        }
+
+        fn write(&self, path: &str, text: &str) {
+            fsx::write(&self.dir().join(path), text.as_bytes()).unwrap();
+        }
+
+        fn read(&self, path: &str) -> Option<String> {
+            std::fs::read_to_string(self.dir().join(path)).ok()
+        }
+    }
+
+    #[test]
+    fn packs_remove_only_the_files_they_generated_before() {
+        let pack = toy(|_| {});
+        let project = Project::new(pack.path(), "");
+        let foreign = [
+            (
+                "src/proto.rs",
+                "// This file is @generated by prost-build.\n",
+            ),
+            (
+                "docs/api.md",
+                "<!-- this file is @generated by another SDK -->\n",
+            ),
+            (
+                "src/commands/old.rs",
+                "// This file is @generated by perseid.\n",
+            ),
+        ];
+        for (path, text) in foreign {
+            project.write(path, text);
+        }
+        let first = project.shown(false);
+        assert!(first.contains(&"+ api.md".to_owned()), "{first:?}");
+        assert!(!first.iter().any(|c| c.starts_with('-')), "{first:?}");
+        let record: Value = serde_json::from_str(&project.read(GENERATION).unwrap()).unwrap();
+        assert_eq!(
+            record["paths"],
+            json!([
+                "api.md",
+                "src/commands/mod.rs",
+                "src/commands/pets.rs",
+                "src/runtime/output.rs"
+            ])
+        );
+
+        let text = std::fs::read_to_string(pack.path().join(MANIFEST)).unwrap();
+        let text = text.replace("api_reference = { dir = \".\", extension = \"md\" }\n", "");
+        std::fs::write(pack.path().join(MANIFEST), text).unwrap();
+        std::fs::remove_file(pack.path().join("templates/api_reference.md.jinja")).unwrap();
+        project.write("src/runtime/mine.rs", "// handwritten\n");
+        assert_eq!(
+            project.shown(true),
+            ["~ .perseid/generation.json", "- api.md"]
+        );
+        assert!(project.read("api.md").is_some(), "--check must not write");
+        assert_eq!(
+            project.shown(false),
+            ["~ .perseid/generation.json", "- api.md"]
+        );
+        assert!(project.read("api.md").is_none());
+        for (path, text) in foreign {
+            assert_eq!(project.read(path).as_deref(), Some(text), "{path}");
+        }
+        assert!(project.read("src/runtime/mine.rs").is_some());
+        assert!(project.shown(false).is_empty());
+    }
+
+    #[test]
+    fn records_naming_paths_outside_the_target_are_ignored() {
+        let pack = toy(|_| {});
+        let project = Project::new(pack.path(), "");
+        project.generate(false, false).unwrap();
+        let outside = project.root.path().join("outside.rs");
+        std::fs::write(&outside, "// This file is @generated by perseid.\n").unwrap();
+        let record = project.read(GENERATION).unwrap();
+        let tampered = record.replace("\"api.md\"", "\"../outside.rs\", \"api.md\"");
+        project.write(GENERATION, &tampered);
+        project.generate(false, false).unwrap();
+        assert!(outside.exists());
+    }
+
+    #[test]
+    fn scaffolds_neither_overwrite_generated_files_nor_leave_the_target() {
+        let colliding = toy(|dir| {
+            let runtime = std::fs::read(dir.join("runtime/output.rs")).unwrap();
+            fsx::write(&dir.join("scaffold/src/runtime/output.rs"), &runtime).unwrap();
+        });
+        let error = format!(
+            "{:#}",
+            Project::new(colliding.path(), "")
+                .generate(false, false)
+                .err()
+                .unwrap()
+        );
+        assert!(
+            error.contains(
+                "the scaffold of the toy pack writes files its templates or runtime generate: scaffold/src/runtime/output.rs"
+            ),
+            "{error}"
+        );
+        let escaping = toy(|dir| fsx::write(&dir.join("scaffold/@@WHERE@@/x"), b"").unwrap());
+        let pack = Pack::load(escaping.path(), "rust").unwrap();
+        for (place, path) in [("../..", "../../x"), ("/etc", "/etc/x")] {
+            let tokens = json!({ "where": place });
+            let error = format!("{:#}", scaffold_files(&pack, &tokens).unwrap_err());
+            assert!(
+                error.contains(&format!(
+                    "scaffold/@@WHERE@@/x goes to {path:?}, outside the target"
+                )),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn build_output_in_a_pack_is_left_out() {
+        let pack = toy(|dir| {
+            for path in [
+                "runtime/target/.rustc_info.json",
+                "runtime/node_modules/x/index.js",
+                "scaffold/target/debug/cli",
+                "templates/target/x.jinja",
+            ] {
+                fsx::write(&dir.join(path), b"{}").unwrap();
+            }
+            fsx::write(&dir.join("scaffold/.gitignore"), b"/target\n").unwrap();
+        });
+        let project = Project::new(pack.path(), "");
+        let generated = project.generate(false, false).unwrap();
+        assert_eq!(
+            generated.scaffold,
+            [
+                PathBuf::from(".github/workflows/release.yml"),
+                ".gitignore".into(),
+                "Cargo.toml".into(),
+                "src/main.rs".into()
+            ]
+        );
+        assert!(
+            project
+                .read("src/runtime/target/.rustc_info.json")
+                .is_none()
+        );
+
+        let unmarked =
+            toy(|dir| fsx::write(&dir.join("runtime/util.rs"), b"pub fn f() {}\n").unwrap());
+        let error = format!(
+            "{:#}",
+            Project::new(unmarked.path(), "")
+                .generate(false, false)
+                .err()
+                .unwrap()
+        );
+        let source = unmarked.path().join("runtime/util.rs");
+        assert!(
+            error.contains(&format!(
+                "src/runtime/util.rs lacks the `@generated` marker in its first lines: add it to {}",
+                source.display()
+            )),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn runtime_features_are_copied_when_the_sdk_turns_them_on() {
+        let pack = toy(|dir| {
+            for feature in ["webhooks", "tests"] {
+                let path = dir.join(format!("runtime/features/{feature}/{feature}.rs"));
+                fsx::write(&path, b"// This file is @generated by perseid.\n").unwrap();
+            }
+        });
+        let project = Project::new(pack.path(), "");
+        project.generate(false, false).unwrap();
+        assert!(project.read("src/runtime/tests.rs").is_some());
+        assert!(project.read("src/runtime/webhooks.rs").is_none());
+        let project = Project::new(pack.path(), "webhooks = true");
+        project.generate(false, false).unwrap();
+        assert!(project.read("src/runtime/webhooks.rs").is_some());
+    }
+
+    #[test]
+    fn templates_include_sdk_templates_that_import_others() {
+        let pack = toy(|dir| {
+            manifest(|t| format!("{t}component_type = {{ dir = \"src/models\" }}\n"))(dir);
+            let template = "{% include \"sdk/component_type.rs.jinja\" %}\n";
+            fsx::write(
+                &dir.join("templates/component_type.rs.jinja"),
+                template.as_bytes(),
+            )
+            .unwrap();
+        });
+        let project = Project::new(pack.path(), "");
+        project.generate(false, false).unwrap();
+        let pet = project.read("src/models/pet.rs").unwrap();
+        assert!(pet.contains("pub struct Pet {"), "{pet}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pack_may_format_with_a_command_of_its_own() {
+        let pack = toy(manifest(|t| {
+            let command =
+                r#"format = ["sh", "-c", "for f; do echo '// formatted' >> \"$f\"; done", "fmt"]"#;
+            t.replace("runtime = ", &format!("{command}\nruntime = "))
+        }));
+        let project = Project::new(pack.path(), "");
+        project.generate(false, true).unwrap();
+        for path in ["api.md", "src/commands/pets.rs", "src/runtime/output.rs"] {
+            let text = project.read(path).unwrap();
+            assert!(text.ends_with("// formatted\n"), "{path}: {text}");
+        }
+        assert!(!project.read("Cargo.toml").unwrap().contains("formatted"));
+        assert!(project.generate(true, true).unwrap().changes.is_empty());
+
+        let failing = toy(manifest(|t| {
+            t.replace("runtime = ", "format = [\"false\"]\nruntime = ")
+        }));
+        let error = format!(
+            "{:#}",
+            Project::new(failing.path(), "")
+                .generate(false, true)
+                .err()
+                .unwrap()
+        );
+        assert!(error.contains("`false` failed"), "{error}");
     }
 
     fn manifest(edit: impl Fn(&str) -> String) -> impl FnOnce(&Path) {
@@ -457,10 +737,6 @@ mod tests {
             pack.manifest.templates.keys().collect::<Vec<_>>(),
             ["api_reference", "api_resource", "api_summary"]
         );
-        let scan = scan(&pack, "rust").unwrap();
-        let roots = ["", "src/commands", "src/runtime"].map(PathBuf::from);
-        assert_eq!(scan.roots, roots);
-        assert_eq!(scan.extensions, ["md", "rs"]);
     }
 
     #[test]
@@ -533,6 +809,8 @@ mod tests {
             "a//b",
             "./src",
             ".github/workflows",
+            ".perseid",
+            "src/.cache",
         ] {
             assert!(!folder(bad), "{bad}");
         }

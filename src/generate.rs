@@ -222,6 +222,8 @@ pub(crate) struct Layout {
     pub tasks: Vec<(String, PathBuf, String)>,
     /// The folder of runtime files, if any, and where they go.
     pub runtime: (PathBuf, PathBuf),
+    /// Where the runtime files come from, as errors name them.
+    pub origin: String,
 }
 
 /// Renders templates, then runtime files, into `stage`. Returns their paths relative to it.
@@ -254,6 +256,7 @@ fn render(
             })
             .collect(),
         runtime: (assets_dir.path().join("runtime").join(language), runtime),
+        origin: format!("runtime/{language}"),
     };
     let api = sdk_api(config, sdk, context, spec)?;
     let globals = serde_json::Map::from_iter([("sdk".to_owned(), context.clone())]);
@@ -303,14 +306,26 @@ pub(crate) fn draw(
     }
     let (runtime_dir, runtime) = &layout.runtime;
     if runtime_dir.is_dir() {
-        for file in assets::walk(runtime_dir)? {
-            let relative = file.strip_prefix(runtime_dir)?;
-            let Some(relative) = feature_path(relative, tokens) else {
+        for file in assets::walk_sources(runtime_dir)? {
+            let source = file.strip_prefix(runtime_dir)?;
+            let origin = format!("{}/{}", layout.origin, source.display());
+            let Some(relative) = feature_path(source, tokens) else {
                 continue;
             };
             let name = self::tokens(relative.to_str().unwrap(), tokens)?;
-            let content = self::tokens(&std::fs::read_to_string(&file)?, tokens)?;
+            ensure!(
+                inside(Path::new(&name)),
+                "{origin} goes to {name:?}, outside the generated folder"
+            );
+            let text =
+                std::fs::read_to_string(&file).with_context(|| format!("reading {origin}"))?;
+            let content = self::tokens(&text, tokens)?;
             let path = clean(&runtime.join(name));
+            ensure!(
+                marked(&path, &content),
+                "{} lacks the `@generated` marker in its first lines: add it to {origin}",
+                path.display()
+            );
             fsx::write(&stage.join(&path), content.as_bytes())?;
             produced.push(path);
         }
@@ -374,6 +389,13 @@ pub(crate) fn tokens(source: &str, context: &Value) -> Result<String> {
     Ok(out)
 }
 
+/// Whether `path` names a file below the folder it is relative to.
+pub(crate) fn inside(path: &Path) -> bool {
+    use std::path::Component::{CurDir, Normal};
+    path.components().any(|c| matches!(c, Normal(_)))
+        && path.components().all(|c| matches!(c, Normal(_) | CurDir))
+}
+
 pub(crate) fn clean(path: &Path) -> PathBuf {
     path.components()
         .filter(|c| *c != std::path::Component::CurDir)
@@ -422,7 +444,13 @@ pub fn sdk(
         extensions: vec![extension(sdk.language).to_owned()],
         files: vec![clean(&round_trips_data(sdk.language, &context))],
     };
-    settle(dir, stage.path(), produced, &scan, options.check)
+    settle(
+        dir,
+        stage.path(),
+        produced,
+        &Stale::Scan(scan),
+        options.check,
+    )
 }
 
 /// A folder under `dir` that generated files are staged in before they replace those of `dir`.
@@ -457,6 +485,16 @@ pub(crate) fn logged(
     Ok(produced)
 }
 
+/// Which generated files of a tree, no longer produced, are removed.
+pub(crate) enum Stale {
+    /// Those found beside the produced files or under the folders of the scan: an SDK's tree is
+    /// perseid's alone.
+    Scan(Scan),
+    /// Those [`GENERATION`] lists from the last generation: a pack's target also holds files that
+    /// other tools generate.
+    Recorded,
+}
+
 /// Where generated files no longer produced may be left, relative to the generated root.
 pub(crate) struct Scan {
     /// Folders searched for files of `extensions`, through their subfolders.
@@ -471,7 +509,7 @@ pub(crate) fn settle(
     dir: &Path,
     stage: &Path,
     produced: Vec<PathBuf>,
-    scan: &Scan,
+    stale: &Stale,
     check: bool,
 ) -> Result<Vec<Change>> {
     let mut changes = Vec::new();
@@ -501,22 +539,32 @@ pub(crate) fn settle(
             .map(|p| p.display().to_string())
             .join(", ")
     );
-    let produced: BTreeSet<_> = produced.into_iter().collect();
     let mut candidates = BTreeSet::new();
-    for relative in dirs {
-        let Ok(entries) = std::fs::read_dir(dir.join(&relative)) else {
-            continue;
-        };
-        for entry in entries {
-            candidates.insert(relative.join(entry?.file_name()));
+    let recorded = match stale {
+        Stale::Scan(scan) => {
+            for relative in dirs {
+                let Ok(entries) = std::fs::read_dir(dir.join(&relative)) else {
+                    continue;
+                };
+                for entry in entries {
+                    candidates.insert(relative.join(entry?.file_name()));
+                }
+            }
+            for root in &scan.roots {
+                for extension in &scan.extensions {
+                    scan_sources(dir, root, extension, &mut candidates)?;
+                }
+            }
+            candidates.extend(scan.files.iter().cloned());
+            None
         }
-    }
-    for root in &scan.roots {
-        for extension in &scan.extensions {
-            scan_sources(dir, root, extension, &mut candidates)?;
+        Stale::Recorded => {
+            let recorded = recorded(dir);
+            candidates.extend(recorded.iter().cloned());
+            Some(recorded)
         }
-    }
-    candidates.extend(scan.files.iter().cloned());
+    };
+    let produced: BTreeSet<_> = produced.into_iter().collect();
     for path in candidates {
         if dir.join(&path).is_file() && !produced.contains(&path) && generated(&dir.join(&path)) {
             changes.push((Change::Removed(path), None));
@@ -524,9 +572,10 @@ pub(crate) fn settle(
     }
     // Rewritten only along with other changes: a spec change leaving the SDK alone then needs no
     // release for targets, which compare it with the one at the release tag.
-    if !changes.is_empty() {
+    if !changes.is_empty() || recorded.is_some_and(|r| r != produced) {
         let marker = PathBuf::from(GENERATION);
-        let content = generation(&digest.finalize());
+        let paths = matches!(stale, Stale::Recorded).then_some(&produced);
+        let content = generation(&digest.finalize(), paths);
         match std::fs::read(dir.join(&marker)) {
             Ok(old) if old == content => {}
             Ok(_) => changes.push((Change::Modified(marker), Some(content))),
@@ -558,14 +607,33 @@ pub(crate) fn settle(
 /// Where each SDK records what perseid last generated in it, relative to its directory.
 pub const GENERATION: &str = ".perseid/generation.json";
 
-/// The text of [`GENERATION`], from the digest of the generated files.
-fn generation(digest: &[u8]) -> Vec<u8> {
+/// The text of [`GENERATION`], from the digest of the generated files, and their `paths` when
+/// they are recorded.
+fn generation(digest: &[u8], paths: Option<&BTreeSet<PathBuf>>) -> Vec<u8> {
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
-    let record = serde_json::json!({
+    let mut record = serde_json::json!({
         "generated": "this file is @generated by perseid",
         "files": format!("sha256:{hex}"),
     });
+    if let Some(paths) = paths {
+        let paths = paths
+            .iter()
+            .map(|p| p.iter().map(|c| c.to_string_lossy()).join("/"));
+        record["paths"] = paths.collect();
+    }
     (serde_json::to_string_pretty(&record).unwrap_or_default() + "\n").into_bytes()
+}
+
+/// The paths [`GENERATION`] in `dir` records, those leaving `dir` ignored: none before a first
+/// generation.
+fn recorded(dir: &Path) -> BTreeSet<PathBuf> {
+    let text = std::fs::read_to_string(dir.join(GENERATION)).unwrap_or_default();
+    let record: Value = serde_json::from_str(&text).unwrap_or_default();
+    (record["paths"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .map(|p| clean(Path::new(p)))
+        .filter(|p| inside(p))
+        .collect()
 }
 
 pub fn load_spec(config: &Config, root: &Path, over: Option<&str>) -> Result<String> {
@@ -635,7 +703,41 @@ pub fn summary(
 mod tests {
     use serde_json::json;
 
-    use super::tokens;
+    use super::*;
+
+    #[test]
+    fn runtime_files_stay_in_the_generated_folder() {
+        let runtime = tempfile::tempdir().unwrap();
+        let file = runtime.path().join("@@WHERE@@/x.rs");
+        fsx::write(&file, b"// This file is @generated by perseid.\n").unwrap();
+        let stage = tempfile::tempdir().unwrap();
+        let layout = Layout {
+            templates: PathBuf::new(),
+            tasks: vec![],
+            runtime: (runtime.path().to_owned(), PathBuf::from("src")),
+            origin: "packs/cli/runtime".into(),
+        };
+        let draw = |place: &str| {
+            let tokens = json!({ "where": place });
+            draw(
+                &Default::default(),
+                &Default::default(),
+                &layout,
+                &tokens,
+                "rs",
+                stage.path(),
+            )
+        };
+        assert_eq!(draw("io").unwrap(), [PathBuf::from("src/io/x.rs")]);
+        for place in ["../..", "/etc"] {
+            let error = format!("{:#}", draw(place).unwrap_err());
+            assert!(
+                error.contains("packs/cli/runtime/@@WHERE@@/x.rs goes to")
+                    && error.ends_with("outside the generated folder"),
+                "{error}"
+            );
+        }
+    }
 
     #[test]
     fn tokens_with_digits_are_substituted() {

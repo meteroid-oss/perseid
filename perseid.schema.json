@@ -833,7 +833,7 @@
       ],
       "properties": {
         "after": {
-          "description": "When its pull request opens: once every SDK generated from the current spec is released (`sdks`, the default), once the SDK of a language is (`rust`), or with the SDK pull requests (`generate`).",
+          "description": "When its pull request opens: once every SDK generated from the current spec is released (`sdks`, the default), once the SDK of a language is (`rust`, the default of a pack, which waits for no other), or with the SDK pull requests (`generate`).",
           "allOf": [
             {
               "$ref": "#/definitions/After"

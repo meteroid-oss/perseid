@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::{
     changelog::Changelog,
-    config::{After, Config, Sdk, TargetKind, TargetTable},
+    config::{After, Config, Sdk, TargetKind, TargetTable, same_repo},
     generate::{self, Change, GENERATION, Options},
     pack,
     pr::{self, Bump},
@@ -108,12 +108,23 @@ impl Target {
             table.repo
         );
         ensure!(!table.repo.is_empty(), "{at}: set `repo`, `owner/name`");
+        let after = match (&kind, table.after) {
+            (Kind::Pack { wraps, .. }, Some(After::Sdk(language))) if language.name() != *wraps => {
+                bail!(
+                    "{at}: `after = \"{}\"` waits for an SDK the pack doesn't wrap: set \"{wraps}\", \"sdks\" or \"generate\"",
+                    language.name()
+                )
+            }
+            (_, Some(after)) => after,
+            (Kind::Pack { .. }, None) => table.wraps.map_or(After::Sdks, After::Sdk),
+            (Kind::Docs, None) => After::Sdks,
+        };
         Ok(Target {
             name: name.to_owned(),
             kind,
             repo: table.repo.clone(),
             path: path.to_owned(),
-            after: table.after.unwrap_or_default(),
+            after,
         })
     }
 
@@ -121,6 +132,54 @@ impl Target {
     pub fn branch(&self) -> String {
         format!("perseid/targets/{}", self.name)
     }
+}
+
+/// Fails when a pack target writes in the folder of an SDK or of another target, or in one
+/// holding it: perseid would replace or delete the files of one generating the other.
+pub(crate) fn overlaps(config: &Config) -> Result<()> {
+    let targets = config.targets(&[])?;
+    let sdks = config.sdks(&[]).unwrap_or_default();
+    let nested = |a: &str, b: &str| {
+        let (a, b) = (a.trim_end_matches('/'), b.trim_end_matches('/'));
+        a == "."
+            || b == "."
+            || a == b
+            || b.starts_with(&format!("{a}/"))
+            || a.starts_with(&format!("{b}/"))
+    };
+    let place = |repo: &str, path: &str| match path {
+        "." => repo.to_owned(),
+        path => format!("{repo} ({path}/)"),
+    };
+    for (i, target) in targets.iter().enumerate() {
+        let at = format!("[targets.{}]", target.name);
+        let pack = matches!(target.kind, Kind::Pack { .. });
+        for other in &targets[i + 1..] {
+            ensure!(
+                !(pack || matches!(other.kind, Kind::Pack { .. }))
+                    || !same_repo(&target.repo, &other.repo)
+                    || !nested(&target.path, &other.path),
+                "{at} writes in {}, and [targets.{}] in {}: set `path` to folders apart",
+                place(&target.repo, &target.path),
+                other.name,
+                place(&other.repo, &other.path)
+            );
+        }
+        let packages = sdks
+            .iter()
+            .filter(|_| pack)
+            .filter_map(|s| Package::of(config, s));
+        for package in packages {
+            ensure!(
+                !same_repo(&target.repo, &package.repo) || !nested(&target.path, &package.path),
+                "{at} writes in {}, and the {} SDK in {}: set `path` to folders apart",
+                place(&target.repo, &target.path),
+                package.language,
+                place(&package.repo, &package.path)
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The files of a docs target, relative to its folder: the spec as perseid read it, the docs
@@ -474,8 +533,12 @@ pub fn deliver(
         let scratch = tempfile::tempdir()?;
         let previous = scratch.path().join("openapi.json");
         let had_spec = std::fs::copy(dir.join(snapshot), &previous).is_ok();
-        let (changes, files) = write(config, root, target, &dir, spec, &versions, &options)?;
+        let (mut changes, files) = write(config, root, target, &dir, spec, &versions, &options)?;
         pr::record(&checkout)?;
+        let within = |p: &Path| generate::clean(&Path::new(&target.path).join(p));
+        let (workflows, files): (Vec<_>, Vec<_>) =
+            (files.into_iter()).partition(|f| within(f).starts_with(WORKFLOWS));
+        changes.retain(|c| !matches!(c, Change::Added(p) if workflows.contains(p)));
         if changes.is_empty() {
             println!("{at}: up to date in {}", target.repo);
             continue;
@@ -490,7 +553,6 @@ pub fn deliver(
             (Bump::Auto, false) => (Bump::Minor, Changelog::default()),
             (bump, _) => (bump, Changelog::default()),
         };
-        let within = |p: &Path| generate::clean(&Path::new(&target.path).join(p));
         let folder = [target.path.clone()];
         let files: Vec<String> = (files.iter())
             .filter(|f| dir.join(f).is_file())
@@ -523,7 +585,19 @@ pub fn deliver(
             &BTreeMap::from([(target.name.clone(), shown)]),
             &BTreeMap::new(),
         );
-        let describe = |listed: &str| describe(&summary, listed, &described, origin.as_deref());
+        let workflows = workflows_note(
+            target,
+            &workflows.iter().map(|w| within(w)).collect::<Vec<_>>(),
+        );
+        let describe = |listed: &str| {
+            let listed = [listed, &workflows].into_iter().filter(|s| !s.is_empty());
+            describe(
+                &summary,
+                &listed.collect::<Vec<_>>().join("\n\n"),
+                &described,
+                origin.as_deref(),
+            )
+        };
         let changelog = &changelog;
         match pr::open(
             github, &checkout, &update, bump, &subject, changelog, describe,
@@ -538,6 +612,26 @@ pub fn deliver(
         }
     }
     Ok(())
+}
+
+/// Where GitHub reads workflows, which the tokens of CI runs can't write.
+const WORKFLOWS: &str = ".github/workflows";
+
+/// What a pull request says of the `workflows` of a pack's scaffold it leaves out.
+fn workflows_note(target: &Target, workflows: &[PathBuf]) -> String {
+    if workflows.is_empty() {
+        return String::new();
+    }
+    let listed: Vec<String> = (workflows.iter())
+        .map(|w| format!("- `{}`", w.display()))
+        .collect();
+    format!(
+        "The scaffold also writes these workflows, which pull requests from CI can't carry:\n\n{}\n\n\
+         Add them by hand: `perseid targets {} --out <dir>`, then commit them from `<dir>/{}`.",
+        listed.join("\n"),
+        target.name,
+        target.name
+    )
 }
 
 /// The description of a target's pull request.
@@ -676,7 +770,8 @@ mod tests {
     fn pack_targets_wrap_an_sdk_and_may_wait_for_its_release_alone() {
         let config = config(
             "[targets.cli]\npack = \"../ext/packs/cli\"\nwraps = \"typescript\"\nrepo = \"acme/cli\"\nafter = \"typescript\"\n\
-             [targets.tools]\npack = \"packs/tools\"\nwraps = \"go\"\nrepo = \"acme/tools\"\npath = \"tools/\"\nafter = \"generate\"\n",
+             [targets.tools]\npack = \"packs/tools\"\nwraps = \"go\"\nrepo = \"acme/tools\"\npath = \"tools/\"\nafter = \"generate\"\n\
+             [targets.tui]\npack = \"packs/tui\"\nwraps = \"go\"\nrepo = \"acme/tools\"\npath = \"tui\"\n",
         )
         .unwrap();
         assert_eq!(
@@ -701,6 +796,16 @@ mod tests {
                     repo: "acme/tools".into(),
                     path: "tools".into(),
                     after: After::Generate,
+                },
+                Target {
+                    name: "tui".into(),
+                    kind: Kind::Pack {
+                        dir: "packs/tui".into(),
+                        wraps: "go",
+                    },
+                    repo: "acme/tools".into(),
+                    path: "tui".into(),
+                    after: After::Sdk(Language::Go),
                 },
             ]
         );
@@ -730,8 +835,8 @@ mod tests {
                 "[targets.cli] `wraps = \"rust\"` names an SDK that `sdks` doesn't list",
             ),
             (
-                format!("{pack}wraps = \"go\"\nafter = \"python\"\n"),
-                "[targets.cli] `after = \"python\"` names an SDK that `sdks` doesn't list",
+                format!("{pack}wraps = \"go\"\nafter = \"typescript\"\n"),
+                "[targets.cli]: `after = \"typescript\"` waits for an SDK the pack doesn't wrap: set \"go\", \"sdks\" or \"generate\"",
             ),
             (
                 format!("{pack}wraps = \"go\"\nafter = \"ruby\"\n"),
@@ -771,6 +876,52 @@ mod tests {
     }
 
     #[test]
+    fn pack_targets_write_apart_from_the_sdks_and_the_other_targets() {
+        let toml = "repo = \"acme/acme-{lang}\"\n[go]\nrepo = \"acme/sdks\"\npath = \"go\"\n\
+                    [targets.docs]\nrepo = \"acme/site\"\npath = \"reference/api\"\n\
+                    [targets.cli]\npack = \"packs/cli\"\nwraps = \"go\"\n";
+        let pack = |table: &str| config(&format!("{toml}{table}"));
+        for apart in [
+            "repo = \"acme/cli\"\n",
+            "repo = \"acme/sdks\"\npath = \"cli\"\n",
+            "repo = \"acme/sdks\"\npath = \"gopher\"\n",
+            "repo = \"acme/site\"\npath = \"reference/cli\"\n",
+        ] {
+            assert!(pack(apart).is_ok(), "{apart}");
+        }
+        for (table, expected) in [
+            (
+                "repo = \"acme/sdks\"\n",
+                "[targets.cli] writes in acme/sdks, and the go SDK in acme/sdks (go/)",
+            ),
+            (
+                "repo = \"Acme/SDKs\"\npath = \"go/cli\"\n",
+                "[targets.cli] writes in Acme/SDKs (go/cli/), and the go SDK in acme/sdks (go/)",
+            ),
+            (
+                "repo = \"acme/acme-typescript\"\npath = \"cli\"\n",
+                "and the typescript SDK in acme/acme-typescript: set `path` to folders apart",
+            ),
+            (
+                "repo = \"acme/site\"\npath = \"reference\"\n",
+                "[targets.cli] writes in acme/site (reference/), and [targets.docs] in acme/site (reference/api/)",
+            ),
+        ] {
+            let text = format!("{:#}", pack(table).err().expect(table));
+            assert!(text.contains(expected), "{table}: {text}");
+        }
+        let twice = error(
+            "[targets.cli]\npack = \"p\"\nwraps = \"go\"\nrepo = \"acme/cli\"\n\
+             [targets.tui]\npack = \"q\"\nwraps = \"go\"\nrepo = \"acme/cli\"\npath = \"tui\"\n",
+        );
+        assert!(
+            twice
+                .contains("[targets.cli] writes in acme/cli, and [targets.tui] in acme/cli (tui/)"),
+            "{twice}"
+        );
+    }
+
+    #[test]
     fn a_pack_target_depends_on_the_released_version_of_its_sdk() {
         let root = tempfile::tempdir().unwrap();
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
@@ -806,7 +957,8 @@ mod tests {
         assert_eq!(
             files,
             [
-                PathBuf::from("Cargo.toml"),
+                PathBuf::from(".github/workflows/release.yml"),
+                "Cargo.toml".into(),
                 "src/main.rs".into(),
                 pack::SPEC.into()
             ]

@@ -203,12 +203,17 @@ api_reference = { dir = ".", extension = "md" }
   released one, else the one where `generate` writes the SDK. `pack` holds `name`, `target` (the
   table's name), `repo`, `path`, and `sdk`: `language`, `package`, `version` and `released`.
 - `runtime/` and `scaffold/` files take the `@@TOKEN@@`s of the SDK, plus `@@PACK_NAME@@`,
-  `@@PACK_TARGET@@`, `@@PACK_REPO@@` and `@@PACK_PATH@@`. Runtime files under
-  `features/<name>/` are copied when `sdk.<name>` is true.
-- Generated files, runtime included, must carry `@generated`. Those no longer generated are
-  deleted, as in an SDK, and `--check` compares them.
+  `@@PACK_TARGET@@`, `@@PACK_REPO@@` and `@@PACK_PATH@@`, in their paths too, which must stay in
+  the target. Runtime files under `features/<name>/` are copied when `sdk.<name>` is true.
+  Folders named `target`, `node_modules` or `.git` in a pack are left out.
+- `dir` and `runtime` can't be hidden folders, such as `.github` or `.perseid`.
+- Generated files, runtime included, must carry `@generated`. `.perseid/generation.json` lists
+  them: the next generation deletes those it no longer generates, and `--check` compares them.
+  Other files are never deleted, even those other tools mark `@generated`.
 - `scaffold/` is written on the first generation, without overwriting a file: the manifest, the
   release workflow and a handwritten `main`, which belong to the target's repository afterwards.
+  It can't hold a file the templates or runtime generate. Pull requests leave out its workflows,
+  `.github/workflows/`, which CI tokens can't push: their description lists them to add by hand.
 - `model` must be the `model_version` that `perseid inspect` prints: a pack written for another
   fails, naming what to upgrade.
 

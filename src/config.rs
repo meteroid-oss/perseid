@@ -227,8 +227,8 @@ pub struct TargetTable {
     /// into the whole repository (`.`) by default.
     pub path: Option<String>,
     /// When its pull request opens: once every SDK generated from the current spec is released
-    /// (`sdks`, the default), once the SDK of a language is (`rust`), or with the SDK pull
-    /// requests (`generate`).
+    /// (`sdks`, the default), once the SDK of a language is (`rust`, the default of a pack, which
+    /// waits for no other), or with the SDK pull requests (`generate`).
     pub after: Option<After>,
     /// The folder of a pack, relative to perseid.toml: a program wrapping the SDK `wraps` names,
     /// rendered from the pack's templates against that SDK's model.
@@ -623,6 +623,7 @@ impl Config {
         let mut config = Self::parse(&text, &path.display().to_string())?;
         let root = std::path::absolute(path)?.parent().unwrap().to_owned();
         config.home = Home::of(&root);
+        crate::targets::overlaps(&config).with_context(|| format!("in {}", path.display()))?;
         Ok((config, root))
     }
 
@@ -695,7 +696,7 @@ impl Config {
                 );
             }
         }
-        Ok(())
+        crate::targets::overlaps(self)
     }
 
     /// The `[targets]` named `selected`, or all of them.

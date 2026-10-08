@@ -77,6 +77,25 @@ pub fn eject(language: &str, only: &[String], dir: &Path) -> Result<Vec<PathBuf>
     Ok(written)
 }
 
+/// The files under `dir`, like [`walk`], leaving out build output, dependencies and git metadata:
+/// the folders named `target`, `node_modules` and `.git`.
+pub(crate) fn walk_sources(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if !path.is_dir() {
+            files.push(path);
+        } else if !matches!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("target" | "node_modules" | ".git")
+        ) {
+            files.extend(walk_sources(&path)?);
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 pub fn walk(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for entry in std::fs::read_dir(dir)? {
