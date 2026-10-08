@@ -25,7 +25,7 @@ These hold for the TypeScript and Python SDKs, checked against SDKs generated fr
 | Install | Same package names, on the same registries |
 | Client | `new Knock({ apiKey })`, `Knock(api_key=...)`, `AsyncKnock` in Python |
 | Environment | `KNOCK_API_KEY` and `KNOCK_BASE_URL` |
-| Resources | `client.users.list()`, `client.messages.markAsArchived(id)`: method names come from `stainless.yml` for the resources whose operations perseid groups under the same name (their first tag): `client.workspaces.peers.chat()` becomes `client.peers.chat()`, but `client.sessions.peers.add()` keeps perseid's name in `client.sessions` |
+| Resources | `client.users.list()`, `client.users.feeds.listItems(...)`, `client.messages.markAsArchived(id)`: resources, nested ones included, and method names come from `stainless.yml` |
 | Arguments | Path parameters first, then objects (TypeScript) or keyword arguments (Python) |
 | Pagination | `for await (const user of client.users.list())`, `for user in client.users.list()`, `hasNextPage()`/`getNextPage()`, `has_next_page()`/`get_next_page()` |
 | Errors | `APIError`, `NotFoundError`, `RateLimitError`, `APIConnectionError`... by status, with `status` / `status_code`. `Knock.NotFoundError` works in TypeScript |
@@ -124,14 +124,13 @@ imports. It writes `perseid.toml` and the workflows, then lists what it did not 
 with why:
 
 ```
-From stainless.yml: name, sdks, packages, repositories, base_url, license, idempotency_keys, 2 pagination rules, 3 method names, exclude (1 operation)
+From stainless.yml: name, sdks, packages, repositories, base_url, license, idempotency_keys, 2 pagination rules, 3 resource placements, 4 method names, exclude (1 operation)
 Not carried over from stainless.yml:
   - edition: perseid has no editions: a perseid upgrade that changes the SDKs comes as a pull request
   - targets.ruby: perseid generates no Ruby SDK
   - client_settings.opts.branch: perseid clients take no custom options: send `X-Knock-Branch` with the default headers (`defaultHeaders`, `default_headers`)
   - pagination.slack_channels_cursor: `query_options.cursor` is a nested parameter: perseid pages with a top-level query parameter
   - resources.users.list_schedules: `paginated: false`, but perseid pages `listUserSchedules`: set `x-pagination: false` on it in the spec
-  - resources.users.feeds (1 method): nested resource: perseid has one level of resources, named after the operations' first tag: users.retrieve_feed
   ...
 ```
 
@@ -145,7 +144,12 @@ exclude = ["notify"]
 
 [methods]
 getUser = "get"
+getUserFeed = "list_items"
 archiveMessage = "mark_as_archived"
+
+[resources]                         # where perseid would place them elsewhere
+getUserFeed = "users.feeds"
+addAudienceMembers = "audiences"
 
 [[pagination]]                      # entries_cursor
 cursor = "after"
@@ -162,8 +166,8 @@ Without `--spec`, `init` maps everything but the resources, and says so.
 
 Then work through the list. Most items are fixed in the spec:
 
-- A method in another resource: perseid groups operations by their first tag. Tag them as the
-  resource is named in `stainless.yml`.
+- Methods of the client (`$client`): perseid's client has none, they stay in the resource of
+  their tag.
 - `x-pagination: false` on an operation Stainless did not paginate.
 - `components.securitySchemes` and `security` that `stainless.yml` overrode.
 - Transforms of `openapi.transforms`, applied to the spec itself.
@@ -254,7 +258,7 @@ files without its `@generated` marker.
 
 | Stainless | perseid |
 |---|---|
-| Resources nested at any depth, methods on the client (`$client`) | One level of resources, from the spec's first tag |
+| Resources nested at any depth, methods on the client (`$client`) | Resources three deep at most, from the spec's first tag and its paths, and no methods on the client |
 | Types namespaced by resource | Types named after the spec's schemas |
 | Every request retried, POST included, on connection errors, 408, 409, 429 and 5xx | POST retried only with an `Idempotency-Key`: `idempotency_keys = true` sends one with every POST. 409 is not retried |
 | `environment` option between named base URLs | One default base URL, overridden by `baseURL` / `base_url` or `KNOCK_BASE_URL` |

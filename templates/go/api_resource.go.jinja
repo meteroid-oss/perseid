@@ -63,6 +63,7 @@ package {{ sdk.package_name }}
 {% for p in op.path_params if p in op.path_styles and op.path_styles[p].type is defined %}{% if "json." in go_type(op.path_styles[p].type) %}{% set ns.json = true %}{% endif %}{% if "time." in go_type(op.path_styles[p].type) %}{% set ns.time = true %}{% endif %}{% endfor -%}
 {% for p in op.path_params if p in op.path_styles and op.path_styles[p].type is defined %}{% if "uuid." in go_type(op.path_styles[p].type) %}{% set ns.uuid = true %}{% endif %}{% endfor -%}
 {% endfor -%}
+{% if resource.operations -%}
 import (
 	"context"
 {% if ns.io %}	"io"
@@ -72,6 +73,7 @@ import (
 {% endif %}{% if ns.uuid %}
 	"github.com/google/uuid"
 {% endif %})
+{% endif -%}
 
 {% for op in resource.operations if op.request_body_kind == "multipart" %}
 {% set body_type_name = (resource_type_name ~ (op.name | ident("pascal", "go")) ~ "Body") | go_name %}
@@ -105,11 +107,17 @@ type {{ options_type_name }} struct {
 {% endif %}{% if op.response_body_union is defined and op.response_body_union not in types %}
 {{ go_union(go_ident(op.response_body_union), op.response_body_json_type) }}
 {% endif %}{% endfor %}
-// {{ resource_type_name }} groups the {{ go_words(resource.name) }} operations of the {{ sdk.client_name }} API.
+// {{ resource_type_name }} groups the {{ go_words(resource.path | join("_")) }} operations of the {{ sdk.client_name }} API.
 type {{ resource_type_name }} struct {
 	client *Client
 }
-
+{% for child in resource.children %}
+{% set name = go_ident(child.accessor) %}
+// {{ name }} returns the {{ go_words(child.accessor) }} API.
+func (a *{{ resource_type_name }}) {{ name }}() *{{ go_ident(child.name) }} {
+	return &{{ go_ident(child.name) }}{client: a.client}
+}
+{% endfor %}
 {% for op in resource.operations %}
 {% set name = go_export(op.name) %}
 {% set required_query = op.query_params | selectattr("required") | list %}

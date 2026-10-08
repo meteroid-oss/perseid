@@ -96,7 +96,8 @@ resource's class, to add custom methods.
 | Python | `extensions/<resource>.py`, and `<resource>_async.py` for the async class |
 | Java, C# | `extensions/<resource>.java`, `.cs`, and `<resource>_<operation>.java`, `.cs` inlined after that operation's method |
 
-Resource and operation names are in snake_case.
+Resource and operation names are in snake_case; a nested resource is named by its dotted path,
+`extensions/workspaces.peers.ts`.
 
 ## Ejected templates
 

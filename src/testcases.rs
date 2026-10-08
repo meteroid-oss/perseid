@@ -140,6 +140,7 @@ mod tests {
             detect_pagination: true,
             reserved: Default::default(),
             names: Default::default(),
+            resources: Default::default(),
             uuid_strings: false,
         };
         let api = crate::spec::api(&spec, &filters).unwrap();

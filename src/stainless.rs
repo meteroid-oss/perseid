@@ -39,6 +39,8 @@ pub(crate) struct Import {
     /// Each rule with the name of the Stainless scheme it comes from.
     pub pagination: Vec<(String, Pagination)>,
     pub methods: BTreeMap<String, String>,
+    /// The resource of each operation perseid places elsewhere than stainless.yml, by id.
+    pub resources: BTreeMap<String, String>,
     pub exclude: Vec<String>,
     /// What was imported, for the summary.
     pub mapped: Vec<String>,
@@ -687,6 +689,30 @@ impl Import {
         }
     }
 
+    /// The Stainless resource of each operation `api` places in another one, by id: the
+    /// `$client` methods stay where perseid derives them, as its client has no methods.
+    fn placements(&self, api: &crate::api::Api) -> BTreeMap<String, String> {
+        let generated = operations(api);
+        let mut out = BTreeMap::new();
+        for method in self
+            .endpoints
+            .iter()
+            .filter(|m| !m.resource.starts_with('$'))
+        {
+            let found = generated
+                .iter()
+                .find(|(_, op)| op.method == method.verb && shape(&op.path) == shape(&method.path));
+            let target = snake_path(&method.resource);
+            if let Some((resource, op)) = found
+                && !same_resource(&method.resource, resource)
+                && crate::api::nesting::resource_path(&target).is_ok()
+            {
+                out.insert(op.id.clone(), target);
+            }
+        }
+        out
+    }
+
     /// Without a spec, nothing tells the operations the resources and pagination rules refer to.
     pub(crate) fn without_spec(&mut self) {
         if !self.endpoints.is_empty() {
@@ -716,20 +742,22 @@ impl Import {
         if self.endpoints.is_empty() {
             return;
         }
-        let filters =
-            |names: &BTreeMap<String, String>, pagination: &[(String, Pagination)]| Filters {
-                include_mode: IncludeMode::OnlyPublic,
-                excluded: BTreeSet::new(),
-                specified: BTreeSet::new(),
-                pagination: pagination.iter().map(|(_, p)| p.clone()).collect(),
-                detect_pagination: true,
-                reserved: BTreeSet::new(),
-                names: names.clone(),
-                uuid_strings: false,
-            };
-        let api = match quietly(|| {
-            crate::spec::api(spec, &filters(&BTreeMap::new(), &self.pagination))
-        }) {
+        let filters = |names: &BTreeMap<String, String>,
+                       resources: &BTreeMap<String, String>,
+                       pagination: &[(String, Pagination)]| Filters {
+            include_mode: IncludeMode::OnlyPublic,
+            excluded: BTreeSet::new(),
+            specified: BTreeSet::new(),
+            pagination: pagination.iter().map(|(_, p)| p.clone()).collect(),
+            detect_pagination: true,
+            reserved: BTreeSet::new(),
+            names: names.clone(),
+            resources: resources.clone(),
+            uuid_strings: false,
+        };
+        let none = BTreeMap::new();
+        let api = match quietly(|| crate::spec::api(spec, &filters(&none, &none, &self.pagination)))
+        {
             Ok(api) => api,
             Err(error) => {
                 self.skip(
@@ -737,6 +765,20 @@ impl Import {
                     format!("the spec can't be read, so no method is mapped: {error:#}"),
                 );
                 return;
+            }
+        };
+        let mut placements = self.placements(&api);
+        let api = match quietly(|| {
+            crate::spec::api(spec, &filters(&none, &placements, &self.pagination))
+        }) {
+            Ok(placed) => placed,
+            Err(error) => {
+                self.skip(
+                    "resources",
+                    format!("the resources of stainless.yml don't fit perseid's, so none is kept: {error:#}"),
+                );
+                placements.clear();
+                api
             }
         };
         let generated_ops = operations(&api);
@@ -784,7 +826,9 @@ impl Import {
         let matched = total - missing.count();
         let trusted = matched * 5 >= total * 4;
         drop_clashes(&generated_ops, &mut names);
-        let renamed = match quietly(|| crate::spec::api(spec, &filters(&names, &self.pagination))) {
+        let renamed = match quietly(|| {
+            crate::spec::api(spec, &filters(&names, &placements, &self.pagination))
+        }) {
             Ok(api) => Some(api),
             Err(error) => {
                 self.skip(
@@ -808,22 +852,21 @@ impl Import {
             let Some((resource, name)) = generated.get(&op.id) else {
                 continue;
             };
-            if *resource == method.resource && *name == snake(&method.name) {
+            if *resource == snake_path(&method.resource) && *name == snake(&method.name) {
                 continue;
             }
             let why = if method.resource == "$client" {
                 "methods of the client: perseid has none, it groups operations by their first tag"
                     .to_owned()
-            } else if method.resource.contains('.') {
-                "nested resource: perseid has one level of resources, named after the operations' first tag".to_owned()
-            } else if *resource == format!("{}_api", snake(&method.resource)) {
+            } else if let Err(why) =
+                crate::api::nesting::resource_path(&snake_path(&method.resource))
+            {
+                format!("`{}` {why}", snake_path(&method.resource))
+            } else if !same_resource(&method.resource, resource) {
+                format!("perseid places them in `{resource}`")
+            } else if *resource != snake_path(&method.resource) {
                 format!(
                     "perseid names the resource `{resource}`, as a type is named like `{}`",
-                    method.resource
-                )
-            } else if !same_resource(&method.resource, resource) {
-                format!(
-                    "perseid groups operations by their first tag: tag them `{}` in the spec",
                     method.resource
                 )
             } else {
@@ -840,10 +883,15 @@ impl Import {
                 missing.first().map(|e| format!(" (`{e}` is not)")).unwrap_or_default()
             )),
         }
+        if !placements.is_empty() {
+            self.mapped
+                .push(count(placements.len(), "resource placement"));
+        }
         if !names.is_empty() {
             self.mapped.push(count(names.len(), "method name"));
         }
         self.methods = names;
+        self.resources = placements;
         let left_out = |id: &String| {
             !self.sdks.is_empty()
                 && self
@@ -943,6 +991,12 @@ impl Import {
             out += "\n[methods]\n";
             for (id, name) in &self.methods {
                 out += &format!("{} = {}\n", key(id), quote(name));
+            }
+        }
+        if !self.resources.is_empty() {
+            out += "\n[resources]\n";
+            for (id, resource) in &self.resources {
+                out += &format!("{} = {}\n", key(id), quote(resource));
             }
         }
         if let Some(prefix) = env_prefix {
@@ -1250,11 +1304,9 @@ fn skipped_in(node: &Value, parent: &BTreeSet<&'static str>) -> BTreeSet<&'stati
 /// The generated operations, with their resource.
 fn operations(api: &crate::api::Api) -> Vec<(String, &Operation)> {
     let mut out = Vec::new();
-    let mut stack: Vec<&crate::api::Resource> = api.resources.values().collect();
-    while let Some(resource) = stack.pop() {
-        stack.extend(resource.subresources.values());
+    for resource in api.resources.values() {
         for op in resource.operations.iter().filter(|op| !op.stream) {
-            out.push((resource.name.clone(), op));
+            out.push((resource.path.join("."), op));
         }
     }
     out
@@ -1288,11 +1340,26 @@ fn drop_clashes(operations: &[(String, &Operation)], names: &mut BTreeMap<String
     }
 }
 
-/// Whether the methods of the Stainless resource `stainless` are those of the perseid resource
-/// `perseid`: its last segment is named alike, or `<name>_api` as a type is named like it.
+/// The dotted resource path of perseid naming the Stainless resource `stainless`.
+fn snake_path(stainless: &str) -> String {
+    stainless
+        .split('.')
+        .map(snake)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// Whether the Stainless resource `stainless` is the perseid resource `perseid` (dotted): each
+/// segment is named alike, or `<name>_api` as a type is named like it.
 fn same_resource(stainless: &str, perseid: &str) -> bool {
-    let name = snake(stainless.rsplit('.').next().unwrap_or(stainless));
-    !stainless.starts_with('$') && (perseid == name || perseid == format!("{name}_api"))
+    let theirs: Vec<&str> = stainless.split('.').collect();
+    let ours: Vec<&str> = perseid.split('.').collect();
+    !stainless.starts_with('$')
+        && theirs.len() == ours.len()
+        && theirs.iter().zip(&ours).all(|(t, o)| {
+            let name = snake(t);
+            *o == name || *o == format!("{name}_api")
+        })
 }
 
 /// Methods of Stainless resources, grouped by resource and by why they differ in perseid.
@@ -1601,7 +1668,7 @@ mod tests {
     }
 
     #[test]
-    fn client_and_nested_methods_rename_no_resource_named_otherwise() {
+    fn client_methods_stay_where_perseid_derives_them_and_nested_ones_are_renamed() {
         let op = |id: &str, tag: &str| json!({ "operationId": id, "tags": [tag], "responses": { "204": { "description": "ok" } } });
         let spec = json!({
             "openapi": "3.1.0",
@@ -1626,19 +1693,24 @@ mod tests {
         import.with_spec(&spec.to_string());
         assert_eq!(
             import.methods,
-            BTreeMap::from([("listUsers".to_owned(), "all".to_owned())])
+            BTreeMap::from([
+                ("addSessionPeers".to_owned(), "add".to_owned()),
+                ("listUsers".to_owned(), "all".to_owned()),
+                ("removeSessionPeers".to_owned(), "remove".to_owned()),
+            ])
         );
+        assert!(import.resources.is_empty(), "{:?}", import.resources);
         let keys: Vec<&str> = import.skipped.iter().map(|(k, _)| k.as_str()).collect();
         assert!(keys.contains(&"resources.$client (1 method)"), "{keys:?}");
         assert!(
-            keys.contains(&"resources.sessions.peers (2 methods)"),
+            !keys.iter().any(|k| k.starts_with("resources.sessions")),
             "{keys:?}"
         );
         assert!(import.exclude.is_empty() && import.warnings.is_empty());
     }
 
     #[test]
-    fn nested_resources_rename_the_methods_of_the_perseid_resource_named_like_them() {
+    fn operations_perseid_places_elsewhere_move_to_the_stainless_resource() {
         let op = |id: &str, tag: &str| json!({ "operationId": id, "tags": [tag], "responses": { "204": { "description": "ok" } } });
         let spec = json!({
             "openapi": "3.1.0",
@@ -1658,13 +1730,55 @@ mod tests {
         );
         import.with_spec(&spec.to_string());
         assert_eq!(
-            import.methods,
-            BTreeMap::from([("getOrCreatePeer".to_owned(), "get_or_create".to_owned())])
+            import.resources,
+            BTreeMap::from([
+                (
+                    "addSessionPeers".to_owned(),
+                    "workspaces.sessions.peers".to_owned()
+                ),
+                ("getOrCreatePeer".to_owned(), "workspaces.peers".to_owned()),
+            ])
         );
-        let keys: Vec<&str> = import.skipped.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            import.methods,
+            BTreeMap::from([
+                ("addSessionPeers".to_owned(), "add".to_owned()),
+                ("getOrCreatePeer".to_owned(), "get_or_create".to_owned()),
+            ])
+        );
         assert!(
-            keys.contains(&"resources.workspaces.sessions.peers (1 method)"),
-            "{keys:?}"
+            !import
+                .skipped
+                .iter()
+                .any(|(k, _)| k.starts_with("resources")),
+            "{:?}",
+            import.skipped
+        );
+        assert!(import.tables(None).contains(
+            "\n[resources]\naddSessionPeers = \"workspaces.sessions.peers\"\ngetOrCreatePeer = \"workspaces.peers\"\n"
+        ));
+    }
+
+    #[test]
+    fn resources_deeper_than_perseid_nests_stay_where_perseid_places_them() {
+        let op = |id: &str| json!({ "operationId": id, "tags": ["orgs"], "responses": { "204": { "description": "ok" } } });
+        let spec = json!({
+            "openapi": "3.1.0",
+            "info": { "title": "Acme", "version": "1" },
+            "paths": { "/orgs/{id}/teams/{t}/members/{m}/roles": { "get": op("listRoles") } },
+        });
+        let mut import = Import::from_config(&json!({ "resources": { "orgs": { "subresources": {
+            "teams": { "subresources": { "members": { "subresources": { "roles": { "methods": {
+                "list": "get /orgs/{id}/teams/{t}/members/{m}/roles",
+            }}}}}},
+        }}}}));
+        import.with_spec(&spec.to_string());
+        assert!(import.resources.is_empty(), "{:?}", import.resources);
+        let why: Vec<&str> = import.skipped.iter().map(|(_, w)| w.as_str()).collect();
+        assert!(
+            why.iter()
+                .any(|w| w.starts_with("`orgs.teams.members.roles` nests 4 resources")),
+            "{why:?}"
         );
     }
 

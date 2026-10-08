@@ -6,7 +6,8 @@
 {% for prefix in ["List", ""] -%}
 {% for resource in api.resources -%}
 {% for op in resource.operations if go_export(op.name) is startingwith(prefix) and op.method == "get" and not op.path_params and not (op | has_required_query_or_header_params) and op.request_body_kind == "none" -%}
-{% if not ns.example %}{% set ns.example = "client." ~ go_ident(resource.name) ~ "()." ~ go_export(op.name) ~ "(ctx" ~ (", nil" if op | has_query_or_header_params else "") ~ ")" %}{% endif -%}
+{% set chain = namespace(text="client") %}{% for a in resource.path %}{% set chain.text = chain.text ~ "." ~ go_ident(a) ~ "()" %}{% endfor -%}
+{% if not ns.example %}{% set ns.example = chain.text ~ "." ~ go_export(op.name) ~ "(ctx" ~ (", nil" if op | has_query_or_header_params else "") ~ ")" %}{% endif -%}
 {% endfor -%}
 {% endfor -%}
 {% endfor -%}
@@ -71,7 +72,7 @@ func (e *APIError) Detail() *{{ go_ident(api.default_error) }} {
 	return decodeErrorBody[{{ go_ident(api.default_error) }}](e.RawBody)
 }
 {% endif %}
-{% for resource in api.resources %}
+{% for resource in api.resources | rejectattr("parent") %}
 {% set name = go_ident(resource.name) %}
 // {{ name }} returns the {{ go_words(resource.name) }} API.
 func (c *Client) {{ name }}() *{{ name }} {

@@ -286,9 +286,9 @@ class {{ cls }}:
 
     {% if is_async %}async {% endif %}def __{{ "a" if is_async else "" }}exit__(self, *exc_info: object) -> None:
         {% if is_async %}await self.aclose(){% else %}self.close(){% endif %}
-{% for resource in api.resources %}
+{% for resource in api.resources | rejectattr("parent") %}
 {%- set rcls = prefix ~ (resource.name | to_upper_camel_case) %}
-    @property
+    @functools.cached_property
     def {{ py_ident(resource.name) }}(self) -> {{ rcls }}:
         """The {{ resource.name | to_snake_case | replace("_", " ") }} API."""
         from .{{ resource_module(resource.name) }} import {{ rcls }}
@@ -301,7 +301,7 @@ class {{ cls }}WithRawResponse:
 
     def __init__(self, client: {{ cls }}) -> None:
         self._client = client
-{% for resource in api.resources %}
+{% for resource in api.resources | rejectattr("parent") %}
 {%- set rcls = prefix ~ (resource.name | to_upper_camel_case) %}
     @property
     def {{ py_ident(resource.name) }}(self) -> {{ rcls }}WithRawResponse:
@@ -317,6 +317,7 @@ class {{ cls }}WithRawResponse:
 from __future__ import annotations
 
 import dataclasses
+import functools
 import os
 import typing as t
 
@@ -330,7 +331,7 @@ from .middleware import AsyncMiddleware, SyncMiddleware
 
 # Each resource's module is imported the first time it is used.
 if t.TYPE_CHECKING:
-{%- for resource in api.resources %}
+{%- for resource in api.resources | rejectattr("parent") %}
 {%- set cls = resource.name | to_upper_camel_case %}
     from .{{ resource_module(resource.name) }} import (
         Async{{ cls }},

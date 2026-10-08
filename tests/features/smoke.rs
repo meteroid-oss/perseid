@@ -432,7 +432,7 @@ async fn unknown_fields_and_nulls_are_kept() {
     assert_eq!(health.extra["nested"], serde_json::json!({"a": [1, 2, {"b": null}]}));
     assert_eq!(health.extra["list"], serde_json::json!([1, "x"]));
 
-    let nulls = content.list_scenarios_nulls().await.unwrap();
+    let nulls = content.nulls().retrieve().await.unwrap();
     assert_eq!(nulls.name, None);
     assert_eq!(nulls.tags, [Some("a".to_owned()), None, Some("b".to_owned())]);
     assert_eq!(nulls.counts, HashMap::from([("x".to_owned(), Some(1)), ("y".to_owned(), None)]));
@@ -447,7 +447,7 @@ async fn unknown_fields_and_nulls_are_kept() {
             vec![Some("a".to_owned()), None],
         )
     };
-    assert_eq!(content.create_scenarios_null(sent.clone()).await.unwrap(), sent);
+    assert_eq!(content.nulls().create(sent.clone()).await.unwrap(), sent);
 }
 
 #[tokio::test]
@@ -478,9 +478,9 @@ async fn integers_bytes_and_dates_round_trip() {
     // Bytes are base64 text in the model.
     let bytes = b"hello\xfb\xff\xfe";
     assert_eq!(base64_encode(bytes), "aGVsbG/7//4=");
-    let echoed = encoding.create_scenarios_byte(Blob::new(base64_encode(bytes))).await.unwrap();
+    let echoed = encoding.bytes().create(Blob::new(base64_encode(bytes))).await.unwrap();
     assert_eq!(base64_decode(&echoed.data), bytes);
-    let fetched = encoding.list_scenarios_bytes().await.unwrap();
+    let fetched = encoding.bytes().retrieve().await.unwrap();
     assert_eq!(base64_decode(&fetched.data), bytes);
 
     let options = EncodingRetrieveScenariosDatetimeOptions::new(instant(), day());

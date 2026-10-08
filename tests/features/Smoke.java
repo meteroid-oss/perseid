@@ -387,7 +387,7 @@ public class Smoke {
         expect(extras.additionalProperties().get("extra").asInt(), 1);
         expect(extras.additionalProperties().get("nested").get("a").get(2).has("b"), true);
 
-        NullBag nulls = client.content().listScenariosNulls();
+        NullBag nulls = client.content().nulls().retrieve();
         expect(nulls.name().isPresent(), false);
         expect(nulls.tags(), Arrays.asList("a", null, "b"));
         Map<String, Long> counts = new LinkedHashMap<>();
@@ -401,7 +401,7 @@ public class Smoke {
         NullBag sent = NullBag.builder().name(null).tags(Arrays.asList("a", null)).counts(sentCounts).build();
         JsonNode sentJson = MAPPER.readTree("{\"name\":null,\"tags\":[\"a\",null],\"counts\":{\"x\":null,\"y\":2}}");
         expect(MAPPER.readTree(sent.toJson()), sentJson);
-        NullBag echoed = client.content().createScenariosNull(sent);
+        NullBag echoed = client.content().nulls().create(sent);
         expect(echoed.name().isPresent(), false);
         expect(echoed.tags(), Arrays.asList("a", null));
         expect(echoed.counts(), sentCounts);
@@ -434,8 +434,8 @@ public class Smoke {
         expect(big.min(), Long.MIN_VALUE);
         String base64 = Base64.getEncoder().encodeToString(HELLO);
         expect(base64, "aGVsbG/7//4=");
-        expect(Arrays.equals(Base64.getDecoder().decode(client.encoding().createScenariosByte(Blob.builder().data(base64).build()).data()), HELLO), true);
-        expect(Arrays.equals(Base64.getDecoder().decode(client.encoding().listScenariosBytes().data()), HELLO), true);
+        expect(Arrays.equals(Base64.getDecoder().decode(client.encoding().bytes().create(Blob.builder().data(base64).build()).data()), HELLO), true);
+        expect(Arrays.equals(Base64.getDecoder().decode(client.encoding().bytes().retrieve().data()), HELLO), true);
         for (ZoneOffset zone : List.of(ZoneOffset.UTC, ZoneOffset.ofHours(2), ZoneOffset.ofHoursMinutes(-5, -30))) {
             OffsetDateTime at = INSTANT.withOffsetSameInstant(zone);
             DateBox queried = client.encoding().retrieveScenariosDatetime(at, LocalDate.of(2024, 1, 2));

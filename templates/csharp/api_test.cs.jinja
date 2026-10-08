@@ -18,7 +18,7 @@ public class {{ test_class }}
 {%- set args = namespace(list=[]) %}
 {%- for arg in case.path_args %}{% set args.list = args.list + [docs.literal(arg)] %}{% endfor %}
 {%- if case.body %}{% set args.list = args.list + ["PerseidMock.Decode<global::" ~ sdk.package_name ~ ".Models." ~ (case.body.schema | to_upper_camel_case) ~ ">(" ~ (case.body.json | tojson) ~ ")"] %}{% endif %}
-{%- set call = "mock.Client." ~ (docs.resource(resource.name) | replace("client.", "")) ~ "." ~ docs.method(op) ~ "(" ~ (args.list | join(", ")) ~ ")" %}
+{%- set call = "mock.Client." ~ (docs.resource(resource.path) | replace("client.", "")) ~ "." ~ docs.method(op) ~ "(" ~ (args.list | join(", ")) ~ ")" %}
 
     [Fact]
     public async Task {{ op.name | to_upper_camel_case }}()

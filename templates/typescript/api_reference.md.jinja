@@ -53,7 +53,7 @@
         {%- if op.response_may_be_empty | default(false) and body != "void" %}{% set body = body ~ " | undefined" %}{% endif -%}
         {%- set returned = "APIPromise<" ~ body ~ ">" -%}
     {%- endif -%}
-    {{ docs.resource(resource.name) }}.{{ docs.method(op) }}({{ params.list | join(", ") }}): {{ returned }}
+    {{ docs.resource(resource.path) }}.{{ docs.method(op) }}({{ params.list | join(", ") }}): {{ returned }}
 {%- endmacro -%}
 {% macro returns(op) -%}
     {%- if op.pagination is defined %}{{ model(op.response_body_schema_name) }} pages of {{ model(op.pagination.item_schema) }}
@@ -80,9 +80,7 @@ resource. Each method also takes a last `requestOptions?: RequestOptions` argume
 `APIPromise`, awaited for the body or asked for the response with `.withResponse()`. Models are
 in [`src/models`](src/models).
 {%- set paged = namespace(any=false) %}
-{%- for resource in api.resources %}
-    {%- for r in [resource] + (resource.subresources | items | map(attribute=1) | list) if r.operations | selectattr("pagination", "defined") | list %}{% set paged.any = true %}{% endfor %}
-{%- endfor %}
+{%- for r in api.resources if r.operations | selectattr("pagination", "defined") | list %}{% set paged.any = true %}{% endfor %}
 {%- if paged.any %}
 
 List methods return a `PagePromise`. Awaited, it gives the first `Page`: the response body, its
@@ -93,14 +91,9 @@ Iterated with `for await`, it yields every item of every page.
 {{ docs.contents(api.resources) }}
 {% endif %}
 {%- for resource in api.resources %}
-## {{ docs.title(resource.name) }}
+{{ docs.heading(resource) }}
 
-[`{{ docs.resource(resource.name) }}`]({{ docs.resource_path(resource.name) }})
+[`{{ docs.resource(resource.path) }}`]({{ docs.resource_path(resource.name) }})
 
 {{ table(resource) -}}
-{%- for name, sub in resource.subresources | items %}
-### {{ docs.title(name) }}
-
-{{ table(sub) -}}
-{%- endfor %}
 {%- endfor %}

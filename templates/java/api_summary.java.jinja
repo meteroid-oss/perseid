@@ -3,18 +3,18 @@ List.of({%- for names in security %}{% if not loop.first %}, {% endif %}List.of(
 {%- endmacro -%}
 {% set _ = set_summary_filename(sdk.client_name ~ ".java") -%}
 {% set client = sdk.client_name -%}
-{% set reserved = ["async", "sync", "withRawResponse", "close", "fromEnv", "builder", "getClass", "hashCode", "toString", "notify", "notifyAll", "wait", "clone", "finalize", "options"] -%}
+{% import "types/macros.java.jinja" as m -%}
+{% set top = api.resources | rejectattr("parent") | list -%}
 {% set ns = namespace(accessors=[]) -%}
-{% for resource in api.resources -%}
-{% set a = resource.name | ident("camel", "java") -%}
-{% set ns.accessors = ns.accessors + [a ~ "_" if a in reserved else a] -%}
+{% for resource in top -%}
+{% set ns.accessors = ns.accessors + [m.accessor(resource.name)] -%}
 {% endfor -%}
 {% set accessors = ns.accessors -%}
 {% set async_source -%}
 // this file is @generated
 package {{ sdk.java_package }};
 
-{% for resource in api.resources -%}
+{% for resource in top -%}
 import {{ sdk.java_package }}.api.{{ resource.name | to_upper_camel_case }}Async;
 {% endfor %}
 
@@ -26,13 +26,13 @@ import {{ sdk.java_package }}.api.{{ resource.name | to_upper_camel_case }}Async
 public final class {{ client }}Async implements AutoCloseable {
     private final {{ client }} sync;
     private final WithRawResponse withRawResponse;
-{% for resource in api.resources -%}
+{% for resource in top -%}
     private final {{ resource.name | to_upper_camel_case }}Async {{ accessors[loop.index0] }};
 {% endfor %}
 
     {{ client }}Async({{ client }} sync) {
         this.sync = sync;
-{% for resource in api.resources -%}
+{% for resource in top -%}
         this.{{ accessors[loop.index0] }} = new {{ resource.name | to_upper_camel_case }}Async(sync.{{ accessors[loop.index0] }}());
 {% endfor -%}
         this.withRawResponse = new WithRawResponse();
@@ -55,7 +55,7 @@ public final class {{ client }}Async implements AutoCloseable {
     public WithRawResponse withRawResponse() {
         return withRawResponse;
     }
-{% for resource in api.resources %}
+{% for resource in top %}
 
     /**
      * The {@code {{ resource.name }}} operations.
@@ -76,7 +76,7 @@ public final class {{ client }}Async implements AutoCloseable {
     /** The operations, returning the status and headers along with the body. */
     public final class WithRawResponse {
         private WithRawResponse() {}
-{% for resource in api.resources %}
+{% for resource in top %}
 
         /**
          * The {@code {{ resource.name }}} operations.
@@ -94,7 +94,7 @@ public final class {{ client }}Async implements AutoCloseable {
 // this file is @generated
 package {{ sdk.java_package }};
 
-{% for resource in api.resources -%}
+{% for resource in top -%}
 import {{ sdk.java_package }}.api.{{ resource.name | to_upper_camel_case }};
 {% endfor %}
 import {{ sdk.java_internal_package }}.{{ client }}Auth;
@@ -142,7 +142,7 @@ public final class {{ client }} implements AutoCloseable {
     private final {{ client }}HttpClient httpClient;
     private final WithRawResponse withRawResponse;
     private final {{ client }}Async async;
-{% for resource in api.resources -%}
+{% for resource in top -%}
     private final {{ resource.name | to_upper_camel_case }} {{ accessors[loop.index0] }};
 {% endfor %}
 
@@ -204,7 +204,7 @@ public final class {{ client }} implements AutoCloseable {
         defaultHeaders.putAll(options.headers());
         {{ client }}Auth auth = new {{ client }}Auth(SECURITY_SCHEMES, {{ java_security(api.security) }}, apiKey, options);
         this.httpClient = new {{ client }}HttpClient(parsedUrl, defaultHeaders, options, auth);
-{% for resource in api.resources -%}
+{% for resource in top -%}
         this.{{ accessors[loop.index0] }} = new {{ resource.name | to_upper_camel_case }}(httpClient);
 {% endfor -%}
         this.withRawResponse = new WithRawResponse();
@@ -248,7 +248,7 @@ public final class {{ client }} implements AutoCloseable {
     public void close() {
         httpClient.close();
     }
-{% for resource in api.resources %}
+{% for resource in top %}
 
     /**
      * The {@code {{ resource.name }}} operations.
@@ -263,7 +263,7 @@ public final class {{ client }} implements AutoCloseable {
     /** The operations, returning the status and headers along with the body. */
     public final class WithRawResponse {
         private WithRawResponse() {}
-{% for resource in api.resources %}
+{% for resource in top %}
 
         /**
          * The {@code {{ resource.name }}} operations.

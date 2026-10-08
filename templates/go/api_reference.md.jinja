@@ -60,7 +60,7 @@
 {#- A method, `suffix` ("AutoPaging") naming its twin, which returns `result`. -#}
 {% macro signature(resource, op, suffix="", result=none) -%}
     {%- set result = result or returned(resource, op) -%}
-    {{ docs.resource(resource.name) }}.{{ docs.method(op) }}{{ suffix }}{{ params(resource, op) }} {{ result if suffix else ("(" ~ result ~ ", error)" if result else "error") }}
+    {{ docs.resource(resource.path) }}.{{ docs.method(op) }}{{ suffix }}{{ params(resource, op) }} {{ result if suffix else ("(" ~ result ~ ", error)" if result else "error") }}
 {%- endmacro -%}
 {% macro row(op, signature, returns) -%}
 | `{{ signature }}`{% if op.deprecated %} (deprecated){% endif %} | `{{ op.method | upper }} {{ op.path }}` | {{ returns }} |
@@ -86,14 +86,9 @@ in the `{{ sdk.package_name }}` package.
 {{ docs.contents(api.resources) }}
 {% endif %}
 {%- for resource in api.resources %}
-## {{ docs.title(resource.name) }}
+{{ docs.heading(resource) }}
 
-[`{{ docs.resource(resource.name) }}`]({{ docs.resource_path(resource.name) }})
+[`{{ docs.resource(resource.path) }}`]({{ docs.resource_path(resource.name) }})
 
 {{ table(resource) -}}
-{%- for name, sub in resource.subresources | items %}
-### {{ docs.title(name) }}
-
-{{ table(sub) -}}
-{%- endfor %}
 {%- endfor %}

@@ -75,6 +75,10 @@ pub struct Config {
     /// Method names by operation id, over the resource-style names.
     #[serde(default, rename = "methods")]
     pub names: BTreeMap<String, String>,
+    /// Resources by operation id, over the ones derived from tags and paths: `workspaces.peers`
+    /// puts the method in `client.workspaces.peers`, `workspaces` in the top-level resource.
+    #[serde(default)]
+    pub resources: BTreeMap<String, String>,
     /// Also generates the operations marked `x-internal: true`.
     #[serde(default)]
     pub internal: bool,
@@ -544,6 +548,11 @@ impl Config {
             self.spec
         );
         self.listed()?;
+        for (id, dotted) in &self.resources {
+            if let Err(why) = crate::api::nesting::resource_path(dotted) {
+                anyhow::bail!("[resources] `{id} = {dotted:?}`: `{dotted}` {why}");
+            }
+        }
         ensure!(
             !self.internal || self.only.is_empty(),
             "`only` lists every operation generated: `internal` can't add any, delete it"
@@ -618,6 +627,7 @@ impl Config {
             detect_pagination: self.detect_pagination != Some(false),
             reserved: BTreeSet::new(),
             names: self.names.clone(),
+            resources: self.resources.clone(),
             uuid_strings: self.types.uuid == Some(UuidType::String),
         }
     }
@@ -1107,6 +1117,40 @@ mod tests {
                 .unwrap()
         );
         assert!(error.contains("perseid connect"), "{error}");
+    }
+
+    #[test]
+    fn resources_are_dotted_snake_case_paths_three_deep_at_most() {
+        let config =
+            |path: &str| format!("name = \"A\"\nsdks = [\"go\"]\n[resources]\nop = \"{path}\"\n");
+        assert!(load(&config("workspaces")).is_ok());
+        assert!(load(&config("admin.audit.logs")).is_ok());
+        assert!(load(&config("v2_admin.users")).is_ok());
+        let error = |path: &str| format!("{:#}", load(&config(path)).err().unwrap());
+        assert!(
+            error("a.b.c.d").contains("[resources] `op = \"a.b.c.d\"`: `a.b.c.d` nests 4 resources, perseid nests 3 at most"),
+            "{}",
+            error("a.b.c.d")
+        );
+        for bad in [
+            "Workspaces",
+            "workspaces.Peers",
+            "workspaces..peers",
+            "work-spaces",
+            "_x",
+            "x_",
+            "1x",
+        ] {
+            assert!(
+                error(bad).contains("is not a snake_case name"),
+                "{bad}: {}",
+                error(bad)
+            );
+        }
+        assert!(
+            error("schools.client").contains("`client` is a member of the generated resources")
+        );
+        assert!(load(&config("client")).is_ok());
     }
 
     #[test]

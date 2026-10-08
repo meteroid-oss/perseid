@@ -18,7 +18,7 @@ import (
 )
 {{ docs.imports(cases) }}{% for case in cases %}
 {%- set op = resource.operations[case.index] %}
-{%- set args = namespace(list=[docs.resource(resource.name) ~ "." ~ docs.method(op)]) %}
+{%- set args = namespace(list=[docs.resource(resource.path) ~ "." ~ docs.method(op)]) %}
 {%- for arg in case.path_args %}{% set args.list = args.list + [docs.literal(arg)] %}{% endfor %}
 {%- if case.body %}{% set args.list = args.list + ["decode[" ~ sdk.package_name ~ "." ~ go_ident(case.body.schema) ~ "](t, " ~ text(case.body.json) ~ ")"] %}{% endif %}
 {%- if docs.has_options(op) %}{% set args.list = args.list + ["nil"] %}{% endif %}

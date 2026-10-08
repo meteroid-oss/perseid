@@ -49,7 +49,7 @@ let client = @@CLIENT_NAME@@::builder()
 Building a client fails with `Error::Request` when it has no base URL (the API declares none and
 `base_url()` is not called) or an invalid one.
 
-Every API area hangs off the client (`{{ docs.resource(call.resource) if call else "client.items()" }}`), and `with_options` sets headers, the
+Every API area hangs off the client (`{{ docs.resource(call.resource_path) if call else "client.items()" }}`), and `with_options` sets headers, the
 timeout, retries or the idempotency key of the calls made through it. Clients are cheap to clone
 and can move to other tasks.
 

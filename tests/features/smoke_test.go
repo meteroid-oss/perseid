@@ -427,7 +427,7 @@ func TestScenarioContent(t *testing.T) {
 		expect(t, asJSON(t, health.ExtraFields["list"]), []any{float64(1), "x"})
 	})
 	t.Run("nulls", func(t *testing.T) {
-		bag, err := content.ListScenariosNulls(ctx)
+		bag, err := content.Nulls().Retrieve(ctx)
 		must(t, err)
 		expect(t, bag.Name == nil, true)
 		expect(t, bag.Tags, RequiredSlice[*string]{Ptr("a"), nil, Ptr("b")})
@@ -440,7 +440,7 @@ func TestScenarioContent(t *testing.T) {
 			Tags:   RequiredSlice[*string]{Ptr("a"), nil},
 			Counts: RequiredMap[*int64]{"x": nil, "y": Ptr[int64](2)},
 		}
-		echoed, err := content.CreateScenariosNull(ctx, sent)
+		echoed, err := content.Nulls().Create(ctx, sent)
 		must(t, err)
 		expect(t, echoed.Name == nil, true)
 		expect(t, echoed.Tags, sent.Tags)
@@ -487,10 +487,10 @@ func TestScenarioEncoding(t *testing.T) {
 	t.Run("bytes", func(t *testing.T) {
 		want := []byte("hello\xfb\xff\xfe")
 		// The SDK keeps a `format: byte` property as its standard base64 text.
-		echoed, err := encoding.CreateScenariosByte(ctx, Blob{Data: base64.StdEncoding.EncodeToString(want)})
+		echoed, err := encoding.Bytes().Create(ctx, Blob{Data: base64.StdEncoding.EncodeToString(want)})
 		must(t, err)
 		expect(t, echoed.Data, "aGVsbG/7//4=")
-		got, err := encoding.ListScenariosBytes(ctx)
+		got, err := encoding.Bytes().Retrieve(ctx)
 		must(t, err)
 		for _, blob := range []*Blob{echoed, got} {
 			decoded, err := base64.StdEncoding.DecodeString(blob.Data)

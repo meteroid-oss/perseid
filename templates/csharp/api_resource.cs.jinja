@@ -5,6 +5,8 @@
 {% set raw_interface_name = "I" ~ raw_type_name -%}
 {% set _ = set_summary_filename(resource_type_name ~ ".cs") -%}
 {% set context = sdk.client_name ~ "JsonContext.Default" -%}
+{% set owner_class = m.resource_class(resource.parent) if resource.parent else sdk.client_name ~ "Client" -%}
+{% set owner_property = resource.path | last | to_upper_camel_case -%}
 {#- What each operation takes and returns, shared by the interfaces and classes below. -#}
 {% macro facts(f, op) -%}
 {% set f.body_type = m.body_type(op, types) -%}
@@ -141,11 +143,16 @@ using {{ sdk.package_name }}.Models;
 
 namespace {{ sdk.package_name }};
 
-/// <summary>The <c>{{ resource.name }}</c> operations, as <see cref="I{{ sdk.client_name }}Client.{{ resource.name | to_upper_camel_case }}"/> exposes them; mock it in tests.</summary>
+/// <summary>The <c>{{ resource.path | join(".") }}</c> operations, as <see cref="I{{ owner_class }}.{{ owner_property }}"/> exposes them; mock it in tests.</summary>
 public interface {{ interface_name }}
 {
     /// <summary>The same operations, returning the status and headers of the response with its body.</summary>
     {{ raw_interface_name }} WithRawResponse { get; }
+{%- for child in resource.children %}
+
+    /// <summary>The <c>{{ child.accessor }}</c> operations.</summary>
+    I{{ m.resource_class(child.name) }} {{ child.accessor | to_upper_camel_case }} { get; }
+{%- endfor %}
 {%- for op in resource.operations %}
 {%- set f = namespace() %}{% set _ = facts(f, op) %}
 {%- set method_name = (op.name | to_upper_camel_case) ~ "Async" %}
@@ -180,9 +187,14 @@ public interface {{ interface_name }}
 {%- endfor %}
 }
 
-/// <summary>The <c>{{ resource.name }}</c> operations, returning the status and headers of the response with its body.</summary>
+/// <summary>The <c>{{ resource.path | join(".") }}</c> operations, returning the status and headers of the response with its body.</summary>
 public interface {{ raw_interface_name }}
 {
+{%- for child in resource.children %}
+    /// <summary>The <c>{{ child.accessor }}</c> operations, returning the status and headers of the response with its body.</summary>
+    I{{ m.resource_class(child.name) }}WithRawResponse {{ child.accessor | to_upper_camel_case }} { get; }
+{%- if not loop.last or resource.operations %}{{ "\n" }}{% endif %}
+{%- endfor %}
 {%- for op in resource.operations %}
 {%- set f = namespace() %}{% set _ = facts(f, op) %}
 {%- set method_name = (op.name | to_upper_camel_case) ~ "Async" %}
@@ -200,19 +212,31 @@ public interface {{ raw_interface_name }}
 {%- endfor %}
 }
 
-/// <summary>The <c>{{ resource.name }}</c> operations. Get it from <see cref="{{ sdk.client_name }}Client.{{ resource.name | to_upper_camel_case }}"/>.</summary>
+/// <summary>The <c>{{ resource.path | join(".") }}</c> operations. Get it from <see cref="{{ owner_class }}.{{ owner_property }}"/>.</summary>
 public sealed partial class {{ resource_type_name }} : {{ interface_name }}
 {
     internal {{ resource_type_name }}(ApiTransport transport)
     {
         WithRawResponse = new(transport);
+{%- for child in resource.children %}
+        {{ child.accessor | to_upper_camel_case }} = new(transport);
+{%- endfor %}
     }
 
     /// <inheritdoc cref="{{ interface_name }}.WithRawResponse"/>
     public {{ raw_type_name }} WithRawResponse { get; }
 
     {{ raw_interface_name }} {{ interface_name }}.WithRawResponse => WithRawResponse;
-{%- set extra %}{% include "extensions/" ~ (resource.name | to_snake_case) ~ ".cs" ignore missing %}{% endset %}
+{%- for child in resource.children %}
+{%- set child_class = m.resource_class(child.name) %}
+{%- set property = child.accessor | to_upper_camel_case %}
+
+    /// <inheritdoc cref="{{ interface_name }}.{{ property }}"/>
+    public {{ child_class }} {{ property }} { get; }
+
+    {{ m.arrow("I" ~ child_class ~ " " ~ interface_name ~ "." ~ property, property, 4) }}
+{%- endfor %}
+{%- set extra %}{% include "extensions/" ~ (resource.path | join(".")) ~ ".cs" ignore missing %}{% endset %}
 {%- if extra | trim %}
 
 {{ extra | trim("\n") }}
@@ -289,7 +313,7 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
     {{ sig }} =>{% if (0 if "\n" in sig else 4) + (last | length) + (call | length) + 5 <= 120 %} {% else %}
         {% endif %}{{ call }};
 {%- endif %}
-{%- set extra %}{% include "extensions/" ~ (resource.name | to_snake_case) ~ "_" ~ (op.name | to_snake_case) ~ ".cs" ignore missing %}{% endset %}
+{%- set extra %}{% include "extensions/" ~ (resource.path | join(".")) ~ "_" ~ (op.name | to_snake_case) ~ ".cs" ignore missing %}{% endset %}
 {%- if extra | trim %}
 
 {{ extra | trim("\n") }}
@@ -297,7 +321,7 @@ public sealed partial class {{ resource_type_name }} : {{ interface_name }}
 {%- endfor %}
 }
 
-/// <summary>The <c>{{ resource.name }}</c> operations, returning the status and headers of the response with its body.</summary>
+/// <summary>The <c>{{ resource.path | join(".") }}</c> operations, returning the status and headers of the response with its body.</summary>
 public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
 {
     private readonly ApiTransport _transport;
@@ -305,7 +329,19 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
     internal {{ raw_type_name }}(ApiTransport transport)
     {
         _transport = transport;
+{%- for child in resource.children %}
+        {{ child.accessor | to_upper_camel_case }} = new(transport);
+{%- endfor %}
     }
+{%- for child in resource.children %}
+{%- set child_class = m.resource_class(child.name) ~ "WithRawResponse" %}
+{%- set property = child.accessor | to_upper_camel_case %}
+
+    /// <inheritdoc cref="{{ raw_interface_name }}.{{ property }}"/>
+    public {{ child_class }} {{ property }} { get; }
+
+    {{ m.arrow("I" ~ child_class ~ " " ~ raw_interface_name ~ "." ~ property, property, 4) }}
+{%- endfor %}
 {%- for op in resource.operations %}
 {%- set f = namespace() %}{% set _ = facts(f, op) %}
 {%- set method_name = (op.name | to_upper_camel_case) ~ "Async" %}

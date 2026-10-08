@@ -15,7 +15,7 @@
 {%- set args.list = args.list + (["Some(" ~ body ~ ")"] if op.request_body_optional else [body]) %}
 {%- endif %}
 {%- if op | has_query_or_header_params %}{% set args.list = args.list + ["None"] %}{% endif %}
-{%- set call = docs.resource(resource.name) ~ "." ~ docs.method(op) ~ "(" ~ (args.list | join(", ")) ~ ").await.unwrap()" %}
+{%- set call = docs.resource(resource.path) ~ "." ~ docs.method(op) ~ "(" ~ (args.list | join(", ")) ~ ").await.unwrap()" %}
 
 #[tokio::test]
 async fn {{ docs.method(op) }}() {

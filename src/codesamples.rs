@@ -105,9 +105,9 @@ fn generate_sample(
     samples_map: &mut BTreeMap<CodegenLanguage, Vec<CodeSample>>,
     api: &Api,
     resource: &Resource,
-    resource_parents: &Vec<String>,
     templates: &CodesampleTemplates,
 ) {
+    let resource_parents = &resource.path;
     for operation in &resource.operations {
         for SampleTemplate {
             source,
@@ -141,13 +141,6 @@ fn generate_sample(
 
             lang_vec.push(sample);
         }
-    }
-
-    for (subresource_name, subresource) in &resource.subresources {
-        let mut new_parents = resource_parents.clone();
-        new_parents.push(subresource_name.clone());
-
-        generate_sample(env, samples_map, api, subresource, &new_parents, templates);
     }
 }
 
@@ -213,6 +206,7 @@ pub async fn generate_codesamples(
             detect_pagination: true,
             reserved: BTreeSet::new(),
             names: Default::default(),
+            resources: Default::default(),
             uuid_strings: false,
         },
     )?;
@@ -221,15 +215,8 @@ pub async fn generate_codesamples(
 
     let env = codesample_env(Arc::new(path_param_example))?;
 
-    for (resource_name, resource) in &api_ir.resources {
-        generate_sample(
-            &env,
-            &mut samples_map,
-            &api_ir,
-            resource,
-            &vec![resource_name.clone()],
-            &templates,
-        );
+    for resource in api_ir.resources.values() {
+        generate_sample(&env, &mut samples_map, &api_ir, resource, &templates);
     }
     Ok(samples_map)
 }

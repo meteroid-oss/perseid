@@ -115,12 +115,12 @@ async function content(client: Features) {
   });
   assert.equal((await client.content.listScenariosExtraFields()).status, "ok");
 
-  const nulls = await client.content.listScenariosNulls();
+  const nulls = await client.content.nulls.retrieve();
   assert.equal(nulls.name, null);
   assert.deepEqual(nulls.tags, ["a", null, "b"]);
   assert.deepEqual(nulls.counts, { x: 1n, y: null });
   assert.equal(nulls.note, null);
-  const echoed = await client.content.createScenariosNull({
+  const echoed = await client.content.nulls.create({
     name: null,
     tags: ["a", null],
     counts: { x: null, y: 2n },
@@ -155,8 +155,8 @@ async function encoding(client: Features) {
   assert.equal(big.min, -9223372036854775808n);
 
   const sent = { data: BYTES_BASE64 };
-  assert.deepEqual(Array.from(Buffer.from((await client.encoding.createScenariosByte(sent)).data, "base64")), BYTES);
-  assert.deepEqual(Array.from(Buffer.from((await client.encoding.listScenariosBytes()).data, "base64")), BYTES);
+  assert.deepEqual(Array.from(Buffer.from((await client.encoding.bytes.create(sent)).data, "base64")), BYTES);
+  assert.deepEqual(Array.from(Buffer.from((await client.encoding.bytes.retrieve()).data, "base64")), BYTES);
 
   const queried = await client.encoding.retrieveScenariosDatetime({ since: INSTANT, day: "2024-01-02" });
   assert.equal(queried.at.getTime(), INSTANT.getTime());

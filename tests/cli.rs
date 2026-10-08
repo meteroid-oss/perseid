@@ -174,7 +174,8 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
     for expected in [
         "spec = \"openapi.yaml\"\nname = \"Knock\"\nsdks = [\"typescript\", \"python\", \"go\"]\nbase_url = \"https://api.knock.app\"\nidempotency_keys = true\nexclude = [\"notify\"]\n",
         "license = \"Apache-2.0\"\nhomepage = \"https://docs.knock.app\"\nauthors = [\"knock <support@knock.app>\"]\n",
-        "[methods]\naddAudienceMembers = \"add_members\"\narchiveMessage = \"mark_as_archived\"\ngetUser = \"get\"\n\n",
+        "[methods]\naddAudienceMembers = \"add_members\"\narchiveMessage = \"mark_as_archived\"\ngetUser = \"get\"\ngetUserFeed = \"list_items\"\n\n",
+        "[resources]\naddAudienceMembers = \"audiences\"\ngetUserFeed = \"users.feeds\"\nlistAudienceMembers = \"audiences\"\n\n",
         "# entries_cursor\ncursor = \"after\"\nitems = \"entries\"\nnext_cursor = \"page_info.after\"\n",
         "# items_cursor\ncursor = \"after\"\nitems = \"items\"\nnext_cursor = \"page_info.after\"\n",
         "[typescript]\npackage = \"@knocklabs/node\"\nrepo = \"knocklabs/knock-node\"\n",
@@ -192,6 +193,11 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
         ),
         "{out}"
     );
+    assert!(
+        out.contains("3 resource placements, 4 method names")
+            && !out.contains("resources.users.feeds"),
+        "{out}"
+    );
     for skipped in [
         "targets.ruby: perseid generates no Ruby SDK",
         "targets.{go,python,typescript}.staging_repo: ",
@@ -200,7 +206,6 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
         "pagination.slack_channels_cursor: `query_options.cursor` is a nested parameter",
         "resources.*.models: perseid names types after their schema, without resource namespaces: MessageSchedule is Schedule",
         "resources.users.list_schedules: `paginated: false`",
-        "resources.users.feeds (1 method): nested resource: perseid has one level of resources, named after the operations' first tag: users.retrieve_feed",
         "readme: ",
     ] {
         assert!(
@@ -3272,20 +3277,12 @@ fn operations(dir: &Path, language: &str) -> Vec<(String, String)> {
     let (ok, out) = perseid(dir, &["inspect", language]);
     assert!(ok, "{out}");
     let api: serde_json::Value = serde_json::from_str(&out).unwrap();
-    let mut stack: Vec<serde_json::Value> = api["resources"].as_array().unwrap().clone();
     let mut operations = vec![];
-    while let Some(resource) = stack.pop() {
+    for resource in api["resources"].as_array().unwrap() {
         for op in resource["operations"].as_array().unwrap() {
             let method = op["method"].as_str().unwrap().to_uppercase();
             operations.push((method, op["path"].as_str().unwrap().to_owned()));
         }
-        stack.extend(
-            resource["subresources"]
-                .as_object()
-                .unwrap()
-                .values()
-                .cloned(),
-        );
     }
     operations
 }
@@ -4520,5 +4517,105 @@ fn oauth2_token_urls_are_passed_to_the_runtimes_as_written() {
             all.contains("secrets.admin"),
             "{language}: no scope of the second scheme"
         );
+    }
+}
+
+#[test]
+fn resources_place_operations_and_name_no_unknown_or_invalid_ones() {
+    let dir = project();
+    let config = dir.path().join("perseid.toml");
+    let base = fs::read_to_string(&config).unwrap();
+    let with = |table: &str| fs::write(&config, format!("{base}\n[resources]\n{table}")).unwrap();
+    with("list_pets = \"store.pets\"\nlistPetz = \"pets\"\n");
+    let (ok, out) = perseid(dir.path(), &["inspect", "rust"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("\"store\",\n        \"pets\""), "{out}");
+    let args = ["generate", "--no-format", "--out", "sdks"];
+    let (ok, out) = perseid(dir.path(), &args);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains(
+            "`listPetz` in the [resources] table of perseid.toml is no operation of the spec"
+        ),
+        "{out}"
+    );
+    with("list_pets = \"Store.pets\"\n");
+    let (ok, out) = perseid(dir.path(), &["inspect", "rust"]);
+    assert!(!ok, "{out}");
+    assert!(
+        out.contains("[resources] `list_pets = \"Store.pets\"`: `Store.pets` `Store` is not a snake_case name"),
+        "{out}"
+    );
+    assert!(!out.contains("perseid does not support"), "{out}");
+}
+
+#[test]
+fn docs_data_calls_methods_through_their_child_resources() {
+    let dir = project_from("edge-nested.yaml", &LANGUAGES);
+    let (ok, out) = perseid(dir.path(), &["docs-data", "--out", "docs.json"]);
+    assert!(ok, "{out}");
+    let data: Value =
+        serde_json::from_str(&fs::read_to_string(dir.path().join("docs.json")).unwrap()).unwrap();
+    let workspaces = (data["resources"].as_array().unwrap().iter())
+        .find(|r| r["name"] == "workspaces")
+        .unwrap();
+    let peers = &workspaces["subresources"].as_array().unwrap()[1];
+    assert_eq!(peers["path"], json!(["workspaces", "peers"]));
+    assert!(
+        peers["operations"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("get_workspace_peer"))
+    );
+    assert_eq!(
+        peers["subresources"][0]["path"],
+        json!(["workspaces", "peers", "sessions"])
+    );
+    let expected = [
+        (
+            "rust",
+            "client.workspaces().peers().sessions().list",
+            "client.schools().class().list",
+            "client.workspaces().peers().retrieve(",
+        ),
+        (
+            "typescript",
+            "client.workspaces.peers.sessions.list",
+            "client.schools.class.list",
+            "client.workspaces.peers.retrieve(",
+        ),
+        (
+            "python",
+            "client.workspaces.peers.sessions.list",
+            "client.schools.class_.list",
+            "client.workspaces.peers.retrieve(",
+        ),
+        (
+            "go",
+            "client.Workspaces().Peers().Sessions().List",
+            "client.Schools().Class().List",
+            "client.Workspaces().Peers().Retrieve(",
+        ),
+        (
+            "java",
+            "client.workspaces().peers().sessions().list",
+            "client.schools().class_().list",
+            "Peer client.workspaces().peers().retrieve(",
+        ),
+        (
+            "csharp",
+            "client.Workspaces.Peers.Sessions.ListAsync",
+            "client.Schools.Class.ListAsync",
+            "Task<Peer> client.Workspaces.Peers.RetrieveAsync(",
+        ),
+    ];
+    for (language, sessions, classes, retrieve) in expected {
+        let ops = &data["languages"][language]["operations"];
+        assert_eq!(ops["list_peer_sessions"]["method"], sessions, "{language}");
+        assert_eq!(ops["list_school_classes"]["method"], classes, "{language}");
+        let sample = ops["list_peer_sessions"]["sample"].as_str().unwrap();
+        assert!(sample.contains(sessions), "{language}: {sample}");
+        let signature = ops["get_workspace_peer"]["signature"].as_str().unwrap();
+        assert!(signature.starts_with(retrieve), "{language}: {signature}");
     }
 }

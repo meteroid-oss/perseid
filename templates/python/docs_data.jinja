@@ -14,7 +14,7 @@ from {{ docs.package() }} import {{ sdk.client_name }}
 client = {{ sdk.client_name }}(api_key=os.environ["{{ sdk.env_prefix }}_API_KEY"])
 {%- endmacro %}
 
-{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+{% macro method(resource, op) %}{{ docs.resource(resource.path) }}.{{ docs.method(op) }}{% endmacro %}
 
 {% macro signature(resource, op) %}{{ ref.signature(resource, op) }}{% endmacro %}
 

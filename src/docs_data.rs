@@ -33,17 +33,30 @@ pub fn run(config: &Config, root: &Path, sdks: &[Sdk], spec: &str) -> Result<Val
     }))
 }
 
-/// `[{name, operations, subresources}]`: the operation ids of each resource, in order.
+/// `[{name, path, operations, subresources}]`: the client's resources, each with the accessors
+/// leading to it (`["workspaces", "peers"]`), its operation ids in order, and its children.
 fn tree(resources: &Resources) -> Value {
-    (resources.values())
-        .map(|r| {
-            let operations: Vec<&str> = (r.operations.iter())
-                .filter(|op| !op.stream)
-                .map(|op| op.id.as_str())
-                .collect();
-            json!({ "name": r.name, "operations": operations, "subresources": tree(&r.subresources) })
-        })
+    let node = |r: &Resource| node(resources, r);
+    (resources.values().filter(|r| r.parent.is_none()))
+        .map(node)
         .collect()
+}
+
+fn node(resources: &Resources, resource: &Resource) -> Value {
+    let operations: Vec<&str> = (resource.operations.iter())
+        .filter(|op| !op.stream)
+        .map(|op| op.id.as_str())
+        .collect();
+    let children: Vec<Value> = (resource.children.iter())
+        .filter_map(|c| resources.get(&c.name))
+        .map(|child| node(resources, child))
+        .collect();
+    json!({
+        "name": resource.path.last(),
+        "path": resource.path,
+        "operations": operations,
+        "subresources": children,
+    })
 }
 
 /// `{install, setup, operations, types}` of one SDK, from the macros of its `docs_data.jinja`.
@@ -90,9 +103,7 @@ fn language(config: &Config, root: &Path, sdk: &Sdk, spec: &str) -> Result<Value
     };
 
     let mut operations = Map::new();
-    let mut resources = Vec::new();
-    walk(&api.resources, &mut resources);
-    for resource in resources {
+    for resource in api.resources.values() {
         let shown = Jinja::from_serialize(resource);
         for op in resource.operations.iter().filter(|op| !op.stream) {
             let (owner, raw) = by_id.get(op.id.as_str()).context("an unknown operation")?;
@@ -125,12 +136,4 @@ fn language(config: &Config, root: &Path, sdk: &Sdk, spec: &str) -> Result<Value
         "operations": operations,
         "types": types,
     }))
-}
-
-/// Every resource, subresources after their parent.
-fn walk<'a>(resources: &'a Resources, out: &mut Vec<&'a Resource>) {
-    for resource in resources.values() {
-        out.push(resource);
-        walk(&resource.subresources, out);
-    }
 }

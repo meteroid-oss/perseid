@@ -1,0 +1,341 @@
+openapi: 3.1.0
+info:
+  title: Edge Nested
+  version: 1.0.0
+  description: Child resources from the paths within each tag, the overrides placing operations, and the names they clash on.
+servers:
+  - url: https://api.example.com
+paths:
+  # `client.workspaces`, with `peers` below it and `sessions` below `peers`.
+  /workspaces:
+    get:
+      operationId: list_workspaces
+      tags: [workspaces]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/WorkspaceList'}}}}
+    post:
+      operationId: create_workspace
+      tags: [workspaces]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/WorkspaceInput'}}}
+      responses:
+        '201': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Workspace'}}}}
+  /workspaces/{workspace_id}:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+    get:
+      operationId: get_workspace
+      tags: [workspaces]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Workspace'}}}}
+  # A segment holding a single operation names a method of its resource: `retrieve_usage`.
+  /workspaces/{workspace_id}/usage:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+    get:
+      operationId: get_workspace_usage
+      tags: [workspaces]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Stats'}}}}
+  /workspaces/{workspace_id}/peers:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+    get:
+      operationId: list_workspace_peers
+      tags: [workspaces]
+      parameters:
+        - {name: cursor, in: query, schema: {type: string}}
+      x-pagination: {cursor: cursor, items: data, next_cursor: next_cursor}
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/PeerList'}}}}
+    post:
+      operationId: create_workspace_peer
+      tags: [workspaces]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/PeerInput'}}}
+      responses:
+        '201': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Peer'}}}}
+  /workspaces/{workspace_id}/peers/{peer_id}:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/PeerId'}]
+    get:
+      operationId: get_workspace_peer
+      tags: [workspaces]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Peer'}}}}
+    delete:
+      operationId: archive_workspace_peer
+      tags: [workspaces]
+      responses: {'204': {description: archived}}
+  /workspaces/{workspace_id}/peers/{peer_id}/sessions:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/PeerId'}]
+    get:
+      operationId: list_peer_sessions
+      tags: [workspaces]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Session'}}}}}
+    post:
+      operationId: create_peer_session
+      tags: [workspaces]
+      responses:
+        '201': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Session'}}}}
+  # Three resources deep at most: `messages` names methods of `workspaces.peers.sessions`.
+  /workspaces/{workspace_id}/peers/{peer_id}/sessions/{session_id}/messages:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}, {$ref: '#/components/parameters/PeerId'}, {$ref: '#/components/parameters/SessionId'}]
+    get:
+      operationId: list_session_messages
+      tags: [workspaces]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Message'}}}}}
+    post:
+      operationId: create_session_message
+      tags: [workspaces]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/MessageInput'}}}
+      responses:
+        '201': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Message'}}}}
+  # A singular segment the path goes on below is a resource, named like a keyword of most languages.
+  /workspaces/{workspace_id}/import:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+    post:
+      operationId: start_workspace_import
+      tags: [workspaces]
+      responses:
+        '202': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Stats'}}}}
+  /workspaces/{workspace_id}/import/status:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+    get:
+      operationId: get_workspace_import_status
+      tags: [workspaces]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Stats'}}}}
+  # `x-perseid-resource: workspaces` keeps them methods of `workspaces`: `list_invites`, `create_invite`.
+  /workspaces/{workspace_id}/invites:
+    parameters: [{$ref: '#/components/parameters/WorkspaceId'}]
+    get:
+      operationId: list_workspace_invites
+      tags: [workspaces]
+      x-perseid-resource: workspaces
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Peer'}}}}}
+    post:
+      operationId: create_workspace_invite
+      tags: [workspaces]
+      x-perseid-resource: workspaces
+      responses:
+        '201': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Peer'}}}}
+  # Another tag's operation, placed in `workspaces.peers`.
+  /members/{peer_id}/promote:
+    parameters: [{$ref: '#/components/parameters/PeerId'}]
+    post:
+      operationId: promote_member
+      tags: [members]
+      x-perseid-resource: workspaces.peers
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Peer'}}}}
+  # `admin` has no method of its own, only `admin.users` and `admin.roles`.
+  /admin/users:
+    get:
+      operationId: list_admin_users
+      tags: [admin]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Peer'}}}}}
+    post:
+      operationId: create_admin_user
+      tags: [admin]
+      responses:
+        '201': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Peer'}}}}
+  /admin/users/{user_id}:
+    get:
+      operationId: get_admin_user
+      tags: [admin]
+      parameters: [{name: user_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Peer'}}}}
+  /admin/roles:
+    get:
+      operationId: list_admin_roles
+      tags: [admin]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: string}}}}}
+    put:
+      operationId: replace_admin_roles
+      tags: [admin]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: array, items: {type: string}}}}
+      responses: {'204': {description: ok}}
+  # An override deeper than nesting goes, through `admin.audit` that holds no method.
+  /audit-logs:
+    get:
+      operationId: list_audit_logs
+      tags: [admin]
+      x-perseid-resource: admin.audit.logs
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: string}}}}}
+  # A tag its paths don't name is rooted at the segment they share: `connect.payouts`.
+  /connected-accounts:
+    get:
+      operationId: list_connected_accounts
+      tags: [connect]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Peer'}}}}}
+  /connected-accounts/{account_id}:
+    get:
+      operationId: get_connected_account
+      tags: [connect]
+      parameters: [{name: account_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Peer'}}}}
+  /connected-accounts/{account_id}/payouts:
+    parameters: [{name: account_id, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: list_account_payouts
+      tags: [connect]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: string}}}}}
+    post:
+      operationId: create_account_payout
+      tags: [connect]
+      responses: {'204': {description: ok}}
+  # `lock` is both the method of `POST /issues/{id}/lock` and the resource `issues.lock` the
+  # overrides make: the method takes its operation id, `lock_issue`.
+  /issues:
+    get:
+      operationId: list_issues
+      tags: [issues]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {$ref: '#/components/schemas/Peer'}}}}}
+  /issues/{issue_id}/lock:
+    post:
+      operationId: lock_issue
+      tags: [issues]
+      parameters: [{name: issue_id, in: path, required: true, schema: {type: string}}]
+      responses: {'204': {description: ok}}
+  /locks/{lock_id}:
+    parameters: [{name: lock_id, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: get_lock
+      tags: [issues]
+      x-perseid-resource: issues.lock
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Stats'}}}}
+    delete:
+      operationId: delete_lock
+      tags: [issues]
+      x-perseid-resource: issues.lock
+      responses: {'204': {description: ok}}
+  # Child resources named like keywords and members of the languages.
+  /schools/{school_id}/class:
+    parameters: [{name: school_id, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: list_school_classes
+      tags: [schools]
+      x-perseid-resource: schools.class
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: string}}}}}
+  /schools/{school_id}/types:
+    parameters: [{name: school_id, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: list_school_types
+      tags: [schools]
+      x-perseid-resource: schools.type
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: string}}}}}
+  /schools/{school_id}/defaults:
+    parameters: [{name: school_id, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: list_school_defaults
+      tags: [schools]
+      x-perseid-resource: schools.default
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: string}}}}}
+  /schools/{school_id}/options:
+    parameters: [{name: school_id, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: list_school_options
+      tags: [schools]
+      x-perseid-resource: schools.options
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: string}}}}}
+  # `client` is a member of the generated resources (Java's HTTP client field): no child is named
+  # so, its operations stay methods of `schools`.
+  /schools/{school_id}/client:
+    parameters: [{name: school_id, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: get_school_client
+      tags: [schools]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Stats'}}}}
+  /schools/{school_id}/client/settings:
+    parameters: [{name: school_id, in: path, required: true, schema: {type: string}}]
+    get:
+      operationId: list_school_client_settings
+      tags: [schools]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {type: array, items: {type: string}}}}}
+  /schools/{school_id}:
+    get:
+      operationId: get_school
+      tags: [schools]
+      parameters: [{name: school_id, in: path, required: true, schema: {type: string}}]
+      responses:
+        '200': {description: ok, content: {application/json: {schema: {$ref: '#/components/schemas/Stats'}}}}
+components:
+  parameters:
+    WorkspaceId: {name: workspace_id, in: path, required: true, schema: {type: string}}
+    PeerId: {name: peer_id, in: path, required: true, schema: {type: string}}
+    SessionId: {name: session_id, in: path, required: true, schema: {type: string}}
+  schemas:
+    Workspace:
+      type: object
+      required: [id, name]
+      properties:
+        id: {type: string}
+        name: {type: string}
+    WorkspaceInput:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+    WorkspaceList:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Workspace'}}
+    Peer:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+        name: {type: string}
+    PeerInput:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string}
+    PeerList:
+      type: object
+      required: [data]
+      properties:
+        data: {type: array, items: {$ref: '#/components/schemas/Peer'}}
+        next_cursor: {type: [string, 'null']}
+    Session:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+    Message:
+      type: object
+      required: [id, text]
+      properties:
+        id: {type: string}
+        text: {type: string}
+    MessageInput:
+      type: object
+      required: [text]
+      properties:
+        text: {type: string}
+    Stats:
+      type: object
+      properties:
+        count: {type: integer}

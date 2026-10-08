@@ -41,6 +41,7 @@ pub enum IncludeMode {
     OnlySpecified,
 }
 
+#[derive(Default)]
 pub struct Filters {
     pub include_mode: IncludeMode,
     pub excluded: BTreeSet<String>,
@@ -52,6 +53,8 @@ pub struct Filters {
     pub reserved: BTreeSet<String>,
     /// Method names by operation id.
     pub names: BTreeMap<String, String>,
+    /// Resource paths (`workspaces.peers`) by operation id.
+    pub resources: BTreeMap<String, String>,
     /// Types `format: uuid` values as strings.
     pub uuid_strings: bool,
 }
@@ -616,6 +619,7 @@ mod tests {
             detect_pagination: true,
             reserved: Default::default(),
             names: Default::default(),
+            resources: Default::default(),
             uuid_strings: false,
         };
         super::api(&text, &filters).unwrap();
@@ -652,6 +656,7 @@ mod tests {
             detect_pagination: true,
             reserved: Default::default(),
             names: Default::default(),
+            resources: Default::default(),
             uuid_strings: false,
         };
         let warned: Vec<String> = super::ignored_servers(&doc, &filters)

@@ -84,14 +84,27 @@
     {% endif -%}
 {% endfor -%}
 
-{% set summary = resource.name | to_snake_case | replace("_", " ") -%}
-/** The {{ summary }} operations, reached through the client's `{{ resource.name | to_lower_camel_case }}`. */
+{% set summary = resource.path | join(" ") | replace("_", " ") -%}
+/** The {{ summary }} operations, reached through the client's `{{ resource.path | map("to_lower_camel_case") | join(".") }}`. */
 export class {{ resource_type_name }} {
+    {% for child in resource.children -%}
+    private _{{ child.accessor | to_lower_camel_case }}?: {{ child.name | to_upper_camel_case }};
+    {% endfor -%}
+
     /** @internal */
     public constructor(private readonly requestCtx: {{ sdk.client_name }}RequestContext) {}
 
-    {% set extension %}extensions/{{ resource.name | to_snake_case }}.ts{% endset -%}
+    {% set extension %}extensions/{{ resource.path | join(".") }}.ts{% endset -%}
     {% include extension ignore missing %}
+
+    {% for child in resource.children -%}
+    /** The {{ child.accessor | replace("_", " ") }} operations. */
+    public get {{ child.accessor | to_lower_camel_case }}(): {{ child.name | to_upper_camel_case }} {
+        this._{{ child.accessor | to_lower_camel_case }} ??= new {{ child.name | to_upper_camel_case }}(this.requestCtx);
+        return this._{{ child.accessor | to_lower_camel_case }};
+    }
+
+    {% endfor -%}
 
     {% for op in resource.operations -%}
         {% if op.response_is_event_stream and op.event_schema_name is defined -%}
@@ -353,11 +366,20 @@ import { {{ decode_helpers | join(", ") }} } from "../decode.js";
 {% if union_helpers -%}
 import { {{ union_helpers | join(", ") }} } from "../unions.js";
 {% endif -%}
+{% for child in resource.children -%}
+import { {{ child.name | to_upper_camel_case }} } from "./{{ child.name | to_lower_camel_case }}.js";
+{% endfor -%}
+{% if resource.operations -%}
 import { {{ runtime_import("APIPromise") }} } from "../apiPromise.js";
+{% endif -%}
 {% if paginated -%}
 import { {{ runtime_import("PagePromise") }} } from "../pagination.js";
 {% endif -%}
+{% if resource.operations -%}
 import { {{ sdk.client_name }}Request, type {{ sdk.client_name }}RequestContext, type RequestOptions } from "../request.js";
+{% else -%}
+import type { {{ sdk.client_name }}RequestContext } from "../request.js";
+{% endif -%}
 {% if streams or "binary" in kinds or "multipart" in kinds -%}
 import {
     {% if raw_streams %}type {{ runtime_import("EventStream") }},{% endif %}

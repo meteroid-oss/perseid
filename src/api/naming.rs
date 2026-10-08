@@ -1,7 +1,7 @@
 //! Method names of operations, after their HTTP method and path within their resource
 //! (`customers.list`, `customers.retrieve`) rather than their operation id.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::bail;
 use heck::ToSnakeCase as _;
@@ -10,13 +10,15 @@ use itertools::Itertools as _;
 use super::resources::{Operation, Resource, Resources};
 
 /// Names every operation after its resource, unless `names` or `x-perseid-name` overrides it.
+/// Clashes involving an `excluded` operation are not reported, as it is dropped.
 pub(crate) fn apply(
     resources: &mut Resources,
     names: &BTreeMap<String, String>,
+    excluded: &BTreeSet<String>,
 ) -> anyhow::Result<()> {
     let mut errors = Vec::new();
     for resource in resources.values_mut() {
-        name_resource(resource, names, &mut errors);
+        name_resource(resource, names, excluded, &mut errors);
     }
     match errors.len() {
         0 => Ok(()),
@@ -28,12 +30,11 @@ pub(crate) fn apply(
 fn name_resource(
     resource: &mut Resource,
     names: &BTreeMap<String, String>,
+    excluded: &BTreeSet<String>,
     errors: &mut Vec<String>,
 ) {
-    for sub in resource.subresources.values_mut() {
-        name_resource(sub, names, errors);
-    }
     let key = |name: &str| name.to_snake_case();
+    let accessors: BTreeSet<String> = resource.children.iter().map(|c| key(&c.accessor)).collect();
     let overrides: Vec<Option<String>> = resource
         .operations
         .iter()
@@ -49,8 +50,9 @@ fn name_resource(
         .iter()
         .map(|op| match op.stream {
             true => None,
-            false => derive(
-                &resource.name,
+            false => derive_below(
+                &resource.path,
+                op.root,
                 &op.id,
                 &op.method,
                 &op.path,
@@ -73,8 +75,31 @@ fn name_resource(
             *name = format!("replace{rest}");
         }
     }
-    // A derived name that two operations share, or that another operation keeps, is dropped for
-    // the operation id until every name is unique.
+    // `PUT /repositories` sets what `PUT /repositories/{id}` updates one of.
+    let whole: Vec<Option<&str>> = (0..derived.len())
+        .map(|i| {
+            let op = &resource.operations[i];
+            let item = format!("{}/{{", op.path.trim_end_matches('/'));
+            let shared = (0..derived.len()).any(|j| {
+                derived[j] == derived[i]
+                    && (resource.operations[j].path.strip_prefix(&item))
+                        .is_some_and(|rest| rest.ends_with('}') && !rest.contains('/'))
+            });
+            match (derived[i].as_deref(), op.method.as_str()) {
+                (Some("update" | "replace"), "put") if shared => Some("set"),
+                (Some("update"), _) if shared => Some("update_all"),
+                (Some("delete"), _) if shared => Some("delete_all"),
+                _ => None,
+            }
+        })
+        .collect();
+    for (derived, whole) in derived.iter_mut().zip(whole) {
+        if let Some(whole) = whole {
+            *derived = Some(whole.to_owned());
+        }
+    }
+    // A derived name that two operations share, that another operation keeps, or that a child
+    // resource has, is dropped for the operation id until every name is unique.
     loop {
         let effective: Vec<String> = (0..derived.len())
             .map(|i| {
@@ -88,7 +113,8 @@ fn name_resource(
         let counts = effective.iter().counts();
         let mut changed = false;
         for (i, name) in effective.iter().enumerate() {
-            if counts[name] > 1 && overrides[i].is_none() && derived[i].take().is_some() {
+            let clashes = counts[name] > 1 || accessors.contains(name);
+            if clashes && overrides[i].is_none() && derived[i].take().is_some() {
                 changed = true;
             }
         }
@@ -108,6 +134,21 @@ fn name_resource(
         .collect();
     let mut seen = BTreeMap::new();
     for (op, name) in ops.iter().zip(&chosen) {
+        if excluded.contains(&op.id) {
+            continue;
+        }
+        if accessors.contains(&key(name)) {
+            errors.push(format!(
+                "operation `{}` ({} {}) is named `{}` like the resource `{}.{}`: set \
+                 `x-perseid-name` on it or rename it in the `[methods]` table of perseid.toml",
+                op.id,
+                op.method.to_uppercase(),
+                op.path,
+                key(name),
+                resource.path.join("."),
+                key(name),
+            ));
+        }
         if let Some(other) = seen.insert(key(name), op)
             && other.id != op.id
         {
@@ -122,7 +163,7 @@ fn name_resource(
                 op.method.to_uppercase(),
                 op.path,
                 key(name),
-                resource.name
+                resource.path.join(".")
             ));
         }
     }
@@ -187,16 +228,19 @@ fn is_single_object(op: &Operation) -> bool {
 /// only gives a CRUD verb or a noun posted to, an operation id starting with an action
 /// (`archive_customer`) or `create` (`create_session`) names the operation instead.
 /// A `GET` of a singular noun with no items below it (`collection`), or of one named object
-/// (`single_object`), retrieves rather than lists.
-pub(crate) fn derive(
-    resource: &str,
+/// (`single_object`), retrieves rather than lists. `resource` is the path of the resource
+/// (`["workspaces", "peers"]`), and the path is described after its segment `root` if given.
+fn derive_below(
+    resource: &[String],
+    root: Option<usize>,
     id: &str,
     method: &str,
     path: &str,
     collection: bool,
     single_object: bool,
 ) -> Option<String> {
-    let (name, kind) = from_path(resource, method, path, collection, single_object)?;
+    let own = resource.last().map_or("", String::as_str);
+    let (name, kind) = from_path(own, method, path, root, collection, single_object)?;
     let phrase = id_phrase(resource, id);
     let verb = phrase.split('_').next().unwrap_or_default();
     let name = match kind {
@@ -221,23 +265,50 @@ enum Kind {
     Noun,
 }
 
-fn from_path(
-    resource: &str,
-    method: &str,
-    path: &str,
-    collection: bool,
-    single_object: bool,
-) -> Option<(String, Kind)> {
-    let segments: Vec<&str> = path
-        .split('/')
+/// The segments of a path, without the extension of literal ones (`/Accounts/{Sid}.json`).
+pub(crate) fn segments(path: &str) -> Vec<&str> {
+    path.split('/')
         .filter(|s| !s.is_empty())
         .map(|s| match s.starts_with('{') {
             true => s,
             false => s.split('.').next().unwrap_or(s),
         })
         .filter(|s| !s.is_empty())
-        .collect();
-    let is_param = |s: &str| s.starts_with('{');
+        .collect()
+}
+
+pub(crate) fn is_param(segment: &str) -> bool {
+    segment.starts_with('{')
+}
+
+/// The index of the first segment naming `resource`: `customers` in `/v1/customers/{id}`.
+pub(crate) fn root_of(resource: &str, segments: &[&str]) -> Option<usize> {
+    let own = singular(&snake(resource)).replace('_', "");
+    segments
+        .iter()
+        .position(|s| !is_param(s) && singular(&snake(s)).replace('_', "") == own)
+}
+
+/// The indices of the segments describing an operation of a resource its path does not name:
+/// all but the prefixes and the one or two letter fragments (`/a/{id}`), which name nothing.
+pub(crate) fn unrooted(segments: &[&str]) -> Vec<usize> {
+    (0..segments.len())
+        .filter(|i| {
+            let s = segments[*i];
+            is_param(s) || (!is_prefix(s) && s.chars().count() > 2)
+        })
+        .collect()
+}
+
+fn from_path(
+    resource: &str,
+    method: &str,
+    path: &str,
+    root: Option<usize>,
+    collection: bool,
+    single_object: bool,
+) -> Option<(String, Kind)> {
+    let segments = segments(path);
     let own = singular(&snake(resource)).replace('_', "");
     let singleton = !collection
         && (single_object
@@ -245,15 +316,11 @@ fn from_path(
                 .iter()
                 .rfind(|s| !is_param(s) && !is_prefix(s))
                 .is_some_and(|s| !is_plural(&snake(s))));
-    let rest: Vec<&str> = match segments
-        .iter()
-        .position(|s| !is_param(s) && singular(&snake(s)).replace('_', "") == own)
-    {
+    let rest: Vec<&str> = match root.or_else(|| root_of(resource, &segments)) {
         Some(i) => segments[i + 1..].to_vec(),
-        None => segments
+        None => unrooted(&segments)
             .into_iter()
-            // A one or two letter fragment (`/a/{id}`) names nothing worth a method name.
-            .filter(|s| is_param(s) || (!is_prefix(s) && s.chars().count() > 2))
+            .map(|i| segments[i])
             .collect(),
     };
     let literals: Vec<String> = rest
@@ -317,19 +384,22 @@ fn from_path(
     })
 }
 
-/// The operation id in snake_case without the resource's own noun: `send_invoice_reminder` is
-/// `send_reminder` in `invoices`.
-fn id_phrase(resource: &str, id: &str) -> String {
-    let own = singular(&snake(resource)).replace('_', "");
+/// The operation id in snake_case without the nouns of its resource and of those holding it:
+/// `send_invoice_reminder` is `send_reminder` in `invoices`, `archive_workspace_peer` `archive`
+/// in `workspaces.peers`.
+fn id_phrase(resource: &[String], id: &str) -> String {
     let mut words: Vec<String> = snake(id.rsplit('/').next().unwrap_or(id))
         .split('_')
         .map(str::to_owned)
         .collect();
-    let noun = (1..words.len())
-        .flat_map(|start| (start + 1..=words.len()).map(move |end| (start, end)))
-        .find(|&(start, end)| singular(&words[start..end].join("_")).replace('_', "") == own);
-    if let Some((start, end)) = noun {
-        words.drain(start..end);
+    for resource in resource.iter().rev() {
+        let own = singular(&snake(resource)).replace('_', "");
+        let noun = (1..words.len())
+            .flat_map(|start| (start + 1..=words.len()).map(move |end| (start, end)))
+            .find(|&(start, end)| singular(&words[start..end].join("_")).replace('_', "") == own);
+        if let Some((start, end)) = noun {
+            words.drain(start..end);
+        }
     }
     words.join("_")
 }
@@ -347,7 +417,7 @@ fn is_action(verb: &str) -> bool {
 }
 
 /// Whether a path segment names an action rather than a sub-resource.
-fn is_verb(words: &str) -> bool {
+pub(crate) fn is_verb(words: &str) -> bool {
     const CRUD: [&str; 11] = [
         "add", "create", "delete", "find", "get", "list", "lookup", "remove", "retrieve", "set",
         "update",
@@ -392,7 +462,7 @@ fn item_verb(method: &str) -> Option<&'static str> {
 }
 
 /// `api`, `v1` or `2010-04-01`, which scope paths rather than name resources.
-fn is_prefix(segment: &str) -> bool {
+pub(crate) fn is_prefix(segment: &str) -> bool {
     segment == "api"
         || segment.starts_with(|c: char| c.is_ascii_digit())
         || segment
@@ -400,7 +470,7 @@ fn is_prefix(segment: &str) -> bool {
             .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
-fn is_plural(words: &str) -> bool {
+pub(crate) fn is_plural(words: &str) -> bool {
     let word = words.rsplit('_').next().unwrap_or(words);
     word.len() >= 3
         && word.ends_with('s')
@@ -408,14 +478,30 @@ fn is_plural(words: &str) -> bool {
 }
 
 /// The singular of the last word of a snake_case name, as far as a suffix tells.
-fn singular(words: &str) -> String {
+pub(crate) fn singular(words: &str) -> String {
+    /// Nouns whose plural ends in `-ches`, `-uses` or `-zes` but which keep their final `e`.
+    const KEEP_E: [&str; 9] = [
+        "cache",
+        "niche",
+        "cliche",
+        "avalanche",
+        "headache",
+        "moustache",
+        "cause",
+        "house",
+        "size",
+    ];
     if !is_plural(words) {
         return words.to_owned();
+    }
+    let word = words.rsplit('_').next().unwrap_or(words);
+    if KEEP_E.iter().any(|w| word.ends_with(&format!("{w}s"))) {
+        return words[..words.len() - 1].to_owned();
     }
     if let Some(stem) = words.strip_suffix("ies") {
         return format!("{stem}y");
     }
-    for suffix in ["sses", "xes", "ches", "shes", "zes", "uses"] {
+    for suffix in ["sses", "xes", "ches", "shes", "zzes", "uses"] {
         if let Some(stem) = words.strip_suffix(suffix) {
             return format!("{stem}{}", &suffix[..suffix.len() - 2]);
         }
@@ -426,6 +512,18 @@ fn singular(words: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn derive(
+        resource: &str,
+        id: &str,
+        method: &str,
+        path: &str,
+        collection: bool,
+        single_object: bool,
+    ) -> Option<String> {
+        let resource = [resource.to_owned()];
+        derive_below(&resource, None, id, method, path, collection, single_object)
+    }
 
     #[test]
     fn crud_paths_get_resource_method_names() {
@@ -556,6 +654,18 @@ mod tests {
         assert_eq!(singular("tax_ids"), "tax_id");
         assert_eq!(singular("status"), "status");
         assert_eq!(singular("statuses"), "status");
+        assert_eq!(singular("caches"), "cache");
+        assert_eq!(singular("dns_caches"), "dns_cache");
+        assert_eq!(singular("niches"), "niche");
+        assert_eq!(singular("matches"), "match");
+        assert_eq!(singular("batches"), "batch");
+        assert_eq!(singular("branches"), "branch");
+        assert_eq!(singular("searches"), "search");
+        assert_eq!(singular("sizes"), "size");
+        assert_eq!(singular("buzzes"), "buzz");
+        assert_eq!(singular("boxes"), "box");
+        assert_eq!(singular("houses"), "house");
+        assert_eq!(singular("bonuses"), "bonus");
     }
 
     #[test]

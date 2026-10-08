@@ -13,13 +13,13 @@ import { test } from "node:test";
 {%- for arg in case.path_args %}{% set args.list = args.list + [docs.literal(arg)] %}{% endfor %}
 {%- if case.body %}{% set args.list = args.list + [(case.body.schema | to_upper_camel_case) ~ "Serializer.parse(parseJson(" ~ (case.body.json | tojson) ~ "))"] %}{% endif %}
 
-test("{{ resource.name }}.{{ op.name }}", async () => {
+test("{{ resource.path | join(".") }}.{{ op.name }}", async () => {
   const { client, requests } = mock({
     status: {{ case.response.status }},
     contentType: {{ case.response.content_type | tojson }},
     body: {{ case.response.body | tojson }},
   });
-{%- set call = docs.resource(resource.name) ~ "." ~ docs.method(op) ~ "(" ~ (args.list | join(", ")) ~ ")" %}
+{%- set call = docs.resource(resource.path) ~ "." ~ docs.method(op) ~ "(" ~ (args.list | join(", ")) ~ ")" %}
 {%- if op.response_is_event_stream %}
   for await (const event of await {{ call }}) {
     void event;

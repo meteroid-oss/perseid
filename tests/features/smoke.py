@@ -245,10 +245,10 @@ assert raises(APIResponseValidationError, client.content.retrieve_scenarios_malf
 assert raises(APIResponseValidationError, client.content.retrieve_scenarios_empty_body).raw_body == b""
 extras = client.content.list_scenarios_extra_fields()
 assert extras.status == "ok" and extras.extra_fields["extra"] == 1, extras
-nulls = client.content.list_scenarios_nulls()
+nulls = client.content.nulls.retrieve()
 assert nulls.name is None and nulls.note is None, nulls
 assert nulls.tags == ["a", None, "b"] and nulls.counts == {"x": 1, "y": None}, nulls
-echoed = client.content.create_scenarios_null(name=None, tags=["a", None], counts={"x": None, "y": 2})
+echoed = client.content.nulls.create(name=None, tags=["a", None], counts={"x": None, "y": 2})
 assert (echoed.name, echoed.tags, echoed.counts) == (None, ["a", None], {"x": None, "y": 2}), echoed
 assert echoed.note is UNSET, echoed
 assert echoed.to_dict() == {"name": None, "tags": ["a", None], "counts": {"x": None, "y": 2}}, echoed
@@ -264,8 +264,8 @@ assert unknown.kind == "magenta" and unknown.kinds == ["red", "magenta"], unknow
 big = client.encoding.scenarios_bigint(value=9007199254740993, min=-9223372036854775808)
 assert (big.value, big.min) == (9007199254740993, -9223372036854775808), big
 HELLO = b"hello\xfb\xff\xfe"
-assert raw_bytes(client.encoding.create_scenarios_byte(data="aGVsbG/7//4=").data) == HELLO
-assert raw_bytes(client.encoding.list_scenarios_bytes().data) == HELLO
+assert raw_bytes(client.encoding.bytes_.create(data="aGVsbG/7//4=").data) == HELLO
+assert raw_bytes(client.encoding.bytes_.retrieve().data) == HELLO
 INSTANT = datetime(2024, 1, 2, 3, 4, 5, 250000, tzinfo=timezone.utc)
 for zone in (timezone.utc, timezone(timedelta(hours=2)), timezone(timedelta(hours=-5, minutes=-30))):
     at = INSTANT.astimezone(zone)

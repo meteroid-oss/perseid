@@ -437,7 +437,7 @@ internal static class Scenarios
             "the list unknown field is kept"
         );
 
-        var nulls = await content.ListScenariosNullsAsync();
+        var nulls = await content.Nulls.RetrieveAsync();
         IsNull(nulls.Name, "name");
         Same<string?>(new string?[] { "a", null, "b" }, nulls.Tags);
         Equal(2, nulls.Counts.Count);
@@ -460,7 +460,7 @@ internal static class Scenarios
             ),
             $"the null bag is sent as {wire}"
         );
-        var echoed = await content.CreateScenariosNullAsync(sent);
+        var echoed = await content.Nulls.CreateAsync(sent);
         IsNull(echoed.Name, "echoed name");
         Same<string?>(new string?[] { "a", null }, echoed.Tags);
         IsNull(echoed.Counts["x"], "echoed counts.x");
@@ -504,8 +504,8 @@ internal static class Scenarios
         var hello = new byte[] { 0x68, 0x65, 0x6C, 0x6C, 0x6F, 0xFB, 0xFF, 0xFE };
         var sentBlob = new Blob { Data = Convert.ToBase64String(hello) };
         Equal("aGVsbG/7//4=", sentBlob.Data);
-        Same(hello, Convert.FromBase64String((await encoding.CreateScenariosByteAsync(sentBlob)).Data));
-        Same(hello, Convert.FromBase64String((await encoding.ListScenariosBytesAsync()).Data));
+        Same(hello, Convert.FromBase64String((await encoding.Bytes.CreateAsync(sentBlob)).Data));
+        Same(hello, Convert.FromBase64String((await encoding.Bytes.RetrieveAsync()).Data));
 
         var instant = new DateTimeOffset(2024, 1, 2, 3, 4, 5, 250, TimeSpan.Zero);
         var spellings = new[]

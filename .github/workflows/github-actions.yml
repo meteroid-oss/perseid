@@ -51,6 +51,7 @@ jobs:
           - tests/fixtures/edge-legacy.yaml
           - tests/fixtures/edge-oas32.yaml
           - tests/fixtures/edge-swagger2.yaml
+          - tests/fixtures/edge-nested.yaml
           - tests/fixtures/petstore-swagger2.json
           - https://raw.githubusercontent.com/meteroid-oss/meteroid-clients/main/spec/openapi.json
     steps:

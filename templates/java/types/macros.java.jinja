@@ -885,3 +885,9 @@ public String toJson() {
     return Utils.json(this);
 }
 {%- endmacro %}
+
+{#- The accessor of a resource on the client or on its parent resource, clear of their members. -#}
+{% macro accessor(name) -%}
+    {%- set a = name | ident("camel", "java") -%}
+    {{ a ~ "_" if a in ["async", "sync", "withRawResponse", "close", "fromEnv", "builder", "getClass", "hashCode", "toString", "notify", "notifyAll", "wait", "clone", "finalize", "options"] else a }}
+{%- endmacro %}

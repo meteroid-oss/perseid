@@ -104,8 +104,14 @@ use crate::{error::Result, models::*, Configuration};
     {% endif %}
 {% endfor -%}
 
+{#- Intra-doc links name a raw identifier (`r#type`) without its `r#`. -#}
+{% if resource.parent -%}
+/// The {{ resource.path | join(" ") | replace("_", " ") }} API, from
+/// [`{{ resource.parent | to_upper_camel_case }}::{{ resource.path | last | to_snake_case }}`](crate::api::{{ resource.parent | to_upper_camel_case }}::{{ resource.path | last | to_snake_case }}).
+{% else -%}
 /// The {{ resource.name | to_snake_case | replace("_", " ") }} API, from the client's
 /// [`{{ resource.name | to_snake_case }}`](crate::api::{{ sdk.client_name }}::{{ resource.name | to_snake_case }}).
+{% endif -%}
 #[derive(Clone)]
 pub struct {{ resource_type_name }} {
     cfg: std::sync::Arc<Configuration>,
@@ -136,8 +142,17 @@ impl {{ resource_type_name }} {
         self
     }
 
-    {% set extension %}extensions/{{ resource.name | to_snake_case }}.rs{% endset -%}
+    {% set extension %}extensions/{{ resource.path | join(".") }}.rs{% endset -%}
     {% include extension ignore missing %}
+
+    {% for child in resource.children -%}
+    /// The {{ child.accessor | replace("_", " ") }} API, with the options of this one.
+    #[must_use]
+    pub fn {{ child.accessor | to_rust_ident }}(&self) -> super::{{ child.name | to_upper_camel_case }} {
+        super::{{ child.name | to_upper_camel_case }}::new(self.cfg.clone()).with_options(self.options.clone())
+    }
+
+    {% endfor -%}
 
     {% for op in resource.operations %}
     {% set has_params = op | has_query_or_header_params -%}

@@ -1,10 +1,6 @@
 // this file is @generated
-{% for resource in api.resources -%}
-{% if resource.subresources | length > 0 -%}
-{{ panic("typescript codegen: subresources are not supported (resource `" ~ resource.name ~ "`)") }}
-{% endif -%}
-{% endfor -%}
-{% for resource in api.resources -%}
+{% set top = api.resources | rejectattr("parent") | list -%}
+{% for resource in top -%}
 import { {{ resource.name | to_upper_camel_case }} } from "./api/{{ resource.name | to_lower_camel_case }}.js";
 {% endfor -%}
 {% set oauth = api.security_schemes | selectattr("token_url") | list -%}
@@ -176,7 +172,7 @@ export class {{ sdk.client_name }} {
   static readonly {{ name }} = {{ name }}{% if name in model_names %}Class{% endif %};
   {% endfor %}
   private readonly requestCtx: {{ sdk.client_name }}RequestContext;
-  {% for resource in api.resources -%}
+  {% for resource in top -%}
   private _{{ resource.name | to_lower_camel_case }}?: {{ resource.name | to_upper_camel_case }};
   {% endfor %}
 
@@ -230,7 +226,7 @@ export class {{ sdk.client_name }} {
     };
   }
 
-  {% for resource in api.resources %}
+  {% for resource in top %}
   {% set words = resource.name | to_snake_case | replace("_", " ") -%}
   {% if words == "api" %}{% set words = "" %}{% elif words[-4:] == " api" %}{% set words = words[:-4] %}{% endif -%}
   /** The {% if words %}{{ words }} {% endif %}API. */

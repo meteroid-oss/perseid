@@ -538,6 +538,9 @@ Sizing the change:
   (`GITHUB_EVENT_BEFORE`, set by the Action), else the previous commit.
 - Without a previous spec, or without oasdiff, the pull request asks for a minor release.
 - `--bump major|minor|patch` skips the comparison.
+- oasdiff compares specs, not SDKs: an endpoint added next to another can move it into a new
+  [child resource](configuration.md#resources), which breaks its calls. Pin such methods with
+  `[resources]`.
 - An open pull request keeps its largest bump, and the API changes it already lists.
 - SDKs generated for the first time get no API changes: everything in them is new.
 - `--relax-enum-additions`, on by default, counts enum values added to responses as minor

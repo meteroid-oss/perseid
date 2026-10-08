@@ -8,7 +8,11 @@
     {%- for r in resources %}[{{ title(r.name) }}](#{{ r.name | to_kebab_case }}){% if not loop.last %} · {% endif %}{% endfor -%}
 {%- endmacro %}
 
-{% macro resource(name) %}client.{{ name | to_snake_case }}(){% endmacro %}
+{#- The heading of a resource in api.md, one level deeper for each resource holding it. -#}
+{% macro heading(resource) %}{{ "######"[:resource.path | length + 1] }} {{ title(resource.name) }}{% endmacro %}
+
+{#- The accessors from the client to the resource at `path`: `client.workspaces().peers()`. -#}
+{% macro resource(path) %}client{% for a in path %}.{{ a | to_rust_ident }}(){% endfor %}{% endmacro %}
 
 {% macro method(op) %}{{ op.name | to_rust_ident }}{% endmacro %}
 
@@ -49,5 +53,5 @@
     {%- for a in ex.path_args %}{% set out.args = out.args + [literal(a)] %}{% endfor -%}
     {%- if ex.body %}{% set out.args = out.args + [literal({"kind": "object", "schema": ex.body.schema, "fields": ex.body.fields})] %}{% endif -%}
     {%- if ex.operation | has_query_or_header_params %}{% set out.args = out.args + ["None"] %}{% endif -%}
-    {{ resource(ex.resource) }}{{ ".with_options(" ~ options ~ ")" if options }}.{{ method(ex.operation) }}({{ out.args | join(", ") }})
+    {{ resource(ex.resource_path) }}{{ ".with_options(" ~ options ~ ")" if options }}.{{ method(ex.operation) }}({{ out.args | join(", ") }})
 {%- endmacro %}

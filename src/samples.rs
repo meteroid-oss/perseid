@@ -51,6 +51,7 @@ pub fn without_config(location: &str, root: &std::path::Path) -> Result<SpecWith
         detect_pagination: true,
         reserved,
         names: BTreeMap::new(),
+        resources: BTreeMap::new(),
         uuid_strings: false,
     };
     let targets = LANGUAGES

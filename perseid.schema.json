@@ -126,6 +126,14 @@
       "description": "Default repository of every SDK: `owner/name-{lang}` gives each its own (`{lang}` is the language: `typescript`, `python`…), `owner/name` holds them all in folders named after their language. Without it, the SDKs live next to perseid.toml.",
       "type": "string"
     },
+    "resources": {
+      "description": "Resources by operation id, over the ones derived from tags and paths: `workspaces.peers` puts the method in `client.workspaces.peers`, `workspaces` in the top-level resource.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
     "round_trips": {
       "description": "Also generates a test decoding and encoding sample JSON of every model, with `tests`.",
       "type": "boolean"

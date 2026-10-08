@@ -1,5 +1,6 @@
 pub(crate) mod html;
 pub(crate) mod naming;
+pub(crate) mod nesting;
 pub(crate) mod pagination;
 pub(crate) mod resources;
 pub(crate) mod security;
@@ -46,16 +47,31 @@ impl Api {
         filters: &Filters,
     ) -> anyhow::Result<Self> {
         let include_mode = filters.include_mode;
-        let (mut resources, mut errors) = resources::from_openapi(
+        let (tags, mut errors, ids) = resources::from_openapi(
             paths,
             &components.schemas,
             include_mode,
             &filters.excluded,
             &filters.specified,
         );
-        if let Err(e) = naming::apply(&mut resources, &filters.names) {
+        for id in filters.resources.keys().filter(|id| !ids.contains(*id)) {
+            tracing::warn!(
+                "`{id}` in the [resources] table of perseid.toml is no operation of the spec"
+            );
+        }
+        // Excluded operations are placed and named with the others, then dropped, so that an
+        // SDK leaving some out calls the rest as the other SDKs do.
+        let mut resources = nesting::apply(tags, &filters.resources).unwrap_or_else(|e| {
+            errors.push(format!("{e:#}"));
+            Resources::new()
+        });
+        if let Err(e) = naming::apply(&mut resources, &filters.names, &filters.excluded) {
             errors.push(format!("{e:#}"));
         }
+        for resource in resources.values_mut() {
+            (resource.operations).retain(|op| !filters.excluded.contains(&op.id));
+        }
+        resources::drop_empty(&mut resources);
         let (mut types, type_errors) = types::from_referenced_components(
             &resources,
             &mut components.schemas,
@@ -134,7 +150,6 @@ impl Api {
         let mut successes = std::collections::BTreeMap::<&str, usize>::new();
         let mut declaring = 0;
         while let Some(resource) = stack.pop() {
-            stack.extend(resource.subresources.values());
             for op in &resource.operations {
                 if let Some(schema) = op.response_schema() {
                     *successes.entry(schema).or_default() += 1;
@@ -171,7 +186,6 @@ impl Api {
             for op in &mut resource.operations {
                 op.settle_object_unions(best_match, &mut counts);
             }
-            stack.extend(resource.subresources.values_mut());
         }
         counts
     }
@@ -208,10 +222,8 @@ impl Api {
                 }
                 keep
             });
-            stack.extend(resource.subresources.values_mut());
         }
-        self.resources
-            .retain(|_, r| !r.operations.is_empty() || !r.subresources.is_empty());
+        resources::drop_empty(&mut self.resources);
     }
 
     /// Declares the inline object variants of tagged unions as structs, for Go.
@@ -243,7 +255,6 @@ fn operation_ids(resources: &Resources) -> std::collections::BTreeSet<String> {
     let mut stack: Vec<&Resource> = resources.values().collect();
     let mut ids = std::collections::BTreeSet::new();
     while let Some(resource) = stack.pop() {
-        stack.extend(resource.subresources.values());
         ids.extend(resource.operations.iter().map(|op| op.id.clone()));
     }
     ids
@@ -296,7 +307,9 @@ pub(crate) mod toplevel_resources_serde {
         S: Serializer,
     {
         let mut seq = serializer.serialize_seq(Some(map.len()))?;
-        for item in map.values() {
+        let mut resources: Vec<&Resource> = map.values().collect();
+        resources.sort_by(|a, b| a.path.cmp(&b.path));
+        for item in resources {
             seq.serialize_element(item)?;
         }
         seq.end()

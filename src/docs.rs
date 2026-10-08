@@ -66,34 +66,36 @@ fn pick(model: &Value) -> Value {
     json!({ "call": call, "list": list, "stream": stream, "create": create })
 }
 
-/// Every `(resource, operation)`, resources in order, subresources after their parent's.
-pub(crate) fn collect<'a>(resources: &'a Value, out: &mut Vec<(&'a str, &'a Value)>) {
+/// Every `(resource, operation)`, child resources after their parent.
+pub(crate) fn collect<'a>(resources: &'a Value, out: &mut Vec<(&'a Value, &'a Value)>) {
     let resources: Vec<&Value> = match resources {
         Value::Array(list) => list.iter().collect(),
         Value::Object(map) => map.values().collect(),
         _ => vec![],
     };
     for resource in resources {
-        let name = resource["name"].as_str().unwrap_or_default();
         for op in resource["operations"].as_array().into_iter().flatten() {
-            out.push((name, op));
+            out.push((resource, op));
         }
-        collect(&resource["subresources"], out);
     }
 }
 
 /// The example of `op`, when its required arguments can all be written as literals.
-fn example(types: &Value, resource: &str, op: &Value) -> Option<Value> {
+fn example(types: &Value, resource: &Value, op: &Value) -> Option<Value> {
     build(types, resource, op, false).map(|(example, _)| example)
 }
 
 /// The example of `op` with the arguments literals can hold, and whether it holds every
 /// required one.
-pub(crate) fn partial_example(types: &Value, resource: &str, op: &Value) -> Option<(Value, bool)> {
+pub(crate) fn partial_example(
+    types: &Value,
+    resource: &Value,
+    op: &Value,
+) -> Option<(Value, bool)> {
     build(types, resource, op, true)
 }
 
-fn build(types: &Value, resource: &str, op: &Value, partial: bool) -> Option<(Value, bool)> {
+fn build(types: &Value, resource: &Value, op: &Value, partial: bool) -> Option<(Value, bool)> {
     let mut fill = Fill {
         types,
         partial,
@@ -128,7 +130,8 @@ fn build(types: &Value, resource: &str, op: &Value, partial: bool) -> Option<(Va
         false => schema("response_body_schema_name"),
     };
     let example = json!({
-        "resource": resource,
+        "resource": resource["name"],
+        "resource_path": resource["path"],
         "operation": op,
         "path_args": path_args,
         "body": body,
@@ -371,6 +374,7 @@ mod tests {
             detect_pagination: true,
             reserved: Default::default(),
             names: Default::default(),
+            resources: Default::default(),
             uuid_strings: false,
         };
         crate::spec::api(spec, &filters).unwrap()
@@ -430,7 +434,7 @@ mod tests {
                       "required": true, "nullable": false },
                 ] },
             },
-            "resources": [{ "name": "chat", "subresources": {}, "operations": [
+            "resources": [{ "name": "chat", "path": ["chat"], "operations": [
                 { "name": "create_stream", "method": "post", "request_body_kind": "json",
                   "request_body_schema_name": "Message", "response_is_event_stream": true,
                   "path_params": [], "typed_path_params": [], "query_params": [], "header_params": [] },
@@ -475,7 +479,7 @@ mod tests {
                         field("text", json!({ "id": "String" })),
                     ] },
                 },
-                "resources": [{ "name": "orders", "subresources": {}, "operations": ops }],
+                "resources": [{ "name": "orders", "path": ["orders"], "operations": ops }],
             })
         };
         let flat = pick(&model(json!([
@@ -563,7 +567,7 @@ mod tests {
                     { "name": "meta", "type": { "id": "JsonObject" }, "required": true },
                 ] },
             },
-            "resources": [{ "name": "orders", "subresources": {}, "operations": [
+            "resources": [{ "name": "orders", "path": ["orders"], "operations": [
                 { "id": "create_order", "name": "create", "method": "post",
                   "request_body_kind": "json", "request_body_schema_name": "Order",
                   "path_params": ["shop"], "header_params": [],
@@ -580,7 +584,8 @@ mod tests {
             "READMEs show complete calls only"
         );
         let ops = model["resources"][0]["operations"].as_array().unwrap();
-        let (create, complete) = partial_example(&model["types"], "orders", &ops[0]).unwrap();
+        let orders = &model["resources"][0];
+        let (create, complete) = partial_example(&model["types"], orders, &ops[0]).unwrap();
         assert!(!complete);
         assert_eq!(create["path_args"][0]["value"], "shop");
         assert_eq!(
@@ -588,7 +593,7 @@ mod tests {
             json!({ "schema": "Order", "fields": [{ "name": "sku", "kind": "string",
                 "type": "String", "int64": false, "unsigned64": false, "value": "sku" }] })
         );
-        let (upload, complete) = partial_example(&model["types"], "orders", &ops[1]).unwrap();
+        let (upload, complete) = partial_example(&model["types"], orders, &ops[1]).unwrap();
         assert!(!complete && upload["body"].is_null());
     }
 }

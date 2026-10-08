@@ -12,7 +12,7 @@ import { {{ sdk.client_name }} } from "{{ sdk.npm_package }}";
 const client = new {{ sdk.client_name }}({ apiKey: process.env.{{ sdk.env_prefix }}_API_KEY });
 {%- endmacro %}
 
-{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+{% macro method(resource, op) %}{{ docs.resource(resource.path) }}.{{ docs.method(op) }}{% endmacro %}
 
 {% macro signature(resource, op) %}{{ ref.signature(resource, op) }}{% endmacro %}
 

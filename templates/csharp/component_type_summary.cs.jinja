@@ -1,19 +1,6 @@
 {% import "macros.cs.jinja" as m -%}
 {% set _ = set_summary_filename(sdk.client_name ~ "JsonContext.cs") -%}
-{#- Every resource, its subresources included. -#}
-{% set all = namespace(resources=[]) -%}
-{% for r1 in api.resources -%}
-{% set all.resources = all.resources + [r1] -%}
-{% for _, r2 in r1.subresources | items -%}
-{% set all.resources = all.resources + [r2] -%}
-{% for _, r3 in r2.subresources | items -%}
-{% set all.resources = all.resources + [r3] -%}
-{% for _, r4 in r3.subresources | items -%}
-{% set all.resources = all.resources + [r4] -%}
-{% endfor -%}
-{% endfor -%}
-{% endfor -%}
-{% endfor -%}
+{% set all = namespace(resources=api.resources) -%}
 {#- The unions of JSON bodies and events that name a schema alias, declared here with the models; the others are declared with their resource. -#}
 {% set bodies = namespace(names=[], aliases=[]) -%}
 {% for resource in all.resources -%}

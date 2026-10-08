@@ -251,10 +251,10 @@ impl {{ client }} {
 
         Self { cfg }
     }
-{% for resource in api.resources %}
+{% for resource in api.resources | rejectattr("parent") %}
     /// The {{ resource.name | to_snake_case | replace("_", " ") }} API.
     #[must_use]
-    pub fn {{ resource.name | to_snake_case }}(&self) -> super::{{ resource.name | to_upper_camel_case }} {
+    pub fn {{ resource.name | to_rust_ident }}(&self) -> super::{{ resource.name | to_upper_camel_case }} {
         super::{{ resource.name | to_upper_camel_case }}::new(self.cfg.clone())
     }
 {% endfor %}

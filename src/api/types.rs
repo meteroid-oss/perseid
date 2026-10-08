@@ -350,7 +350,6 @@ pub(crate) fn resolve_unions(types: &mut Types, resources: &mut Resources) {
             op.untype_unions();
             op.forget_typed_unions_of_unknown_types(types);
         }
-        stack.extend(resource.subresources.values_mut());
     }
 }
 
@@ -1083,9 +1082,6 @@ fn promote_inline_enums_in_resource(
     existing: &ExistingTypes,
     new_types: &mut BTreeMap<String, Type>,
 ) -> anyhow::Result<()> {
-    for sub in resource.subresources.values_mut() {
-        promote_inline_enums_in_resource(sub, existing, new_types)?;
-    }
     for op in &mut resource.operations {
         let op_id = op.id.clone();
         for field in &mut op.multipart_fields {

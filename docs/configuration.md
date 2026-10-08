@@ -46,6 +46,9 @@ uuid = "typed"                      # or "string" for `format: uuid` values that
 [methods]                           # method names by operation id
 listWidgetEvents = "events"
 
+[resources]                         # resources by operation id, as dotted paths
+listWidgetEvents = "widgets.events"
+
 [pagination]                        # or [[pagination]] for several rules
 cursor = "starting_after"
 item_cursor = "id"
@@ -115,6 +118,7 @@ Each key is also a key of the [language tables](#language-tables), which overrid
 | `header_prefix` | kebab-case `name` | Prefix of the headers the SDKs send on their own: `acme-retry-count` |
 | `user_agent` | kebab-case `name` | Prefix of the `User-Agent` header |
 | `[methods]` | | Method names by operation id, over the [resource-style names](#method-names) |
+| `[resources]` | | Resources by operation id, over the [ones derived from tags and paths](#resources) |
 | `[context]` | | Values exposed to templates as `sdk.*` |
 
 `[types]` holds settings of every SDK only:
@@ -204,6 +208,7 @@ Methods are named after the HTTP method and the path within their resource.
 | `upload_file` | `files.upload` |
 | `create_session`, as `POST /auth/session` | `create_session` |
 | `GET /health` | `check`, `check_health` in another resource |
+| `PUT`, `DELETE /groups/{id}/repositories` next to `PUT`, `DELETE .../repositories/{repo}` | `set`, `delete_all` next to `update`, `delete` |
 
 - When the path only says CRUD, an operation id starting with another verb names the method,
   without the resource's own noun.
@@ -211,6 +216,38 @@ Methods are named after the HTTP method and the path within their resource.
   `OAuth` is `oauth`, `IPAddress` is `ip_address`.
 - A name two operations of a resource would share falls back to the operation id.
 - `[methods]` or `x-perseid-name` on an operation renames one.
+
+## Resources
+
+Each tag is a resource of the client, and the paths within it nest resources below it, three deep
+at most:
+
+| Operations of the tag `workspaces` | Methods |
+|---|---|
+| `GET`, `POST /workspaces/{id}/peers`, `GET /workspaces/{id}/peers/{peer_id}` | `workspaces.peers.list`, `create`, `retrieve` |
+| `GET /workspaces/{id}/usage`, the only one under `usage` | `workspaces.retrieve_usage` |
+
+- A collection (`peers`), or a segment paths go on below, holding two operations or more is a
+  resource of its own; other segments name methods of their parent (`retrieve_usage`).
+- A child drops the noun of its parent: `/check-runs` in `checks` is `checks.runs`, unless another
+  child is named `runs`.
+- A tag its paths don't name is rooted at the segment they share: the tag `connect` of
+  `/connected-accounts/{id}/payouts` gives `connect.payouts`.
+- No child is named like a member of the generated resources (`client`, `new`, `api`, `async`,
+  `sync`, `constructor`, `request_ctx`, `with_options`, `with_raw_response`): its operations stay
+  methods of the parent.
+- Every SDK places operations alike: one an SDK's `exclude` leaves out moves no other.
+- `[resources]` or `x-perseid-resource` on an operation places it in a dotted path of at most three
+  snake_case names, `workspaces.peers`, or `workspaces` to keep it a method of the tag's resource.
+  A resource on the way that holds no method of its own, `admin` of `admin.users`, only reaches
+  its children. perseid warns about `[resources]` entries naming no operation of the spec.
+
+Adding an endpoint can move existing methods: `GET /customers/{id}/cash_balance/transactions`
+makes `cash_balance` a child resource, and `customers.retrieve_cash_balance` becomes
+`customers.cash_balance.retrieve`. SDK users' calls break, though
+[oasdiff](ci.md#from-spec-change-to-release) sizes a spec change that only adds as minor. Pin the
+methods whose call paths must hold with `[resources]` or `x-perseid-resource`
+(`retrieveCashBalance = "customers"`), or release such a change with `--bump major`.
 
 ## Unions of objects
 

@@ -1,11 +1,8 @@
 {% from "types/macros.py.jinja" import arg_type, docstring, in_class, literal_type, field_ident, field_type, field_decl, has_object_union, is_flat_union, named_type, page_class, py_str, py_field, py_ident, py_type, param_type, resource_module, type_refs, union_type -%}
 # this file is @generated
-{% if resource.subresources | length > 0 -%}
-    {{ panic("resource `" ~ resource.name ~ "` has subresources, which the Python templates do not support yet") }}
-{%- endif -%}
 {% set _ = set_summary_filename(resource_module(resource.name) ~ ".py") -%}
 {% set resource_class_name = resource.name | to_upper_camel_case -%}
-"""{{ resource.name | to_snake_case | replace("_", " ") | capitalize }} API."""
+"""{{ resource.path | join(" ") | replace("_", " ") | capitalize }} API."""
 
 from __future__ import annotations
 
@@ -65,6 +62,8 @@ from __future__ import annotations
 {% set models = ((referenced_components | map("to_upper_camel_case") | list) + extra_models.names) | unique | sort | list -%}
 {% if "multipart" in body_kinds %}import dataclasses
 {% endif -%}
+{% if resource.children %}import functools
+{% endif -%}
 import typing as t
 {%- set builtin_names = resource.operations | map(attribute="name") | map("ident", "snake", "python") | select("in", ["list", "dict"]) | list %}
 {%- if builtin_names %}
@@ -95,6 +94,15 @@ from ..serialization import UNSET, {% if extra_models.object_unions %}UnknownVar
 from ..unions import ObjectUnion
 {%- endif %}
 from ._response import async_to_raw_response_wrapper, to_raw_response_wrapper
+{%- for child in resource.children %}
+{%- set cls = child.name | to_upper_camel_case %}
+from .{{ resource_module(child.name) }} import (
+    Async{{ cls }},
+    Async{{ cls }}WithRawResponse,
+    {{ cls }},
+    {{ cls }}WithRawResponse,
+)
+{%- endfor %}
 from .common import (
     ApiBaseAsync,
     ApiBaseSync,
@@ -202,14 +210,22 @@ class {{ resource_class_name }}{{ op.name | to_upper_camel_case }}Body:
 
 
 class {{ class_name }}({{ base_class }}):
-    """{{ resource.name | to_snake_case | replace("_", " ") | capitalize }} API{% if is_async %}, for asyncio{% endif %}."""
-{%- set extension %}extensions/{{ resource.name | to_snake_case }}{% if is_async %}_async{% endif %}.py{% endset %}
+    """{{ resource.path | join(" ") | replace("_", " ") | capitalize }} API{% if is_async %}, for asyncio{% endif %}."""
+{%- set extension %}extensions/{{ resource.path | join(".") }}{% if is_async %}_async{% endif %}.py{% endset %}
 {{ "\n" }}{% include extension ignore missing %}
 
     @property
     def with_raw_response(self) -> {{ class_name }}WithRawResponse:
         """These methods, returning an :class:`APIResponse` with the status and headers."""
         return {{ class_name }}WithRawResponse(self)
+{%- for child in resource.children %}
+{%- set child_class = ("Async" if is_async else "") ~ (child.name | to_upper_camel_case) %}
+
+    @functools.cached_property
+    def {{ py_ident(child.accessor) }}(self) -> {{ child_class }}:
+        """The {{ child.accessor | replace("_", " ") }} API."""
+        return {{ child_class }}(self._cfg, self._httpx_client)
+{%- endfor %}
 {%- for op in resource.operations %}
 {%- set response_type = none %}
 {%- set body_param = none %}
@@ -553,9 +569,22 @@ class {{ class_name }}WithRawResponse:
     """The methods of :class:`{{ class_name }}`, returning an :class:`APIResponse`."""
 
     def __init__(self, resource: {{ class_name }}) -> None:
+{%- if resource.children %}
+        self._resource = resource
+{%- endif %}
 {%- for op in resource.operations %}
         self.{{ py_ident(op.name) }} = {% if is_async %}async_{% endif %}to_raw_response_wrapper(resource.{{ py_ident(op.name) }})
 {%- else %}
+{%- if not resource.children %}
         pass
+{%- endif %}
+{%- endfor %}
+{%- for child in resource.children %}
+{%- set child_class = ("Async" if is_async else "") ~ (child.name | to_upper_camel_case) %}
+
+    @property
+    def {{ py_ident(child.accessor) }}(self) -> {{ child_class }}WithRawResponse:
+        """The {{ child.accessor | replace("_", " ") }} API."""
+        return {{ child_class }}WithRawResponse(self._resource.{{ py_ident(child.accessor) }})
 {%- endfor %}
 {% endfor %}

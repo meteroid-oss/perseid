@@ -431,12 +431,15 @@ import {{ sdk.java_package }}.models.{{ c | to_upper_camel_case }};
 {% endfor %}
 
 /**
- * The {@code {{ resource.name }}} operations, without blocking: each method returns a {@link
+ * The {@code {{ resource.path | join(".") }}} operations, without blocking: each method returns a {@link
  * CompletableFuture}. Obtained from {@code client.async()}.
  */
 public final class {{ async_type_name }} {
     private final {{ resource_type_name }} sync;
     private final WithRawResponse withRawResponse;
+{% for child in resource.children %}
+    private final {{ child.name | to_upper_camel_case }}Async {{ m.accessor(child.accessor) }};
+{% endfor %}
 
     /**
      * The operations, sending through {@code sync}.
@@ -446,6 +449,9 @@ public final class {{ async_type_name }} {
     public {{ async_type_name }}({{ resource_type_name }} sync) {
         this.sync = sync;
         this.withRawResponse = new WithRawResponse();
+{% for child in resource.children %}
+        this.{{ m.accessor(child.accessor) }} = new {{ child.name | to_upper_camel_case }}Async(sync.{{ m.accessor(child.accessor) }}());
+{% endfor %}
     }
 
     /**
@@ -456,6 +462,17 @@ public final class {{ async_type_name }} {
     public WithRawResponse withRawResponse() {
         return withRawResponse;
     }
+{% for child in resource.children %}
+
+    /**
+     * The {@code {{ child.accessor }}} operations.
+     *
+     * @return the operations
+     */
+    public {{ child.name | to_upper_camel_case }}Async {{ m.accessor(child.accessor) }}() {
+        return {{ m.accessor(child.accessor) }};
+    }
+{% endfor %}
 {% for o in ops.list %}
 {% if o.page %}
 {% set ret = o.page.async_type %}
@@ -477,6 +494,17 @@ public final class {{ async_type_name }} {
     /** The operations, returning the status and headers along with the body. */
     public final class WithRawResponse {
         private WithRawResponse() {}
+{% for child in resource.children %}
+
+        /**
+         * The {@code {{ child.accessor }}} operations.
+         *
+         * @return the operations
+         */
+        public {{ child.name | to_upper_camel_case }}Async.WithRawResponse {{ m.accessor(child.accessor) }}() {
+            return {{ async_type_name }}.this.{{ m.accessor(child.accessor) }}.withRawResponse();
+        }
+{% endfor %}
 {% for o in ops.list %}
 
 {% if o.page %}
@@ -540,12 +568,15 @@ import {{ sdk.java_package }}.models.{{ c | to_upper_camel_case }};
 {% endfor %}
 
 /**
- * The {@code {{ resource.name }}} operations, blocking. {@link #withRawResponse()} has the same
+ * The {@code {{ resource.path | join(".") }}} operations, blocking. {@link #withRawResponse()} has the same
  * methods returning the status and headers along with the body.
  */
 public final class {{ resource_type_name }} {
     private final {{ http_client_type }} client;
     private final WithRawResponse withRawResponse;
+{% for child in resource.children %}
+    private final {{ child.name | to_upper_camel_case }} {{ m.accessor(child.accessor) }};
+{% endfor %}
 
     /**
      * The operations, sending through {@code client}.
@@ -555,6 +586,9 @@ public final class {{ resource_type_name }} {
     public {{ resource_type_name }}({{ http_client_type }} client) {
         this.client = client;
         this.withRawResponse = new WithRawResponse();
+{% for child in resource.children %}
+        this.{{ m.accessor(child.accessor) }} = new {{ child.name | to_upper_camel_case }}(client);
+{% endfor %}
     }
 
     /**
@@ -565,9 +599,20 @@ public final class {{ resource_type_name }} {
     public WithRawResponse withRawResponse() {
         return withRawResponse;
     }
+{% for child in resource.children %}
+
+    /**
+     * The {@code {{ child.accessor }}} operations.
+     *
+     * @return the operations
+     */
+    public {{ child.name | to_upper_camel_case }} {{ m.accessor(child.accessor) }}() {
+        return {{ m.accessor(child.accessor) }};
+    }
+{% endfor %}
 
     {% set api_resource_extra -%}
-        extensions/{{ resource.name | to_snake_case }}.java
+        extensions/{{ resource.path | join(".") }}.java
     {%- endset %}
     {% include api_resource_extra ignore missing %}
 
@@ -918,7 +963,7 @@ public final class {{ resource_type_name }} {
         {% endif -%}
     }
     {% endif %}
-    {% set api_operation_extra -%}extensions/{{ resource.name | to_snake_case }}_{{ op.name | to_snake_case }}.java{% endset %}
+    {% set api_operation_extra -%}extensions/{{ resource.path | join(".") }}_{{ op.name | to_snake_case }}.java{% endset %}
     {% include api_operation_extra ignore missing %}
 
 {% endfor %}
@@ -926,6 +971,17 @@ public final class {{ resource_type_name }} {
     /** The operations, returning the status and headers along with the body. */
     public final class WithRawResponse {
         private WithRawResponse() {}
+{% for child in resource.children %}
+
+        /**
+         * The {@code {{ child.accessor }}} operations.
+         *
+         * @return the operations
+         */
+        public {{ child.name | to_upper_camel_case }}.WithRawResponse {{ m.accessor(child.accessor) }}() {
+            return {{ resource_type_name }}.this.{{ m.accessor(child.accessor) }}.withRawResponse();
+        }
+{% endfor %}
 {% for o in ops.list %}
 
 {% if o.page %}
