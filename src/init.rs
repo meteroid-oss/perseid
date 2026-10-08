@@ -211,6 +211,15 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         toml += &format!("header_prefix = {}\n", quote(&words.join("-")));
         toml += &format!("user_agent = {}\n", quote(&words.join("-")));
     }
+    // An API streaming its answers, such as an LLM's, may take minutes to give a whole one.
+    let streams = doc["paths"].to_string().contains("text/event-stream");
+    if streams
+        && !imported
+            .as_ref()
+            .is_some_and(|i| i.top_level().contains("timeout"))
+    {
+        toml += "timeout = 600\n";
+    }
     if let Some(stainless) = &imported {
         toml += &stainless.top_level();
     }

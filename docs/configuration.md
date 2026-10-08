@@ -157,7 +157,7 @@ Each key is also a key of the [language tables](#language-tables), which overrid
 | Key | Default | Description |
 |---|---|---|
 | `base_url` | The spec's first absolute server | API base URL of the clients; `""` for none, so callers must pass one |
-| `timeout` | `60` | Request timeout, in seconds |
+| `timeout` | `60` | Request timeout, in seconds. `perseid init` writes `600` for an API streaming its answers (`text/event-stream`), as LLM APIs do |
 | `webhooks` | `false` | `true` installs the [webhook verifier](customizing.md#webhooks) |
 | `tests` | `true` | `false` leaves out the [generated tests](languages.md#tests) |
 | `round_trips` | `false` | `true` adds the [round trips](languages.md#round-trips) of every model to the generated tests |
