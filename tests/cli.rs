@@ -53,6 +53,27 @@ fn init_derives_names_from_the_spec() {
 }
 
 #[test]
+fn init_keeps_a_title_word_in_mixed_case_one_word() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = "openapi: 3.1.0\ninfo: {title: OpenAI API, version: '1'}\npaths: {}\n";
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "python,typescript,go"]);
+    assert!(ok, "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    for text in [
+        "name = \"OpenAI\"",
+        "header_prefix = \"openai\"",
+        "[python]\npackage = \"openai\"",
+        "[typescript]\npackage = \"openai\"",
+        "[context]\nenv_prefix = \"OPENAI\"",
+    ] {
+        assert!(config.contains(text), "no `{text}` in {config}");
+    }
+    let (ok, out) = perseid(dir.path(), &["generate", "python", "--no-format"]);
+    assert!(ok, "{out}");
+}
+
+#[test]
 fn init_writes_perseid_toml_and_the_workflows_and_asks_for_the_sdks() {
     let dir = tempfile::tempdir().unwrap();
     let nested = dir.path().join("spec/api/v1");

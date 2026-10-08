@@ -285,8 +285,28 @@ const RESERVED_CLASSES: &[&str] = &[
 ];
 
 /// `name` for the title's client: UpperCamelCase ASCII, starting with a letter, never colliding.
+/// A capitalized word in mixed case keeps its spelling: `OpenAI`, not `OpenAi`.
 pub fn from_title(title: &str) -> String {
-    let words: Vec<String> = transliterate(title)
+    let mixed = |w: &str| {
+        w.starts_with(|c: char| c.is_ascii_uppercase())
+            && w.contains(|c: char| c.is_ascii_lowercase())
+    };
+    let name: String = title_words(title)
+        .iter()
+        .map(|w| match mixed(w) {
+            true => w.clone(),
+            false => w.to_upper_camel_case(),
+        })
+        .collect();
+    match name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
+        true => FALLBACK.into(),
+        false => avoid(&name),
+    }
+}
+
+/// The words of a title that name the API, without `API`, `REST` and the like.
+pub fn title_words(title: &str) -> Vec<String> {
+    transliterate(title)
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|w| {
             !w.is_empty()
@@ -296,12 +316,7 @@ pub fn from_title(title: &str) -> String {
                 .contains(&w.to_lowercase().as_str())
         })
         .map(str::to_owned)
-        .collect();
-    let name = words.join(" ").to_upper_camel_case();
-    match name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
-        true => FALLBACK.into(),
-        false => avoid(&name),
-    }
+        .collect()
 }
 
 /// `name`, or `name` with a suffix when it would collide.
@@ -441,6 +456,8 @@ mod tests {
     fn titles_become_camel_case_names() {
         assert_eq!(from_title("Acme Pet Store API"), "AcmePetStore");
         assert_eq!(from_title("acme-billing REST service"), "AcmeBilling");
+        assert_eq!(from_title("OpenAI API"), "OpenAI");
+        assert_eq!(from_title("GitHub v3 REST API"), "GitHubV3");
     }
 
     #[test]
