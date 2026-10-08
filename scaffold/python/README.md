@@ -160,7 +160,8 @@ A successful response that does not decode raises `APIResponseValidationError`.
 
 Connection errors, timeouts, 408, 429 and 5xx responses are retried twice with exponential
 backoff, honoring `Retry-After`, when replaying the request is safe: for idempotent methods
-and requests with an `Idempotency-Key` header. Requests time out after
+and requests with an `Idempotency-Key` header. A 429 is retried whatever the method, as the
+server refused the request. Requests time out after
 @@TIMEOUT@@ seconds.
 
 ```python
