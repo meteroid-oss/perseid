@@ -27,12 +27,12 @@
 {%- endmacro %}
 
 {#- A literal; the strings of a list are owned, as `new` converts only its own arguments. -#}
-{% macro literal(arg) -%}
+{% macro literal(arg, field=false) -%}
     {%- if arg.kind == "string" %}{{ arg.value | rust_str }}
     {%- elif arg.kind in ["uuid", "date"] %}{{ arg.value | rust_str }}.parse().unwrap()
-    {%- elif arg.kind == "enum" %}{{ arg.value | rust_str }}.into()
+    {%- elif arg.kind == "enum" %}{{ arg.value | rust_str }}{{ "" if field else ".into()" }}
     {%- elif arg.kind == "list" %}vec![{% for item in arg["items"] %}{{ literal(item) }}{% if item.kind == "string" %}{{ ".to_owned()" if item.type == "String" else ".into()" }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}]
-    {%- elif arg.kind == "object" %}{{ arg.schema | to_upper_camel_case }}::new({% for f in arg.fields %}{{ literal(f) }}{% if not loop.last %}, {% endif %}{% endfor %})
+    {%- elif arg.kind == "object" %}{{ arg.schema | to_upper_camel_case }}::new({% for f in arg.fields %}{{ literal(f, true) }}{% if not loop.last %}, {% endif %}{% endfor %})
     {%- else %}{{ arg.value | tojson }}{% endif -%}
 {%- endmacro %}
 

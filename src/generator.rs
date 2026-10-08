@@ -247,6 +247,10 @@ impl Generator<'_> {
         let errors = errors_context(&api);
         let recursive_aliases = types::recursive_aliases(&api.types);
         let rust_sizes = template::rust::Sizes::new(&api.types);
+        let convertible_types = match self.tpl_file_ext {
+            "rs" => template::rust::convertible_types(&api.types),
+            _ => BTreeSet::new(),
+        };
         for (name, ty) in &api.types {
             let mut referenced_components = ty.referenced_components();
             // A recursive type refers to itself, which is not an import.
@@ -293,6 +297,7 @@ impl Generator<'_> {
                     request_only => request_only_schemas.contains(name.as_str()),
                     enum_literals => &enum_literals,
                     open_enums => &open_enums,
+                    convertible_types => &convertible_types,
                     ..errors.clone()
                 },
             )?);

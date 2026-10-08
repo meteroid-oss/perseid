@@ -1,9 +1,11 @@
 //! What the Rust templates need to know of other types: the union variants to box, given the
-//! estimated sizes of the generated types.
+//! estimated sizes of the generated types, and the types constructors convert into.
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
 };
+
+use heck::ToUpperCamelCase as _;
 
 use crate::api::{
     Types,
@@ -135,6 +137,21 @@ impl<'a> Sizes<'a> {
             _ => size,
         }
     }
+}
+
+/// The names of the types constructors take as `impl Into<_>`: enums, which strings or their
+/// variants' payloads convert into.
+pub(crate) fn convertible_types(types: &Types) -> BTreeSet<String> {
+    let convertible = |ty: &Type| match &ty.data {
+        TypeData::StringEnum { .. } => true,
+        TypeData::StructEnum { fields, .. } => fields.is_empty(),
+        TypeData::Alias { target } => matches!(**target, FieldType::Union { .. }),
+        _ => false,
+    };
+    (types.values())
+        .filter(|ty| convertible(ty))
+        .map(|ty| ty.name.to_upper_camel_case())
+        .collect()
 }
 
 fn variants(repr: &StructEnumRepr) -> &[SimpleVariant] {
