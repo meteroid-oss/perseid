@@ -2150,7 +2150,7 @@ impl Merged {
         }
         let properties = part.get("properties").and_then(Value::as_object);
         for (name, value) in properties.into_iter().flatten() {
-            add_property(&mut self.properties, name, value);
+            add_property(&mut self.properties, name, value, schemas);
         }
         add_required(&mut self.required, part.get("required"));
         Some(())
@@ -2192,12 +2192,12 @@ impl Merged {
         let own_required = std::mem::take(&mut self.required);
         for (fields, required) in inherited {
             for (name, value) in &fields {
-                add_property(&mut self.properties, name, value);
+                add_property(&mut self.properties, name, value, schemas);
             }
             add_required(&mut self.required, Some(&Value::Array(required)));
         }
         for (name, value) in &own {
-            add_property(&mut self.properties, name, value);
+            add_property(&mut self.properties, name, value, schemas);
         }
         add_required(&mut self.required, Some(&Value::Array(own_required)));
         self.references.clear();
@@ -2220,9 +2220,14 @@ fn add_required(required: &mut Vec<Value>, names: Option<&Value>) {
     }
 }
 
-fn add_property(properties: &mut Map<String, Value>, name: &str, value: &Value) {
+fn add_property(
+    properties: &mut Map<String, Value>,
+    name: &str,
+    value: &Value,
+    schemas: &Map<String, Value>,
+) {
     let merged = match properties.get(name) {
-        Some(existing) => reconcile(name, existing, value),
+        Some(existing) => reconcile(name, existing, value, schemas),
         None => value.clone(),
     };
     properties.insert(name.to_owned(), merged);
@@ -2275,7 +2280,7 @@ fn collect_schema_fields(
         .into_iter()
         .flatten()
     {
-        add_property(fields, name, value);
+        add_property(fields, name, value, schemas);
     }
     add_required(required, schema.get("required"));
 }
@@ -2293,32 +2298,110 @@ const DOCUMENTATION: [&str; 7] = [
 
 /// Whether `narrow` accepts only values `wide` accepts, judging by the same type and by
 /// constraints it adds or tightens.
-fn refines(narrow: &Value, wide: &Value) -> bool {
+fn refines(narrow: &Value, wide: &Value, schemas: &Map<String, Value>) -> bool {
+    let ((narrow, narrow_null), (wide, wide_null)) = (shape(narrow, schemas), shape(wide, schemas));
     let (Some(narrow), Some(wide)) = (narrow.as_object(), wide.as_object()) else {
         return false;
     };
-    if narrow.contains_key("$ref") || wide.contains_key("$ref") {
-        return narrow.get("$ref") == wide.get("$ref") && narrow.get("$ref").is_some();
-    }
-    wide.iter()
-        .filter(|(key, _)| !DOCUMENTATION.contains(&key.as_str()))
-        .all(|(key, value)| match (key.as_str(), narrow.get(key)) {
-            (_, None) => false,
-            ("enum", Some(Value::Array(own))) => value
-                .as_array()
-                .is_some_and(|all| own.iter().all(|v| all.contains(v))),
-            (_, Some(own)) => own == value,
-        })
+    (wide_null || !narrow_null)
+        && wide
+            .iter()
+            .all(|(key, value)| match (key.as_str(), narrow.get(key)) {
+                (_, None) => false,
+                ("enum", Some(Value::Array(own))) => value
+                    .as_array()
+                    .is_some_and(|all| own.iter().all(|v| all.contains(v))),
+                // An object with more properties, or more of them required, is narrower.
+                ("properties", Some(Value::Object(own))) => value
+                    .as_object()
+                    .is_some_and(|all| all.iter().all(|(k, v)| own.get(k) == Some(v))),
+                ("required", Some(Value::Array(own))) => value
+                    .as_array()
+                    .is_some_and(|all| all.iter().all(|v| own.contains(v))),
+                (_, Some(own)) => own == value,
+            })
 }
 
-/// The one schema two `allOf` parts declare for the same property: the narrower of them, or an
-/// untyped one when neither refines the other.
-fn reconcile(name: &str, first: &Value, second: &Value) -> Value {
-    if first == second || refines(second, first) {
+/// `schema` as it constrains values, with whether it also takes `null`: references followed,
+/// documentation left out, `anyOf: [X, null]` and `type: [X, "null"]` read as a nullable `X`.
+fn shape(schema: &Value, schemas: &Map<String, Value>) -> (Value, bool) {
+    let mut schema = schema.clone();
+    for _ in 0..8 {
+        let target = schema.get("$ref").and_then(Value::as_str);
+        match target.and_then(|t| schemas.get(t.strip_prefix(SCHEMA_PREFIX)?)) {
+            Some(resolved) => schema = resolved.clone(),
+            None => break,
+        }
+    }
+    let mut nullable = false;
+    for key in ["anyOf", "oneOf"] {
+        let inner = match schema.get(key) {
+            Some(Value::Array(variants)) => match &variants[..] {
+                [a, b] if is_null_schema(b) => Some(shape(a, schemas).0),
+                [a, b] if is_null_schema(a) => Some(shape(b, schemas).0),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(inner) = inner {
+            schema = inner;
+            nullable = true;
+        }
+    }
+    if let Some(Value::Array(types)) = schema.get("type") {
+        let kept: Vec<Value> = types.iter().filter(|t| *t != "null").cloned().collect();
+        nullable |= kept.len() < types.len();
+        schema["type"] = match &kept[..] {
+            [only] => only.clone(),
+            _ => Value::Array(kept),
+        };
+    }
+    (without_documentation(&schema), nullable)
+}
+
+fn without_documentation(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .filter(|(key, _)| !DOCUMENTATION.contains(&key.as_str()))
+                .map(|(key, value)| (key.clone(), without_documentation(value)))
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(without_documentation).collect()),
+        other => other.clone(),
+    }
+}
+
+/// The one schema two `allOf` parts declare for the same property: the nullable one when only
+/// `null` tells them apart, else the narrower, the named one of two string enums (unknown values
+/// are kept), or an untyped one.
+fn reconcile(name: &str, first: &Value, second: &Value, schemas: &Map<String, Value>) -> Value {
+    // Parts differing only by `null` keep it: a response may hold it.
+    let ((first_shape, first_null), (second_shape, _)) =
+        (shape(first, schemas), shape(second, schemas));
+    if first != second && first_shape == second_shape {
+        return if first_null {
+            first.clone()
+        } else {
+            second.clone()
+        };
+    }
+    if first == second || refines(second, first, schemas) {
         return second.clone();
     }
-    if refines(first, second) {
+    if refines(first, second, schemas) {
         return first.clone();
+    }
+    let string_enum = |v: &Value| {
+        let (shape, _) = shape(v, schemas);
+        shape.get("type") == Some(&json!("string"))
+            && shape.get("enum").is_some_and(Value::is_array)
+    };
+    if string_enum(first) && string_enum(second) {
+        return match first.get("$ref").is_some() && second.get("$ref").is_none() {
+            true => first.clone(),
+            false => second.clone(),
+        };
     }
     tracing::warn!(
         property = name,
@@ -2967,6 +3050,41 @@ mod tests {
             json!({ "type": "string", "enum": ["a"] })
         );
         assert_eq!(child["properties"]["n"], json!({}));
+    }
+
+    #[test]
+    fn all_of_parts_are_compared_through_references_and_null() {
+        let doc = normalized(json!({ "components": { "schemas": {
+            "Status": { "type": "string", "enum": ["done", "failed"] },
+            "Small": { "type": "object", "properties": { "a": { "type": "string" } } },
+            "Large": { "type": "object", "properties": {
+                "a": { "type": "string" }, "b": { "type": "boolean" } } },
+            "Base": { "type": "object", "properties": {
+                "status": { "type": "string", "enum": ["running", "done"] },
+                "top": { "type": "integer" },
+                "cache": { "$ref": "#/components/schemas/Small" } } },
+            "Child": { "allOf": [
+                { "$ref": "#/components/schemas/Base" },
+                { "type": "object", "properties": {
+                    "status": { "$ref": "#/components/schemas/Status" },
+                    "top": { "anyOf": [{ "type": "integer" }, { "type": "null" }] },
+                    "cache": { "$ref": "#/components/schemas/Large" } } }
+            ] }
+        } } }));
+        let child = &doc["components"]["schemas"]["Child"]["properties"];
+        assert_eq!(
+            child["status"],
+            json!({ "$ref": "#/components/schemas/Status" })
+        );
+        assert_eq!(
+            child["top"]["anyOf"][1],
+            json!({ "type": "null" }),
+            "{child}"
+        );
+        assert_eq!(
+            child["cache"],
+            json!({ "$ref": "#/components/schemas/Large" })
+        );
     }
 
     #[test]
