@@ -49,7 +49,8 @@ pub struct Config {
     /// Package metadata written into the manifests `perseid generate` creates.
     #[serde(default, rename = "metadata")]
     pub package: Package,
-    /// API base URL the clients default to.
+    /// API base URL the clients default to: the spec's first absolute server unless set, none
+    /// for `""`.
     pub base_url: Option<String>,
     /// Prefix of the SDK's own headers, such as `{prefix}-retry-count`: the kebab-case `name`
     /// by default.
@@ -249,7 +250,7 @@ macro_rules! language {
             repo: Option<String>,
             #[doc = $package]
             package: Option<String>,
-            /// API base URL this client defaults to, over the top-level one.
+            /// API base URL this client defaults to, over the top-level one; none for `""`.
             base_url: Option<String>,
             /// Prefix of this SDK's own headers, over the top-level one.
             header_prefix: Option<String>,
@@ -726,6 +727,19 @@ impl Config {
             })
     }
 
+    /// Defaults `base_url` to the spec's first absolute server, the one `perseid init` writes.
+    pub fn default_to_spec_server(&mut self, spec: &str) {
+        #[derive(Deserialize)]
+        struct Servers {
+            #[serde(default)]
+            servers: Value,
+        }
+        if self.base_url.is_none() {
+            let servers = serde_json::from_str::<Servers>(spec).map(|doc| doc.servers);
+            self.base_url = servers.ok().and_then(|s| crate::spec::server_url(&s));
+        }
+    }
+
     /// Values exposed to templates as `sdk`, for an SDK checked out at `dir`.
     pub fn context(&self, sdk: &Sdk, dir: &Path) -> Value {
         let (language, target) = (sdk.language, sdk.target);
@@ -740,6 +754,7 @@ impl Config {
                 .or_else(|| shared.clone())
                 .unwrap_or_else(|| default.into())
         };
+        let base_url = pick(&target.base_url, &self.base_url, "");
         let mut context = json!({
             "client_name": self.name,
             "package_name": if language == "typescript" { &snake } else { &package },
@@ -747,8 +762,8 @@ impl Config {
             "java_package": if language == "java" { package.clone() } else { format!("com.{snake}") },
             "npm_package": if language == "typescript" { &package } else { &kebab },
             "go_module": self.go_module(sdk).unwrap_or_else(|| kebab.clone()),
-            "default_base_url": pick(&target.base_url, &self.base_url, ""),
-            "has_default_base_url": target.base_url.is_some() || self.base_url.is_some(),
+            "default_base_url": base_url,
+            "has_default_base_url": !base_url.is_empty(),
             "user_agent_prefix": pick(&target.user_agent, &self.user_agent, &kebab),
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
             "idempotency_keys": self.idempotency_keys.unwrap_or(false),
@@ -1284,6 +1299,32 @@ mod tests {
         let toml = format!("base_url = \"https://a.test\"\n{toml}");
         assert_eq!(context(&toml, "go")["has_default_base_url"], true);
         assert_eq!(context(&toml, "go")["default_base_url"], "https://a.test");
+    }
+
+    #[test]
+    fn base_url_defaults_to_the_spec_s_first_absolute_server() {
+        let base_url = |toml: &str, spec: &str| {
+            let mut config: Config = toml::from_str(toml).unwrap();
+            config.default_to_spec_server(spec);
+            let sdk = config.sdks(&[]).unwrap().remove(0);
+            let context = config.context(&sdk, Path::new("/nonexistent"));
+            let url = context["default_base_url"].as_str().unwrap().to_owned();
+            assert_eq!(context["has_default_base_url"], !url.is_empty());
+            url
+        };
+        let toml = "name = \"A\"\nsdks = [\"python\"]\n";
+        let spec = r#"{"servers": [{"url": "https://{env}.a.test/v1/", "variables": {"env": {"default": "api"}}}, {"url": "https://b.test"}]}"#;
+        assert_eq!(base_url(toml, spec), "https://api.a.test/v1");
+        let top = format!("base_url = \"https://own.test\"\n{toml}");
+        assert_eq!(base_url(&top, spec), "https://own.test");
+        let table = format!("{toml}[python]\nbase_url = \"https://py.test\"\n");
+        assert_eq!(base_url(&table, spec), "https://py.test");
+        let none = format!("base_url = \"\"\n{toml}");
+        assert_eq!(base_url(&none, spec), "");
+        let none_here = format!("{toml}[python]\nbase_url = \"\"\n");
+        assert_eq!(base_url(&none_here, spec), "");
+        assert_eq!(base_url(toml, r#"{"servers": [{"url": "/v1"}]}"#), "");
+        assert_eq!(base_url(toml, r#"{"openapi": "3.0.3"}"#), "");
     }
 
     #[test]

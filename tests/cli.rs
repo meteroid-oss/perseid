@@ -516,6 +516,49 @@ fn webhooks_verifier_is_opt_in() {
 }
 
 #[test]
+fn base_url_defaults_to_the_spec_s_first_server_without_init() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = "openapi: 3.0.3\ninfo: {title: Acme, version: '1'}\nservers:\n\
+                - url: 'https://{region}.acme.test/v1/'\n  variables: {region: {default: eu}}\n\
+                - url: https://other.acme.test\npaths: {}\n";
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let config = dir.path().join("perseid.toml");
+    let base = "spec = \"openapi.yaml\"\nname = \"Acme\"\nsdks = [\"rust\"]\n";
+    let generated = |toml: &str| {
+        fs::write(&config, toml).unwrap();
+        let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+        assert!(ok, "{out}");
+        let client = fs::read_to_string(dir.path().join("rust/src/api/client.rs")).unwrap();
+        let (ok, out) = perseid(dir.path(), &["docs-data"]);
+        assert!(ok, "{out}");
+        let docs: serde_json::Value = serde_json::from_str(&out).unwrap();
+        (client, docs["base_url"].clone())
+    };
+    let constant = |url: &str| format!("const DEFAULT_BASE_URL: Option<&str> = {url};");
+
+    let (client, docs) = generated(base);
+    assert!(client.contains(&constant("Some(\"https://eu.acme.test/v1\")")));
+    assert_eq!(docs, "https://eu.acme.test/v1");
+    let (client, docs) = generated(&format!("base_url = \"https://own.test\"\n{base}"));
+    assert!(client.contains(&constant("Some(\"https://own.test\")")));
+    assert_eq!(docs, "https://own.test");
+    let (client, _) = generated(&format!("{base}[rust]\nbase_url = \"https://rs.test\"\n"));
+    assert!(client.contains(&constant("Some(\"https://rs.test\")")));
+    let (client, docs) = generated(&format!("base_url = \"\"\n{base}"));
+    assert!(client.contains(&constant("None")));
+    assert!(docs.is_null());
+
+    fs::write(
+        dir.path().join("openapi.yaml"),
+        spec.replace("'https://{region}.acme.test/v1/'", "/v1"),
+    )
+    .unwrap();
+    let (client, docs) = generated(base);
+    assert!(client.contains(&constant("None")), "{client}");
+    assert!(docs.is_null());
+}
+
+#[test]
 fn tests_are_generated_unless_left_out() {
     let dir = project_from("petstore.yaml", &["go", "java", "csharp"]);
     let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
