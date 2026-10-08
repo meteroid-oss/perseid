@@ -300,7 +300,7 @@ paths:
         - {name: async, in: query, schema: {type: string}}
         - {name: page.size, in: query, schema: {type: integer}}
         - {name: 'filter[status]', in: query, schema: {type: string}}
-        - {name: X-Rate-Limit, in: header, schema: {type: integer}}
+        - {name: X-Rate-Limit, in: header, description: "The most requests a minute, `*/` included.", schema: {type: integer}}
         - {name: session_id, in: cookie, schema: {type: string}}
         - {name: kind, in: query, schema: {$ref: '#/components/schemas/Kind'}}
       requestBody:

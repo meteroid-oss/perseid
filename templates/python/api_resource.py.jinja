@@ -472,7 +472,7 @@ class {{ class_name }}({{ base_class }}):
 {%- for f in flat_fields.list if f.description is defined %}
 :param {{ field_ident(f) }}: {{ f.description | replace("\n", " ") }}
 {%- endfor %}
-{%- for p in op.query_params if p.description is defined %}
+{%- for p in op.query_params + op.header_params if p.description is defined %}
 :param {{ py_ident(p.ident) }}: {{ p.description | replace("\n", " ") }}
 {%- endfor %}
 {%- endset %}

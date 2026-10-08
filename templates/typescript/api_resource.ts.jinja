@@ -76,8 +76,8 @@
             {{ m.doc(p.description, false) }}{{ p.ident | ident("camel") }}{% if not p.required %}?{% endif %}: {{ m.js_type(ptype) }}{% if not p.required %} | undefined{% endif %};
         {% endfor -%}
         {% for p in op.header_params -%}
-            /** Sent as the `{{ p.name }}` {{ "cookie" if p.cookie else "header" }}{% if p.json %}, as compact JSON{% endif %}. */
-            {{ p.ident | ident("camel") }}{% if not p.required %}?{% endif %}: {{ m.js_type(p.type) }}{% if not p.required %} | undefined{% endif %};
+            {% if p.description is defined and p.description %}{{ m.doc(p.description, false) }}{% else %}/** Sent as the `{{ p.name }}` {{ "cookie" if p.cookie else "header" }}{% if p.json %}, as compact JSON{% endif %}. */
+            {% endif %}{{ p.ident | ident("camel") }}{% if not p.required %}?{% endif %}: {{ m.js_type(p.type) }}{% if not p.required %} | undefined{% endif %};
         {% endfor -%}
     }
 

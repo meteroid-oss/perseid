@@ -96,7 +96,7 @@ type {{ options_type_name }} struct {
 {% endif %}{% if p.description is defined %}{{ p.description | to_doc_comment(style="go") }}
 {% endif %}{{ go_export(p.ident) }} {% if param_union(op, p) or not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}*{% endif %}{{ param_type(op, p) }}
 {% endfor %}{% for p in optional_headers %}{% if optional_query or not loop.first %}
-{% endif %}// {{ go_export(p.ident) }} is sent as the {{ p.name }} {{ "cookie" if p.cookie else "header" }}.
+{% endif %}{% if p.description is defined %}{{ p.description | to_doc_comment(style="go") }}{% else %}// {{ go_export(p.ident) }} is sent as the {{ p.name }} {{ "cookie" if p.cookie else "header" }}.{% endif %}
 {{ go_export(p.ident) }} {% if not (p.type.is_list() or p.type.is_set() or p.type.is_map() or p.type.is_json_object()) %}*{% endif %}{{ go_header_type(p) }}
 {% endfor %}}
 {% endif %}{% endfor %}

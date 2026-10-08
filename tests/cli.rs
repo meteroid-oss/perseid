@@ -3092,6 +3092,69 @@ fn java_enums_keep_unknown_values_and_docs_are_html() {
 const LANGUAGES: [&str; 6] = ["rust", "typescript", "python", "go", "java", "csharp"];
 
 #[test]
+fn header_parameters_are_documented_with_their_description_in_every_language() {
+    let dir = project_from("petstore.yaml", &LANGUAGES);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Shop, version: "1" }
+servers: [{ url: https://x.example.com }]
+paths:
+  /orders:
+    get:
+      operationId: list_orders
+      tags: [orders]
+      parameters:
+        - { name: X-Tenant, in: header, description: "The tenant to list the orders of.", schema: { type: string } }
+        - { name: X-Trace, in: header, schema: { type: string } }
+      responses:
+        '204': { description: ok }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let fallbacks = [
+        (
+            "rust",
+            "/// The `X-Tenant` header parameter.",
+            "/// The `X-Trace` header parameter.",
+        ),
+        (
+            "typescript",
+            "Sent as the `X-Tenant` header",
+            "Sent as the `X-Trace` header",
+        ),
+        ("python", "", ""),
+        (
+            "go",
+            "XTenant is sent as the X-Tenant header",
+            "XTrace is sent as the X-Trace header",
+        ),
+        (
+            "java",
+            "The {@code X-Tenant} parameter.",
+            "The {@code X-Trace} parameter.",
+        ),
+        (
+            "csharp",
+            "The <c>X-Tenant</c> header",
+            "The <c>X-Trace</c> header",
+        ),
+    ];
+    for (language, described, undescribed) in fallbacks {
+        let all = files(&dir.path().join(language));
+        let text: String = all.iter().map(|(_, text)| text.as_str()).collect();
+        assert!(
+            text.contains("The tenant to list the orders of."),
+            "{language}: the description is missing"
+        );
+        if !described.is_empty() {
+            assert!(!text.contains(described), "{language}: {described}");
+            assert!(text.contains(undescribed), "{language}: {undescribed}");
+        }
+    }
+}
+
+#[test]
 fn readme_examples_build_lists_and_nested_models_in_every_language() {
     let languages = ["rust", "typescript", "python", "go", "java", "csharp"];
     let dir = project_from("petstore.yaml", &languages);
