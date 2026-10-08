@@ -433,8 +433,18 @@ impl<'a> Gen<'a> {
                 Some(Value::Object(own))
             }
         };
+        let tag = match &variant.content {
+            EnumVariantType::Ref {
+                schema_ref: Some(target),
+                ..
+            } => crate::api::types::declared_tag(self.types, target, discriminator, &variant.name),
+            _ => None,
+        };
         let mut out = Map::new();
-        out.insert(discriminator.to_owned(), Value::from(variant.name.as_str()));
+        out.insert(
+            discriminator.to_owned(),
+            Value::from(tag.unwrap_or(&variant.name)),
+        );
         match content_field {
             Some(field) => {
                 if let Some(body) = body {
