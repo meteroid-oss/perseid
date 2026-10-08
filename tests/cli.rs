@@ -2155,13 +2155,16 @@ fn pagination_rules_use_the_response_values_it_has() {
 }
 
 #[test]
-fn stripe_style_lists_paginate_without_a_rule() {
+fn stripe_and_openai_style_lists_paginate_without_a_rule() {
     let list = |id: &str, cursor: &str, has_more: bool, extra: &str| {
-        let more = if has_more {
-            ", has_more: { type: boolean }"
-        } else {
-            ""
+        let more = match (has_more, extra) {
+            (true, "last_id") => {
+                ", has_more: { type: boolean }, last_id: { type: [string, \"null\"] }"
+            }
+            (true, _) => ", has_more: { type: boolean }",
+            _ => "",
         };
+        let extra = if extra == "last_id" { "" } else { extra };
         format!(
             r#"
   /{id}:
@@ -2183,12 +2186,14 @@ fn stripe_style_lists_paginate_without_a_rule() {
         )
     };
     let spec = format!(
-        "openapi: 3.1.0\ninfo: {{ title: Shop, version: \"1\" }}\npaths:{}{}{}{}\ncomponents:\n  \
+        "openapi: 3.1.0\ninfo: {{ title: Shop, version: \"1\" }}\npaths:{}{}{}{}{}{}\ncomponents:\n  \
          schemas:\n    Item: {{ type: object, required: [id], properties: {{ id: {{ type: string }} }} }}\n",
         list("customers", "starting_after", true, ""),
         list("completions", "after", true, ""),
         list("events", "starting_after", false, ""),
         list("invoices", "starting_after", true, "x-pagination: false"),
+        list("threads", "after", true, "last_id"),
+        list("batches", "after_id", true, "last_id"),
     );
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
@@ -2205,6 +2210,16 @@ fn stripe_style_lists_paginate_without_a_rule() {
     assert!(customers.get("before").is_none(), "{customers}");
     for id in ["completions", "events", "invoices"] {
         assert!(operation(&api, id).get("pagination").is_none(), "{id}");
+    }
+    for (id, param) in [("threads", "after"), ("batches", "after_id")] {
+        let threads = &operation(&api, id)["pagination"];
+        assert_eq!(threads["param"], param, "{id}");
+        assert_eq!(
+            threads["next_cursor"],
+            serde_json::json!(["last_id"]),
+            "{id}"
+        );
+        assert_eq!(threads["has_more"], serde_json::json!(["has_more"]), "{id}");
     }
 
     let rule = "\n[[pagination]]\ncursor = \"after\"\nitem_cursor = \"id\"\nbefore = \"limit\"\noperations = [\"completions\"]\n";

@@ -206,17 +206,25 @@ impl Pagination {
     }
 }
 
-/// Stripe's list shape, which pages operations no rule matches: a `starting_after` cursor
+/// The list shapes that page operations no rule matches. Stripe's: a `starting_after` cursor
 /// taking the `id` of the last item of `data`, while `has_more`, and backwards from
-/// `ending_before`.
-pub(crate) fn detected() -> config::Pagination {
-    config::Pagination {
+/// `ending_before`. OpenAI's and Anthropic's: an `after` or `after_id` cursor taking `last_id`.
+pub(crate) fn detected() -> Vec<config::Pagination> {
+    let stripe = config::Pagination {
         cursor: Some("starting_after".to_owned()),
         item_cursor: Some("id".to_owned()),
         has_more: Some("has_more".to_owned()),
         items: Some("data".to_owned()),
         ..Default::default()
-    }
+    };
+    let last_id = |cursor: &str| config::Pagination {
+        cursor: Some(cursor.to_owned()),
+        next_cursor: Some("last_id".to_owned()),
+        has_more: Some("has_more".to_owned()),
+        items: Some("data".to_owned()),
+        ..Default::default()
+    };
+    vec![stripe, last_id("after"), last_id("after_id")]
 }
 
 /// The members a page adds to the response body, in snake case.

@@ -1252,10 +1252,10 @@ impl Operation {
                         Err(_) => {}
                     }
                 }
-                let detected = super::pagination::detected();
                 found.or_else(|| {
-                    let detected = detect.then_some(&detected)?;
-                    Pagination::resolve(detected, &candidate, types, true).ok()
+                    let detected = super::pagination::detected();
+                    (detected.iter().filter(|_| detect))
+                        .find_map(|rule| Pagination::resolve(rule, &candidate, types, true).ok())
                 })
             }
         };

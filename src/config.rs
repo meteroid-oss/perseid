@@ -90,7 +90,7 @@ pub struct Config {
     #[serde(default)]
     pub exclude: Vec<String>,
     /// `false` pages only the operations that `x-pagination` or a `pagination` rule matches,
-    /// not the Stripe-style lists perseid detects.
+    /// not the Stripe- and OpenAI-style lists perseid detects.
     pub detect_pagination: Option<bool>,
     /// Paginated list operations, detected from their query parameter and response shape.
     #[serde(default, deserialize_with = "one_or_many")]
