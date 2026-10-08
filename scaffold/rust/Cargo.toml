@@ -14,7 +14,7 @@ categories = ["api-bindings"]
 [dependencies]
 # HTTP & Networking
 hyper = { version = "1.7", features = ["client", "http1"] }
-hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
+hyper-util = { version = "0.1.12", features = ["client-legacy", "http1", "tokio"] }
 http-body-util = "0.1"
 bytes = "1"
 futures-core = "0.3"
