@@ -171,11 +171,29 @@ public class HttpTests
     }
 
     [Fact]
-    public async Task DoesNotRetryARateLimitedPatchWithoutAnIdempotencyKey()
+    public async Task RetriesARateLimitedPatchWithoutAnIdempotencyKey()
     {
         var (client, server) = Client(_ => Reply(HttpStatusCode.TooManyRequests));
         using var _ = client;
         await Assert.ThrowsAsync<RateLimitException>(() => client.Things.UpdateAsync("t1", new()));
+        Assert.Equal(3, server.Seen.Count);
+        Assert.Equal("2", Header(server.Seen[^1].Request, "torture-retry-count"));
+    }
+
+    [Fact]
+    public async Task DoesNotRetryAPatchThatFailedToConnect()
+    {
+        var server = new Server((_, _, _) => throw new HttpRequestException("refused"));
+        using var client = new TortureClient(
+            "token",
+            new()
+            {
+                BaseUrl = "https://torture.test/v1",
+                HttpMessageHandler = server,
+                RetrySchedule = [TimeSpan.Zero],
+            }
+        );
+        await Assert.ThrowsAsync<ApiConnectionException>(() => client.Things.UpdateAsync("t1", new()));
         Assert.Single(server.Seen);
     }
 
