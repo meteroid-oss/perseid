@@ -3456,7 +3456,7 @@ components:
     let calls = [
         (
             "rust",
-            "OrderCreate::new(vec![Line::new(1, \"small\".into(), \"sku\")], Address::new(\"Paris\"), vec![\"tags\".to_owned()])",
+            "OrderCreate::new(vec![Line::new(1, \"small\", \"sku\")], Address::new(\"Paris\"), vec![\"tags\".to_owned()])",
         ),
         (
             "typescript",

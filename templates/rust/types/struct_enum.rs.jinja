@@ -94,6 +94,23 @@ impl {{ enum_name }} {
         }
     }
 }
+{#- A variant's payload converts into the union, unless another variant holds the same type. -#}
+{% set payloads = namespace(all=[]) -%}
+{% for variant in type.variants -%}
+{% set payloads.all = payloads.all + [payload(variant) | replace("Box<", "") | replace(">", "")] -%}
+{% endfor -%}
+{% for variant in type.variants -%}
+{% set p = payload(variant) -%}
+{% set inner = payloads.all[loop.index0] -%}
+{% if p and payloads.all | select("equalto", inner) | list | length == 1 %}
+
+impl From<{{ inner }}> for {{ enum_name }} {
+    fn from(value: {{ inner }}) -> Self {
+        Self::{{ variant.name | to_rust_variant }}({% if p != inner %}Box::new(value){% else %}value{% endif %})
+    }
+}
+{%- endif %}
+{%- endfor %}
 
 
 impl Serialize for {{ enum_name }} {

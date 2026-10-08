@@ -6,7 +6,7 @@
 {%- endmacro -%}
 {#- A Rust type without the `crate::models::` the resource files spell. -#}
 {% macro short(ty) %}{{ ty | replace("crate::models::", "") | replace("std::collections::", "") }}{% endmacro -%}
-{% macro option(text, optional) %}{% if optional %}Option<{{ text }}>{% else %}{{ text }}{% endif %}{% endmacro -%}
+{% macro option(text, optional) %}{% if optional %}impl Into<Option<{{ text }}>>{% else %}{{ text }}{% endif %}{% endmacro -%}
 {% macro params(resource, op) -%}
     {%- set prefix = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) -%}
     {%- set args = namespace(list=[]) -%}
