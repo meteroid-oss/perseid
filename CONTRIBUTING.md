@@ -83,7 +83,7 @@ files are generated:
 
 ## Repository layout
 
-| Path | |
+| Path | Contents |
 |---|---|
 | `src/` | The binary. `main.rs` holds the commands |
 | `src/spec/`, `src/spec.rs` | Loading the spec: bundling external `$ref`s, upgrading 3.0, normalizing |

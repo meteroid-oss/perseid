@@ -140,7 +140,7 @@ perseid eject typescript   # copies the templates and runtime to .perseid/
 
 ### Template model
 
-| Field | Where | |
+| Field | Where | Description |
 |---|---|---|
 | `op.errors` | Operations | The schema of each error response by status: `404`, `4XX`, `default` |
 | `error_schemas`, `default_error` | Every template | Error schemas, and the API-wide one ([error schemas](configuration.md#spec-support)) |
@@ -173,7 +173,7 @@ headers.
 new Webhook("whsec_...").verify(rawBody, request.headers); // throws WebhookVerificationError
 ```
 
-| Language | |
+| Language | Usage |
 |---|---|
 | TypeScript | `new Webhook(secret).verify(body, headers)` |
 | Python | `Webhook(secret).verify(body, headers)` |

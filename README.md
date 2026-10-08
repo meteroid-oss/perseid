@@ -69,7 +69,7 @@ var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.
 
 ## Features
 
-| | |
+| Area | Support |
 |---|---|
 | Languages | Rust, TypeScript, Python (sync and async), Go, Java, C# |
 | Requests | Typed errors by status, retries with backoff and `Retry-After`, idempotency keys, per-call timeouts and headers |
@@ -135,7 +135,7 @@ See [repository layouts](docs/ci.md#repository-layouts).
 
 ## Commands
 
-| Command | |
+| Command | Description |
 |---|---|
 | `init` | Write `perseid.toml` and the workflows. Local only: nothing is sent to GitHub. |
 | `generate` | Write the SDKs. `--out <dir>` previews, `--check` fails on drift, `--pr` opens pull requests. |

@@ -18,7 +18,7 @@ decide.
 
 ### Hosting, license and price
 
-| | Generator license | Runs in | Account | Price |
+| Generator | Generator license | Runs in | Account | Price |
 |---|---|---|---|---|
 | perseid | Apache-2.0 | Your GitHub Actions, as one binary or a Docker image | None | Free |
 | Stainless | Proprietary | Stainless's cloud | Yes | Closed to new customers |
@@ -34,7 +34,7 @@ use a GitHub App of your own (`perseid app`) or a token: see [credentials](ci.md
 
 ### Languages and other outputs
 
-| | SDK languages | Other outputs |
+| Generator | SDK languages | Other outputs |
 |---|---|---|
 | perseid | Rust, TypeScript, Python (sync and async), Go, Java, C# | `api.md` and a README per SDK |
 | Stainless | TypeScript, Python, Go, Java, Kotlin, Ruby, PHP, C# | CLI, MCP server, Terraform provider, docs platform |
@@ -46,7 +46,7 @@ use a GitHub App of your own (`perseid app`) or a token: see [credentials](ci.md
 
 ### Generated SDKs
 
-| | Code style | Pagination | Retries | Errors |
+| Generator | Code style | Pagination | Retries | Errors |
 |---|---|---|---|---|
 | perseid | Resource namespaces: `client.customers.list()` | Cursor, page and offset, from `x-pagination` or rules in `perseid.toml`; Stripe-style lists without either. Lists iterate across pages | Backoff, `Retry-After`, opt-in idempotency keys | A type per status, with the declared error schema decoded |
 | Stainless | Resource namespaces | Cursor, offset and page, configured | Backoff, idempotency keys | A type per status |
@@ -58,7 +58,7 @@ use a GitHub App of your own (`perseid app`) or a token: see [credentials](ci.md
 
 ### Releases and customization
 
-| | Release automation | Breaking-change detection | Your edits across regenerations |
+| Generator | Release automation | Breaking-change detection | Your edits across regenerations |
 |---|---|---|---|
 | perseid | A pull request per spec change, then release-please and trusted publishing from your repositories | oasdiff sizes each pull request: `feat!:`, `feat:` or `fix:`. Changelogs name breaking changes | Whole files: perseid only rewrites files marked `@generated`. Middleware, resource snippets, ejected templates |
 | Stainless | Release PRs and publishing, hosted | Enterprise feature | Three-way merge of custom code |

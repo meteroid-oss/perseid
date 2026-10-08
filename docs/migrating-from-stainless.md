@@ -20,7 +20,7 @@ TypeScript, but types and some names change (see [what changes](#what-changes-fo
 These hold for the TypeScript and Python SDKs, checked against SDKs generated from the
 [test fixture](../tests/fixtures/stainless.yml):
 
-| | Stainless and perseid |
+| Area | Stainless and perseid |
 |---|---|
 | Install | Same package names, on the same registries |
 | Client | `new Knock({ apiKey })`, `Knock(api_key=...)`, `AsyncKnock` in Python |

@@ -162,7 +162,7 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
 
 Every SDK can return the status, headers and request id of a successful call with its body.
 
-| Language | |
+| Language | Usage |
 |---|---|
 | TypeScript | `const { data, response, requestId } = await client.customers.retrieve(id).withResponse()` |
 | Python | `raw = client.with_raw_response.customers.retrieve(id)`, then `raw.headers`, `raw.parse()` |

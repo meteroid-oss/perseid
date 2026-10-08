@@ -89,7 +89,7 @@ You need:
 Every perseid workflow takes the first credential it finds, so the same workflow files serve every
 setup:
 
-| Credential | Set up by | Stored as | |
+| Credential | Set up by | Stored as | Notes |
 |---|---|---|---|
 | A GitHub App of your own | [`perseid app`](#perseid-app) | `SDK_APP_ID` variable, `SDK_APP_PRIVATE_KEY` secret | Each run mints a token for an hour. You keep the key |
 | A [fine-grained token](#tokens) | You | `SDK_GITHUB_TOKEN` secret | It expires and acts as you |
@@ -158,7 +158,7 @@ GitHub with `perseid.toml`, prints the plan and applies it once you agree:
    the default branch, or through one pull request when the branch takes no direct push. One whose
    first line you removed stays yours.
 
-| Flag | |
+| Flag | Effect |
 |---|---|
 | `--dry-run` | Prints the plan, exits with 2 when changes are pending |
 | `--yes` | Applies without asking |
@@ -170,7 +170,7 @@ change them. Pin it if you prefer, and let Dependabot's `github-actions` updates
 
 ### `perseid generate`
 
-| Flag | |
+| Flag | Effect |
 |---|---|
 | none | Writes the SDKs where `perseid.toml` says, and prints where each one went |
 | `--out <dir>` | Writes every SDK to `<dir>/<language>`, without cloning anything |
@@ -191,7 +191,7 @@ change them. Pin it if you prefer, and let Dependabot's `github-actions` updates
 
 `sdks.yml` opens pull requests with one of:
 
-| Credential | |
+| Credential | Tokens |
 |---|---|
 | The perseid App, installed by `perseid sync` | Tokens traded for the run's OIDC token, never stored |
 | A GitHub App, set up by `perseid app` | Tokens minted on each run from the key you store |
@@ -225,7 +225,7 @@ and asks first. If you decline, it prints the steps to do it by hand:
 3. On each, store its App ID as the `SDK_APP_ID` variable and a private key as the
    `SDK_APP_PRIVATE_KEY` secret.
 
-| Flag | |
+| Flag | Effect |
 |---|---|
 | `--dry-run` | Prints the plan, exits with 2 when changes are pending |
 | `--yes` | Applies without asking |
@@ -293,7 +293,7 @@ npx perseid connect acme/api-sdks
 
 It reads `perseid.toml` from the SDKs repository and finds the spec here.
 
-| Flag | |
+| Flag | Effect |
 |---|---|
 | `--spec <path>` | Another spec file |
 | `--build "<command>"` | A command writing the spec in CI, when it is not committed |
@@ -395,7 +395,7 @@ The Action installs the perseid matching its own ref, then:
    base branch already holds as generated. Each merges on its own: where branch protection
    requires branches to be up to date, merge them one at a time or through a merge queue.
 
-| Input | Default | |
+| Input | Default | Description |
 |---|---|---|
 | `command` | `generate --pr` | Arguments passed to perseid. `generate --check` fails on drift, for pull request checks |
 | `token` | | Contents and Pull requests write on every target repository, such as `SDK_GITHUB_TOKEN`. Unused with `app-id`. Without either, the perseid App's |
@@ -595,7 +595,7 @@ Notes:
 
 `meteroid-oss/perseid/release` takes:
 
-| Input | `sdk-release.yml` passes | |
+| Input | `sdk-release.yml` passes | Description |
 |---|---|---|
 | `app-id`, `app-private-key` | `SDK_APP_ID` variable, `SDK_APP_PRIVATE_KEY` secret | A GitHub App whose token, minted for this repository with Contents and Pull requests write, runs release-please |
 | `release-token` | `SDK_GITHUB_TOKEN` secret | The token for release-please without an App |

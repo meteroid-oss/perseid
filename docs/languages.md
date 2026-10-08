@@ -5,7 +5,7 @@ Examples use an API named `Acme` with a `customers` resource. Names follow the `
 
 ## What every SDK does
 
-| Behavior | |
+| Behavior | Description |
 |---|---|
 | Retries | Connection errors, timeouts, 408, 429 and 5xx, retried twice by default with jittered exponential backoff |
 | Safe retries only | Idempotent methods, or requests with an `Idempotency-Key`. Every POST gets one automatically with [`idempotency_keys = true`](configuration.md#spec-name-and-sdks) |
@@ -27,7 +27,7 @@ See [features](features.md) for auth, pagination and encoding, and
 
 ## At a glance
 
-| | Requires | Client | Base error | Paginated list | Raw response |
+| Language | Requires | Client | Base error | Paginated list | Raw response |
 |---|---|---|---|---|---|
 | Rust | Tokio | `Acme::builder()...build()?` | `Error` | `.items()` on `list()` | `.with_response()` |
 | TypeScript | Node.js 20+, Deno, Bun, browsers | `new Acme({ apiKey })` | `AcmeError` | `for await` on `list()` | `.withResponse()` |
@@ -63,7 +63,7 @@ process with a sample of the declared response, so no server or extra tool is ne
 come from the spec's schemas. The test checks the method and path sent, and that the response
 decodes.
 
-| | Tests | Run |
+| Language | Tests | Run |
 |---|---|---|
 | Rust | `tests/api/` | `cargo test` |
 | TypeScript | `tests/api/*.test.ts` | `npm test` |
@@ -84,7 +84,7 @@ decodes.
 `round_trips.json`: every property set, required ones only, `null`s, each union variant and enum
 value. What comes back must be the same JSON, up to the spelling of date-times and decimals.
 
-| | Test | Samples |
+| Language | Test | Samples |
 |---|---|---|
 | Rust | `tests/round_trips.rs` | `tests/round_trips.json` |
 | TypeScript | `tests/api/roundTrips.test.ts` | `tests/api/round_trips.json` |
@@ -239,7 +239,7 @@ type-checks under `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropert
 const client = new Acme({ apiKey: "sk_live_...", timeout: 20_000, maxRetries: 5 });
 ```
 
-| Option | |
+| Option | Description |
 |---|---|
 | `apiKey`, `baseURL` | Default to `ACME_API_KEY` and `ACME_BASE_URL` |
 | `timeout` | Milliseconds, `Infinity` to wait forever |
@@ -467,7 +467,7 @@ Go 1.23+. The module path is set by `module` under `[go]`, else derived from the
 client := acme.New("sk_live_...", &acme.Options{ServerURL: "https://staging.acme.com"})
 ```
 
-| `Options` field | |
+| `Options` field | Description |
 |---|---|
 | `ServerURL` | Else `ACME_BASE_URL`, else `DefaultServerURL` |
 | `Timeout`, `MaxRetries`, `RetrySchedule` | Defaults: `DefaultTimeout`, 2, exponential backoff |
