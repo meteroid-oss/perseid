@@ -477,6 +477,7 @@ pub(crate) fn set_discriminator_defaults(types: &mut Types) {
                 schema_ref: Some(target),
                 ..
             } = &variant.content
+                && !implicit_tag_of_a_constant(types, target, discriminator_field, &variant.name)
             {
                 values
                     .entry((target.clone(), discriminator_field.clone()))
@@ -537,6 +538,18 @@ pub(crate) fn set_discriminator_defaults(types: &mut Types) {
             }
         }
     }
+}
+
+/// Whether `tag` is only the schema name `target` gets without a mapping, while its `field`
+/// declares another constant: OpenAI's `InputMessage` is tagged `message`, as its `type` says.
+fn implicit_tag_of_a_constant(types: &Types, target: &str, field: &str, tag: &str) -> bool {
+    tag == target
+        && matches!(
+            types.get(target).map(|t| &t.data),
+            Some(TypeData::Struct { fields, .. }) if fields.iter().any(|f| {
+                f.name == field && f.constant.as_ref().and_then(|c| c.as_str()).is_some_and(|c| c != tag)
+            })
+        )
 }
 
 /// Makes `readOnly` fields optional in the schemas sent in requests, and `writeOnly` ones in

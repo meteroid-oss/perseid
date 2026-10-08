@@ -180,6 +180,49 @@ torture = generate("torture")
 paged = generate("paged", spec=PAGED_SPEC)
 expandable = generate("expandable", spec=EXPANDABLE_SPEC)
 adjacent = generate("adjacent", spec=ADJACENT_SPEC, base_url=None)
+
+# OpenAI's `InputItem`: three variants whose `type` is `message`, two of them in a nested union.
+SHARED_TAG_SPEC = """
+openapi: 3.1.0
+info: {title: Shared, version: "1"}
+paths:
+  /items:
+    post:
+      operationId: create_item
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Holder'}}}
+      responses: {"204": {description: ok}}
+components:
+  schemas:
+    Holder:
+      type: object
+      required: [items]
+      properties: {items: {type: array, items: {$ref: '#/components/schemas/InputItem'}}}
+    InputItem:
+      oneOf: [{$ref: '#/components/schemas/Easy'}, {$ref: '#/components/schemas/Item'}]
+      discriminator: {propertyName: type}
+    Item:
+      oneOf: [{$ref: '#/components/schemas/Input'}, {$ref: '#/components/schemas/Output'}, {$ref: '#/components/schemas/Call'}]
+      discriminator: {propertyName: type}
+    Easy:
+      type: object
+      required: [content]
+      properties: {type: {type: string, enum: [message]}, content: {type: string}}
+    Input:
+      type: object
+      required: [role]
+      properties: {type: {type: string, enum: [message]}, role: {type: string}}
+    Output:
+      type: object
+      required: [id, type]
+      properties: {type: {type: string, enum: [message]}, id: {type: string}}
+    Call:
+      type: object
+      required: [type, name]
+      properties: {type: {type: string, enum: [call]}, name: {type: string}}
+"""
+shared = generate("shared", spec=SHARED_TAG_SPEC, base_url=None)
 from torture import RateLimitError, Torture, models  # noqa: E402
 from torture import (  # noqa: E402
     APIConnectionError,
@@ -365,6 +408,14 @@ class ModelTest(unittest.TestCase):
         self.assertIsInstance(draft, models.Draft, "ties go to the first variant")
         untitled = models.ObjectUnions.from_dict({"document": {"body": "b"}}).document
         self.assertIsInstance(untitled, UnknownVariant)
+
+    def test_variants_sharing_a_tag_are_sent_with_the_tag_they_declare(self) -> None:
+        m = shared.models
+        items = [m.Easy(content="hi"), m.Input(role="user"), m.Output(id="o"), m.Call(name="f")]
+        sent = m.Holder(items=items).to_dict()["items"]
+        self.assertEqual([item["type"] for item in sent], ["message", "message", "message", "call"])
+        decoded = m.Holder.from_dict({"items": sent}).items
+        self.assertEqual([type(item) for item in decoded], [m.Easy, m.Input, m.Output, m.Call])
 
     def test_unknown_properties_stay_with_the_model_that_owns_them(self) -> None:
         composed = models.Composed.from_dict({**SAMPLES["Composed"], "new": 1})
