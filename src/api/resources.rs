@@ -284,6 +284,25 @@ pub(crate) fn drop_empty(resources: &mut Resources) {
     }
 }
 
+/// Gives each top-level resource the description of the tag it is named after.
+pub(crate) fn describe_tags(resources: &mut Resources, spec: &serde_json::Value) {
+    let Some(tags) = spec["tags"].as_array() else {
+        return;
+    };
+    for tag in tags {
+        let (Some(name), Some(description)) = (tag["name"].as_str(), tag["description"].as_str())
+        else {
+            continue;
+        };
+        let name = resource_name(name);
+        for resource in resources.values_mut() {
+            if resource.parent.is_none() && resource.path == [name.as_str()] {
+                resource.description = super::html::doc(Some(description.to_owned()));
+            }
+        }
+    }
+}
+
 /// A named group of [`Operation`]s: a top-level resource of the client, or a child of one.
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Resource {
@@ -294,6 +313,9 @@ pub(crate) struct Resource {
     pub path: Vec<String>,
     /// The name of the resource holding it.
     pub parent: Option<String>,
+    /// The description of the tag it is named after.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub children: Vec<Child>,
     pub operations: Vec<Operation>,
 }
@@ -384,6 +406,7 @@ impl Resource {
             name: path.join("_"),
             path,
             parent: None,
+            description: None,
             children: Vec::new(),
             operations: Vec::new(),
         }
@@ -850,6 +873,7 @@ impl Operation {
                     };
                     header_params.push(HeaderParam {
                         ident: parameter_data.name.clone(),
+                        description: super::html::doc(parameter_data.description.clone()),
                         name: parameter_data.name,
                         required: parameter_data.required,
                         cookie: false,
@@ -866,6 +890,7 @@ impl Operation {
                         .with_context(|| format!("cookie parameter `{name}`"))?;
                     header_params.push(HeaderParam {
                         ident: parameter_data.name.clone(),
+                        description: super::html::doc(parameter_data.description.clone()),
                         name: parameter_data.name,
                         required: parameter_data.required,
                         cookie: true,
@@ -1947,6 +1972,8 @@ pub(crate) struct HeaderParam {
     pub(crate) name: String,
     /// Name the SDK derives its identifier from, unique among the operation's parameters.
     ident: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
     required: bool,
     /// A cookie parameter: sent in the `Cookie` header, percent-encoded, with the others.
     #[serde(default)]

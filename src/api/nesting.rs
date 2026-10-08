@@ -485,6 +485,34 @@ mod tests {
     }
 
     #[test]
+    fn tag_and_header_descriptions_reach_the_model() {
+        let spec = json!({
+            "openapi": "3.1.0",
+            "info": { "title": "A", "version": "1" },
+            "tags": [{ "name": "Add-ons", "description": "Extras <b>sold</b> with plans." }],
+            "paths": {
+                "/add-ons/{a}/versions": {
+                    "get": { "operationId": "ListVersions", "tags": ["Add-ons"], "parameters": [
+                        { "name": "a", "in": "path", "required": true, "schema": { "type": "string" } },
+                        { "name": "X-Tenant", "in": "header", "description": "The tenant.", "schema": { "type": "string" } },
+                    ], "responses": { "204": { "description": "ok" } } },
+                    "post": { "operationId": "CreateVersion", "tags": ["Add-ons"], "responses": { "204": { "description": "ok" } } },
+                },
+            },
+        });
+        let api = crate::spec::api(&spec.to_string(), &Filters::default()).unwrap();
+        let root = &api.resources["add_ons"];
+        assert_eq!(
+            root.description.as_deref(),
+            Some("Extras **sold** with plans.")
+        );
+        let child = &api.resources["add_ons_versions"];
+        assert_eq!(child.description, None);
+        let list = serde_json::to_value(&child.operations[0]).unwrap();
+        assert_eq!(list["header_params"][0]["description"], "The tenant.");
+    }
+
+    #[test]
     fn nesting_stops_three_resources_deep() {
         let ops = [
             ("get", "/orgs/{o}/teams", "listTeams", "orgs"),

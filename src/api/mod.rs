@@ -72,6 +72,7 @@ impl Api {
             (resource.operations).retain(|op| !filters.excluded.contains(&op.id));
         }
         resources::drop_empty(&mut resources);
+        resources::describe_tags(&mut resources, raw_spec);
         let (mut types, type_errors) = types::from_referenced_components(
             &resources,
             &mut components.schemas,
