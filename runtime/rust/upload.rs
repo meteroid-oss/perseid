@@ -11,6 +11,7 @@ use std::{
     collections::VecDeque,
     fmt,
     io,
+    path::Path,
     pin::Pin,
     sync::{Mutex, PoisonError},
     task::{Context, Poll},
@@ -100,6 +101,27 @@ impl Upload {
         }
     }
 
+    /// The file at `path`, read in memory, named after it and typed by its extension
+    /// (`application/octet-stream` for an unknown one).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the file cannot be read.
+    pub async fn path(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref().to_owned();
+        let (path, bytes) = tokio::task::spawn_blocking(move || {
+            let bytes = std::fs::read(&path);
+            (path, bytes)
+        })
+        .await
+        .map_err(io::Error::other)?;
+        let upload = Self::bytes(bytes?).with_content_type(content_type_of(&path));
+        Ok(match path.file_name() {
+            Some(name) => upload.with_filename(name.to_string_lossy()),
+            None => upload,
+        })
+    }
+
     /// Filename used by multipart encoding; does not affect a raw upload.
     #[must_use]
     pub fn with_filename(mut self, filename: impl Into<String>) -> Self {
@@ -143,6 +165,27 @@ impl Upload {
             remaining: self.length(),
             segments: [self.segment()?].into(),
         })
+    }
+}
+
+fn content_type_of(path: &Path) -> &'static str {
+    let extension = path.extension().and_then(|e| e.to_str()).unwrap_or_default();
+    match extension.to_ascii_lowercase().as_str() {
+        "json" => "application/json",
+        "jsonl" => "application/jsonl",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        _ => DEFAULT_CONTENT_TYPE,
     }
 }
 
