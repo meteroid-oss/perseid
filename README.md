@@ -59,7 +59,7 @@ const pets = await petstore.pets.list({ limit: 10, status: "available" });
 
 ```python
 petstore = Petstore(api_key="sk_live_...")
-pets = petstore.pets.list(limit=10, status=PetStatus.AVAILABLE)
+pets = petstore.pets.list(limit=10, status="available")
 ```
 
 ```csharp

@@ -11,7 +11,7 @@ use crate::{
     api::{
         Api, Resource, Types,
         resources::request_and_response_roots,
-        types::{self, Type, TypeData},
+        types::{self, EnumVariantType, StructEnumRepr, Type, TypeData},
     },
     postprocessing::Postprocessor,
     template,
@@ -101,6 +101,10 @@ pub(crate) fn generate_with_output_context(
         output_context.unwrap_or(output_dir.as_str()).to_owned(),
     );
     minijinja_env.add_global("_perseid_actual_output_dir", output_dir.as_str().to_owned());
+    minijinja_env.add_global(
+        "param_types",
+        minijinja::Value::from_serialize(param_types(&api)),
+    );
     minijinja_env.add_template(tpl_path, &tpl_source)?;
     let tpl = minijinja_env.get_template(tpl_path)?;
 
@@ -156,8 +160,8 @@ pub(crate) fn for_language(
     if language == "java" {
         api.inline_string_alias_bodies()?;
     }
-    if matches!(language, "cs" | "go" | "rs") {
-        api.inline_flattened_fields()?;
+    if matches!(language, "cs" | "go" | "rs" | "py") {
+        api.inline_flattened_fields(language != "py")?;
     }
     Ok(())
 }
@@ -230,6 +234,26 @@ impl Generator<'_> {
                 .collect::<std::collections::BTreeMap<_, _>>(),
         );
         let request_schemas = request_schemas(&api);
+        let request_only_schemas = request_only_schemas(&api);
+        // The enums with a `Literal` alias of their values (no schema takes its name), and the open ones.
+        let enum_literals: BTreeSet<String> = (api.types.values())
+            .filter(|t| {
+                matches!(
+                    t.data,
+                    TypeData::StringEnum { .. } | TypeData::IntegerEnum { .. }
+                )
+            })
+            .map(|t| t.name.to_upper_camel_case())
+            .filter(|name| {
+                !api.types
+                    .keys()
+                    .any(|k| k.to_upper_camel_case() == format!("{name}Literal"))
+            })
+            .collect();
+        let open_enums: BTreeSet<String> = (api.types.values())
+            .filter(|t| matches!(t.data, TypeData::StringEnum { open: true, .. }))
+            .map(|t| t.name.to_upper_camel_case())
+            .collect();
         let errors = errors_context(&api);
         let recursive_aliases = types::recursive_aliases(&api.types);
         for (name, ty) in &api.types {
@@ -268,6 +292,9 @@ impl Generator<'_> {
                     type_names => type_names.clone(),
                     is_error_schema => api.error_schemas.contains(name),
                     request_schema => request_schemas.contains(name.as_str()),
+                    request_only => request_only_schemas.contains(name.as_str()),
+                    enum_literals => &enum_literals,
+                    open_enums => &open_enums,
                     ..errors.clone()
                 },
             )?);
@@ -357,10 +384,83 @@ fn errors_context(api: &Api) -> minijinja::Value {
 
 /// Schemas a request can carry: the ones operations send and every schema they reach.
 fn request_schemas(api: &Api) -> BTreeSet<&str> {
-    let mut stack: Vec<&str> = request_and_response_roots(&api.resources)
-        .0
-        .into_iter()
-        .collect();
+    reachable(api, request_and_response_roots(&api.resources).0)
+}
+
+/// Schemas only requests carry: none the SDK decodes (responses, errors, events) reaches them,
+/// nor any schema outside requests, such as a webhook payload.
+fn request_only_schemas(api: &Api) -> BTreeSet<&str> {
+    let requests = request_schemas(api);
+    let mut received = request_and_response_roots(&api.resources).1;
+    received.extend(
+        (api.resources.values().flat_map(|r| &r.operations))
+            .filter_map(|op| op.event_schema_name.as_deref()),
+    );
+    received.extend(
+        api.types
+            .keys()
+            .map(String::as_str)
+            .filter(|name| !requests.contains(name)),
+    );
+    let received = reachable(api, received);
+    requests.difference(&received).copied().collect()
+}
+
+/// The class names of the models requests carry that SDKs also take as their JSON, typed: Python's
+/// `PetParam` dicts. Those are the structs, and the plain unions of them whose variants all hold
+/// the discriminator, so that a dict names its variant.
+fn param_types(api: &Api) -> BTreeSet<String> {
+    let requests = request_schemas(api);
+    let names: BTreeSet<String> = api.types.keys().map(|k| k.to_upper_camel_case()).collect();
+    let free = |name: &str| !names.contains(&format!("{}Param", name.to_upper_camel_case()));
+    let mut params = BTreeSet::new();
+    for name in requests.iter().copied().filter(|n| free(n)) {
+        if let Some(TypeData::Struct { fields, .. }) = api.types.get(name).map(|t| &t.data)
+            && !fields.iter().any(|f| f.flatten)
+        {
+            params.insert(name.to_upper_camel_case());
+        }
+    }
+    let holds = |variant: &str, field: &str| {
+        matches!(
+            api.types.get(variant).map(|t| &t.data),
+            Some(TypeData::Struct { fields, .. }) if fields.iter().any(|f| f.name == field)
+        )
+    };
+    for name in requests.iter().copied().filter(|n| free(n)) {
+        let Some(TypeData::StructEnum {
+            discriminator_field,
+            repr: StructEnumRepr::InternallyTagged { variants },
+            fields,
+        }) = api.types.get(name).map(|t| &t.data)
+        else {
+            continue;
+        };
+        let refs: Vec<Option<&str>> = (variants.iter())
+            .map(|v| match &v.content {
+                EnumVariantType::Ref {
+                    schema_ref: Some(target),
+                    ..
+                } => Some(target.as_str()),
+                _ => None,
+            })
+            .collect();
+        let distinct = refs.iter().collect::<BTreeSet<_>>().len() == refs.len();
+        let typed = refs.iter().all(|r| {
+            r.is_some_and(|r| {
+                params.contains(&r.to_upper_camel_case()) && holds(r, discriminator_field)
+            })
+        });
+        if fields.is_empty() && distinct && typed {
+            params.insert(name.to_upper_camel_case());
+        }
+    }
+    params
+}
+
+/// `roots` and every schema they reach.
+fn reachable<'a>(api: &'a Api, roots: BTreeSet<&'a str>) -> BTreeSet<&'a str> {
+    let mut stack: Vec<&str> = roots.into_iter().collect();
     let mut seen = BTreeSet::new();
     while let Some(name) = stack.pop() {
         if seen.insert(name) {

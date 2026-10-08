@@ -8,7 +8,7 @@ Examples use an API named `Acme` with a `customers` resource. Names follow the `
 | Behavior | Description |
 |---|---|
 | Retries | Connection errors, timeouts, 408, 429 and 5xx, retried twice by default with jittered exponential backoff |
-| Safe retries only | Idempotent methods, or requests with an `Idempotency-Key`. Every POST gets one automatically with [`idempotency_keys = true`](configuration.md#spec-name-and-sdks) |
+| Safe retries only | Idempotent methods, or requests with an `Idempotency-Key`. Every POST gets one automatically with [`idempotency_keys = true`](configuration.md#spec-name-and-sdks). A 429 is retried whatever the method, as the server refused the request before processing it |
 | `Retry-After` | `retry-after-ms` and `Retry-After` set the wait when at most 60 seconds, else the backoff applies |
 | Timeout | Per attempt, `timeout` of `perseid.toml` (60 seconds by default), settable per client and per call |
 | Environment | `ACME_API_KEY` for the token, `ACME_BASE_URL` for the base URL, `ACME_CLIENT_ID` and `ACME_CLIENT_SECRET` for OAuth2 client credentials |
@@ -361,16 +361,23 @@ async with AsyncAcme() as client:
 ### Calls and options
 
 ```python
-client.customers.create(currency="EUR", name="x")
+client.customers.create(currency="EUR", name="x", address={"city": "Paris"})
 client.customers.retrieve("cus_1", timeout=5.0, max_retries=0)
+client.files.create(file=Upload(b"...", "a.csv"), purpose="import")
 ```
 
-- Path parameters come first. Query, header and object body fields are keyword arguments.
+- Path parameters come first. Query, header and object body fields are keyword arguments,
+  `allOf` bodies and required multipart bodies included.
 - An omitted argument is not sent. `None` sends `null` to a nullable field, and is omitted
   elsewhere.
-- Enum arguments take the enum or its literal value (`Currency | CurrencyLiteral`).
-- Lists, unions, multipart and binary bodies, or a body with a field named like a parameter,
-  are one `body` argument.
+- Enum arguments take the enum or its literal value (`Currency | CurrencyLiteral`). An open
+  enum, a spec's `anyOf: [string, enum]`, takes any `str` too.
+- A model argument also takes its JSON as a dict, typed by `CustomerParam`, a `TypedDict` keyed
+  by JSON names. A union of models takes the dict of a variant, its tag included. Lists of them
+  take any sequence.
+- Lists, unions, optional multipart and binary bodies, or a body with a field named like a
+  parameter, are one `body` argument.
+- The `_stream` twin of a method sets the body's `stream` itself, multipart or JSON.
 - Every method takes `extra_headers=`, `extra_query=`, `extra_body=`, `timeout=` and
   `max_retries=`, prefixed with `request_` when a parameter has that name.
 - These headers, like `default_headers`, win over the client's credentials.
@@ -432,7 +439,9 @@ The message quotes the start of the body: `Error code: 404 - {"error": ...}`.
 
 ### Models and unions
 
-- Models are keyword-only dataclasses with `from_dict` and `to_dict`.
+- Models are keyword-only dataclasses with `from_dict` and `to_dict`. The parts of an `allOf`
+  are inlined: their fields are the model's own.
+- In models only requests send, enum fields also take their values, as arguments do.
 - Unknown properties are kept in `extra_fields`, readable as attributes, and sent back.
 - In request models, an optional nullable field defaults to `UNSET`: omitted, while `None` sends
   `null`. In response models it is `X | None = None`.

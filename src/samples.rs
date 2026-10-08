@@ -256,7 +256,7 @@ impl<'a> Gen<'a> {
         let (full, _) = self.run(name, Mode::Full, 0, 0);
         out.push(sample("full", full));
         match &ty.data {
-            TypeData::StringEnum { values } => {
+            TypeData::StringEnum { values, .. } => {
                 kind = "enum";
                 for seed in 0..values.len() {
                     let (json, _) = self.run(name, Mode::Full, 0, seed as u64);
@@ -361,7 +361,7 @@ impl<'a> Gen<'a> {
                 }
                 Value::Object(out)
             }
-            TypeData::StringEnum { values } => values
+            TypeData::StringEnum { values, .. } => values
                 .get((seed % values.len().max(1) as u64) as usize)
                 .map_or_else(|| Value::from(""), |v| Value::from(v.as_str())),
             TypeData::IntegerEnum { variants } => variants

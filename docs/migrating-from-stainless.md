@@ -260,7 +260,7 @@ files without its `@generated` marker.
 |---|---|
 | Resources nested at any depth, methods on the client (`$client`) | Resources three deep at most, from the spec's first tag and its paths, and no methods on the client |
 | Types namespaced by resource | Types named after the spec's schemas |
-| Every request retried, POST included, on connection errors, 408, 409, 429 and 5xx | POST retried only with an `Idempotency-Key`: `idempotency_keys = true` sends one with every POST. 409 is not retried |
+| Every request retried, POST included, on connection errors, 408, 409, 429 and 5xx | POST retried only with an `Idempotency-Key`, except on 429: `idempotency_keys = true` sends one with every POST. 409 is not retried |
 | `environment` option between named base URLs | One default base URL, overridden by `baseURL` / `base_url` or `KNOCK_BASE_URL` |
 | Custom client options, sent as headers or parameters | Default headers, or a parameter on each call |
 | Pagination by next-page URL, backwards, or in the body | By a query parameter, backwards only from an item cursor (`before`) |

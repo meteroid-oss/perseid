@@ -509,7 +509,9 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 			attempt--
 			continue
 		}
-		if !res.retryable || !idempotent || req.oneShot || attempt >= len(call.retrySchedule) || ctx.Err() != nil {
+		// A 429 was refused before being processed, so resending it cannot apply it twice.
+		safe := idempotent || res.status == http.StatusTooManyRequests
+		if !res.retryable || !safe || req.oneShot || attempt >= len(call.retrySchedule) || ctx.Err() != nil {
 			return nil, 0, res.err
 		}
 

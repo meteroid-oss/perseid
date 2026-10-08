@@ -53,6 +53,27 @@ fn init_derives_names_from_the_spec() {
 }
 
 #[test]
+fn init_keeps_a_title_word_in_mixed_case_one_word() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = "openapi: 3.1.0\ninfo: {title: OpenAI API, version: '1'}\npaths: {}\n";
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "python,typescript,go"]);
+    assert!(ok, "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    for text in [
+        "name = \"OpenAI\"",
+        "header_prefix = \"openai\"",
+        "[python]\npackage = \"openai\"",
+        "[typescript]\npackage = \"openai\"",
+        "[context]\nenv_prefix = \"OPENAI\"",
+    ] {
+        assert!(config.contains(text), "no `{text}` in {config}");
+    }
+    let (ok, out) = perseid(dir.path(), &["generate", "python", "--no-format"]);
+    assert!(ok, "{out}");
+}
+
+#[test]
 fn init_writes_perseid_toml_and_the_workflows_and_asks_for_the_sdks() {
     let dir = tempfile::tempdir().unwrap();
     let nested = dir.path().join("spec/api/v1");
@@ -510,6 +531,49 @@ fn webhooks_verifier_is_opt_in() {
         "target setting wins, stale file removed"
     );
     assert!(dir.path().join("rust/src/webhooks.rs").exists());
+}
+
+#[test]
+fn base_url_defaults_to_the_spec_s_first_server_without_init() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = "openapi: 3.0.3\ninfo: {title: Acme, version: '1'}\nservers:\n\
+                - url: 'https://{region}.acme.test/v1/'\n  variables: {region: {default: eu}}\n\
+                - url: https://other.acme.test\npaths: {}\n";
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let config = dir.path().join("perseid.toml");
+    let base = "spec = \"openapi.yaml\"\nname = \"Acme\"\nsdks = [\"rust\"]\n";
+    let generated = |toml: &str| {
+        fs::write(&config, toml).unwrap();
+        let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+        assert!(ok, "{out}");
+        let client = fs::read_to_string(dir.path().join("rust/src/api/client.rs")).unwrap();
+        let (ok, out) = perseid(dir.path(), &["docs-data"]);
+        assert!(ok, "{out}");
+        let docs: serde_json::Value = serde_json::from_str(&out).unwrap();
+        (client, docs["base_url"].clone())
+    };
+    let constant = |url: &str| format!("const DEFAULT_BASE_URL: Option<&str> = {url};");
+
+    let (client, docs) = generated(base);
+    assert!(client.contains(&constant("Some(\"https://eu.acme.test/v1\")")));
+    assert_eq!(docs, "https://eu.acme.test/v1");
+    let (client, docs) = generated(&format!("base_url = \"https://own.test\"\n{base}"));
+    assert!(client.contains(&constant("Some(\"https://own.test\")")));
+    assert_eq!(docs, "https://own.test");
+    let (client, _) = generated(&format!("{base}[rust]\nbase_url = \"https://rs.test\"\n"));
+    assert!(client.contains(&constant("Some(\"https://rs.test\")")));
+    let (client, docs) = generated(&format!("base_url = \"\"\n{base}"));
+    assert!(client.contains(&constant("None")));
+    assert!(docs.is_null());
+
+    fs::write(
+        dir.path().join("openapi.yaml"),
+        spec.replace("'https://{region}.acme.test/v1/'", "/v1"),
+    )
+    .unwrap();
+    let (client, docs) = generated(base);
+    assert!(client.contains(&constant("None")), "{client}");
+    assert!(docs.is_null());
 }
 
 #[test]
@@ -3052,6 +3116,117 @@ fn python_types_errors_unions_and_discriminator_defaults() {
     assert!(
         things.contains("\"422\": _models.ValidationError,") && things.contains("def create("),
         "{things}"
+    );
+}
+
+#[test]
+fn python_bodies_are_keyword_arguments_and_enums_take_their_values() {
+    let dir = project_from("petstore.yaml", &["python"]);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Kw, version: "1.0.0" }
+servers: [{ url: https://x.example.com }]
+paths:
+  /chat:
+    post:
+      operationId: create_chat
+      tags: [chat]
+      parameters:
+        - { name: order, in: query, schema: { $ref: "#/components/schemas/Model" } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ChatRequest" } } }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Shared" } }
+            text/event-stream: { schema: { $ref: "#/components/schemas/Shared" } }
+  /transcribe:
+    post:
+      operationId: transcribe
+      tags: [audio]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, model]
+              properties:
+                file: { type: string, format: binary }
+                model: { $ref: "#/components/schemas/Model" }
+                stream: { type: boolean }
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json: { schema: { $ref: "#/components/schemas/Shared" } }
+            text/event-stream: { schema: { $ref: "#/components/schemas/Shared" } }
+components:
+  schemas:
+    Model: { type: string, enum: [small, large] }
+    Shared:
+      type: object
+      properties: { temperature: { type: number } }
+    ChatRequest:
+      allOf:
+        - $ref: "#/components/schemas/Shared"
+        - type: object
+          required: [prompt]
+          properties:
+            prompt: { type: string }
+            stream: { type: boolean }
+            tier: { anyOf: [{ type: string }, { type: string, enum: [auto, flex] }] }
+            size: { $ref: "#/components/schemas/Model" }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let read =
+        |path: &str| fs::read_to_string(dir.path().join("python/petstore").join(path)).unwrap();
+    let chat = read("api/chat.py");
+    for text in [
+        "prompt: str,",
+        "temperature: float | None = None,",
+        "order: Model | ModelLiteral | None = None,",
+        "tier: ChatRequestTier | ChatRequestTierLiteral | str | None = None,",
+        "ChatRequest(temperature=temperature, prompt=prompt, size=",
+        "), ChatRequest), \"stream\": True}",
+    ] {
+        assert!(chat.contains(text), "no `{text}` in {chat}");
+    }
+    assert!(!chat.contains("        body: "), "{chat}");
+    let request = read("models/chat_request.py");
+    for text in [
+        "tier: ChatRequestTier | ChatRequestTierLiteral | str | None = None",
+        "size: Model | ModelLiteral | None = None",
+        "from .model import Model, ModelLiteral",
+        "class _ChatRequestParamRequired(t.TypedDict):\n\n    prompt: str\n",
+        "class ChatRequestParam(_ChatRequestParamRequired, total=False):",
+        "    tier: ChatRequestTier | ChatRequestTierLiteral | str",
+    ] {
+        assert!(request.contains(text), "no `{text}` in {request}");
+    }
+    assert!(!request.contains("_FLATTENED"), "{request}");
+    assert!(
+        read("models/shared.py").contains("temperature: float | None = None"),
+        "a model responses carry keeps its types"
+    );
+    let audio = read("api/audio.py");
+    for text in [
+        "file: FileInput,",
+        "model: Model | ModelLiteral,",
+        "(\"file\", file, True, None),",
+        "(\"stream\", True, False, None),",
+    ] {
+        assert!(audio.contains(text), "no `{text}` in {audio}");
+    }
+    assert!(
+        !audio.contains("stream: bool")
+            && !audio.contains("(\"stream\", stream")
+            && !audio.contains("class AudioTranscribeBody"),
+        "{audio}"
     );
 }
 

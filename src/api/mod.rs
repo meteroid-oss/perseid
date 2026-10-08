@@ -234,8 +234,8 @@ impl Api {
         types::hoist_inline_variants(&mut self.types);
     }
 
-    pub(crate) fn inline_flattened_fields(&mut self) -> anyhow::Result<()> {
-        types::inline_flattened_fields(&mut self.types)
+    pub(crate) fn inline_flattened_fields(&mut self, strict: bool) -> anyhow::Result<()> {
+        types::inline_flattened_fields(&mut self.types, strict)
     }
 
     /// Types string-alias bodies and parameters as plain strings, for Java.

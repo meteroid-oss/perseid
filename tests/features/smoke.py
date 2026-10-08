@@ -23,7 +23,7 @@ from features import (
     PermissionDeniedError,
     UnprocessableEntityError,
 )
-from features.api import AsyncWidgetsListPage, GadgetsListPage, RecordsListPage, StreamingUploadFileBody, Upload, WidgetsListPage
+from features.api import AsyncWidgetsListPage, GadgetsListPage, RecordsListPage, Upload, WidgetsListPage
 from features.models import (
     UNSET,
     ChargeItemsItem,
@@ -171,14 +171,14 @@ assert [(e.event, e.data, e.id, e.retry) for e in events] == [
     ("message", "line1\nline2", "1", None),
     ("message", '{"n": 3}', "3", 1500),
 ], events
-body = StreamingUploadFileBody(
+uploaded = client.streaming.upload_file(
     file=Upload(b"hello", "a.txt", "text/plain"),
     name="doc",
     count=2,
     meta=Health(status="ok"),
     tags=["a", "b"],
 )
-assert client.streaming.upload_file(body).status == (
+assert uploaded.status == (
     'count=::2;file=a.txt:text/plain:hello;meta=:application/json:{"status": "ok"}'
     ";name=::doc;tags=::a;tags=::b"
 )

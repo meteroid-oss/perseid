@@ -368,7 +368,8 @@ class ModelTest(unittest.TestCase):
 
     def test_unknown_properties_stay_with_the_model_that_owns_them(self) -> None:
         composed = models.Composed.from_dict({**SAMPLES["Composed"], "new": 1})
-        self.assertEqual((composed.extra_fields, composed.base.extra_fields), ({"new": 1}, {}))
+        self.assertEqual(composed.extra_fields, {"new": 1})
+        self.assertEqual((composed.id, composed.extra), ("b1", "e"), "allOf parts are inlined")
         composed.extra = "changed"
         self.assertEqual(composed.to_dict()["extra"], "changed")
         data = {"type": "circle", "radius": 1.0, "color": "red"}
@@ -480,6 +481,15 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(json.loads(self.requests[0].content), [{"name": "n"}])
         self.assertEqual(self.requests[1].url.params["DateCreated<"], "2024-01-01")
 
+    def test_models_of_arguments_also_take_their_json_as_a_dict(self) -> None:
+        widget = {"id": "w", "name": "n"}
+        with client(self.respond(httpx.Response(200, json=[widget]))) as api:
+            api.widgets.bulk([{"name": "n"}, models.WidgetUpdate(name="m")])
+            api.widgets.bulk((models.WidgetUpdate(name="m"),))
+        bodies = [json.loads(r.content) for r in self.requests]
+        self.assertEqual(bodies, [[{"name": "n"}, {"name": "m"}], [{"name": "m"}]])
+        self.assertIn("name", models.WidgetUpdateParam.__annotations__)
+
     def test_object_bodies_are_keyword_arguments(self) -> None:
         with client(self.respond(httpx.Response(200, json=THING))) as api:
             api.things.create(name="n", kind="beta-2", priority=10)
@@ -544,12 +554,17 @@ class ClientTest(unittest.TestCase):
             self.assertEqual(len(self.requests), 2)
             self.assertEqual(api.things.retrieve("t", max_retries=1).id, "a/b")
 
-    def test_non_idempotent_requests_are_not_replayed_on_429(self) -> None:
-        responses = (httpx.Response(429, headers={"retry-after": "0"}), httpx.Response(200))
+    def test_every_request_is_replayed_on_429_as_the_server_refused_it(self) -> None:
+        responses = (httpx.Response(429, headers={"retry-after": "0"}), httpx.Response(200, json=THING))
+        with client(self.respond(*responses), max_retries=1) as api:
+            self.assertEqual(api.things.update("t").id, "a/b")
+        self.assertEqual(len(self.requests), 2)
+        self.assertNotIn("idempotency-key", self.requests[1].headers)
+        responses = (httpx.Response(429, headers={"retry-after": "0"}),) * 2
         with client(self.respond(*responses), max_retries=1) as api:
             with self.assertRaises(RateLimitError):
                 api.things.update("t")
-        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(len(self.requests), 4)
 
     def test_non_idempotent_requests_are_not_replayed_on_5xx(self) -> None:
         responses = (

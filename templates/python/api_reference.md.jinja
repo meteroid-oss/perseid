@@ -1,4 +1,4 @@
-{% from "types/macros.py.jinja" import field_ident, field_type, named_type, page_class, param_type, py_ident, py_type -%}
+{% from "types/macros.py.jinja" import field_ident, flat_multipart, py_field, field_type, named_type, page_class, param_type, py_ident, py_type -%}
 {% import "docs.jinja" as docs -%}
 {% set _ = set_summary_filename("api.md") -%}
 {% macro model(name) -%}
@@ -50,6 +50,12 @@
             {%- if op.request_body_is_list %}{% set body_type = "list[" ~ body_type ~ "]" %}{% endif -%}
         {%- elif op.request_body_kind == "binary" -%}
             {%- set body_type = "UploadContent" -%}
+        {%- elif op.request_body_kind == "multipart" and flat_multipart(op) | trim -%}
+            {%- for f in op.multipart_fields -%}
+                {%- set annotation = "list[FileInput]" if f.is_file and f.is_file_list else ("FileInput" if f.is_file else py_type(f.type)) -%}
+                {%- if f.required and not f.nullable %}{% set args.required = args.required + [py_field(f.name) ~ ": " ~ annotation] %}{% else %}{% set args.optional = args.optional + [py_field(f.name) ~ "=..."] %}{% endif -%}
+            {%- endfor -%}
+            {%- set body_type = none -%}
         {%- elif op.request_body_kind == "multipart" -%}
             {%- set body_type = (resource.name | to_upper_camel_case) ~ (op.name | to_upper_camel_case) ~ "Body" -%}
         {%- else -%}

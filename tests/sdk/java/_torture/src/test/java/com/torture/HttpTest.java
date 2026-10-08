@@ -201,6 +201,24 @@ class HttpTest {
                 ApiException.class, () -> client().things().update("t", ThingPatch.builder().build()));
         assertEquals(503, error.statusCode());
         assertEquals(1, requests.size());
+
+        statuses.add(503);
+        assertThrows(
+                CompletionException.class,
+                () -> client().async().things().update("t", ThingPatch.builder().build()).join());
+        assertEquals(2, requests.size());
+    }
+
+    @Test
+    void patchesWithoutAnIdempotencyKeyAreRetriedOn429() throws Exception {
+        statuses.add(429);
+        retryAfter = "0";
+        client().things().update("t", ThingPatch.builder().build());
+        assertEquals(2, requests.size());
+
+        statuses.add(429);
+        client().async().things().update("t", ThingPatch.builder().build()).get();
+        assertEquals(4, requests.size());
     }
 
     @Test

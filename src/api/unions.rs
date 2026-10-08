@@ -111,7 +111,7 @@ pub(crate) fn shape(types: &Types, name: &str) -> Option<Vec<Property>> {
 fn property(types: &Types, field: &Field) -> Property {
     let enum_constant = || match &field.r#type {
         FieldType::SchemaRef { name, .. } if !field.nullable => match &types.get(name)?.data {
-            TypeData::StringEnum { values } if values.len() == 1 => {
+            TypeData::StringEnum { values, .. } if values.len() == 1 => {
                 Some(Value::String(values[0].clone()))
             }
             _ => None,

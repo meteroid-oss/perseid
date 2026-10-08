@@ -1140,6 +1140,9 @@ fn tags(
     Some(found)
 }
 
+/// Marks an enum that also allows any other string, such as `anyOf: [string, {enum: [...]}]`.
+pub(crate) const OPEN_ENUM: &str = "x-perseid-open-enum";
+
 /// The values a schema of strings contributes to an open enum, with their documentation.
 struct Strings {
     /// Known values, empty for a plain string.
@@ -1263,6 +1266,7 @@ fn open_enum(map: &mut Map<String, Value>, schemas: &Map<String, Value>) -> bool
         return false;
     };
     let mut nullable = false;
+    let mut open = false;
     let mut members = 0;
     let mut values: Vec<(String, Option<String>)> = Vec::new();
     for variant in variants {
@@ -1275,6 +1279,7 @@ fn open_enum(map: &mut Map<String, Value>, schemas: &Map<String, Value>) -> bool
         };
         members += 1;
         nullable |= strings.nullable;
+        open |= strings.values.is_empty();
         for (value, doc) in strings.values {
             match values.iter_mut().find(|(known, _)| *known == value) {
                 Some(known) => {
@@ -1304,6 +1309,9 @@ fn open_enum(map: &mut Map<String, Value>, schemas: &Map<String, Value>) -> bool
             "enum".into(),
             Value::Array(values.iter().map(|(v, _)| json!(v)).collect()),
         );
+        if open {
+            map.insert(OPEN_ENUM.into(), json!(true));
+        }
     }
     if values.iter().any(|(_, doc)| doc.is_some()) {
         map.insert(
@@ -3223,7 +3231,12 @@ mod tests {
         }));
         assert_eq!(
             s["Model"],
-            json!({ "description": "d", "type": "string", "enum": ["a", "b", "c"] })
+            json!({
+                "description": "d",
+                "type": "string",
+                "enum": ["a", "b", "c"],
+                "x-perseid-open-enum": true
+            })
         );
         // The referenced enum stays a type of its own.
         assert_eq!(s["Known"], json!({ "type": "string", "enum": ["b", "c"] }));
@@ -3254,7 +3267,10 @@ mod tests {
             "Outer": { "anyOf": [{ "type": "string" }, { "$ref": "#/components/schemas/Inner" }] },
             "Inner": { "oneOf": [{ "const": "x" }, { "const": "y" }] }
         }));
-        assert_eq!(s["Outer"], json!({ "type": "string", "enum": ["x", "y"] }));
+        assert_eq!(
+            s["Outer"],
+            json!({ "type": "string", "enum": ["x", "y"], "x-perseid-open-enum": true })
+        );
     }
 
     #[test]
@@ -3301,8 +3317,9 @@ mod tests {
             } } } }
         }));
         let model = &doc["components"]["schemas"]["Holder"]["properties"]["model"];
-        assert_eq!(model, &json!({ "type": "string", "enum": ["a", "b"] }));
+        let open = json!({ "type": "string", "enum": ["a", "b"], "x-perseid-open-enum": true });
+        assert_eq!(model, &open);
         let param = &doc["paths"]["/x"]["get"]["parameters"][0]["schema"];
-        assert_eq!(param, &json!({ "type": "string", "enum": ["a", "b"] }));
+        assert_eq!(param, &open);
     }
 }
