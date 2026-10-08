@@ -54,10 +54,13 @@ impl {{ struct_name }} {
 {{ union_enums(struct_name, variant.fields) }}
 {% endfor %}
 
+{#- Recursive variants are boxed, and those far larger than the others. -#}
 {% macro payload(variant) -%}
-{% if variant.type == "struct" and variant.fields -%}
+{% if variant.type == "struct" and variant.fields and variant.name in boxed_variants -%}
+Box<{{ type_name }}{{ variant.name | to_rust_variant }}Variant>
+{%- elif variant.type == "struct" and variant.fields -%}
 {{ type_name }}{{ variant.name | to_rust_variant }}Variant
-{%- elif variant.schema_ref is defined and variant.schema_ref | to_upper_camel_case in recursive -%}
+{%- elif variant.schema_ref is defined and (variant.schema_ref | to_upper_camel_case in recursive or variant.name in boxed_variants) -%}
 Box<{{ variant.schema_ref | to_upper_camel_case }}>
 {%- elif variant.schema_ref is defined -%}
 {{ variant.schema_ref | to_upper_camel_case }}
