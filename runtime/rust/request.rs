@@ -80,7 +80,7 @@ pub(crate) fn decode_error(error: impl Into<BoxError>) -> Error {
 /// The body of a successful response: read whole, or left open for an event stream.
 pub(crate) enum ResponseBody {
     Buffered(Bytes),
-    Events(Option<hyper::body::Incoming>, Bytes),
+    Events(Box<EventStream>),
 }
 
 impl ResponseBody {
@@ -122,7 +122,7 @@ fn text(body: ResponseBody) -> Result<String, Error> {
 
 fn events(body: ResponseBody) -> Result<EventStream, Error> {
     match body {
-        ResponseBody::Events(body, buffered) => Ok(EventStream::new(body, buffered)),
+        ResponseBody::Events(stream) => Ok(*stream),
         ResponseBody::Buffered(_) => Err(decode_error("expected an event stream")),
     }
 }
@@ -652,7 +652,9 @@ impl Request {
         // An access token the API rejects is replaced once, without using up a retry.
         let mut renewed = false;
         loop {
+            let started = std::time::Instant::now();
             let attempt = self.attempt(conf, event_stream).await;
+            log::attempt(&self, conf, &attempt, started.elapsed(), retries);
             if let Attempt::Done(status, headers, body) = attempt {
                 return Ok(Received {
                     status,
@@ -687,6 +689,7 @@ impl Request {
             let delay = attempt
                 .retry_after()
                 .unwrap_or_else(|| backoff(retries));
+            log::retry(&self, conf, retries + 1, delay);
             tokio::time::sleep(delay).await;
             retries += 1;
             self.headers
@@ -727,10 +730,8 @@ impl Request {
         result.unwrap_or_else(Attempt::Failed)
     }
 
-    fn build_request(
-        &mut self,
-        conf: &Configuration,
-    ) -> Result<http::Request<RequestBody>, BoxError> {
+    /// The path with its parameters, and the URL without its query.
+    fn url(&self, conf: &Configuration) -> Result<(String, String), BoxError> {
         const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
         const PATH: &AsciiSet = &FRAGMENT.add(b'#').add(b'?').add(b'{').add(b'}');
         const PATH_SEGMENT: &AsciiSet = &PATH.add(b'/').add(b'%');
@@ -750,11 +751,19 @@ impl Request {
             path = path.replace(&format!("{{{name}}}"), value);
         }
         // The token endpoint of an OAuth2 scheme may live elsewhere.
-        let mut uri = if path.contains("://") {
+        let uri = if path.contains("://") {
             path.clone()
         } else {
             format!("{}{path}", conf.base_path.trim_end_matches('/'))
         };
+        Ok((path, uri))
+    }
+
+    fn build_request(
+        &mut self,
+        conf: &Configuration,
+    ) -> Result<http::Request<RequestBody>, BoxError> {
+        let (path, mut uri) = self.url(conf)?;
         if !self.query_params.is_empty() {
             let mut query = url::form_urlencoded::Serializer::new(String::new());
             for (name, value) in &self.query_params {
@@ -801,6 +810,63 @@ impl Request {
             headers.append(name, value.clone());
         }
         Ok(request)
+    }
+}
+
+/// Logs of attempts and retries with the `tracing` feature: never headers, bodies or credentials.
+#[allow(unexpected_cfgs, unused_variables)]
+mod log {
+    use super::{Attempt, Configuration, Duration, Request};
+
+    pub(super) fn attempt(
+        request: &Request,
+        conf: &Configuration,
+        attempt: &Attempt,
+        elapsed: Duration,
+        retries: usize,
+    ) {
+        #[cfg(feature = "tracing")]
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let (method, url) = (&request.method, url(request, conf));
+            let elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
+            let status = match attempt {
+                Attempt::Done(status, ..) | Attempt::Status(status, ..) => status,
+                Attempt::Failed(failure) => {
+                    use super::Failure;
+                    let error = match failure {
+                        Failure::Request(_) => "request",
+                        Failure::Timeout => "timeout",
+                        Failure::Transport(_) => "connection",
+                        Failure::Decode(_) => "decode",
+                    };
+                    tracing::debug!(%method, %url, error, elapsed_ms, retries, "HTTP request failed");
+                    return;
+                }
+            };
+            let status = status.as_u16();
+            tracing::debug!(%method, %url, status, elapsed_ms, retries, "HTTP request");
+        }
+    }
+
+    pub(super) fn retry(request: &Request, conf: &Configuration, retry: usize, delay: Duration) {
+        #[cfg(feature = "tracing")]
+        if tracing::enabled!(tracing::Level::INFO) {
+            let (method, url) = (&request.method, url(request, conf));
+            let delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+            tracing::info!(%method, %url, retry, delay_ms, "retrying HTTP request");
+        }
+    }
+
+    /// The URL without its query or user info.
+    #[cfg(feature = "tracing")]
+    fn url(request: &Request, conf: &Configuration) -> String {
+        let Some(uri) = request.url(conf).ok().and_then(|(_, url)| url.parse::<http::Uri>().ok())
+        else {
+            return String::new();
+        };
+        let port = uri.port().map(|port| format!(":{port}")).unwrap_or_default();
+        let scheme = uri.scheme_str().unwrap_or_default();
+        format!("{scheme}://{}{port}{}", uri.host().unwrap_or_default(), uri.path())
     }
 }
 
@@ -930,7 +996,8 @@ fn open_event_stream(response: Response) -> Result<Attempt, Failure> {
     }
     let (status, headers) = (response.status(), response.headers().clone());
     let (body, buffered) = response.into_events();
-    Ok(Attempt::Done(status, headers, ResponseBody::Events(body, buffered)))
+    let stream = EventStream::new(status, headers.clone(), body, buffered);
+    Ok(Attempt::Done(status, headers, ResponseBody::Events(Box::new(stream))))
 }
 
 /// Exponential backoff from 500ms up to 8s with jitter.

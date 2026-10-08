@@ -104,8 +104,8 @@ value. What comes back must be the same JSON, up to the spelling of date-times a
 cargo add acme
 ```
 
-Cargo features: `rustls-tls` (default) or `native-tls`, `http1` (default), `http2`, and
-`webhooks` for the [webhook verifier](customizing.md#webhooks).
+Cargo features: `rustls-tls` (default) or `native-tls`, `http1` (default), `http2`, `webhooks` for
+the [webhook verifier](customizing.md#webhooks), and `tracing` for [logs](#logging).
 
 ### Client
 
@@ -123,6 +123,10 @@ let client = Acme::builder()
   `new` take nothing from them.
 - The builder also takes `header`, `middleware`, `http_client`, and `connector` for any hyper
   connector (custom TLS roots, client certificates, a proxy).
+- The default client goes through the proxy of `HTTPS_PROXY`, `HTTP_PROXY` or `ALL_PROXY` (or
+  their lowercase names), read when the client is built: an `http://` proxy, CONNECT tunnelling
+  HTTPS, or `socks5://`. Hosts, domains with their subdomains, IPs and networks listed in
+  `NO_PROXY` connect directly, and so does a client given its own `connector` or `http_client`.
 - Credentials: `token_provider`, `client_credentials(id, secret)`, `basic_auth`,
   `api_key(scheme, key)`.
 - Building fails with `Error::Request` without a base URL, or with one that is not absolute
@@ -148,6 +152,9 @@ client.customers().with_options(options).list(None).await?;
   `retrieve("cus_1")` and `retrieve(&customer.id)` both work.
 - `with_options` on a resource sets headers, timeout, retries or idempotency key for its calls.
 - An operation that also declares a bodiless 2xx returns `Option<T>`.
+- Files are `Upload`s: `Upload::path("a.csv").await?` reads the file, named after it and typed by
+  its extension; `Upload::bytes(...)` and `Upload::reader(...)` take `with_filename` and
+  `with_content_type`. Readers stream and are not retried.
 
 ### Pagination
 
@@ -175,6 +182,10 @@ while let Some(customer) = customers.next().await {
 Event streams are `Stream`s of the model each event carries, ending at `[DONE]`, or of raw
 `SseEvent`s. `last_event()` gives the raw event, `into_raw()` the raw stream.
 
+- An `error` event, or data that is not the model but an object with an `error`, ends the stream
+  with an `Error::Api` holding that data and the response's status and headers.
+- Comments are skipped, and so are `ping` and `keepalive` events that are not the model.
+
 ### Errors
 
 ```rust
@@ -187,13 +198,23 @@ match client.customers().retrieve("cus_1").await {
 
 - `Error` has `Api`, `Timeout`, `Connection`, `Decode` and `Request` variants.
 - `ApiError` has `kind()` (`NotFound`, `RateLimited`, `InternalServer`...), `request_id()`,
-  `payload()` (the API's common error schema, `api::ErrorBody`) and `json::<T>()`.
+  `payload()` (the API's common error schema, `api::ErrorBody`), `json::<T>()`, `text()` and
+  `message()`: the body's `error.message`, `message` or `detail` string.
+- An API error displays as `API error (404 Not Found): No such customer`, its `message()`, else
+  its body.
 - Methods list their documented error bodies under `# Errors`.
 
 ### Raw responses
 
 `client.customers().retrieve(id).with_response().await?` returns the `status()`, `headers()`,
 `request_id()` and `into_data()`.
+
+### Logging
+
+With the `tracing` feature, each attempt is a `tracing` DEBUG event (method, URL, status or error
+kind, elapsed time, retry count), and each retry an INFO event with its delay, for the subscriber
+the application installs. Headers, the query string, user info, credentials and bodies are never
+logged.
 
 ### Models and unions
 
@@ -220,6 +241,8 @@ match client.customers().retrieve("cus_1").await {
 
 - `src/error.rs` is yours. The runtime only calls `Error::generic(Failure)` and
   `Error::from_response(status, headers, body)`.
+- `Cargo.toml` is yours too. A crate generated before the `tracing` feature declares it with
+  `tracing = { version = "0.1", optional = true }` and `tracing = ["dep:tracing"]`.
 - The `http` crate is re-exported as `acme::api::http`.
 
 ## TypeScript
