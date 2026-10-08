@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Result, bail, ensure};
-use heck::{ToKebabCase, ToShoutySnakeCase};
+use heck::{ToKebabCase, ToShoutySnakeCase, ToSnakeCase as _};
 use serde_json::{Value, json};
 
 use crate::{
@@ -127,6 +127,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             name_from_title(&json!({ "info": { "title": fallback } }))
         });
     let from_stainless = imported.as_ref().and_then(|i| i.name.clone());
+    let named_by_title = init.name.is_none() && from_stainless.is_none();
     let name = match (&init.name, interactive) {
         (Some(name), _) => crate::client_name::parse(name).map_err(anyhow::Error::msg)?,
         (None, _) if from_stainless.is_some() => from_stainless.unwrap_or_default(),
@@ -135,7 +136,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             &derived,
             crate::client_name::parse,
         )?,
-        (None, false) => derived,
+        (None, false) => derived.clone(),
     };
     let sdks = match (init.sdks.is_empty(), &mut imported) {
         (true, Some(stainless)) => stainless.sdks.clone(),
@@ -174,7 +175,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         .base_url
         .clone()
         .or_else(|| imported.as_ref()?.base_url.clone())
-        .or_else(|| server_url(&doc));
+        .or_else(|| spec::server_url(&doc["servers"]));
     if base_url.is_none() && readable {
         println!(
             "! the spec has no absolute server URL: until you set `base_url`, clients need one passed in or from {}_BASE_URL",
@@ -198,6 +199,16 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     }
     if let Some(url) = base_url {
         toml += &format!("base_url = {}\n", quote(&url));
+    }
+    // A title word such as `OpenAI` stays one word in packages and names: `openai`, not `open_ai`.
+    let words = (doc["info"]["title"].as_str())
+        .filter(|_| named_by_title && name == derived)
+        .map(crate::client_name::title_words)
+        .map(|words| words.iter().map(|w| w.to_lowercase()).collect::<Vec<_>>())
+        .filter(|words| words.join("_") != name.to_snake_case());
+    if let Some(words) = &words {
+        toml += &format!("header_prefix = {}\n", quote(&words.join("-")));
+        toml += &format!("user_agent = {}\n", quote(&words.join("-")));
     }
     if let Some(stainless) = &imported {
         toml += &stainless.top_level();
@@ -223,6 +234,8 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         let package = match (target.and_then(|t| t.package.clone()), sdk.language) {
             (Some(package), _) => package,
             (None, "java") => java_package(&doc, &name).unwrap_or_else(|| draft.package(&sdk)),
+            (None, "python" | "rust") if let Some(words) = &words => words.join("_"),
+            (None, "typescript") if let Some(words) = &words => words.join("-"),
             (None, _) => draft.package(&sdk),
         };
         toml += &format!("\n[{}]\npackage = {}\n", sdk.language, quote(&package));
@@ -236,6 +249,12 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         if !target.exclude.is_empty() {
             toml += &format!("exclude = {}\n", crate::stainless::list(&target.exclude));
         }
+    }
+    if let Some(words) = &words {
+        toml += &format!(
+            "\n[context]\nenv_prefix = {}\n",
+            quote(&words.join("_").to_uppercase())
+        );
     }
     fsx::write(&path, toml.as_bytes())?;
     println!("+ {}", config::FILE);
@@ -717,20 +736,6 @@ fn read_spec(spec: &str, root: &Path) -> Result<Value> {
     Ok(serde_json::from_str(&spec::read(spec, root)?)?)
 }
 
-/// The first absolute server URL, its `{variables}` set to their defaults.
-fn server_url(doc: &Value) -> Option<String> {
-    let server = &doc["servers"][0];
-    let mut url = server["url"].as_str()?.to_owned();
-    if let Some(variables) = server["variables"].as_object() {
-        for (name, variable) in variables {
-            if let Some(default) = variable["default"].as_str() {
-                url = url.replace(&format!("{{{name}}}"), default);
-            }
-        }
-    }
-    (url.starts_with("http") && !url.contains('{')).then(|| url.trim_end_matches('/').to_owned())
-}
-
 /// A Java package Maven Central can verify: the reversed domain of the API's homepage, then the
 /// client name, as `com.acme.petstore` for `https://www.acme.com`.
 fn java_package(doc: &Value, name: &str) -> Option<String> {
@@ -824,17 +829,6 @@ mod tests {
         );
         assert_eq!(url("http://proxy@127.0.0.1:8080/git/acme/sdk"), None);
         assert_eq!(url("/tmp/origin.git"), None);
-    }
-
-    #[test]
-    fn server_variables_take_their_defaults() {
-        let doc = serde_json::json!({ "servers": [{
-            "url": "https://{region}.acme.com/{version}/",
-            "variables": { "region": { "default": "eu" }, "version": { "default": "v2" } }
-        }]});
-        assert_eq!(server_url(&doc).as_deref(), Some("https://eu.acme.com/v2"));
-        let relative = serde_json::json!({ "servers": [{ "url": "/v1" }] });
-        assert_eq!(server_url(&relative), None);
     }
 
     #[test]

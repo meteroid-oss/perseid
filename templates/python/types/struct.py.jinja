@@ -1,4 +1,37 @@
-{% from "types/macros.py.jinja" import py_str, docstring, attr_names, field_decl, field_ident, has_object_union, in_class, model_imports, py_type -%}
+{% from "types/macros.py.jinja" import py_str, docstring, arg_literals, arg_type, attr_names, field_decl, field_ident, has_object_union, in_class, input_refs, input_type, literal_type, model_imports, py_type -%}
+{#- In a model only requests send, an enum field also takes its values as literals, and an open
+    one any string. -#}
+{% macro wide_type(field) -%}
+    {%- if request_only and field.literal is not defined -%}
+        {%- set wide = arg_type(field.type, enum_literals, open_enums) -%}
+        {%- if wide != py_type(field.type) %}{{ wide }}{% endif -%}
+    {%- endif -%}
+{%- endmacro -%}
+{% set class_name = type.name | to_upper_camel_case -%}
+{% set param = class_name ~ "Param" if class_name in param_types else none -%}
+{% set keys = type.fields | rejectattr("read_only") | list if param else [] -%}
+{% set literals = namespace(names=[]) -%}
+{% for field in type.fields if request_only and field.literal is not defined -%}
+    {% set literals.names = literals.names + (arg_literals(field.type, enum_literals) | split | list) -%}
+{% endfor -%}
+{% for field in keys -%}
+    {% set literals.names = literals.names + (input_refs(field.type, enum_literals) | split | list) -%}
+{% endfor -%}
+{#- The `Param` keys of `fields`, as class attributes. -#}
+{% macro key_lines(fields) -%}
+{%- for field in fields %}
+
+    {{ field.name }}: {{ key_type(field) }}
+{%- if field.description is defined %}
+    {{ docstring(field.description) | indent(4) }}
+{%- endif %}
+{%- endfor %}
+{%- endmacro -%}
+{#- The annotation of the `Param` key of `field`. -#}
+{% macro key_type(field) -%}
+    {%- set ty = literal_type(field) or input_type(field.type, enum_literals, open_enums) -%}
+    {{ ty }}{% if field.nullable and ty != "t.Any" %} | None{% endif %}
+{%- endmacro -%}
 {#- A union variant's discriminator defaults to its tag: `Circle(radius=1)`. -#}
 {% set defaults = type.discriminator_defaults if type.discriminator_defaults is defined else {} -%}
 {% set runtime_names = ["BaseModel"] -%}
@@ -15,7 +48,7 @@
 {% if objects.any -%}
     {% set runtime_names = runtime_names + ["ObjectUnion", "UnknownVariant"] -%}
 {% endif -%}
-{{ model_imports(referenced_components, runtime_names, union_refs | reject("in", [type.name]) | list) }}
+{{ model_imports(referenced_components, runtime_names, union_refs | reject("in", [type.name]) | list, literals.names) }}
 
 {% set json_keys %}
     {#- Keyed by the attribute name: a keyword field `class` is exposed as `class_`. -#}
@@ -58,7 +91,7 @@ class {{ type.name | to_upper_camel_case }}(BaseModel):
     {%- for required_pass in [true, false] %}
         {%- for field in type.fields if field.required == required_pass %}
 
-    {{ field_ident(field) }}: {{ in_class(field_decl(field, request_schema), attrs) }}
+    {{ field_ident(field) }}: {{ in_class(field_decl(field, request_schema, wide_type(field) or none), attrs) }}
             {%- if field.required and not field.nullable and field.name in defaults and field.type.to_python() == "str" %} = {{ py_str(defaults[field.name]) }}{% endif %}
             {%- if field.description is defined or field.deprecated %}
     {{ docstring(((field.description if field.description is defined else "") ~ ("\n\n.. deprecated:: This field is deprecated." if field.deprecated else "")) | trim) | indent(4) }}
@@ -71,3 +104,32 @@ class {{ type.name | to_upper_camel_case }}(BaseModel):
 
     pass
     {%- endif %}
+{%- if param %}
+{%- set required = keys | selectattr("required") | list %}
+{%- set optional = keys | rejectattr("required") | list %}
+{%- set plain = namespace(ok=true) %}
+{%- for field in keys if field.name is not python_attr or field.name in type_names %}{% set plain.ok = false %}{% endfor %}
+{%- set doc = "The JSON of :class:`" ~ class_name ~ "` as a dict, keyed by its JSON names: methods take either." %}
+{%- if plain.ok %}
+{%- if required and optional %}
+
+
+class _{{ param }}Required(t.TypedDict):
+{{- key_lines(required) }}
+{%- endif %}
+
+
+class {{ param }}({% if required and optional %}_{{ param }}Required, total=False{% elif required %}t.TypedDict{% else %}t.TypedDict, total=False{% endif %}):
+    {{ docstring(doc) | indent(4) }}
+{{- key_lines(optional if optional else required) }}
+{%- else %}
+
+
+_{{ param }}Required = t.TypedDict("_{{ param }}Required", { {%- for field in required %}{{ py_str(field.name) }}: {{ py_str(key_type(field)) }}, {% endfor -%} })
+_{{ param }}Optional = t.TypedDict("_{{ param }}Optional", { {%- for field in optional %}{{ py_str(field.name) }}: {{ py_str(key_type(field)) }}, {% endfor -%} }, total=False)
+
+
+class {{ param }}(_{{ param }}Required, _{{ param }}Optional):
+    {{ docstring(doc) | indent(4) }}
+{%- endif %}
+{%- endif %}

@@ -17,7 +17,7 @@ repo = "acme/acme-{lang}"           # one repository per SDK ({lang}: typescript
 # release = false                   # no release-please files nor sdk-release.yml
 
 # Defaults of every SDK, each also settable in a language table
-base_url = "https://api.acme.com"   # first server of the spec by default
+base_url = "https://api.acme.com"   # first absolute server of the spec by default, "" for none
 timeout = 60                        # seconds
 webhooks = false                    # install the Standard Webhooks verifier
 tests = true                        # generate a test per operation
@@ -79,7 +79,7 @@ of every key with its description and allowed values.
 | `spec` | The OpenAPI document, a path relative to `perseid.toml` (`openapi.json` by default) or an `http(s)` URL |
 | `name` | The client name, in any form |
 | `sdks` | Among `rust`, `typescript`, `python`, `go`, `java`, `csharp` |
-| `idempotency_keys` | `true` when the API deduplicates POST requests by `Idempotency-Key`: the SDKs send one with every POST and retry them. `false` by default: a POST is only retried when the caller gives it a key, as replaying it could apply it twice |
+| `idempotency_keys` | `true` when the API deduplicates POST requests by `Idempotency-Key`: the SDKs send one with every POST and retry them. `false` by default: a POST is only retried when the caller gives it a key, as replaying it could apply it twice. A 429 is retried for every method |
 
 - The spec is Swagger 2.0 or OpenAPI 3.0, 3.1 or 3.2, JSON or YAML. `$ref`s to other files or URLs
   are bundled.
@@ -109,7 +109,7 @@ Each key is also a key of the [language tables](#language-tables), which overrid
 
 | Key | Default | Description |
 |---|---|---|
-| `base_url` | The spec's first server | API base URL of the clients |
+| `base_url` | The spec's first absolute server | API base URL of the clients; `""` for none, so callers must pass one |
 | `timeout` | `60` | Request timeout, in seconds |
 | `webhooks` | `false` | `true` installs the [webhook verifier](customizing.md#webhooks) |
 | `tests` | `true` | `false` leaves out the [generated tests](languages.md#tests) |

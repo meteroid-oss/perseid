@@ -51,6 +51,17 @@
     {{- py_field(field.type.to_python() if field.flatten else field.name) -}}
 {%- endmacro %}
 
+{#- "M" when the method of multipart `op` takes its fields as keyword arguments: its body is
+    required, and no field is named like a parameter. -#}
+{% macro flat_multipart(op) -%}
+    {%- if op.request_body_kind == "multipart" and not op.request_body_optional -%}
+        {%- set params = (op.path_params | list) + (op.query_params | map(attribute="ident") | list) + (op.header_params | map(attribute="ident") | list) -%}
+        {%- set taken = (params | map("ident", "snake", "python") | list) + ["self", "t"] -%}
+        {%- set idents = op.multipart_fields | map(attribute="name") | map("ident", "snake", "python_field") | list -%}
+        {%- if not (idents | select("in", taken) | list) and (idents | unique | list | length) == (idents | length) %}M{% endif -%}
+    {%- endif -%}
+{%- endmacro %}
+
 {#- The annotation of one variant of a union: its `""` variant is `t.Literal[""]`, a free-form
     object `dict[str, t.Any]`. -#}
 {% macro variant_type(variant) -%}
@@ -217,16 +228,67 @@
     {%- if alias not in names %}{{ alias }}{% endif -%}
 {%- endmacro %}
 
-{#- The annotation of an argument holding `ty`: an enum also takes its values as literals.
-    `enums` lists the class names of the enums with a `literal_alias`. -#}
-{% macro arg_type(ty, enums) -%}
-    {{ py_type(ty) }}{% if ty.is_schema_ref() and ty.to_python() in enums %} | {{ ty.to_python() }}Literal{% endif %}
+{#- The annotation of an argument holding `ty`: an enum also takes its values as literals, and
+    an open one any string. `enums` lists the class names of the enums with a `literal_alias`,
+    `open_enums` those of the open ones. Lists keep the enum alone, as `list` is invariant. -#}
+{% macro arg_type(ty, enums, open_enums=[]) -%}
+    {%- if ty.is_nullable() and ty.inner_type().is_schema_ref() -%}
+        {{ arg_type(ty.inner_type(), enums, open_enums) }} | None
+    {%- else -%}
+        {{ py_type(ty) }}
+        {%- if ty.is_schema_ref() and ty.to_python() in enums %} | {{ ty.to_python() }}Literal{% endif %}
+        {%- if ty.is_schema_ref() and ty.to_python() in open_enums %} | str{% endif %}
+    {%- endif -%}
+{%- endmacro %}
+
+{#- The `XLiteral` aliases `arg_type` names for `ty`, each followed by a space. -#}
+{% macro arg_literals(ty, enums) -%}
+    {%- set inner = ty.inner_type() if ty.is_nullable() else ty -%}
+    {%- if inner.is_schema_ref() and inner.to_python() in enums %}{{ inner.to_python() }}Literal {% endif -%}
+{%- endmacro %}
+
+{#- The annotation of an argument or a `Param` key holding `ty`: a model also takes its `Param`
+    dict, an enum its values. A list or map holding those takes any sequence or mapping, as `list`
+    is invariant; not one of strings, as a `str` is a sequence too. -#}
+{% macro input_type(ty, enums, open_enums) -%}
+    {%- if ty.is_nullable() and not (ty.inner_type().is_json_object() and not ty.inner_type().is_union()) -%}
+        {{ input_type(ty.inner_type(), enums, open_enums) }} | None
+    {%- elif ty.is_schema_ref() and ty.to_python() in param_types -%}
+        {{ ty.to_python() }} | {{ ty.to_python() }}Param
+    {%- elif ty.is_schema_ref() -%}
+        {{ arg_type(ty, enums, open_enums) }}
+    {%- elif ty.is_list() or ty.is_set() -%}
+        {%- set inner = input_type(ty.inner_type(), enums, open_enums) -%}
+        {%- if inner != py_type(ty.inner_type()) and "str" not in (inner | split(" | ") | list) %}t.Sequence[{{ inner }}]{% else %}{{ py_type(ty) }}{% endif -%}
+    {%- elif ty.is_map() -%}
+        {%- set inner = input_type(ty.value_type(), enums, open_enums) -%}
+        {%- if inner != py_type(ty.value_type()) %}t.Mapping[str, {{ inner }}]{% else %}{{ py_type(ty) }}{% endif -%}
+    {%- elif ty.is_union() and ty.union_mode() == "json" -%}
+        {%- for variant in (ty.try_variants() if ty.union_decode() == "try" else ty.union_variants()) -%}
+            {%- if not loop.first %} | {% endif -%}
+            {%- if variant.empty or (variant.type.is_json_object() and not variant.type.is_union()) %}{{ variant_type(variant) }}{% else %}{{ input_type(variant.type, enums, open_enums) }}{% endif -%}
+        {%- endfor -%}
+    {%- elif ty.is_union() -%}
+        {{ py_type(ty) }}
+        {%- for variant in ty.union_variants() if variant.type.is_schema_ref() and variant.type.to_python() in param_types %} | {{ variant.type.to_python() }}Param{% endfor -%}
+    {%- else -%}
+        {{ py_type(ty) }}
+    {%- endif -%}
+{%- endmacro %}
+
+{#- The `Param` and `Literal` names `input_type` writes for `ty`, each followed by a space. -#}
+{% macro input_refs(ty, enums) -%}
+    {%- if ty.is_schema_ref() and ty.to_python() in param_types %}{{ ty.to_python() }}Param {% endif -%}
+    {%- if ty.is_schema_ref() and ty.to_python() in enums %}{{ ty.to_python() }}Literal {% endif -%}
+    {%- if ty.is_list() or ty.is_set() or ty.is_nullable() %}{{ input_refs(ty.inner_type(), enums) }}{% endif -%}
+    {%- if ty.is_map() %}{{ input_refs(ty.value_type(), enums) }}{% endif -%}
+    {%- if ty.is_union() %}{% for v in ty.union_variants() %}{{ input_refs(v.type, enums) }}{% endfor %}{% endif -%}
 {%- endmacro %}
 
 {#- `from __future__` and imports shared by the model modules. Other models are
     imported for type checkers only, which keeps recursive schemas importable:
     the runtime resolves their names in the models package. -#}
-{% macro model_imports(referenced_components, runtime_names, union_refs=[]) -%}
+{% macro model_imports(referenced_components, runtime_names, union_refs=[], literals=[]) -%}
 {%- set referenced_components = (referenced_components | list) + (union_refs | reject("in", referenced_components | list) | sort | list) -%}
 from __future__ import annotations
 
@@ -246,6 +308,7 @@ from ..unions import ObjectUnion
 if t.TYPE_CHECKING:
 {%- for c in referenced_components %}
     from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}
+        {%- for suffix in ["Literal", "Param"] if (c | to_upper_camel_case) ~ suffix in literals %}, {{ c | to_upper_camel_case }}{{ suffix }}{% endfor %}
 {%- endfor %}
 {%- endif %}
 {%- endmacro %}
