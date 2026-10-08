@@ -27,6 +27,7 @@ use crate::api::Api;
 
 mod external;
 mod normalize;
+pub(crate) use normalize::OPEN_ENUM;
 mod swagger2;
 mod upgrade;
 

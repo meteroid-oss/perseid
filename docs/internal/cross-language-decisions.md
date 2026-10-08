@@ -9,3 +9,5 @@ where it landed and what is left. Delete an entry once every language has it.
 | Object request bodies are always keyword arguments / flat options, `allOf` included | Python | Check TypeScript, Java, C#, Go, Rust |
 | Required multipart bodies are keyword arguments, like JSON bodies; no `...Body` class is generated for them | Python | Every other language |
 | The boolean `stream` part of a multipart `_stream` twin is set by the twins (`true` on the stream one, left out of the other), like JSON bodies' | Python | Every other language; consider moving it to `stream_property` in `src/api/resources.rs` |
+| Open enums (`anyOf: [string, enum]`) carry `open: true` (from `x-perseid-open-enum`, set by the spec normalization) and accept any string next to their values | Python | Every other language: their enums keep unknown values, but their argument types may not accept a plain string |
+| Enum arguments (body fields, query and header parameters) take the enum or its value; in models only requests send, enum fields do too. Models responses carry keep the enum type, so readers' code does not change | Python | Check TypeScript, Java, C#, Go |
