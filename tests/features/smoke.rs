@@ -24,7 +24,7 @@ use features::error::{ApiErrorKind, Error};
 use features::models::{
     BigBox, Blob, Charge, ChargeItemsItem, ChargeShipping, ChargeShippingAddress,
     CompletionRequest, DateBox, Filter, FilterAmount, Health, Item, ItemPatch, NullBag,
-    PaintKind, PaintKindsItem, Payment, SearchRange, Widget, WidgetList,
+    PaintKind, PaintKindsItem, Payment, RangeQuerySpecs, SearchRange, Widget, WidgetList,
 };
 use futures::{StreamExt, TryStreamExt};
 use http::{HeaderMap, StatusCode};
@@ -223,12 +223,15 @@ async fn wire() {
         .metadata([("k".to_owned(), "v".to_owned())])
         .ids(vec!["x".to_owned(), "y".to_owned()])
         .tags(vec!["t1".into(), "t2".into()])
-        .range(SearchRange { gte: Some(1), lt: Some(9), ..Default::default() });
+        .range(SearchRange { gte: Some(1), lt: Some(9), ..Default::default() })
+        .created(RangeQuerySpecs { gte: Some(3), lt: Some(7), ..Default::default() });
     assert_eq!(
         wire.search(Some(search)).await.unwrap().status,
-        "expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y\
+        "created[gte]=3&created[lt]=7&expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y\
          &metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2"
     );
+    let search = WireSearchOptions::new().created(5);
+    assert_eq!(wire.search(Some(search)).await.unwrap().status, "created=5");
     let charge = Charge {
         capture: Some(true),
         metadata: Some([("order".to_owned(), "7".to_owned())].into()),

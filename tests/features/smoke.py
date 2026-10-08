@@ -34,6 +34,7 @@ from features.models import (
     Filter,
     FilterAmount,
     Health,
+    RangeQuerySpecs,
     SearchRange,
     WidgetList,
 )
@@ -189,12 +190,14 @@ searched = client.wire.search(
     ids=["x", "y"],
     tags=["t1", "t2"],
     range=SearchRange(gte=1, lt=9),
+    created=RangeQuerySpecs(gte=3, lt=7),
 )
 assert searched.status == (
-    "expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y"
+    "created[gte]=3&created[lt]=7&expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y"
     "&metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2"
 ), searched
 assert client.wire.search(ids="z").status == "ids=z"
+assert client.wire.search(created=5).status == "created=5"
 assert client.wire.search(ids="z", extra_query={"debug": True}).status == "debug=true&ids=z"
 charged = client.wire.create_charge(
     amount=100,

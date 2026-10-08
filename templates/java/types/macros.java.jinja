@@ -20,15 +20,15 @@
 {%- endif -%}
 {%- endmacro %}
 
-{#- "true" when the query parameter `p` declares a union of scalars and lists of scalars, which
-    its options class types. -#}
+{#- "true" when the query parameter `p` declares a union of scalars, lists of scalars and named
+    schemas, which its options class types. -#}
 {% macro typed_param_union(p) -%}
 {%- if p.typed_union is defined and not p.required -%}
 {%- set ns = namespace(plain=true) -%}
 {%- for v in p.typed_union.union_variants() -%}
 {%- set item = v.type.inner_type() if v.type.is_list() else v.type -%}
 {%- set item = item.inner_type() if item.is_nullable() else item -%}
-{%- if v.json_type == "object" or item.is_schema_ref() or item.is_union() or item.is_json_object() or item.is_list() -%}
+{%- if (item.is_schema_ref() and v.type.is_list()) or item.is_union() or item.is_json_object() or item.is_list() -%}
 {%- set ns.plain = false -%}
 {%- endif -%}
 {%- endfor -%}

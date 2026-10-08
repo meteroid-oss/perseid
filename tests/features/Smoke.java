@@ -49,6 +49,7 @@ import com.features.models.ItemPatch;
 import com.features.models.NullBag;
 import com.features.models.Paint;
 import com.features.models.Payment;
+import com.features.models.RangeQuerySpecs;
 import com.features.models.SearchRange;
 import com.features.models.Widget;
 import com.features.streaming.EventStream;
@@ -236,11 +237,18 @@ public class Smoke {
                 .ids(WireSearchOptions.Ids.ofArrayOfStrings(List.of("x", "y")))
                 .tags(List.of("t1", "t2"))
                 .range(SearchRange.builder().gte(1L).lt(9L).build())
+                .created(WireSearchOptions.Created.ofRangeQuerySpecs(
+                        RangeQuerySpecs.builder().gte(3L).lt(7L).build()))
                 .build();
         expect(
                 client.wire().search(search).status(),
-                "expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y"
+                "created[gte]=3&created[lt]=7&expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y"
                         + "&metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2");
+        expect(
+                client.wire().search(WireSearchOptions.builder()
+                        .created(WireSearchOptions.Created.ofInteger(5L))
+                        .build()).status(),
+                "created=5");
         Charge charge = Charge.builder()
                 .amount(100L)
                 .capture(true)

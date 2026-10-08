@@ -255,7 +255,7 @@ const customer = await client.customers.retrieve("cus_1", { timeout: 5_000, maxR
 ```
 
 - The last argument of every method is `{ signal, headers, query, timeout, maxRetries, idempotencyKey }`.
-- Unions of scalars and lists are typed in query, header and path parameters.
+- Unions of scalars, lists and objects are typed in query, header and path parameters.
 - `int64 = "bigint"` or `"string"` under `[typescript]` parses int64 values without losing digits.
   With `"string"`, the int64 values of a union variant are `number | bigint`, as a string would
   read as a string variant.

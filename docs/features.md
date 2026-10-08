@@ -167,6 +167,7 @@ expand[]=a&expand[]=b                         # lists with `style: deepObject`
 | Parameter | Sent as |
 |---|---|
 | List | Repeated (`?tag=a&tag=b`), comma-separated with `explode: false` |
+| `deepObject` union (`anyOf: [object, integer]`) | Typed in every SDK: `created[gte]=1` for the object, `created=1` for the integer |
 | `pipeDelimited`, `spaceDelimited` list | `ids=a\|b\|c`, `ids=a b c`; repeated with `explode` |
 | `content: application/json` (query, path, header) | Typed by its schema, sent as compact JSON, percent-encoded where needed |
 | Header | Typed by its schema like a query parameter: numbers, booleans, dates, enums, lists (comma-separated) |

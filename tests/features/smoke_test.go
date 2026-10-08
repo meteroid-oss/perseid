@@ -250,10 +250,12 @@ func TestSmokeWire(t *testing.T) {
 		IDs:      Ptr(NewWireSearchIDsFromArrayOfStrings([]string{"x", "y"})),
 		Tags:     []string{"t1", "t2"},
 		Range:    &SearchRange{Gte: Ptr[int64](1), Lt: Ptr[int64](9)},
+		Created:  Ptr(NewWireSearchCreatedFromRangeQuerySpecs(RangeQuerySpecs{Gte: Ptr[int64](3), Lt: Ptr[int64](7)})),
 	}
 	expect(t, status(wire.Search(ctx, search)),
-		"expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y"+
+		"created[gte]=3&created[lt]=7&expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y"+
 			"&metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2")
+	expect(t, status(wire.Search(ctx, &WireSearchOptions{Created: Ptr(NewWireSearchCreatedFromInteger(5))})), "created=5")
 	charge := Charge{
 		Amount:   100,
 		Capture:  Ptr(true),

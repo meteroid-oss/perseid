@@ -223,6 +223,20 @@ paths:
             properties:
               gte: { type: integer }
               lt: { type: integer }
+        - name: created
+          in: query
+          style: deepObject
+          explode: true
+          schema:
+            anyOf:
+              - title: range_query_specs
+                type: object
+                properties:
+                  gt: { type: integer }
+                  gte: { type: integer }
+                  lt: { type: integer }
+                  lte: { type: integer }
+              - type: integer
       responses:
         '200':
           description: the query as the server read it

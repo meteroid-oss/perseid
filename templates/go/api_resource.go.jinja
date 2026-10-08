@@ -1,7 +1,7 @@
 {% from "types/macros.go.jinja" import go_local, go_arg, go_query_scalar, go_header_type, go_type, go_ident, go_export, go_security, go_strings, go_field_type, go_words, go_article, go_path_guard, go_path_value, go_union -%}
 {% set resource_type_name = go_ident(resource.name) -%}
 {#- The union a query parameter typed as untyped JSON keeps, declared next to the operation
-    when its variants are scalars, lists or named schemas told apart by their JSON type. -#}
+    when its variants are scalars, lists or named schemas. -#}
 {% macro param_union(op, p) -%}
     {%- if p.typed_union is defined and p.structured -%}
         {%- set ns = namespace(ok=true) -%}
@@ -9,7 +9,7 @@
             {%- set nested = namespace(t=v.type) -%}
             {%- for level in range(3) %}{% if nested.t.is_list() or nested.t.is_set() %}{% set nested.t = nested.t.inner_type() %}{% endif %}{% endfor -%}
             {%- set t = nested.t -%}
-            {%- if not (t.to_go() in ["string", "bool", "int16", "int32", "int64", "uint16", "uint64", "float32", "float64"] or (t.is_schema_ref() and v.json_type not in ["", "object"])) %}{% set ns.ok = false %}{% endif -%}
+            {%- if not (t.to_go() in ["string", "bool", "int16", "int32", "int64", "uint16", "uint64", "float32", "float64"] or (t.is_schema_ref() and v.json_type != "")) %}{% set ns.ok = false %}{% endif -%}
         {%- endfor -%}
         {%- if ns.ok %}{{ (resource_type_name ~ (op.name | ident("pascal", "go")) ~ (p.ident | ident("pascal", "go"))) | go_name }}{% endif -%}
     {%- endif -%}

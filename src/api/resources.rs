@@ -208,6 +208,11 @@ pub(crate) fn request_and_response_roots(
             let sent = (op.request_body_json_type.iter())
                 .chain(op.multipart_fields.iter().map(|f| &f.field.r#type))
                 .chain(op.query_params.iter().map(|p| &p.r#type))
+                .chain(
+                    op.query_params
+                        .iter()
+                        .filter_map(|p| p.typed_union.as_ref()),
+                )
                 .chain(op.path_styles.values().filter_map(|p| p.r#type.as_ref()))
                 .chain(op.header_params.iter().map(|p| &p.r#type));
             for ty in sent {
@@ -389,6 +394,7 @@ impl Resource {
                     res.insert(name);
                 }
                 res.extend(param.r#type.union_refs());
+                res.extend(param.typed_union.iter().flat_map(FieldType::union_refs));
             }
             for param in operation.path_styles.values() {
                 if let Some(name) = param.r#type.as_ref().and_then(FieldType::referenced_schema) {

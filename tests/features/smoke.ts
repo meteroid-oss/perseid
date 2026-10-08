@@ -452,12 +452,14 @@ async function main() {
     ids: ["x", "y"],
     tags: ["t1", "t2"],
     range: { gte: 1n, lt: 9n },
+    created: { gte: 3n, lt: 7n },
   });
   assert.equal(
     searched.status,
-    "expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y" +
+    "created[gte]=3&created[lt]=7&expand[]=a&expand[]=b&filter[amount][gte]=5&filter[status]=open&ids=x&ids=y" +
       "&metadata[k]=v&range[gte]=1&range[lt]=9&tags=t1,t2"
   );
+  assert.equal((await client.wire.search({ created: 5n })).status, "created=5");
   const charged = await client.wire.createCharge({
     amount: 100n,
     capture: true,
