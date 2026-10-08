@@ -7,14 +7,17 @@ cancellation.
 
 import asyncio
 import email.utils
+import importlib
 import json
 import logging
 import os
 import re
+import tempfile
 import time
 import unittest
 import urllib.parse
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest import mock
 
 import httpx
@@ -549,6 +552,16 @@ class RetryTest(unittest.TestCase):
 
 SECRETS = ("tok", "q-secret", "h-secret", "Bearer", "authorization")
 ITEM_URL = r"https://features\.test/api/v2/items/i1"
+
+
+class MultipartTest(unittest.TestCase):
+    def test_a_path_is_read_as_a_file_named_after_it(self) -> None:
+        streaming = importlib.import_module(f"{features.__name__}.api._streaming")
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "a.csv"
+            path.write_bytes(b"x,y")
+            files = streaming.multipart_files([("file", path, True, "text/csv")])
+        self.assertEqual(files, [("file", ("a.csv", b"x,y", "text/csv"))])
 
 
 class LoggingTest(unittest.TestCase):

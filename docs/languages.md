@@ -381,7 +381,8 @@ client.files.create(file=Upload(b"...", "a.csv"), purpose="import")
 - Every method takes `extra_headers=`, `extra_query=`, `extra_body=`, `timeout=` and
   `max_retries=`, prefixed with `request_` when a parameter has that name.
 - These headers, like `default_headers`, win over the client's credentials.
-- Multipart file fields take bytes, a binary file, or `Upload(content, filename, content_type)`.
+- Multipart file fields take bytes, a binary file, a path (`Path("a.csv")`, read and named after
+  it), or `Upload(content, filename, content_type)`.
 - An operation that also declares a bodiless 2xx returns `Model | None`.
 
 ### Pagination

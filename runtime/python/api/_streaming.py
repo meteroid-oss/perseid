@@ -48,8 +48,8 @@ class Upload(t.NamedTuple):
     content_type: str = "application/octet-stream"
 
 
-FileInput: t.TypeAlias = "bytes | t.IO[bytes] | Upload"
-"""A multipart file: its content, or an :class:`Upload` naming it."""
+FileInput: t.TypeAlias = "bytes | t.IO[bytes] | os.PathLike[str] | Upload"
+"""A multipart file: its content, the path of a file to read, or an :class:`Upload` naming it."""
 
 MultipartField: t.TypeAlias = "tuple[str, object, bool, str | None]"
 """A multipart field: its name, its value, whether it is a file and its declared content type."""
@@ -318,6 +318,10 @@ def multipart_files(fields: t.Sequence[MultipartField]) -> list[_File]:
             many = isinstance(value, (list, tuple)) and not isinstance(value, Upload)
             items: list[object] = list(t.cast("t.Sequence[object]", value)) if many else [value]
             for item in items:
+                if isinstance(item, os.PathLike):
+                    source = os.fspath(t.cast("os.PathLike[str]", item))
+                    with open(source, "rb") as file:
+                        item = Upload(file.read(), os.path.basename(source))
                 upload = item if isinstance(item, Upload) else Upload(t.cast("bytes", item))
                 if content_type and upload.content_type == _OCTET_STREAM:
                     upload = upload._replace(content_type=content_type)
