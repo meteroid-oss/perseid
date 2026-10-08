@@ -68,7 +68,7 @@ path = "api"                        # the only folder perseid writes there, repl
 after = "sdks"                      # once every SDK is released, or "generate": with the SDK PRs
 
 [targets.cli]                       # a pack: a program wrapping one SDK, in a repository of its own
-pack = "../perseid-ext/packs/cli"   # the pack's folder, relative to perseid.toml
+pack = "../packs/cli"   # the pack's folder, relative to perseid.toml
 wraps = "rust"                      # the SDK it wraps, among `sdks`
 repo = "acme/acme-cli"
 after = "rust"                      # once that SDK is released
@@ -145,7 +145,7 @@ path = "reference/api"
 | a pack (`pack`) | What its templates, runtime and scaffold render around the SDK it wraps, `.perseid/generation.json`, and `.perseid/openapi.json`, the spec it was generated from, which sizes the next pull request |
 
 A name or `kind` perseid doesn't know is an error. `pack` is a folder for now: a reference to a
-repository, such as `gh:meteroid-oss/perseid-ext/packs/cli@v0`, is an error. `after` other than
+repository, such as `gh:acme/packs/cli@v0`, is an error. `after` other than
 `"generate"` needs the release workflows, so it can't go with `release = false`.
 
 ## SDK defaults

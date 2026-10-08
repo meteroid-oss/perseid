@@ -65,7 +65,7 @@ impl Target {
                         && !["gh:", "github:", "git@", "http://", "https://"]
                             .iter()
                             .any(|p| dir.starts_with(p)),
-                    "{at}: `pack = {dir:?}`: perseid reads packs from a folder for now, set its path relative to perseid.toml, such as \"../perseid-ext/packs/cli\""
+                    "{at}: `pack = {dir:?}`: perseid reads packs from a folder for now, set its path relative to perseid.toml, such as \"../packs/cli\""
                 );
                 let wraps = table.wraps.with_context(|| {
                     format!("{at}: set `wraps`, the language of the SDK the pack wraps")
@@ -750,7 +750,7 @@ mod tests {
                 "[targets.cli]: set `wraps`, the language of the SDK the pack wraps",
             ),
             (
-                "pack = \"gh:meteroid-oss/perseid-ext/packs/cli@v0\"\nwraps = \"go\"\n".to_owned(),
+                "pack = \"gh:acme/packs/cli@v0\"\nwraps = \"go\"\n".to_owned(),
                 "perseid reads packs from a folder for now",
             ),
             (
