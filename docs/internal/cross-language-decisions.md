@@ -18,7 +18,7 @@ where it landed and what is left. Delete an entry once every language has it.
 | Responses can be streamed without loading them (Stainless' `with_streaming_response`) | — | Every language |
 | Types can be renamed in `perseid.toml` (Stainless turns `CreateChatCompletionResponse` into `ChatCompletion`) | — | Every language |
 | Union variants sharing a tag (OpenAI's `InputItem`: three `message` variants) are sent with the tag they declare, not their schema name; decoding tries the other variants declaring the tag when the first rejects the data. In the spec model, a variant's implicit (schema-name) tag no longer erases the constant its property declares | Python, spec model | TypeScript (sends `type: "InputMessage"` today), Rust, Go, Java, C# |
-| Merged `allOf` parts typed the same once `$ref`s are followed and `X \| null` is unwrapped, instead of an untyped value (29 properties of OpenAI's spec, `CreateResponse.top_logprobs` among them) | — | Spec normalization (`refines()`), every language |
+| Merged `allOf` parts typed the same once `$ref`s are followed and `X \| null` is unwrapped, instead of an untyped value (`CreateResponse.top_logprobs`...) | Every language (spec normalization) | — |
 | An error event in a stream (`event: error`, or data with an `error` key) raises an API error, not a decode error | — | Check every language |
 | `init` sets `timeout = 600` for specs with event streams (LLM APIs answer slowly), as Stainless' 10 minutes | — | `init` |
 | `perseid init` keeps a mixed-case title word as written (`OpenAI`, `GitHub`) and one word in packages, header prefix, user agent and `env_prefix` (`openai`, `OPENAI_API_KEY`) | Every language (init) | — |
