@@ -11,7 +11,7 @@ use crate::{
     api::{
         Api, Resource, Types,
         resources::request_and_response_roots,
-        types::{self, Type, TypeData},
+        types::{self, EnumVariantType, StructEnumRepr, Type, TypeData},
     },
     postprocessing::Postprocessor,
     template,
@@ -101,6 +101,10 @@ pub(crate) fn generate_with_output_context(
         output_context.unwrap_or(output_dir.as_str()).to_owned(),
     );
     minijinja_env.add_global("_perseid_actual_output_dir", output_dir.as_str().to_owned());
+    minijinja_env.add_global(
+        "param_types",
+        minijinja::Value::from_serialize(param_types(&api)),
+    );
     minijinja_env.add_template(tpl_path, &tpl_source)?;
     let tpl = minijinja_env.get_template(tpl_path)?;
 
@@ -400,6 +404,58 @@ fn request_only_schemas(api: &Api) -> BTreeSet<&str> {
     );
     let received = reachable(api, received);
     requests.difference(&received).copied().collect()
+}
+
+/// The class names of the models requests carry that SDKs also take as their JSON, typed: Python's
+/// `PetParam` dicts. Those are the structs, and the plain unions of them whose variants all hold
+/// the discriminator, so that a dict names its variant.
+fn param_types(api: &Api) -> BTreeSet<String> {
+    let requests = request_schemas(api);
+    let names: BTreeSet<String> = api.types.keys().map(|k| k.to_upper_camel_case()).collect();
+    let free = |name: &str| !names.contains(&format!("{}Param", name.to_upper_camel_case()));
+    let mut params = BTreeSet::new();
+    for name in requests.iter().copied().filter(|n| free(n)) {
+        if let Some(TypeData::Struct { fields, .. }) = api.types.get(name).map(|t| &t.data)
+            && !fields.iter().any(|f| f.flatten)
+        {
+            params.insert(name.to_upper_camel_case());
+        }
+    }
+    let holds = |variant: &str, field: &str| {
+        matches!(
+            api.types.get(variant).map(|t| &t.data),
+            Some(TypeData::Struct { fields, .. }) if fields.iter().any(|f| f.name == field)
+        )
+    };
+    for name in requests.iter().copied().filter(|n| free(n)) {
+        let Some(TypeData::StructEnum {
+            discriminator_field,
+            repr: StructEnumRepr::InternallyTagged { variants },
+            fields,
+        }) = api.types.get(name).map(|t| &t.data)
+        else {
+            continue;
+        };
+        let refs: Vec<Option<&str>> = (variants.iter())
+            .map(|v| match &v.content {
+                EnumVariantType::Ref {
+                    schema_ref: Some(target),
+                    ..
+                } => Some(target.as_str()),
+                _ => None,
+            })
+            .collect();
+        let distinct = refs.iter().collect::<BTreeSet<_>>().len() == refs.len();
+        let typed = refs.iter().all(|r| {
+            r.is_some_and(|r| {
+                params.contains(&r.to_upper_camel_case()) && holds(r, discriminator_field)
+            })
+        });
+        if fields.is_empty() && distinct && typed {
+            params.insert(name.to_upper_camel_case());
+        }
+    }
+    params
 }
 
 /// `roots` and every schema they reach.
