@@ -205,6 +205,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         .filter(|_| named_by_title && name == derived)
         .map(crate::client_name::title_words)
         .map(|words| words.iter().map(|w| w.to_lowercase()).collect::<Vec<_>>())
+        .filter(|words| words.concat() == name.to_lowercase())
         .filter(|words| words.join("_") != name.to_snake_case());
     if let Some(words) = &words {
         toml += &format!("header_prefix = {}\n", quote(&words.join("-")));

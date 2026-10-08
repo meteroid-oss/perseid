@@ -12,6 +12,7 @@ where it landed and what is left. Delete an entry once every language has it.
 | Open enums (`anyOf: [string, enum]`) carry `open: true` (from `x-perseid-open-enum`, set by the spec normalization) and accept any string next to their values | Python | Every other language: their enums keep unknown values, but their argument types may not accept a plain string |
 | Enum arguments (body fields, query and header parameters) take the enum or its value; in models only requests send, enum fields do too. Models responses carry keep the enum type, so readers' code does not change | Python | Check TypeScript, Java, C#, Go |
 | Models requests carry also take their JSON as a typed dict (`PetParam`, keys as on the wire, the tag of a union variant required); `param_types` in templates lists them. Model types themselves do not change | Python | TypeScript already takes object literals; check Go, Java, C#, Rust have a builder or literal form |
+| A 429 is retried whatever the method, when the body can be sent again: the server refused the request | Every language | — |
 | `perseid init` keeps a mixed-case title word as written (`OpenAI`, `GitHub`) and one word in packages, header prefix, user agent and `env_prefix` (`openai`, `OPENAI_API_KEY`) | Every language (init) | — |
 
 ## Considered and left as is
