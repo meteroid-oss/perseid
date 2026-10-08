@@ -330,10 +330,9 @@ internal sealed class ApiTransport : IDisposable
         }
 
         var uri = request.BuildUri(_baseUrl, authQuery);
-        var retryable =
-            (request.IsRetrySafe || IsIdempotent(request.Method) || headers.ContainsKey("Idempotency-Key"))
-            && !request.IsOneShot;
-        var retries = retryable
+        var idempotent =
+            request.IsRetrySafe || IsIdempotent(request.Method) || headers.ContainsKey("Idempotency-Key");
+        var retries = !request.IsOneShot
             ? Math.Max(0, options?.MaxRetries ?? _retrySchedule?.Count ?? _maxRetries)
             : 0;
         var timeout = options?.Timeout ?? _timeout;
@@ -406,7 +405,7 @@ internal sealed class ApiTransport : IDisposable
                     {
                         renew = true;
                     }
-                    else if (last || !ShouldRetry((int)response.StatusCode))
+                    else if (last || !ShouldRetry((int)response.StatusCode, idempotent))
                     {
                         activity?.SetStatus(ActivityStatusCode.Error);
                         throw ApiExceptionExtensions.ForResponse(
@@ -423,7 +422,7 @@ internal sealed class ApiTransport : IDisposable
                 }
                 catch (Exception e) when (e is HttpRequestException or IOException)
                 {
-                    if (last)
+                    if (last || !idempotent)
                     {
                         activity?.SetStatus(ActivityStatusCode.Error, e.Message);
                         throw new ApiConnectionException(
@@ -434,7 +433,7 @@ internal sealed class ApiTransport : IDisposable
                 }
                 catch (OperationCanceledException e) when (!cancellationToken.IsCancellationRequested)
                 {
-                    if (last)
+                    if (last || !idempotent)
                     {
                         activity?.SetStatus(ActivityStatusCode.Error, "timeout");
                         throw new ApiTimeoutException(
@@ -464,7 +463,9 @@ internal sealed class ApiTransport : IDisposable
         || method == HttpMethod.Options
         || method == HttpMethod.Trace;
 
-    private static bool ShouldRetry(int status) => status is 408 or 429 or >= 500;
+    // A 429 was refused before being processed, so resending it cannot apply it twice.
+    private static bool ShouldRetry(int status, bool idempotent) =>
+        status is 429 || (idempotent && status is 408 or >= 500);
 
     /// <summary>The server's <c>retry-after-ms</c> or <c>Retry-After</c> when within a minute, else
     /// the backoff.</summary>

@@ -876,12 +876,16 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         INSTANCE
     }
 
-    private static boolean retryable(Request request) {
+    /** Whether the body of {@code request}, if any, can be sent again. */
+    private static boolean replayable(Request request) {
         RequestBody body = request.body();
-        return (IDEMPOTENT_METHODS.contains(request.method())
-                        || request.tag(RetrySafe.class) != null
-                        || request.header("idempotency-key") != null)
-                && (body == null || !body.isOneShot());
+        return body == null || !body.isOneShot();
+    }
+
+    private static boolean idempotent(Request request) {
+        return IDEMPOTENT_METHODS.contains(request.method())
+                || request.tag(RetrySafe.class) != null
+                || request.header("idempotency-key") != null;
     }
 
     private static Request attempt(Request request, int attempt) {
@@ -893,20 +897,21 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
     }
 
     /**
-     * Retries transport errors, 408, 429 and 5xx responses of requests that are safe to repeat:
-     * idempotent methods, or those carrying an idempotency key.
+     * Retries transport errors, 408 and 5xx responses of requests that are safe to repeat:
+     * idempotent methods, or those carrying an idempotency key; 429 responses whatever the method.
      */
     private Response execute(Request request, OkHttpClient http, int retries) throws IOException {
-        boolean retryable = retryable(request);
+        boolean replayable = replayable(request);
+        boolean idempotent = idempotent(request);
         // An access token the API rejects is replaced once, without using up a retry.
         boolean renewed = false;
         for (int attempt = 0; ; attempt++) {
-            boolean lastAttempt = !retryable || attempt >= retries;
+            boolean lastAttempt = !replayable || attempt >= retries;
             Response response;
             try {
                 response = http.newCall(attempt(request, attempt)).execute();
             } catch (IOException e) {
-                if (lastAttempt || Thread.currentThread().isInterrupted()) {
+                if (lastAttempt || !idempotent || Thread.currentThread().isInterrupted()) {
                     throw e;
                 }
                 sleep(backoff(attempt));
@@ -919,7 +924,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                 attempt--;
                 continue;
             }
-            Duration delay = lastAttempt ? null : retryDelay(response, attempt);
+            Duration delay = lastAttempt ? null : retryDelay(response, attempt, idempotent);
             if (delay == null) {
                 return response;
             }
@@ -930,16 +935,15 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
 
     /** Whether {@code response} rejects the OAuth2 access token {@code request} carries. */
     private boolean rejectedToken(Request request, Response response) {
-        RequestBody body = request.body();
         return response.code() == 401
                 && auth != null
-                && (body == null || !body.isOneShot())
+                && replayable(request)
                 && auth.renewable(request);
     }
 
     private CompletableFuture<Response> executeAsync(Request request, OkHttpClient http, int retries) {
         CompletableFuture<Response> result = new CompletableFuture<>();
-        executeAsync(request, http, retryable(request) ? retries : 0, 0, false, result);
+        executeAsync(request, http, replayable(request) ? retries : 0, 0, false, result);
         return result;
     }
 
@@ -965,7 +969,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                 new Callback() {
                     @Override
                     public void onFailure(okhttp3.Call call, IOException e) {
-                        if (lastAttempt) {
+                        if (lastAttempt || !idempotent(request)) {
                             result.completeExceptionally(transportError(e));
                         } else {
                             later(
@@ -989,7 +993,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                                     });
                             return;
                         }
-                        Duration delay = lastAttempt ? null : retryDelay(response, attempt);
+                        Duration delay = lastAttempt ? null : retryDelay(response, attempt, idempotent(request));
                         if (delay == null) {
                             if (!result.complete(response)) {
                                 response.close();
@@ -1007,9 +1011,10 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
     }
 
     /** The delay before retrying after {@code response}, or null to return it. */
-    private Duration retryDelay(Response response, int attempt) {
+    private Duration retryDelay(Response response, int attempt, boolean idempotent) {
         int status = response.code();
-        if (status != 408 && status != 429 && status < 500) {
+        // A 429 was refused before being processed, so resending it cannot apply it twice.
+        if (status != 429 && (!idempotent || (status != 408 && status < 500))) {
             return null;
         }
         Duration delay = retryAfter(response);

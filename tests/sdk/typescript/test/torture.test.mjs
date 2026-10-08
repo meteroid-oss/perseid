@@ -216,7 +216,7 @@ describe("client", () => {
     assert.equal(calls[2].init.headers["torture-retry-count"], "2");
   });
 
-  it("does not retry a failed PATCH without an idempotency key", async () => {
+  it("does not retry a failed PATCH without an idempotency key, except on 429", async () => {
     const { calls, torture } = client([json({}, 500)], { retryScheduleInMs: [1, 1] });
     await assert.rejects(torture.things.update("t1", {}), (error) => {
       assert.ok(error instanceof sdk.APIError);
@@ -224,9 +224,13 @@ describe("client", () => {
       return true;
     });
     assert.equal(calls.length, 1);
+    const refused = client([() => Promise.reject(new TypeError("fetch failed"))], { retryScheduleInMs: [1, 1] });
+    await assert.rejects(refused.torture.things.update("t1", {}), sdk.APIConnectionError);
+    assert.equal(refused.calls.length, 1);
     const limited = client([json({}, 429, { "retry-after": "0" })]);
     await assert.rejects(limited.torture.things.update("t1", {}), sdk.RateLimitError);
-    assert.equal(limited.calls.length, 1);
+    assert.equal(limited.calls.length, 3);
+    assert.equal(limited.calls[2].init.headers["torture-retry-count"], "2");
   });
 
   it("stops retrying when the caller aborts", async () => {

@@ -27,9 +27,10 @@ public sealed partial class @@CLIENT_NAME@@ClientOptions
     /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> disables it.</summary>
     public TimeSpan Timeout { get; set; } = DefaultTimeout;
 
-    /// <summary>Retries after network failures, timeouts, 408, 429 and 5xx, with jittered backoff or
+    /// <summary>Retries after network failures, timeouts, 408 and 5xx, with jittered backoff or
     /// <c>Retry-After</c>, for idempotent requests or those with an <c>Idempotency-Key</c> (POST
-    /// requests get one when the API deduplicates by it). Ignored when <see cref="RetrySchedule"/> is set.</summary>
+    /// requests get one when the API deduplicates by it), and after 429 for every request. Ignored
+    /// when <see cref="RetrySchedule"/> is set.</summary>
     public int MaxRetries { get; set; } = 2;
 
     /// <summary>The exact delay before each retry, its length the number of retries. An empty list
