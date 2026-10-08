@@ -162,6 +162,7 @@ impl {{ resource_type_name }} {
     {% set body_ident = op.request_body_schema_name | to_rust_ident -%}
     {% if body_ident in ["options", "cfg", "make_form", "form", "this", "call"] or body_ident in (op.path_params | map("to_rust_ident") | list) %}{% set body_ident = "body" %}{% endif -%}
     {% endif -%}
+    {% set optional_body = body_ident if op.request_body_schema_name is defined else "body" -%}
     {% if op.response_is_event_stream -%}
     {% set returned %}crate::api::EventStream{% if op.event_schema_name is defined %}<crate::models::{{ op.event_schema_name | to_upper_camel_case }}>{% endif %}{% endset -%}
     {% elif op.response_is_binary -%}
@@ -223,16 +224,16 @@ impl {{ resource_type_name }} {
         {% endfor -%}
 
         {% if op.request_body_kind == "binary" -%}
-        body: {% if op.request_body_optional %}Option<{% endif %}crate::api::Upload{% if op.request_body_optional %}>{% endif %},
+        body: {% if op.request_body_optional %}impl Into<Option<{% endif %}crate::api::Upload{% if op.request_body_optional %}>>{% endif %},
         {% elif op.request_body_kind == "multipart" -%}
-        body: {% if op.request_body_optional %}Option<{% endif %}{{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body{% if op.request_body_optional %}>{% endif %},
+        body: {% if op.request_body_optional %}impl Into<Option<{% endif %}{{ resource_type_name }}{{ op.name | to_upper_camel_case }}Body{% if op.request_body_optional %}>>{% endif %},
         {% endif -%}
 
         {# body parameter struct -#}
         {% if op.request_body_schema_name is defined -%}
-            {{ body_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},
+            {{ body_ident }}: {% if op.request_body_optional %}impl Into<Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>>{% endif %},
         {% elif op.request_body_json_type is defined -%}
-            body: {% if op.request_body_optional %}Option<{% endif %}{{ rust_type(op.request_body_json_type, op.request_body_union | default(none)) }}{% if op.request_body_optional %}>{% endif %},
+            body: {% if op.request_body_optional %}impl Into<Option<{% endif %}{{ rust_type(op.request_body_json_type, op.request_body_union | default(none)) }}{% if op.request_body_optional %}>>{% endif %},
         {% endif -%}
 
         {# query / header parameter struct -#}
@@ -244,6 +245,9 @@ impl {{ resource_type_name }} {
             {%- endif -%}
         {% endif -%}
     ) -> crate::api::Call<{{ returned }}> {
+        {% if op.request_body_optional -%}
+        let {{ optional_body }} = {{ optional_body }}.into();
+        {% endif -%}
         {% if has_params -%}
             {# unpack query / header parameter struct -#}
             let {{ param_struct_name }} {
@@ -289,7 +293,7 @@ impl {{ resource_type_name }} {
         {% for p in op.path_params -%}
             {% if p in op.path_styles -%}
             {% set ps = op.path_styles[p] -%}
-            .with_styled_path_param("{{ p }}", {% if ps.type is defined %}&{{ p | to_rust_ident }}{% else %}{{ p | to_rust_ident }}.to_string(){% endif %}, "{{ ps.style }}", {{ ps.explode | lower }})
+            .with_styled_path_param("{{ p }}", {% if ps.type is defined %}{{ p | to_rust_ident }}{% else %}{{ p | to_rust_ident }}.to_string(){% endif %}, "{{ ps.style }}", {{ ps.explode | lower }})
             {% else -%}
             {% set alias = path_alias(op, p) -%}
             .with_path_param("{{ p }}", {% if alias %}Into::<{{ alias }}>::into({{ p | to_rust_ident }}){% else %}{{ p | to_rust_ident }}{% endif %})
@@ -388,9 +392,9 @@ impl {{ resource_type_name }} {
             {% endif -%}
         {% endfor -%}
         {% if op.request_body_schema_name is defined -%}
-            {{ body_ident }}: {% if op.request_body_optional %}Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>{% endif %},
+            {{ body_ident }}: {% if op.request_body_optional %}impl Into<Option<{% endif %}{% if op.request_body_is_list %}Vec<{% endif %}crate::models::{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}>{% endif %}{% if op.request_body_optional %}>>{% endif %},
         {% elif op.request_body_json_type is defined -%}
-            body: {% if op.request_body_optional %}Option<{% endif %}{{ rust_type(op.request_body_json_type, op.request_body_union | default(none)) }}{% if op.request_body_optional %}>{% endif %},
+            body: {% if op.request_body_optional %}impl Into<Option<{% endif %}{{ rust_type(op.request_body_json_type, op.request_body_union | default(none)) }}{% if op.request_body_optional %}>>{% endif %},
         {% endif -%}
         {% if has_required_params -%}
             options: {{ param_struct_name }},
@@ -444,6 +448,9 @@ impl {{ resource_type_name }} {
         {% set alias = path_alias(op, p) -%}
         let {{ p | to_rust_ident }}{% if alias %}: {{ alias }} = {{ p | to_rust_ident }}.into(){% else %} = {{ p | to_rust_ident }}.to_string(){% endif %};
         {% endfor -%}
+        {% if op.request_body_optional -%}
+        let {{ optional_body }}: Option<_> = {{ optional_body }}.into();
+        {% endif -%}
         let this = self.clone();
         let call = move |options: {{ param_struct_name }}| {
             this.{{ request_fn }}(

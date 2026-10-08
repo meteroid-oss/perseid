@@ -263,6 +263,11 @@ impl Generator<'_> {
             .collect();
         let errors = errors_context(&api);
         let recursive_aliases = types::recursive_aliases(&api.types);
+        let rust_sizes = template::rust::Sizes::new(&api.types);
+        let convertible_types = match self.tpl_file_ext {
+            "rs" => template::rust::convertible_types(&api.types),
+            _ => BTreeSet::new(),
+        };
         for (name, ty) in &api.types {
             let mut referenced_components = ty.referenced_components();
             // A recursive type refers to itself, which is not an import.
@@ -271,6 +276,11 @@ impl Generator<'_> {
             let union_refs = ty.union_refs();
             let patch_body = patch_bodies.contains(name.as_str());
             let inherited_fields = ty.inherited_fields(&api.types);
+            let declared_tags = declared_tags(&api.types, ty);
+            let boxed_variants = match self.tpl_file_ext {
+                "rs" => rust_sizes.boxed_variants(ty),
+                _ => BTreeSet::new(),
+            };
             // Type names, as templates render them, of the schemas `ty` embeds or unites that
             // are not objects (a union, say).
             let non_struct_refs: BTreeSet<String> = ty
@@ -294,6 +304,8 @@ impl Generator<'_> {
                     union_refs,
                     patch_body,
                     inherited_fields,
+                    declared_tags,
+                    boxed_variants,
                     non_struct_refs,
                     output_dir,
                     type_names => type_names.clone(),
@@ -302,6 +314,7 @@ impl Generator<'_> {
                     request_only => request_only_schemas.contains(name.as_str()),
                     enum_literals => &enum_literals,
                     open_enums => &open_enums,
+                    convertible_types => &convertible_types,
                     ..errors.clone()
                 },
             )?);
@@ -311,7 +324,10 @@ impl Generator<'_> {
     }
 
     fn generate_summary(&self, api: Api) -> anyhow::Result<Vec<Utf8PathBuf>> {
-        self.render_tpl(None, context! { api })
+        let request_schemas: BTreeSet<String> = (request_schemas(&api).into_iter())
+            .map(str::to_owned)
+            .collect();
+        self.render_tpl(None, context! { api, request_schemas })
     }
 
     fn render_tpl(
@@ -464,6 +480,32 @@ fn param_types(api: &Api) -> BTreeSet<String> {
         }
     }
     params
+}
+
+/// The tags the variants of the union `ty` declare instead of the one naming them, by the latter:
+/// OpenAI's `InputMessage` variant is sent as `"type": "message"`.
+fn declared_tags<'a>(
+    types: &'a Types,
+    ty: &'a Type,
+) -> std::collections::BTreeMap<&'a str, &'a str> {
+    let TypeData::StructEnum {
+        discriminator_field,
+        repr: StructEnumRepr::InternallyTagged { variants },
+        ..
+    } = &ty.data
+    else {
+        return Default::default();
+    };
+    (variants.iter())
+        .filter_map(|v| match &v.content {
+            EnumVariantType::Ref {
+                schema_ref: Some(target),
+                ..
+            } => types::declared_tag(types, target, discriminator_field, &v.name)
+                .map(|tag| (v.name.as_str(), tag)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `roots` and every schema they reach.

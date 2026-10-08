@@ -436,7 +436,8 @@ async fn unknown_fields_and_nulls_are_kept() {
     assert_eq!(nulls.name, None);
     assert_eq!(nulls.tags, [Some("a".to_owned()), None, Some("b".to_owned())]);
     assert_eq!(nulls.counts, HashMap::from([("x".to_owned(), Some(1)), ("y".to_owned(), None)]));
-    assert_eq!(nulls.note, None);
+    // A request schema tells a `null` it received from an absent field.
+    assert_eq!(nulls.note, Some(None));
 
     // `name` is an explicit null, `note` is unset: the server checks the exact body.
     let sent = NullBag {
