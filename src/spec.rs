@@ -206,6 +206,20 @@ fn warn_ignored_servers(doc: &Value, filters: &Filters) {
     }
 }
 
+/// The first of the spec's `servers` when absolute, its `{variables}` set to their defaults.
+pub(crate) fn server_url(servers: &Value) -> Option<String> {
+    let server = &servers[0];
+    let mut url = server["url"].as_str()?.to_owned();
+    if let Some(variables) = server["variables"].as_object() {
+        for (name, variable) in variables {
+            if let Some(default) = variable["default"].as_str() {
+                url = url.replace(&format!("{{{name}}}"), default);
+            }
+        }
+    }
+    (url.starts_with("http") && !url.contains('{')).then(|| url.trim_end_matches('/').to_owned())
+}
+
 fn ignored_servers(doc: &Value, filters: &Filters) -> Vec<(String, String)> {
     let urls = |servers: &Value| -> Vec<String> {
         servers
@@ -534,6 +548,18 @@ mod tests {
     use std::io::{Read as _, Write as _};
 
     use serde_json::json;
+
+    #[test]
+    fn server_variables_take_their_defaults() {
+        let servers = json!([{
+            "url": "https://{region}.acme.com/{version}/",
+            "variables": { "region": { "default": "eu" }, "version": { "default": "v2" } }
+        }]);
+        let url = super::server_url(&servers);
+        assert_eq!(url.as_deref(), Some("https://eu.acme.com/v2"));
+        assert_eq!(super::server_url(&json!([{ "url": "/v1" }])), None);
+        assert_eq!(super::server_url(&serde_json::Value::Null), None);
+    }
 
     #[test]
     fn specs_over_ten_megabytes_download() {

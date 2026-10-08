@@ -174,7 +174,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         .base_url
         .clone()
         .or_else(|| imported.as_ref()?.base_url.clone())
-        .or_else(|| server_url(&doc));
+        .or_else(|| spec::server_url(&doc["servers"]));
     if base_url.is_none() && readable {
         println!(
             "! the spec has no absolute server URL: until you set `base_url`, clients need one passed in or from {}_BASE_URL",
@@ -717,20 +717,6 @@ fn read_spec(spec: &str, root: &Path) -> Result<Value> {
     Ok(serde_json::from_str(&spec::read(spec, root)?)?)
 }
 
-/// The first absolute server URL, its `{variables}` set to their defaults.
-fn server_url(doc: &Value) -> Option<String> {
-    let server = &doc["servers"][0];
-    let mut url = server["url"].as_str()?.to_owned();
-    if let Some(variables) = server["variables"].as_object() {
-        for (name, variable) in variables {
-            if let Some(default) = variable["default"].as_str() {
-                url = url.replace(&format!("{{{name}}}"), default);
-            }
-        }
-    }
-    (url.starts_with("http") && !url.contains('{')).then(|| url.trim_end_matches('/').to_owned())
-}
-
 /// A Java package Maven Central can verify: the reversed domain of the API's homepage, then the
 /// client name, as `com.acme.petstore` for `https://www.acme.com`.
 fn java_package(doc: &Value, name: &str) -> Option<String> {
@@ -824,17 +810,6 @@ mod tests {
         );
         assert_eq!(url("http://proxy@127.0.0.1:8080/git/acme/sdk"), None);
         assert_eq!(url("/tmp/origin.git"), None);
-    }
-
-    #[test]
-    fn server_variables_take_their_defaults() {
-        let doc = serde_json::json!({ "servers": [{
-            "url": "https://{region}.acme.com/{version}/",
-            "variables": { "region": { "default": "eu" }, "version": { "default": "v2" } }
-        }]});
-        assert_eq!(server_url(&doc).as_deref(), Some("https://eu.acme.com/v2"));
-        let relative = serde_json::json!({ "servers": [{ "url": "/v1" }] });
-        assert_eq!(server_url(&relative), None);
     }
 
     #[test]
