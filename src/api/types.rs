@@ -557,7 +557,14 @@ pub(crate) fn declared_tag<'a>(
         return None;
     };
     (tag == target)
-        .then(|| fields.iter().find(|f| f.name == field)?.constant.as_ref()?.as_str())
+        .then(|| {
+            fields
+                .iter()
+                .find(|f| f.name == field)?
+                .constant
+                .as_ref()?
+                .as_str()
+        })
         .flatten()
         .filter(|constant| *constant != tag)
 }
@@ -1597,6 +1604,16 @@ pub(super) fn extract_nullable_variant(variants: &[Schema]) -> Option<&Schema> {
     }
 }
 
+/// The description of `X` in a nullable `anyOf: [X, null]`, which documents the field.
+fn nullable_variant_description(obj: &SchemaObject) -> Option<String> {
+    let subschemas = obj.subschemas.as_ref()?;
+    let variants = subschemas.any_of.as_ref().or(subschemas.one_of.as_ref())?;
+    let Schema::Object(inner) = extract_nullable_variant(variants)? else {
+        return None;
+    };
+    inner.metadata.as_ref()?.description.clone()
+}
+
 /// The type implied by validation keywords when `type` is absent.
 fn implied_type(obj: &SchemaObject) -> Option<InstanceType> {
     if obj.reference.is_some() || obj.const_value.is_some() {
@@ -2091,7 +2108,10 @@ impl Field {
             Schema::Object(o) => o,
         };
         let example = obj.extensions.get("example").cloned();
-        let metadata = obj.metadata.clone().unwrap_or_default();
+        let mut metadata = obj.metadata.clone().unwrap_or_default();
+        if metadata.description.is_none() {
+            metadata.description = nullable_variant_description(&obj);
+        }
         let constant = obj
             .const_value
             .clone()
