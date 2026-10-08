@@ -71,6 +71,16 @@ fn init_keeps_a_title_word_in_mixed_case_one_word() {
     }
     let (ok, out) = perseid(dir.path(), &["generate", "python", "--no-format"]);
     assert!(ok, "{out}");
+    let spec = "openapi: 3.1.0\ninfo: {title: Unions, version: '1'}\npaths: {}\n";
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    fs::remove_file(dir.path().join("perseid.toml")).unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", "python"]);
+    assert!(ok, "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert!(
+        config.contains("[python]\npackage = \"unions_sdk\""),
+        "a suffixed name keeps it: {config}"
+    );
 }
 
 #[test]
