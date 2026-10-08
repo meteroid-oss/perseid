@@ -41,7 +41,13 @@ case "$lang" in
       && perseid init --sdks rust --spec "$here/../fixtures/edge-unions.yaml" > /dev/null \
       && perseid generate rust > /dev/null \
       && mkdir -p rust/tests && cp "$here/rust/unions/"*.rs rust/tests/ \
-      && cd rust && cargo test --test models --test client) ;;
+      && cd rust && cargo test --test models --test client --test approvals)
+    # Union variants sharing a tag, which only Rust and Python send as they declare it so far.
+    (mkdir "$work/tags" && cd "$work/tags" \
+      && perseid init --sdks rust --spec "$here/rust/tags/openapi.yaml" > /dev/null \
+      && perseid generate rust > /dev/null \
+      && mkdir -p rust/tests && cp "$here/rust/tags/tags.rs" rust/tests/ \
+      && cd rust && cargo test --test tags) ;;
   typescript)
     # The tests generate more SDKs themselves (features, torture, realworld and, with
     # `int64 = "bigint"` and `"string"`, the round trips of torture and every edge fixture).

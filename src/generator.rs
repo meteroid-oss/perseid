@@ -254,6 +254,7 @@ impl Generator<'_> {
             let union_refs = ty.union_refs();
             let patch_body = patch_bodies.contains(name.as_str());
             let inherited_fields = ty.inherited_fields(&api.types);
+            let declared_tags = declared_tags(&api.types, ty);
             // Type names, as templates render them, of the schemas `ty` embeds or unites that
             // are not objects (a union, say).
             let non_struct_refs: BTreeSet<String> = ty
@@ -277,6 +278,7 @@ impl Generator<'_> {
                     union_refs,
                     patch_body,
                     inherited_fields,
+                    declared_tags,
                     non_struct_refs,
                     output_dir,
                     type_names => type_names.clone(),
@@ -447,6 +449,32 @@ fn param_types(api: &Api) -> BTreeSet<String> {
         }
     }
     params
+}
+
+/// The tags the variants of the union `ty` declare instead of the one naming them, by the latter:
+/// OpenAI's `InputMessage` variant is sent as `"type": "message"`.
+fn declared_tags<'a>(
+    types: &'a Types,
+    ty: &'a Type,
+) -> std::collections::BTreeMap<&'a str, &'a str> {
+    let TypeData::StructEnum {
+        discriminator_field,
+        repr: StructEnumRepr::InternallyTagged { variants },
+        ..
+    } = &ty.data
+    else {
+        return Default::default();
+    };
+    (variants.iter())
+        .filter_map(|v| match &v.content {
+            EnumVariantType::Ref {
+                schema_ref: Some(target),
+                ..
+            } => types::declared_tag(types, target, discriminator_field, &v.name)
+                .map(|tag| (v.name.as_str(), tag)),
+            _ => None,
+        })
+        .collect()
 }
 
 /// `roots` and every schema they reach.
