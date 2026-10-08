@@ -216,8 +216,8 @@ func TestRetries(t *testing.T) {
 	}
 }
 
-func TestNonIdempotentRequestsAreNotRetried(t *testing.T) {
-	for status, attempts := range map[int]int32{http.StatusBadGateway: 1, http.StatusTooManyRequests: 1} {
+func TestNonIdempotentRequestsAreOnlyRetriedOn429(t *testing.T) {
+	for status, attempts := range map[int]int32{http.StatusBadGateway: 1, http.StatusRequestTimeout: 1, http.StatusTooManyRequests: 3} {
 		client, rec := server(t, func(_ int32, w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("X-Request-Id", "req_1")
 			w.WriteHeader(status)

@@ -501,8 +501,15 @@ async fn header_params_win_over_client_headers() {
 }
 
 #[tokio::test]
-async fn throttled_non_idempotent_requests_are_not_retried() {
+async fn throttled_non_idempotent_requests_are_retried() {
     let origin = Origin::replying(vec![(429, vec![("retry-after-ms", "0")], "slow down")]);
+    origin.client().things().update("t", ThingPatch::new()).await.unwrap();
+    let requests = origin.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].0.starts_with("PATCH "), "{}", requests[1].0);
+    assert_eq!(requests[1].1["torture-retry-count"], "1");
+
+    let origin = Origin::replying(vec![(429, vec![("retry-after-ms", "0")], "slow down"); 3]);
     let error = origin
         .client()
         .things()
@@ -510,7 +517,7 @@ async fn throttled_non_idempotent_requests_are_not_retried() {
         .await
         .unwrap_err();
     assert_eq!(error.kind(), Some(ApiErrorKind::RateLimited));
-    assert_eq!(origin.requests().len(), 1);
+    assert_eq!(origin.requests().len(), 3);
 }
 
 #[tokio::test]
