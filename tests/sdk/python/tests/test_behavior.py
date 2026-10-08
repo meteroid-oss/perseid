@@ -8,6 +8,7 @@ cancellation.
 import asyncio
 import email.utils
 import json
+import logging
 import os
 import re
 import time
@@ -294,6 +295,7 @@ class ErrorTest(unittest.TestCase):
                 error = self.status(httpx.Response(404, json={"error": "gone"}, headers=headers))
                 self.assertIsInstance(error, features.NotFoundError)
                 self.assertEqual(error.request_id, want)
+                self.assertEqual(str(error), 'Error code: 404 - {"error":"gone"}')
                 self.assertEqual(error.headers.get("x-request-id"), headers.get("x-request-id"))
 
     def test_request_id_of_an_error_after_retries(self) -> None:
@@ -543,6 +545,84 @@ class RetryTest(unittest.TestCase):
                     with self.assertRaises(features.APIStatusError):
                         api.errors.retrieve_scenario_status(status)
                 self.assertEqual(len(handler.requests), 1)
+
+
+SECRETS = ("tok", "q-secret", "h-secret", "Bearer", "authorization")
+ITEM_URL = r"https://features\.test/api/v2/items/i1"
+
+
+class LoggingTest(unittest.TestCase):
+    """The `features` logger: each attempt at DEBUG, each retry at INFO, never a credential."""
+
+    def assert_no_secret(self, messages: list[str]) -> None:
+        for message in messages:
+            for secret in SECRETS:
+                self.assertNotIn(secret, message)
+
+    def retrieve(self, api):
+        return api.items.retrieve(
+            "i1", extra_query={"api_key": "q-secret"}, extra_headers={"x-token": "h-secret"}
+        )
+
+    def test_attempts_and_retries_are_logged(self) -> None:
+        handler = Recorder(unavailable(), httpx.Response(200, json=ITEM))
+        with self.assertLogs("features", "DEBUG") as logs, sync_client(handler) as api:
+            self.retrieve(api)
+        self.assertEqual([r.levelname for r in logs.records], ["DEBUG", "INFO", "DEBUG"])
+        messages = [r.getMessage() for r in logs.records]
+        self.assertRegex(messages[0], rf"^GET {ITEM_URL} -> 503 in \d+\.\d{{3}}s \(retry 0\)$")
+        self.assertRegex(messages[1], rf"^Retrying GET {ITEM_URL} in 0\.00s \(retry 1 of 2\)$")
+        self.assertRegex(messages[2], rf"^GET {ITEM_URL} -> 200 in \d+\.\d{{3}}s \(retry 1\)$")
+        self.assert_no_secret(messages)
+
+    def test_info_logs_the_retries_only(self) -> None:
+        handler = Recorder(unavailable(), httpx.Response(200, json=ITEM))
+        with self.assertLogs("features", "INFO") as logs, sync_client(handler) as api:
+            self.retrieve(api)
+        self.assertEqual([r.levelname for r in logs.records], ["INFO"])
+
+    def test_async_attempts_and_connection_errors_are_logged(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused by h-secret")
+
+        async def run() -> None:
+            async with async_client(handler, max_retries=1) as api:
+                with self.assertRaises(features.APIConnectionError):
+                    await self.retrieve(api)
+
+        with self.assertLogs("features", "DEBUG") as logs:
+            asyncio.run(run())
+        messages = [r.getMessage() for r in logs.records]
+        self.assertEqual(len(messages), 3, messages)
+        self.assertRegex(messages[0], rf"^GET {ITEM_URL} -> ConnectError in ")
+        self.assertRegex(messages[1], rf"^Retrying GET {ITEM_URL} in ")
+        self.assert_no_secret(messages)
+
+    def test_the_log_variable_configures_the_logger(self) -> None:
+        logger = logging.getLogger("features")
+        self.addCleanup(setattr, logger, "handlers", [])
+        self.addCleanup(logger.setLevel, logging.NOTSET)
+        cases = [
+            ("debug", logging.DEBUG, 1),
+            ("INFO", logging.INFO, 1),
+            ("verbose", logging.NOTSET, 0),
+            (None, logging.NOTSET, 0),
+        ]
+        for value, level, handlers in cases:
+            with self.subTest(value=value), mock.patch.object(logging.root, "handlers", []):
+                logger.handlers = []
+                logger.setLevel(logging.NOTSET)
+                with mock.patch.dict(os.environ, {"FEATURES_LOG": value or ""}):
+                    features.api.common._setup_logging()
+                self.assertEqual((logger.level, len(logger.handlers)), (level, handlers))
+
+    def test_the_log_variable_keeps_a_configured_logger(self) -> None:
+        logger = logging.getLogger("features")
+        self.addCleanup(logger.setLevel, logging.NOTSET)
+        logger.setLevel(logging.WARNING)
+        with mock.patch.dict(os.environ, {"FEATURES_LOG": "debug"}):
+            features.api.common._setup_logging()
+        self.assertEqual((logger.level, logger.handlers), (logging.WARNING, []))
 
 
 class MiddlewareTest(unittest.TestCase):

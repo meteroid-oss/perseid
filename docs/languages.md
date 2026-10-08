@@ -430,12 +430,25 @@ except APIConnectionError: ...
 | `APIConnectionError`, `APITimeoutError` | No response, or none within the timeout |
 | `APIResponseValidationError` | A 2xx body that does not decode |
 
-The message quotes the start of the body: `Error code: 404 - {"error": ...}`.
+The message quotes the start of the body: `Error code: 404 - {"error": ...}`. `request_id` is
+the `x-request-id` (or `request-id`) header of the response, `None` without one.
 
 ### Raw responses
 
 `client.with_raw_response.customers.retrieve(id)` returns an `APIResponse` with `status_code`,
 `headers`, `request_id` and `parse()`.
+
+### Logging
+
+```sh
+ACME_LOG=debug python app.py
+```
+
+- The `acme` logger, named after the package, records each attempt at DEBUG (method, URL,
+  status or error type, elapsed time, retry count) and each retry at INFO, with its delay.
+- `ACME_LOG=debug` or `info` sets that level, unless the logger already has one, and logs to
+  stderr unless a handler is configured. Without it, records only reach the handlers you set up.
+- Headers, the query string, credentials and bodies are never logged.
 
 ### Models and unions
 
