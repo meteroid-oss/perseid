@@ -47,8 +47,8 @@ async with Async@@CLIENT_NAME@@() as client:
 
 ## Requests
 
-The fields of a JSON or form request body are keyword arguments, next to the query and header
-parameters; path parameters come first{% if with_body %}:
+The fields of a JSON, form or multipart request body are keyword arguments, next to the query and
+header parameters; path parameters come first{% if with_body %}:
 
 ```python
 {{ docs.imports([with_body]) }}{{ docs.call(with_body) }}
@@ -56,8 +56,9 @@ parameters; path parameters come first{% if with_body %}:
 {% else %}.
 {% endif %}
 An optional argument left out is not sent; `None` sends `null` where the API accepts it. An enum
-argument takes the enum or its value as a string. Other bodies (lists, unions, files) are one
-`body` argument.
+argument takes the enum or its value as a string. A model argument also takes its JSON as a
+dict, typed by the model's `...Param` `TypedDict`. Other bodies (lists, unions, binary files) are
+one `body` argument.
 
 Every method also takes, for that request only, `extra_headers=`, `extra_query=`, `extra_body=`
 (merged into the body), `timeout=` and `max_retries=`. These headers, like `default_headers`, win

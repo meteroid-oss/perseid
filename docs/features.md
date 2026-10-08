@@ -146,7 +146,7 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
 | Media type | SDK |
 |---|---|
 | `text/event-stream` response | An event stream: `for await`, `for`, `range`, `Stream`, `Iterable`, `await foreach` |
-| `multipart/form-data` body | A typed `...Body`, with `Upload` files. List fields are one part per item |
+| `multipart/form-data` body | A typed `...Body` (keyword arguments in Python), with `Upload` files. List fields are one part per item |
 | `application/octet-stream` body | Bytes or a stream |
 | Any other media type (`image/png`, `text/plain`...) | Sent as given, with its media type |
 
