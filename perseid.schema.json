@@ -166,6 +166,13 @@
       "default": "openapi.json",
       "type": "string"
     },
+    "targets": {
+      "description": "What perseid writes besides the SDKs, each into one folder of a repository through pull requests: `[targets.docs]`.",
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/TargetTable"
+      }
+    },
     "tests": {
       "description": "`false` leaves out the tests generated with each SDK, one per operation.",
       "type": "boolean"
@@ -211,6 +218,25 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "After": {
+      "description": "When a target's pull request opens.",
+      "oneOf": [
+        {
+          "description": "With the SDK pull requests, in the same run.",
+          "type": "string",
+          "enum": [
+            "generate"
+          ]
+        },
+        {
+          "description": "Once every SDK generated from the current spec is released.",
+          "type": "string",
+          "enum": [
+            "sdks"
+          ]
+        }
+      ]
+    },
     "CSharp": {
       "type": "object",
       "properties": {
@@ -772,6 +798,52 @@
         "webhooks": {
           "description": "Installs the Standard Webhooks signature verifier, over the top-level setting.",
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TargetKind": {
+      "description": "What a target writes.",
+      "oneOf": [
+        {
+          "description": "The spec and `docs-data.json`, for docs sites showing the reader's SDK language.",
+          "type": "string",
+          "enum": [
+            "docs"
+          ]
+        }
+      ]
+    },
+    "TargetTable": {
+      "description": "A `[targets.<name>]` table: what perseid writes besides the SDKs, as pull requests on `repo`.",
+      "type": "object",
+      "required": [
+        "repo"
+      ],
+      "properties": {
+        "after": {
+          "description": "When its pull request opens: once every SDK generated from the current spec is released (`sdks`, the default), or with the SDK pull requests (`generate`).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/After"
+            }
+          ]
+        },
+        "kind": {
+          "description": "What the target writes: the table's name by default, so `[targets.docs]` is a `docs` target. Set it to name the table otherwise, such as two `docs` targets.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/TargetKind"
+            }
+          ]
+        },
+        "path": {
+          "description": "The only folder perseid writes in `repo`, replaced whole: `api` by default.",
+          "type": "string"
+        },
+        "repo": {
+          "description": "`owner/name` of the repository the target writes to.",
+          "type": "string"
         }
       },
       "additionalProperties": false

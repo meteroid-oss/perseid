@@ -1,0 +1,80 @@
+name: Perseid report
+description: Tell the repository holding perseid.toml which SDKs were published, so its targets waiting for the releases follow
+branding:
+  icon: send
+  color: purple
+
+inputs:
+  to:
+    description: The repository holding perseid.toml, `owner/name`
+    required: true
+  tags:
+    description: JSON object of the release tag of each published path, as `meteroid-oss/perseid/release` outputs it
+    default: '{}'
+  app-id:
+    description: ID of a GitHub App installed on `to`, whose token the Action mints with contents write there
+    default: ''
+  app-private-key:
+    description: Private key of the `app-id` App
+    default: ''
+  token:
+    description: >-
+      A token with Contents write on `to`, such as SDK_GITHUB_TOKEN. Without it or `app-id`, the
+      hosted perseid App's when the job has `id-token: write`, else the default token when `to` is
+      this repository
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - id: target
+      shell: bash
+      env:
+        TO: ${{ inputs.to }}
+      run: |
+        echo "owner=${TO%%/*}" >> "$GITHUB_OUTPUT"
+        echo "name=${TO#*/}" >> "$GITHUB_OUTPUT"
+
+    # App installation tokens expire after an hour, so they are minted on each run.
+    - id: app
+      if: inputs.app-id != ''
+      continue-on-error: true
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ steps.target.outputs.owner }}
+        repositories: ${{ steps.target.outputs.name }}
+        permission-contents: write
+
+    - id: hosted
+      if: inputs.app-id == '' && inputs.token == ''
+      shell: bash
+      env:
+        REPOSITORIES: ${{ inputs.to }}
+        OPTIONAL: 'true'
+      run: '"$GITHUB_ACTION_PATH/../hosted-token.sh"'
+
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token || inputs.token || steps.hosted.outputs.token || (inputs.to == github.repository && github.token) || '' }}
+        TO: ${{ inputs.to }}
+        TAGS: ${{ inputs.tags }}
+      run: |
+        if [ -z "$GH_TOKEN" ]; then
+          echo "::notice::No credential reaches $TO, which isn't told of these releases: see https://github.com/meteroid-oss/perseid/blob/main/docs/ci.md#targets"
+          exit 0
+        fi
+        payload=$(jq -c --arg repo "$GITHUB_REPOSITORY" --arg sha "$GITHUB_SHA" '{
+          event_type: "perseid-released",
+          client_payload: {
+            repo: $repo,
+            sha: $sha,
+            releases: (to_entries | map({path: .key, tag: .value, version: (.value | split("/") | last | ltrimstr("v"))}))
+          }
+        }' <<< "$TAGS")
+        if gh api "repos/$TO/dispatches" --input - <<< "$payload" > /dev/null; then
+          echo "Reported $(jq -r '.client_payload.releases | map(.tag) | join(", ")' <<< "$payload") to $TO"
+        else
+          echo "::notice::$TO wasn't told of these releases: the credential can't reach it (Contents write)"
+        fi

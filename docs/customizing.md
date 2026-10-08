@@ -183,6 +183,7 @@ templates included.
   ],
   "languages": {
     "typescript": {
+      "version": null,
       "install": "npm install @acme/sdk",
       "setup": "import { Acme } from \"@acme/sdk\";\n\nconst client = new Acme({ apiKey: process.env.ACME_API_KEY });",
       "operations": {
@@ -201,6 +202,9 @@ templates included.
 ```
 
 - `name` and `base_url` come from `perseid.toml`, `base_url` is `null` without one.
+- `languages` follow the order of `sdks` in `perseid.toml`, for a language switcher.
+- `version` is the released SDK version the data matches. `docs-data` prints `null`; a
+  [docs target](ci.md#targets) fills in the released versions.
 - `resources` groups the operation ids as every SDK does, in order, without language filters.
 - `operations` are keyed by operation id. A `_stream` twin shares the id of its operation and is
   left out.

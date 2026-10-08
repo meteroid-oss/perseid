@@ -213,9 +213,18 @@ fn repository_workflow(path: &str, branch: &str) -> String {
     String::from_utf8_lossy(template).replace("\"@@BRANCH@@\"", &Value::from(branch).to_string())
 }
 
-/// The release workflow of a repository whose default branch is `branch`.
-pub fn release_workflow(branch: &str) -> Vec<u8> {
-    repository_workflow(RELEASE_WORKFLOW, branch).into_bytes()
+/// The job of the release workflow reporting its releases.
+const REPORT_JOB: &str = "\n  # Tells the repository holding perseid.toml";
+
+/// The release workflow of a repository whose default branch is `branch`, reporting its
+/// releases to the repository `report` names.
+pub fn release_workflow(branch: &str, report: Option<&str>) -> Vec<u8> {
+    let text = repository_workflow(RELEASE_WORKFLOW, branch);
+    match report {
+        Some(hub) => text.replace("\"@@HUB@@\"", &Value::from(hub).to_string()),
+        None => text[..text.find(REPORT_JOB).unwrap_or(text.len())].to_owned(),
+    }
+    .into_bytes()
 }
 
 /// The workflow testing the SDKs at `paths` of a repository whose default branch is `branch`: on
@@ -273,7 +282,8 @@ pub fn release_scaffold(
     }
     let mut files = release_files(read, &packages)?;
     if !packages.is_empty() {
-        files.push((RELEASE_WORKFLOW.to_owned(), release_workflow(branch)));
+        let workflow = release_workflow(branch, config.reports_to());
+        files.push((RELEASE_WORKFLOW.to_owned(), workflow));
     }
     Ok(files)
 }
@@ -516,6 +526,46 @@ mod tests {
         let release: Value = serde_json::from_slice(&files[0].1).unwrap();
         assert_eq!(release["packages"]["."]["include-component-in-tag"], false);
         assert_eq!(release["packages"]["."]["component"], "go");
+    }
+
+    #[test]
+    fn release_workflows_report_to_the_repository_holding_perseid_toml_when_targets_wait() {
+        let without = String::from_utf8(release_workflow("main", None)).unwrap();
+        assert!(!without.contains("report"), "{without}");
+        assert!(
+            without.ends_with("nuget-api-key: ${{ secrets.NUGET_API_KEY }}\n"),
+            "{without}"
+        );
+        let with = String::from_utf8(release_workflow("main", Some("acme/api-sdks"))).unwrap();
+        assert!(with.starts_with(&without), "{with}");
+        let job = &with[without.len()..];
+        for line in [
+            "  report:\n    needs: [release, publish]\n",
+            "    if: ${{ !cancelled() && needs.publish.result == 'success' }}\n",
+            "      - uses: meteroid-oss/perseid/report@v0\n",
+            "          to: \"acme/api-sdks\"\n",
+            "          tags: ${{ needs.release.outputs.tags }}\n",
+        ] {
+            assert!(job.contains(line), "{line} in {job}");
+        }
+
+        let workflow = |url: Option<&str>| {
+            let toml = "name = \"A\"\nsdks = [\"go\"]\n[targets.docs]\nrepo = \"acme/docs\"\n";
+            let mut config: Config = toml::from_str(toml).unwrap();
+            config.home.url = url.map(str::to_owned);
+            let sdks = config.sdks(&[]).unwrap();
+            let files = release_scaffold(&config, &[&sdks[0]], "", "main", |_| Ok(None)).unwrap();
+            files
+                .into_iter()
+                .find(|(p, _)| p == RELEASE_WORKFLOW)
+                .unwrap()
+                .1
+        };
+        assert_eq!(workflow(None), release_workflow("main", None));
+        assert_eq!(
+            workflow(Some("https://github.com/acme/api-sdks")),
+            release_workflow("main", Some("acme/api-sdks"))
+        );
     }
 
     #[test]

@@ -22,6 +22,7 @@ pub mod scaffold;
 pub mod sizing;
 pub mod spec;
 mod stainless;
+pub mod targets;
 mod template;
 mod testcases;
 pub mod tools;

@@ -145,6 +145,7 @@ See [repository layouts](docs/ci.md#repository-layouts).
 | `status` | Check the setup: secrets, workflows, last spec pushed, open pull requests, last runs. |
 | `inspect` | Print the model the templates receive, as JSON. |
 | `docs-data` | Print how each SDK names and calls every operation, as JSON for a docs site. See [docs data](docs/customizing.md#docs-data). |
+| `targets` | Write the [targets](docs/ci.md#targets) of `perseid.toml`, such as the spec and docs data of a docs repository. `--out <dir>` previews, `--pr` opens pull requests. |
 | `eject <lang>` | Copy the built-in templates and runtime of a language to `.perseid/` to edit them. |
 | `tools list`, `tools install` | List or download the pinned formatters and oasdiff. |
 

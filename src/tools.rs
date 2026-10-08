@@ -268,8 +268,12 @@ pub fn default_dir() -> Result<PathBuf> {
 
 /// The account and repositories a GitHub App token for the SDKs' pull requests covers: the
 /// account of the SDK repositories, and those of its repositories among `hub` (holding
-/// perseid.toml, first) and the SDK repositories.
-pub fn app_scope(hub: Option<&str>, sdks: &[Sdk]) -> (Option<String>, Vec<String>) {
+/// perseid.toml, first), the SDK repositories and those `targets` write to.
+pub fn app_scope(
+    hub: Option<&str>,
+    sdks: &[Sdk],
+    targets: &[String],
+) -> (Option<String>, Vec<String>) {
     let slug = |repo: &str| -> Option<(String, String)> {
         let repo = repo.trim_end_matches('/').trim_end_matches(".git");
         let mut parts = repo.rsplit(['/', ':']);
@@ -280,6 +284,7 @@ pub fn app_scope(hub: Option<&str>, sdks: &[Sdk]) -> (Option<String>, Vec<String
     let remote: BTreeSet<(String, String)> = sdks
         .iter()
         .filter_map(|s| s.remote())
+        .chain(targets.iter().map(String::as_str))
         .filter(|r| hub.is_none_or(|hub| !same_repo(r, hub)))
         .filter_map(slug)
         .collect();
@@ -372,14 +377,30 @@ mod tests {
         );
         let sdks = split.sdks(&[]).unwrap();
         assert_eq!(
-            app_scope(Some("acme/api-sdks"), &sdks),
+            app_scope(Some("acme/api-sdks"), &sdks, &[]),
             (
                 Some("acme".into()),
                 vec!["api-sdks".into(), "api-go".into(), "api-typescript".into()]
             )
         );
         assert_eq!(
-            app_scope(Some("Elsewhere/api"), &sdks),
+            app_scope(
+                Some("acme/api-sdks"),
+                &sdks,
+                &["acme/docs".into(), "acme/api-go".into()]
+            ),
+            (
+                Some("acme".into()),
+                vec![
+                    "api-sdks".into(),
+                    "api-go".into(),
+                    "api-typescript".into(),
+                    "docs".into()
+                ]
+            )
+        );
+        assert_eq!(
+            app_scope(Some("Elsewhere/api"), &sdks, &[]),
             (
                 Some("acme".into()),
                 vec!["api-go".into(), "api-typescript".into()]
@@ -387,9 +408,12 @@ mod tests {
         );
         let local = config("name = \"Acme\"\nsdks = [\"go\"]\n");
         assert_eq!(
-            app_scope(Some("acme/api"), &local.sdks(&[]).unwrap()),
+            app_scope(Some("acme/api"), &local.sdks(&[]).unwrap(), &[]),
             (Some("acme".into()), vec!["api".into()])
         );
-        assert_eq!(app_scope(None, &local.sdks(&[]).unwrap()), (None, vec![]));
+        assert_eq!(
+            app_scope(None, &local.sdks(&[]).unwrap(), &[]),
+            (None, vec![])
+        );
     }
 }

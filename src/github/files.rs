@@ -59,6 +59,7 @@ pub fn expected(config: &Config, root: &Path) -> Result<Expected> {
         daily: matches!(config.source(), Source::Url(_)).then_some(daily.as_str()),
         requires: spec.as_deref(),
         auto_merge: config.auto_merge == Some(true),
+        releases: config.awaits_releases(),
     });
     let mut files = vec![(layout::SDKS_WORKFLOW.to_owned(), yaml.into_bytes())];
     let local: Vec<&config::Sdk> = sdks.iter().filter(|s| s.local).collect();

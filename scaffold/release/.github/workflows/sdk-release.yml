@@ -68,3 +68,21 @@ jobs:
           gpg-key: ${{ secrets.GPG_SECRET_KEY }}
           gpg-password: ${{ secrets.GPG_SECRET_KEY_PASSWORD }}
           nuget-api-key: ${{ secrets.NUGET_API_KEY }}
+
+  # Tells the repository holding perseid.toml what was published: its targets wait for the releases.
+  report:
+    needs: [release, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      # Lets the default token report to this repository, when it holds perseid.toml.
+      contents: write
+      id-token: write
+    steps:
+      - uses: meteroid-oss/perseid/report@v0
+        with:
+          to: "@@HUB@@"
+          tags: ${{ needs.release.outputs.tags }}
+          app-id: ${{ vars.SDK_APP_ID }}
+          app-private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
+          token: ${{ secrets.SDK_GITHUB_TOKEN }}

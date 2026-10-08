@@ -12,7 +12,7 @@ use perseid::{
     github::{Auth, PushOn},
     init,
     pr::{self, Bump},
-    scaffold, sizing, tools,
+    scaffold, sizing, targets, tools,
 };
 
 /// OpenAPI in, idiomatic SDKs out: Rust, TypeScript, Python, Go, Java and C#.
@@ -128,6 +128,39 @@ enum Command {
         /// Skip formatters.
         #[arg(long)]
         no_format: bool,
+    },
+    /// Write the targets perseid.toml lists besides the SDKs, `[targets.<name>]`: for `docs`, the
+    /// spec and the docs data, in the folder `path` of its repository.
+    Targets {
+        /// Targets to write (default: all).
+        names: Vec<String>,
+        /// OpenAPI document to read, path or URL, over `spec` of perseid.toml.
+        #[arg(long)]
+        spec: Option<String>,
+        /// Write each target under this directory, in a folder named after it, without checking
+        /// out its repository.
+        #[arg(long, conflicts_with = "pr", required_unless_present = "pr")]
+        out: Option<PathBuf>,
+        /// Open or update the pull request of each target whose `after` holds, from
+        /// `perseid/targets/<name>`, as `generate --pr` does after the SDK pull requests.
+        #[arg(long)]
+        pr: bool,
+        /// Release size the pull request asks for (default: sized against the spec the target
+        /// holds).
+        #[arg(
+            long,
+            value_enum,
+            requires = "pr",
+            default_value = "auto",
+            env = "PERSEID_BUMP"
+        )]
+        bump: Bump,
+        /// Count enum values added to responses as minor changes, as `generate` does.
+        #[arg(long, action = ArgAction::Set, default_value_t = true, env = "PERSEID_RELAX_ENUM_ADDITIONS")]
+        relax_enum_additions: bool,
+        /// Enable auto-merge (squash) on each pull request.
+        #[arg(long, requires = "pr", env = "PERSEID_AUTO_MERGE")]
+        auto_merge: bool,
     },
     /// Set up the repositories perseid.toml names, once you agree: install the perseid App on
     /// them, and commit the release workflow to each SDK repository.
@@ -425,6 +458,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             if pr {
                 let base = base_spec.map(|b| cwd.join(b));
+                let asked = bump;
                 let (bump, changelog) = match bump {
                     Bump::Auto => sizing::size(&sizing::Comparison {
                         root: &root,
@@ -450,7 +484,51 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     files.push(root.join(file));
                 }
                 let names: Vec<_> = sdks.iter().map(|s| s.language.to_owned()).collect();
-                deliver(&names, &dirs, &files, &spec, changes, &request)?;
+                let github = pr::Client::default();
+                deliver(&github, &names, &dirs, &files, &spec, changes, &request)?;
+                let targets = config.targets(&[])?;
+                let request = targets::Request {
+                    bump: asked,
+                    relax_enum_additions,
+                    auto_merge,
+                };
+                targets::deliver(&github, &config, &root, &targets, &spec, &request)?;
+            }
+        }
+        Command::Targets {
+            names,
+            spec,
+            out,
+            pr: _,
+            bump,
+            relax_enum_additions,
+            auto_merge,
+        } => {
+            let (config, root) = Config::load(&config_path)?;
+            let spec = generate::load_spec(&config, &root, spec.as_deref())?;
+            let targets = config.targets(&names)?;
+            if targets.is_empty() {
+                println!("no [targets] in {}", config::FILE);
+                return Ok(ExitCode::SUCCESS);
+            }
+            match out {
+                Some(out) => {
+                    let out = cwd.join(out);
+                    let changes = targets::preview(&config, &root, &targets, &spec, &out)?;
+                    let places = (targets.iter())
+                        .map(|t| (t.name.clone(), shown(&out.join(&t.name), &cwd)))
+                        .collect();
+                    println!("{}", generate::summary(&changes, &places));
+                }
+                None => {
+                    let request = targets::Request {
+                        bump,
+                        relax_enum_additions,
+                        auto_merge,
+                    };
+                    let github = pr::Client::default();
+                    targets::deliver(&github, &config, &root, &targets, &spec, &request)?;
+                }
             }
         }
         Command::Eject {
@@ -511,17 +589,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let (config, root) = Config::load(&config_path)?;
             let spec = generate::load_spec(&config, &root, spec.as_deref())?;
             let sdks = config.sdks(&languages)?;
-            // Templates recurse through nested types, as when generating.
-            let data = std::thread::scope(|scope| {
-                std::thread::Builder::new()
-                    .stack_size(64 << 20)
-                    .spawn_scoped(scope, || {
-                        perseid::docs_data::run(&config, &root, &sdks, &spec)
-                    })
-                    .expect("spawning a docs data thread")
-                    .join()
-                    .expect("docs data thread panicked")
-            })?;
+            let data = perseid::docs_data::run(&config, &root, &sdks, &spec, &BTreeMap::new())?;
             let text = serde_json::to_string_pretty(&data)? + "\n";
             match out {
                 Some(out) => std::fs::write(cwd.join(&out), text)
@@ -571,7 +639,9 @@ fn tools_command(config_path: &Path, cwd: &Path, command: Tools) -> Result<()> {
                     .repo()
                     .map(str::to_owned)
                     .or_else(|| std::env::var("GITHUB_REPOSITORY").ok());
-                let (owner, repositories) = tools::app_scope(hub.as_deref(), &config.sdks(&[])?);
+                let written = targets::repos(&config.targets(&[])?);
+                let (owner, repositories) =
+                    tools::app_scope(hub.as_deref(), &config.sdks(&[])?, &written);
                 tools::github_output(&[
                     ("languages", languages.join(" ")),
                     ("owner", owner.unwrap_or_default()),
@@ -646,6 +716,7 @@ struct Request {
 }
 
 fn deliver(
+    github: &pr::Client,
     names: &[String],
     dirs: &[PathBuf],
     files: &[PathBuf],
@@ -653,7 +724,6 @@ fn deliver(
     mut changes: BTreeMap<String, Vec<generate::Change>>,
     request: &Request,
 ) -> Result<()> {
-    let spec: serde_json::Value = serde_json::from_str(spec)?;
     let mut repos: BTreeMap<PathBuf, Delivery> = BTreeMap::new();
     for (name, dir) in names.iter().zip(dirs) {
         let top = pr::toplevel(dir)?;
@@ -680,12 +750,7 @@ fn deliver(
             delivery.files.push(relative.to_string_lossy().into_owned());
         }
     }
-    let api = format!(
-        "{} {}",
-        spec["info"]["title"].as_str().unwrap_or("the API"),
-        spec["info"]["version"].as_str().unwrap_or_default()
-    );
-    let api = api.trim();
+    let api = perseid::targets::api_name(spec);
     let credit = format!(
         "Generated by [perseid](https://github.com/meteroid-oss/perseid){}.",
         request
@@ -714,11 +779,10 @@ fn deliver(
             )
         }
     };
-    let github = pr::Client::default();
     for (repo, mut delivery) in repos {
         let open = |update: &pr::Update, subject: &str, changes| {
             pr::open(
-                &github,
+                github,
                 &repo,
                 update,
                 request.bump,
@@ -734,11 +798,12 @@ fn deliver(
             paths: &dirs,
             files: &delivery.files,
             shared: &[],
+            owned: &[],
         };
         // One pull request per SDK while the update is too large for release-please, and until
         // those opened are merged.
         let split = delivery.splittable()
-            && (pr::splitting(&github, &repo)?
+            && (pr::splitting(github, &repo)?
                 || pr::changed_files(&repo, &whole)? > pr::split_above());
         if split {
             let mut changes = std::mem::take(&mut delivery.changes);
@@ -755,6 +820,7 @@ fn deliver(
                     paths: std::slice::from_ref(dir),
                     files: &delivery.files_under(dir),
                     shared: &shared,
+                    owned: &[],
                 };
                 let changes = changes
                     .remove(name)
@@ -765,7 +831,7 @@ fn deliver(
                     Some(pull) => pulls.push(pull),
                     None => {
                         println!("{}: nothing to update in {dir}", repo.display());
-                        pr::close_stale(&github, &repo, &branch)?;
+                        pr::close_stale(github, &repo, &branch)?;
                     }
                 }
             }
@@ -776,10 +842,11 @@ fn deliver(
                     paths: &[],
                     files: &shared,
                     shared: &[],
+                    owned: &[],
                 };
                 pulls.extend(open(&update, &format!("update SDKs to {api}"), changes)?);
             } else {
-                pr::close_superseded(&github, &repo, &pulls)?;
+                pr::close_superseded(github, &repo, &pulls)?;
             }
         } else {
             let changes = std::mem::take(&mut delivery.changes);
@@ -791,10 +858,10 @@ fn deliver(
         for pull in &pulls {
             println!("{}", pull.url);
             if request.auto_merge {
-                pr::auto_merge(&github, pull)?;
+                pr::auto_merge(github, pull)?;
             }
             if request.hub.as_ref() == Some(&repo) {
-                pr::dispatch(&github, pull, &request.dispatch)?;
+                pr::dispatch(github, pull, &request.dispatch)?;
             }
         }
     }

@@ -238,6 +238,8 @@ pub struct Workflow<'a> {
     pub requires: Option<&'a str>,
     /// Enables auto-merge on the pull requests.
     pub auto_merge: bool,
+    /// Also runs when an SDK release workflow reports a release, for the targets waiting on them.
+    pub releases: bool,
 }
 
 /// `meteroid-oss/perseid`, or its `action` folder, at the tag of this binary's release line:
@@ -253,6 +255,10 @@ pub fn uses(action: &str) -> String {
         action => format!("meteroid-oss/perseid/{action}@{tag}"),
     }
 }
+
+/// The `repository_dispatch` event the SDK release workflows send to the repository holding
+/// perseid.toml once they published.
+pub const RELEASED: &str = "perseid-released";
 
 pub fn workflow(w: &Workflow) -> String {
     let paths = serde_json::to_string(w.paths).unwrap_or_default();
@@ -272,6 +278,10 @@ pub fn workflow(w: &Workflow) -> String {
         "" => String::new(),
         dir => format!("          working-directory: {dir}\n"),
     };
+    let releases = match w.releases {
+        true => format!("  repository_dispatch:\n    types: [{RELEASED}]\n"),
+        false => String::new(),
+    };
     let auto_merge = if w.auto_merge {
         "          auto-merge: true\n"
     } else {
@@ -286,7 +296,7 @@ on:
     branches: [{branch:?}]
     paths: {paths}
 {schedule}  workflow_dispatch:
-
+{releases}
 permissions:
   contents: read
   id-token: write
@@ -409,6 +419,7 @@ mod tests {
             daily: None,
             requires: None,
             auto_merge: false,
+            releases: false,
         });
         assert!(
             yaml.contains("paths: [\"api/openapi.json\",\"api/perseid.toml\"]"),
@@ -441,6 +452,7 @@ mod tests {
             daily: Some("acme/api-sdks"),
             requires: Some("openapi.json"),
             auto_merge: false,
+            releases: false,
         });
         assert!(yaml.contains("  schedule:\n    - cron: '"), "{yaml}");
         assert!(
@@ -465,6 +477,35 @@ mod tests {
     }
 
     #[test]
+    fn targets_waiting_for_releases_run_the_workflow_on_their_reports() {
+        let paths = ["openapi.json".to_owned()];
+        let yaml = |releases| {
+            workflow(&Workflow {
+                branch: "main",
+                paths: &paths,
+                dir: "",
+                daily: None,
+                requires: None,
+                auto_merge: false,
+                releases,
+            })
+        };
+        assert!(!yaml(false).contains("repository_dispatch"));
+        let report = include_str!("../../report/action.yml");
+        assert!(
+            report.contains(&format!("event_type: \"{RELEASED}\"")),
+            "{report}"
+        );
+        assert!(
+            yaml(true).contains(
+                "  workflow_dispatch:\n  repository_dispatch:\n    types: [perseid-released]\n\npermissions:"
+            ),
+            "{}",
+            yaml(true)
+        );
+    }
+
+    #[test]
     fn auto_merge_is_written_into_the_workflow() {
         let paths = ["openapi.json".to_owned()];
         let yaml = workflow(&Workflow {
@@ -474,6 +515,7 @@ mod tests {
             daily: None,
             requires: None,
             auto_merge: true,
+            releases: false,
         });
         assert!(
             yaml.ends_with(

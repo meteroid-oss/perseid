@@ -61,6 +61,11 @@ package = "@acme/sdk"
 int64 = "bigint"
 [go]
 repo = "acme/acme-golang"           # its own repository name, over the top-level `repo`
+
+[targets.docs]                      # besides the SDKs: the spec and docs data of a docs site
+repo = "acme/docs"                  # the repository it writes to, through pull requests
+path = "api"                        # the only folder perseid writes there, replaced whole
+after = "sdks"                      # once every SDK is released, or "generate": with the SDK PRs
 ```
 
 ## Editor completion
@@ -102,6 +107,36 @@ See [repository layouts](ci.md#repository-layouts) for the trade-offs.
 
 `{lang}` is the language as `sdks` names it. `perseid init` writes the release files for SDKs
 kept next to `perseid.toml`. The first pull request in each SDK repository carries them.
+
+## Targets
+
+A `[targets.<name>]` table makes perseid write something besides the SDKs, into one folder of a
+repository, through a pull request like those of the SDKs. See [targets](ci.md#targets) for the
+flow.
+
+| Key | Default | Description |
+|---|---|---|
+| `repo` | required | `owner/name` of the repository the target writes to |
+| `path` | `"api"` | The only folder perseid writes in `repo`. It owns it: files it no longer writes there are deleted. Nothing outside it is touched |
+| `after` | `"sdks"` | `"sdks"`: the pull request opens once every SDK generated from the current spec is released, with their versions. `"generate"`: with the SDK pull requests, in the same run |
+| `kind` | the table's name | What the target writes |
+
+The table's name is its kind, so `[targets.docs]` is a `docs` target. `kind` names it otherwise,
+for two targets of a kind:
+
+```toml
+[targets.public-docs]
+kind = "docs"
+repo = "acme/website"
+path = "reference/api"
+```
+
+| Kind | Writes in `path` |
+|---|---|
+| `docs` | `openapi.json`, the spec as perseid read it; `docs-data.json`, what [`perseid docs-data`](customizing.md#docs-data) prints for every SDK, with the `version` of each released SDK; `.gitattributes`, marking both as generated so GitHub collapses their diffs |
+
+Other kinds will take keys of their own in the same table. A name or `kind` perseid doesn't know
+is an error. `after = "sdks"` needs the release workflows, so it can't go with `release = false`.
 
 ## SDK defaults
 

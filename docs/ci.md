@@ -12,6 +12,8 @@ where they live (`repo`) and the spec they come from (`spec`).
 | [A separate SDKs repository](#a-separate-sdks-repository) | The API repository must grant nothing else | in the SDKs repository |
 | [A spec at a URL](#a-spec-at-a-url) | The spec is served, not committed | `spec = "https://..."` |
 
+[Targets](#targets) add repositories perseid writes one folder of, such as a docs site's.
+
 perseid never creates repositories. Create the ones `repo` names with `gh repo create`.
 `perseid init` and `perseid status` print the commands.
 
@@ -100,6 +102,7 @@ setup:
 | `sdks.yml`, `sdk-release.yml` | the repository holding `perseid.toml`, each SDK repository | those repositories: contents, pull requests |
 | `sdk-ci.yml` | the repository holding `perseid.toml`, each SDK repository | its own commit statuses |
 | `perseid-push.yml` | the API repository | the SDKs repository: contents |
+| the report job of `sdk-release.yml`, with [targets](#targets) waiting for releases | each SDK repository | the repository holding `perseid.toml`: a `repository_dispatch` event |
 | the publish job of `sdk-release.yml` | the SDK repository, `release` environment | the registries, with [trusted publishing](#publishing) or a registry token |
 
 No credential writes workflow files: `perseid init` and `perseid sync` write them with your own
@@ -150,8 +153,9 @@ pull request.
 Run it in the repository holding `perseid.toml`, after `init` and after adding an SDK. It compares
 GitHub with `perseid.toml`, prints the plan and applies it once you agree:
 
-1. The perseid App, on the repository holding `perseid.toml` and every SDK repository. It opens
-   the App's installation page with them selected, then checks the installation covers them.
+1. The perseid App, on the repository holding `perseid.toml`, every SDK repository and the
+   repositories of the [targets](#targets). It opens the App's installation page with them
+   selected, then checks the installation covers them.
    Skipped when they have `SDK_GITHUB_TOKEN`, or your own App (`SDK_APP_ID`), which `perseid app`
    manages.
 2. `sdk-ci.yml` and `sdk-release.yml` in each SDK repository, committed with your credentials to
@@ -175,7 +179,7 @@ change them. Pin it if you prefer, and let Dependabot's `github-actions` updates
 | none | Writes the SDKs where `perseid.toml` says, and prints where each one went |
 | `--out <dir>` | Writes every SDK to `<dir>/<language>`, without cloning anything |
 | `--check` | Fails when the SDKs differ from what the spec gives. With `--out`, compares against that directory |
-| `--pr` | Commits the SDKs and opens pull requests, see [the Action](#github-action) |
+| `--pr` | Commits the SDKs and opens pull requests, see [the Action](#github-action), then those of the [targets](#targets) |
 | `--spec <path\|url>` | Reads another spec |
 | `--no-format` | Skips the formatters |
 
@@ -579,13 +583,15 @@ folder, such as `api/go/v0.4.0`, as the module proxy expects.
 Versions already on the registry are skipped, so re-running a failed job is safe. `perseid init`
 prints what each registry needs before the first release.
 
-`sdk-release.yml` has two jobs, skipped in forks:
+`sdk-release.yml` has two jobs, skipped in forks, and a third with [targets](#targets) waiting
+for releases:
 
 - `release` runs `meteroid-oss/perseid/release` on pushes to the default branch. It runs
   release-please and outputs the paths of the released packages.
 - `publish` runs `meteroid-oss/perseid/publish` once per released path, in the `release`
-  environment. It is the only job with an OIDC token (`id-token: write`). Registries trust this
-  file name and this environment, so keep both.
+  environment. Registries trust this file name and this environment, so keep both.
+- `report` runs `meteroid-oss/perseid/report` once every path is published: it tells the
+  repository holding `perseid.toml`, so its targets follow.
 
 Notes:
 
@@ -624,6 +630,105 @@ needs:
   required commit status (see [the default `GITHUB_TOKEN`](#the-default-github_token));
 - `SDK_GITHUB_TOKEN` or the App for both `sdks.yml` and `sdk-release.yml`. A merge made with the
   default `GITHUB_TOKEN` triggers no workflow, so nothing would be released.
+
+## Targets
+
+A `[targets.<name>]` table ([keys](configuration.md#targets)) makes perseid write into the folder
+`path` of the repository `repo`, through a pull request from `perseid/targets/<name>`. A `docs`
+target writes the spec and the [docs data](customizing.md#docs-data) of every SDK there, for a
+docs site that shows the API in the reader's SDK language:
+
+```toml
+[targets.docs]
+repo = "acme/docs"
+path = "api"     # the default
+after = "sdks"   # the default
+```
+
+```
+acme/api ──spec──▶ acme/api-sdks ──PRs──▶ acme/api-typescript, acme/api-python
+                         ▲                       │ released
+                         └──── perseid-released ─┘
+acme/api-sdks ──PR──▶ acme/docs (api/)
+```
+
+perseid owns `path`: each pull request replaces the folder whole, deleting the files it no longer
+writes, and changes nothing outside it. The repository needs no setup beyond the App, or token,
+of `sdks.yml` reaching it: `perseid sync` installs the perseid App there, and `perseid status`
+reports a target repository it can't reach.
+
+### `after`
+
+- `after = "generate"`: `generate --pr` opens or updates the target's pull request right after
+  the SDK pull requests. `version` is `null` in `docs-data.json` for an SDK that run changes.
+- `after = "sdks"`: the pull request opens once every SDK generated from the current spec is
+  released, and `docs-data.json` holds the `version` of each.
+
+With `after = "sdks"`:
+
+1. `sdks.yml` opens the SDK pull requests of a new spec, as without targets.
+2. Each SDK repository's `sdk-release.yml` releases and publishes the SDK once its pull request
+   is merged, then its `report` job sends a `perseid-released` `repository_dispatch` event to the
+   repository holding `perseid.toml`, with `{repo, sha, releases: [{path, tag, version}]}`.
+3. `sdks.yml` runs on that event as on a spec change: `generate --pr`, which changes nothing in
+   SDKs already up to date, then the targets. Once every SDK is released, the target's pull
+   request opens.
+
+A spec change that leaves every SDK as it is opens the target's pull request in the run of the
+spec change. Each run decides anew, so a missed event only delays the pull request until the
+next run, and a run with nothing new changes nothing.
+
+`perseid init` adds the `repository_dispatch` trigger to `sdks.yml`, and `perseid init` and
+`perseid sync` add the `report` job to `sdk-release.yml`, once a target waits for releases. Run
+both after adding one.
+
+### When an SDK is released
+
+`generate` records a digest of the files it generates in `.perseid/generation.json`, in each
+SDK's folder, rewritten only along with them. An SDK is released when, in its repository:
+
+- no `perseid/update` or `perseid/update-<language>` pull request is open;
+- its `.perseid/generation.json` on the default branch is the one at its latest release tag, the
+  tag of the version `.release-please-manifest.json` holds, as `release-please-config.json`
+  names it.
+
+Since every run regenerates from the current spec first, an SDK the spec change doesn't touch
+stays released, without a pull request or a release. A digest of the spec would need a pull
+request and a release of every SDK on each spec change to record it. SDKs generated before
+perseid recorded it count as released until their next change.
+
+### The pull request
+
+- Its title is a conventional commit sized like an SDK pull request's, comparing the spec with the
+  `openapi.json` already in `path`: `feat(api): update the API reference to Acme 1.2.0`.
+- Its description lists the files changed, the API changes, the version of each SDK and where
+  the spec comes from.
+- `auto-merge: true` enables auto-merge on it as on the SDK pull requests.
+
+### Credentials of the report
+
+`meteroid-oss/perseid/report` sends the event with the first credential it finds:
+
+| Credential | Notes |
+|---|---|
+| `SDK_APP_ID` variable, `SDK_APP_PRIVATE_KEY` secret | A token of your App, minted for the repository holding `perseid.toml`, where it must be installed |
+| `SDK_GITHUB_TOKEN` secret | It needs Contents write on the repository holding `perseid.toml` |
+| The perseid App | Installed on both repositories |
+| The default token | When the SDKs live in the repository holding `perseid.toml` |
+
+Without one reaching that repository, the job leaves a notice and succeeds: the targets wait for
+the next run of `sdks.yml`.
+
+### `perseid targets`
+
+`perseid targets` writes the targets on their own. Names after the command limit it to those.
+
+| Flag | Effect |
+|---|---|
+| `--out <dir>` | Writes each target to `<dir>/<name>`, without cloning its repository. `version` is `null` |
+| `--pr` | Opens or updates the pull request of each target whose `after` holds, as `generate --pr` does after the SDK pull requests |
+| `--spec <path\|url>` | Reads another spec |
+| `--bump`, `--auto-merge`, `--relax-enum-additions` | As for `generate --pr` |
 
 ## Formatting
 

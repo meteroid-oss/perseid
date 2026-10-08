@@ -296,7 +296,10 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
         .filter_map(|s| s.remote().map(str::to_owned))
         .collect();
     let local_sdks = sdks.iter().any(|s| s.local);
+    let targets = hub.config.targets(&[])?;
     plan.targets = layout::targets(&sdks, &hub.repo);
+    plan.targets
+        .extend(targets.iter().map(|t| format!("{} ({}/)", t.repo, t.path)));
     let hub_owner = owner_of(&hub.repo).to_owned();
     let owner = remote
         .first()
@@ -330,6 +333,27 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
         ));
         plan.attention = true;
     }
+    let mut written = Vec::new();
+    for repo in crate::targets::repos(&targets) {
+        if repos.iter().any(|r| same(r, &repo)) {
+            continue;
+        }
+        if !same(owner_of(&repo), &owner) {
+            bail!(
+                "{repo}, which a target writes to, isn't owned by {owner}: one token covers the repositories of a single account"
+            );
+        }
+        match api.find(&format!("/repos/{repo}"))? {
+            Some(_) => written.push(repo),
+            None => {
+                plan.warnings.push(format!(
+                    "{repo}, which a target writes to, doesn't exist or this token can't see it: create it, perseid writes only the `path` of its target there"
+                ));
+                plan.attention = true;
+            }
+        }
+    }
+    let reached: Vec<String> = repos.iter().chain(&written).cloned().collect();
     let hub_base = default_branch(&hub.info);
     let app_set = hub.info.is_some()
         && secrets::variable(api, &hub.repo, "SDK_APP_ID")
@@ -338,7 +362,7 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
             .is_some();
     if cx.app || app_set {
         plan.app = true;
-        let installed: Vec<String> = repos
+        let installed: Vec<String> = reached
             .iter()
             .filter(|r| same(owner_of(r), &owner))
             .cloned()
@@ -353,13 +377,23 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
         }
         let name = hub.config.name.to_kebab_case();
         plan_app(cx, plan, &hub.repo, repos.clone(), installed, who, name)?;
+        if !written.is_empty() {
+            plan.warnings.push(format!(
+                "install your GitHub App on {} too: the targets' pull requests are opened as it",
+                written.join(", ")
+            ));
+        }
     } else if repos
         .iter()
         .all(|r| secrets::has_secret(api, r, TOKEN).unwrap_or(false))
     {
+        let also = match written.is_empty() {
+            true => String::new(),
+            false => format!(", which must also reach {}", written.join(", ")),
+        };
         plan.add(
             Mark::Keep,
-            format!("{}: {TOKEN} set", repos.join(", ")),
+            format!("{}: {TOKEN} set{also}", repos.join(", ")),
             None,
         );
     } else {
@@ -369,10 +403,11 @@ fn plan_hub(cx: &Session, plan: &mut Plan, hub: Hub, here_info: &Value) -> Resul
                 hub.repo
             );
         }
-        plan_hosted(api, plan, &owner, &repos)?;
+        plan_hosted(api, plan, &owner, &reached)?;
     }
     let release = hub.config.release != Some(false);
-    plan_repository_workflows(api, plan, &sdks, &repos, release)?;
+    let report = hub.config.reports_to();
+    plan_repository_workflows(api, plan, &sdks, &repos, release, report)?;
     let expected = super::files::expected(&hub.config, &hub.local.1)?;
     if expected.branch != hub_base {
         plan.warnings.push(format!(
@@ -468,6 +503,7 @@ fn plan_repository_workflows(
     sdks: &[crate::config::Sdk],
     repos: &[String],
     release: bool,
+    report: Option<&str>,
 ) -> Result<()> {
     for repo in repos {
         let paths: Vec<String> = sdks
@@ -482,7 +518,10 @@ fn plan_repository_workflows(
         let base = bootstrap::default_branch(&info);
         let mut workflows = vec![(CI_WORKFLOW, crate::scaffold::ci_workflow(&base, &paths))];
         if release {
-            workflows.push((RELEASE_WORKFLOW, crate::scaffold::release_workflow(&base)));
+            workflows.push((
+                RELEASE_WORKFLOW,
+                crate::scaffold::release_workflow(&base, report),
+            ));
         }
         let mut changed = Vec::new();
         for (path, expected) in workflows {

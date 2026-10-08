@@ -358,7 +358,14 @@ fn next_steps(config: &Config, root: &Path) {
     };
     let sdks = config.sdks(&[]).unwrap_or_default();
     let remote: BTreeSet<&str> = sdks.iter().filter_map(|s| s.remote()).collect();
-    let repos: Vec<&str> = std::iter::once(hub).chain(remote.iter().copied()).collect();
+    let written = crate::targets::repos(&config.targets(&[]).unwrap_or_default());
+    let written: Vec<&str> = (written.iter().map(String::as_str))
+        .filter(|r| *r != hub && !remote.contains(r))
+        .collect();
+    let repos: Vec<&str> = std::iter::once(hub)
+        .chain(remote.iter().copied())
+        .chain(written.iter().copied())
+        .collect();
     let mut steps = vec![match awaited {
         Some(_) => {
             "Preview the SDKs from any spec: `perseid generate --spec <path|url> --out /tmp/sdks`"

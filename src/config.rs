@@ -125,6 +125,10 @@ pub struct Config {
     #[serde(default, deserialize_with = "target::<CSharp, _>")]
     #[schemars(with = "Option<CSharp>")]
     pub csharp: Option<Target>,
+    /// What perseid writes besides the SDKs, each into one folder of a repository through pull
+    /// requests: `[targets.docs]`.
+    #[serde(default)]
+    pub targets: BTreeMap<String, TargetTable>,
     #[serde(skip)]
     pub home: Home,
 }
@@ -207,6 +211,51 @@ impl Language {
     pub fn name(self) -> &'static str {
         LANGUAGES[self as usize]
     }
+}
+
+/// A `[targets.<name>]` table: what perseid writes besides the SDKs, as pull requests on `repo`.
+#[derive(Clone, Debug, Deserialize, JsonSchema, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct TargetTable {
+    /// What the target writes: the table's name by default, so `[targets.docs]` is a `docs`
+    /// target. Set it to name the table otherwise, such as two `docs` targets.
+    pub kind: Option<TargetKind>,
+    /// `owner/name` of the repository the target writes to.
+    pub repo: String,
+    /// The only folder perseid writes in `repo`, replaced whole: `api` by default.
+    pub path: Option<String>,
+    /// When its pull request opens: once every SDK generated from the current spec is released
+    /// (`sdks`, the default), or with the SDK pull requests (`generate`).
+    pub after: Option<After>,
+}
+
+/// What a target writes.
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TargetKind {
+    /// The spec and `docs-data.json`, for docs sites showing the reader's SDK language.
+    Docs,
+}
+
+impl TargetKind {
+    pub const ALL: [TargetKind; 1] = [TargetKind::Docs];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            TargetKind::Docs => "docs",
+        }
+    }
+}
+
+/// When a target's pull request opens.
+#[derive(Clone, Copy, Debug, Default, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum After {
+    /// With the SDK pull requests, in the same run.
+    Generate,
+    /// Once every SDK generated from the current spec is released.
+    #[default]
+    Sdks,
 }
 
 fn default_spec() -> String {
@@ -557,14 +606,47 @@ impl Config {
             !self.internal || self.only.is_empty(),
             "`only` lists every operation generated: `internal` can't add any, delete it"
         );
+        for target in self.targets(&[])? {
+            ensure!(
+                target.after == After::Generate || self.release != Some(false),
+                "[targets.{}] waits for the SDK releases (`after = \"sdks\"`), which `release = false` leaves to you: set `after = \"generate\"`",
+                target.name
+            );
+        }
         Ok(())
+    }
+
+    /// The `[targets]` named `selected`, or all of them.
+    pub fn targets(&self, selected: &[String]) -> Result<Vec<crate::targets::Target>> {
+        for name in selected {
+            ensure!(
+                self.targets.contains_key(name),
+                "no [targets.{name}] in {FILE}"
+            );
+        }
+        self.targets
+            .iter()
+            .filter(|(name, _)| selected.is_empty() || selected.contains(name))
+            .map(|(name, table)| crate::targets::Target::of(name, table))
+            .collect()
+    }
+
+    /// Whether a target waits for the SDK releases, which the release workflows then report.
+    pub fn awaits_releases(&self) -> bool {
+        (self.targets.values()).any(|t| t.after.unwrap_or_default() == After::Sdks)
+    }
+
+    /// The repository the SDK release workflows report their releases to: the one holding
+    /// perseid.toml, when a target waits for them.
+    pub fn reports_to(&self) -> Option<&str> {
+        self.home.repo().filter(|_| self.awaits_releases())
     }
 
     /// The language tables, checked against `sdks`.
     fn listed(&self) -> Result<()> {
         let tables: Vec<&str> = LANGUAGES
             .into_iter()
-            .zip(self.targets())
+            .zip(self.tables())
             .filter_map(|(language, target)| target.as_ref().map(|_| language))
             .collect();
         if self.sdks.is_empty() {
@@ -590,7 +672,7 @@ impl Config {
         Ok(())
     }
 
-    fn targets(&self) -> [&Option<Target>; 6] {
+    fn tables(&self) -> [&Option<Target>; 6] {
         [
             &self.rust,
             &self.typescript,
@@ -642,7 +724,7 @@ impl Config {
         self.listed()?;
         let all: Vec<_> = LANGUAGES
             .into_iter()
-            .zip(self.targets())
+            .zip(self.tables())
             .filter(|(language, _)| self.sdks.iter().any(|l| l.name() == *language))
             .map(|(language, target)| {
                 let target = target.as_ref().unwrap_or(&DEFAULT_TARGET);
