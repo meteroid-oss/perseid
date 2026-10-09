@@ -656,7 +656,12 @@ Acme client = new Acme(AcmeOptions.builder()
 ```
 
 - `AcmeOptions` is immutable. Its builder also takes `baseUrl`, `header`, `retrySchedule`,
-  `debug`, `httpClient(OkHttpClient)` and `addInterceptor`.
+  `debug`, `proxy(java.net.Proxy)`, `httpClient(OkHttpClient)` and `addInterceptor`.
+- Without `proxy` or `httpClient`, the client goes through the proxy of `HTTPS_PROXY`,
+  `HTTP_PROXY` or `ALL_PROXY` (or their lowercase names), read when it is built: an `http://`
+  proxy, with the URL's credentials, tunnelling HTTPS, or `socks5://`. Hosts, domains with their
+  subdomains, IPs and networks listed in `NO_PROXY` connect directly. Without these variables,
+  the JVM's proxy settings apply.
 - Credentials: `tokenProvider`, `clientCredentials(id, secret)`, `clientAuthInBody`,
   `basicAuth`, `putApiKey`.
 - The base URL defaults to `ACME_BASE_URL`, then `Acme.DEFAULT_BASE_URL`. Without either, the
@@ -676,6 +681,11 @@ var customer = client.customers().retrieve("cus_1",
 - Every method has an overload taking `RequestOptions` last.
 - `client.async()` has the same methods, returning `CompletableFuture`s.
 - An operation that may answer a bodiless 2xx returns an `Optional`.
+- Files are `Upload`s: `Upload.of(Path.of("a.mp3"))` is named after the file and typed by its
+  extension; `Upload.of(bytes)`, `of(File)` and `of(InputStream, length)` take `withFilename` and
+  `withContentType`. Input streams are not retried.
+- The `...Stream` twin of an operation whose body has a `stream` flag sends it as `true`: on a
+  copy of a JSON body, and in place of the property a form body's builder leaves out.
 
 ### Pagination
 
@@ -702,12 +712,16 @@ try (var events = client.completions().createStream(request)) {
 
 Event streams are `EventStream<Chunk>`s, ending at `[DONE]`, with `lastEvent()` for the raw event.
 
+- An `error` event, or an unnamed one whose data is an object with an `error`, ends the stream
+  with an `ApiException` holding that data and the response's status and headers.
+- Comments, `ping` and `keepalive` events are skipped.
+
 ### Errors
 
 | Exception | When |
 |---|---|
 | `AcmeException` | Base of every exception, all unchecked |
-| `ApiException` | Error response: `statusCode()`, `headers()`, `body()`, `requestId()`, `error()` (the body parsed into the status's error schema, else a `JsonNode`), `error(Type.class)` |
+| `ApiException` | Error response: `statusCode()`, `headers()`, `body()`, `requestId()`, `error()` (the body parsed into the status's error schema, else a `JsonNode`), `error(Type.class)`. Its message gives the body's `error.message`, `message` or `detail` string, else the body: `POST /charges failed with status 429: Slow down` |
 | `BadRequestException`, `AuthenticationException`, `PermissionDeniedException`, `NotFoundException`, `ConflictException`, `UnprocessableEntityException`, `RateLimitException`, `InternalServerException` | Subclasses by status |
 | `ApiConnectionException`, `ApiTimeoutException` | No response, or none within the timeout |
 | `InvalidDataException` | A response that is not what the API describes, such as a missing required property, thrown by its getter |
@@ -721,6 +735,10 @@ Event streams are `EventStream<Chunk>`s, ending at `[DONE]`, with `lastEvent()` 
 
 - Models are immutable final classes: `Customer.builder()...build()` throws on a missing required
   property, and `toBuilder()` changes a copy.
+- Builders add to lists and maps one item at a time (`addTagsItem`, `putMetadataItem`). A union
+  property also has a setter per variant type, as far as Java overloads tell them apart
+  (`content("hi")`, `content(List.of(part))`), and an open enum one a `String` setter
+  (`model("gpt-4o")`). Nullable properties have neither, so `x(null)` still sends `null`.
 - Required properties are read directly, others as `Optional`s.
 - For an optional nullable property, `x(null)` sends `null` and leaving it unset omits it.
 - Unknown properties are kept in `additionalProperties()`.
@@ -732,6 +750,9 @@ Event streams are `EventStream<Chunk>`s, ending at `[DONE]`, with `lastEvent()` 
   a value as another variant.
 - `accept(Visitor<R>)` has a `visitX` per variant. `visitUnknown` throws `InvalidDataException`
   unless overridden.
+- Variants declaring the same tag, as OpenAI's three `message` input items, are sent with it,
+  and decoded as the one that has the data's required properties and knows the most of the
+  others, else as the variant the tag names.
 
 ### Notes
 

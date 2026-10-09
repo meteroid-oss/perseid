@@ -187,6 +187,25 @@ private {{ stored_type(field, union_cls) }} {{ var }}{{ initializer(field, ty, d
     this.{{ var }} = {{ "JsonField.ofNullable(" ~ value ~ ")" if k == "tri" else value }};
     return this;
 }
+{#- Shortcuts, one per type Java can tell apart, unless `x(null)` must stay unambiguous. -#}
+{% if k in ["required", "optional"] and union_cls and field.type.is_union() -%}
+{% set pascals = union_pascals(field.type, union_cls) | split(" ") | list -%}
+{% set seen = namespace(erasures=[union_cls]) -%}
+{% for v in field.type.union_variants() -%}
+{% set t = java_type(v.type) -%}
+{% set erasure = t | split("<") | first -%}
+{% if not v.empty and erasure not in seen.erasures and erasure != "Object" -%}
+{% set seen.erasures = seen.erasures + [erasure] %}
+{{ field_doc(field, "@param " ~ var ~ " the value\n@return this builder", "Sets {@code " ~ html(field.name) ~ "} to the {@code " ~ html(v.name) ~ "} variant.") }}public {{ builder }} {{ var }}({{ t }} {{ var }}) {
+    return {{ var }}({{ union_cls }}.of{{ pascals[loop.index0] }}({{ var }}));
+}
+{% endif -%}
+{% endfor -%}
+{% elif k in ["required", "optional"] and field.type.is_schema_ref() and field.type.to_java() in open_enums %}
+{{ field_doc(field, "@param " ~ var ~ " the value, known to this version of the SDK or not\n@return this builder") }}public {{ builder }} {{ var }}(String {{ var }}) {
+    return {{ var }}({{ ty }}.of({{ var }}));
+}
+{% endif -%}
 {% if c %}
 {% set item_ty = java_type(field.type.value_type() if c == "Map" else field.type.inner_type(), union_cls) -%}
 {% set empty = "new LinkedHashMap<>()" if c == "Map" else ("new LinkedHashSet<>()" if c == "Set" else "new ArrayList<>()") -%}
@@ -459,6 +478,19 @@ public String toString() {
 {%- endif -%}
 {%- endmacro %}
 
+{#- The names of the variants of the union `ty`, rendered as the `cls` class, in its `of...`
+    factories. A variant named after its union drops that prefix (`OfObject`), keeping nested
+    class files under the 255-byte file name limit. -#}
+{% macro union_pascals(ty, cls) -%}
+{% set full = ty.union_variants() | map(attribute="name") | list | idents("pascal", "java", "union `" ~ cls ~ "`") -%}
+{% set short = namespace(list=[]) -%}
+{% for p in full -%}
+{% set rest = p[cls | length:] if p is startingwith(cls) and p | length > cls | length else p -%}
+{% set short.list = short.list + [rest] -%}
+{% endfor -%}
+{{ (short.list if short.list | unique | list | length == full | length else full) | join(" ") }}
+{%- endmacro %}
+
 {#- The `cls` class of the union in `ty`: one subclass per variant, told apart by JSON type, or
     by trying them in order when some share a JSON type. -#}
 {% macro union_class(ty, cls, shadowed=[]) -%}
@@ -469,15 +501,7 @@ public String toString() {
 {%- else -%}
 {% set variants = ty.union_variants() -%}
 {% set objects = ty.union_mode() != "json" -%}
-{% set full = variants | map(attribute="name") | list | idents("pascal", "java", "union `" ~ cls ~ "`") -%}
-{#- A variant named after its union drops that prefix (`OfObject`), keeping nested class files
-    under the 255-byte file name limit. -#}
-{% set short = namespace(list=[]) -%}
-{% for p in full -%}
-{% set rest = p[cls | length:] if p is startingwith(cls) and p | length > cls | length else p -%}
-{% set short.list = short.list + [rest] -%}
-{% endfor -%}
-{% set pascals = short.list if short.list | unique | list | length == full | length else full -%}
+{% set pascals = union_pascals(ty, cls) | split(" ") | list -%}
 {% set ns = namespace(types=[]) -%}
 {% for v in variants -%}
 {% set t = v.type.to_java() -%}

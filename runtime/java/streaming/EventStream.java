@@ -2,6 +2,9 @@
 package @@JAVA_PACKAGE@@.streaming;
 
 import @@JAVA_PACKAGE@@.exceptions.ApiConnectionException;
+import @@JAVA_PACKAGE@@.exceptions.ApiException;
+import @@JAVA_INTERNAL_PACKAGE@@.Utils;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Iterator;
@@ -17,6 +20,10 @@ import okio.BufferedSource;
  * try-with-resources. Typed streams yield the decoded {@code data} of each event and end at a
  * {@code [DONE]} event, with {@link #lastEvent()} giving the event behind the last item; untyped
  * ones yield the {@link SseEvent}s. Read errors are thrown as {@link ApiConnectionException}.
+ *
+ * <p>In a typed stream, an {@code error} event, or an unnamed one whose data is an object with an
+ * {@code error}, is thrown as an {@link ApiException} holding that data; {@code ping} and {@code
+ * keepalive} events are skipped.
  *
  * @param <T> the type of the items
  */
@@ -34,6 +41,7 @@ public final class EventStream<T> implements Iterable<T>, AutoCloseable {
     private boolean started;
     private boolean done;
     private SseEvent next;
+    private T item;
     private SseEvent last;
 
     /**
@@ -102,16 +110,15 @@ public final class EventStream<T> implements Iterable<T>, AutoCloseable {
         return new Iterator<>() {
             @Override
             public boolean hasNext() {
-                try {
-                    while (next == null && !done && !source.exhausted()) {
-                        next = push(source.readUtf8CodePoint());
-                        if (next != null && typed && next.data().equals("[DONE]")) {
-                            next = null;
-                            done = true;
-                        }
+                while (next == null && !done) {
+                    SseEvent event = read();
+                    if (event == null || (typed && event.data().equals("[DONE]"))) {
+                        done = true;
+                    } else if (!typed || !(event.event().equals("ping") || event.event().equals("keepalive"))) {
+                        failIfError(event);
+                        item = decode.apply(event);
+                        next = event;
                     }
-                } catch (IOException e) {
-                    throw new ApiConnectionException(e);
                 }
                 return next != null;
             }
@@ -123,9 +130,45 @@ public final class EventStream<T> implements Iterable<T>, AutoCloseable {
                 }
                 last = next;
                 next = null;
-                return decode.apply(last);
+                return item;
             }
         };
+    }
+
+    private SseEvent read() {
+        try {
+            while (!source.exhausted()) {
+                SseEvent event = push(source.readUtf8CodePoint());
+                if (event != null) {
+                    return event;
+                }
+            }
+            return null;
+        } catch (IOException e) {
+            throw new ApiConnectionException(e);
+        }
+    }
+
+    private void failIfError(SseEvent event) {
+        boolean named = typed && event.event().equals("error");
+        boolean unnamed = typed && event.event().equals("message") && event.data().contains("\"error\"");
+        JsonNode data = named || unnamed ? Utils.jsonOrNull(event.data()) : null;
+        if (!named && (data == null || !data.hasNonNull("error"))) {
+            return;
+        }
+        done = true;
+        close();
+        String message = Utils.errorMessage(data);
+        throw new ApiException(
+                response.request().method()
+                        + " "
+                        + response.request().url().encodedPath()
+                        + " streamed an error: "
+                        + (message != null ? message : event.data()),
+                response.code(),
+                response.headers(),
+                event.data(),
+                data);
     }
 
     private SseEvent push(int codePoint) {

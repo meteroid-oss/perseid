@@ -218,6 +218,12 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
             dispatcher.setMaxRequestsPerHost(64);
             builder.dispatcher(dispatcher);
         }
+        if (options.proxy().isPresent()) {
+            builder.proxy(options.proxy().get());
+        } else if (options.httpClient().isEmpty()) {
+            EnvProxy.fromEnv(System.getenv())
+                    .ifPresent(proxies -> builder.proxySelector(proxies).proxyAuthenticator(proxies));
+        }
         options.interceptors().forEach(builder::addInterceptor);
         builder.addInterceptor(logger(options.debug() ? System.Logger.Level.INFO : System.Logger.Level.DEBUG));
         builder.addInterceptor(RESTORE_RETRY_AFTER);
@@ -800,13 +806,14 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
     private ApiException error(Response response, Map<String, Class<?>> errors) throws IOException {
         String body = response.body() == null ? "" : response.body().string();
         int code = response.code();
+        String reported = Utils.errorMessage(Utils.jsonOrNull(body));
         String message =
                 response.request().method()
                         + " "
                         + response.request().url().encodedPath()
                         + " failed with status "
                         + code
-                        + (body.isEmpty() ? "" : ": " + abbreviate(body));
+                        + (body.isEmpty() ? "" : ": " + abbreviate(reported != null ? reported : body));
         Headers headers = response.headers();
         Object error = errorBody(body, code, errors);
         switch (code) {

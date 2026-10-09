@@ -143,6 +143,18 @@ class UnionsTest {
     }
 
     @Test
+    void buildersTakeEachVariantAndTheValuesOfOpenEnums() {
+        CreateCompletionRequest shortcuts =
+                CreateCompletionRequest.builder().model("beta-2").prompt("hi").stop(List.of("a")).build();
+        CreateCompletionRequest explicit = CreateCompletionRequest.builder()
+                .model(ModelIds.of("beta-2"))
+                .prompt(CreateCompletionRequest.CreateCompletionRequestPrompt.ofString("hi"))
+                .stop(CreateCompletionRequest.CreateCompletionRequestStop.ofArrayOfStrings(List.of("a")))
+                .build();
+        assertEquals(explicit, shortcuts);
+    }
+
+    @Test
     void dateTimesFallBackToStrings() {
         assertTrue(completion("").createdAt().isDateTime());
         Completion later = Completion.fromJson(

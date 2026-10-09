@@ -42,7 +42,7 @@ case "$lang" in
       && perseid generate rust > /dev/null \
       && mkdir -p rust/tests && cp "$here/rust/unions/"*.rs rust/tests/ \
       && cd rust && cargo test --test models --test client --test approvals)
-    # Union variants sharing a tag, which only Rust and Python send as they declare it so far.
+    # Union variants sharing a tag, which Rust, Python and Java send as they declare it.
     (mkdir "$work/tags" && cd "$work/tags" \
       && perseid init --sdks rust --spec "$here/rust/tags/openapi.yaml" > /dev/null \
       && perseid generate rust > /dev/null \
@@ -97,7 +97,7 @@ test { useJUnitPlatform(); testLogging { events "passed", "skipped", "failed"; e
 GRADLE
       gradle test --no-daemon
     }
-    rm -rf _torture _oauth _unions && gradle_test
+    rm -rf _torture _oauth _unions _tags _forms && gradle_test
     mkdir "$work/torture" && cp "$here/../fixtures/torture.yaml" "$work/torture/openapi.yaml"
     # Without servers, the client has no default base URL.
     sed -i '/^servers:/,/^paths:/{/^paths:/!d}' "$work/torture/openapi.yaml"
@@ -115,7 +115,17 @@ GRADLE
     (mkdir "$work/unions" && cd "$work/unions" \
       && perseid init --sdks java --spec "$here/../fixtures/edge-unions.yaml" > /dev/null \
       && perseid generate java > /dev/null \
-      && cp -r "$here/java/_unions/." java/ && cd java && gradle_test) ;;
+      && cp -r "$here/java/_unions/." java/ && cd java && gradle_test)
+    # Union variants sharing a tag, on the spec of the Rust tests.
+    (mkdir "$work/tags" && cd "$work/tags" \
+      && perseid init --sdks java --spec "$here/rust/tags/openapi.yaml" > /dev/null \
+      && perseid generate java > /dev/null \
+      && cp -r "$here/java/_tags/." java/ && cd java && gradle_test)
+    # A form operation that also answers an event stream, and file uploads.
+    (mkdir "$work/forms" && cd "$work/forms" \
+      && perseid init --sdks java --spec "$here/java/_forms/openapi.yaml" > /dev/null \
+      && perseid generate java > /dev/null \
+      && cp -r "$here/java/_forms/src" java/ && cd java && gradle_test) ;;
   csharp)
     rm -rf _torture _oauth _unions && dotnet test Tests
     # The tests of tests/sdk/csharp/_torture run on the SDK of tests/fixtures/torture.yaml, with no

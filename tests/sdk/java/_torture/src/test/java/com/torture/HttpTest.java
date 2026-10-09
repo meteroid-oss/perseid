@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.sun.net.httpserver.HttpServer;
 import com.torture.api.ThingsListOptions;
 import com.torture.exceptions.ApiConnectionException;
+import com.torture.internal.EnvProxy;
 import com.torture.exceptions.ApiException;
 import com.torture.exceptions.ApiTimeoutException;
 import com.torture.exceptions.AuthenticationException;
@@ -256,6 +257,70 @@ class HttpTest {
     }
 
     @Test
+    void streamedErrorsAreApiErrorsAndKeepalivesAreSkipped() {
+        okType = "text/event-stream";
+        okBody = "event: ping\ndata: {}\n\ndata: {\"text\":\"hi\"}\n\n"
+                + "data: {\"error\":{\"message\":\"overloaded\",\"type\":\"server_error\"}}\n\ndata: {\"text\":\"late\"}\n\n";
+        List<String> texts = new ArrayList<>();
+        ApiException error;
+        try (EventStream<ChatReply> stream = client().chats().createStream(null)) {
+            error = assertThrows(ApiException.class, () -> stream.forEach(reply -> texts.add(reply.text())));
+            assertFalse(stream.iterator().hasNext());
+        }
+        assertEquals(List.of("hi"), texts);
+        assertEquals("POST /v1/chats streamed an error: overloaded", error.getMessage());
+        assertEquals(200, error.statusCode());
+        assertEquals("req_1", error.requestId().orElseThrow());
+        assertEquals("server_error", ((JsonNode) error.error().orElseThrow()).path("error").path("type").asText());
+
+        okBody = "event: error\ndata: upstream gone\n\n";
+        try (EventStream<ChatReply> stream = client().chats().createStream(null)) {
+            ApiException named = assertThrows(ApiException.class, () -> stream.iterator().hasNext());
+            assertEquals("upstream gone", named.body());
+        }
+    }
+
+    @Test
+    void theProxyOptionSendsRequestsThroughIt() {
+        java.net.Proxy proxy = new java.net.Proxy(java.net.Proxy.Type.HTTP, server.getAddress());
+        TortureOptions options = TortureOptions.builder().baseUrl("http://api.torture.invalid/v1").proxy(proxy).build();
+        try (Torture client = new Torture("token", options)) {
+            assertEquals("i", client.things().retrieve("t").id());
+        }
+        assertEquals(List.of("GET /v1/things/t"), requests);
+    }
+
+    @Test
+    void environmentProxiesFollowTheSchemeAndNoProxy() {
+        Map<String, String> env = Map.of(
+                "HTTPS_PROXY", "user%40corp:p%3Ass@proxy.corp:3128",
+                "http_proxy", "socks5://[::1]",
+                "NO_PROXY", " Example.com, .internal ,*.svc, 10.0.0.0/8, ::1, 192.168.1.7");
+        EnvProxy proxies = EnvProxy.fromEnv(env).orElseThrow();
+        java.net.Proxy https = proxies.select(java.net.URI.create("https://api.torture.dev/v1")).get(0);
+        assertEquals(java.net.Proxy.Type.HTTP, https.type());
+        assertEquals("proxy.corp:3128", https.address().toString().replace("/<unresolved>", ""));
+        java.net.Proxy http = proxies.select(java.net.URI.create("http://api.torture.dev/v1")).get(0);
+        assertEquals(java.net.Proxy.Type.SOCKS, http.type());
+        assertEquals(1080, ((InetSocketAddress) http.address()).getPort());
+        for (String host : List.of("example.com", "api.example.com", "EXAMPLE.COM.", "a.b.internal", "x.svc", "10.1.2.3", "[::1]", "192.168.1.7")) {
+            assertTrue(proxies.bypasses(host), host);
+            assertEquals(java.net.Proxy.NO_PROXY, proxies.select(java.net.URI.create("https://" + host + "/")).get(0));
+        }
+        for (String host : List.of("notexample.com", "example.org", "internal.org", "11.0.0.1", "192.168.1.8", "[::2]")) {
+            assertFalse(proxies.bypasses(host), host);
+        }
+        assertTrue(EnvProxy.fromEnv(Map.of("NO_PROXY", "*")).isEmpty());
+        assertTrue(EnvProxy.fromEnv(Map.of("ALL_PROXY", "http://p:8080", "NO_PROXY", "*")).orElseThrow().bypasses("a.b"));
+        okhttp3.Response challenge = new okhttp3.Response.Builder()
+                .request(new okhttp3.Request.Builder().url("https://api.torture.dev").build())
+                .protocol(okhttp3.Protocol.HTTP_1_1).code(407).message("Proxy Authentication Required").build();
+        okhttp3.Request authorized = proxies.authenticate(null, challenge);
+        assertEquals("Basic dXNlckBjb3JwOnA6c3M=", authorized.header("Proxy-Authorization"));
+        assertEquals(null, proxies.authenticate(null, challenge.newBuilder().request(authorized).build()));
+    }
+
+    @Test
     void aBodilessSuccessIsEmptyWhereTheSpecAllowsIt() {
         okStatus = 202;
         okBody = "";
@@ -343,7 +408,14 @@ class HttpTest {
         ValidationError body = invalid.error(ValidationError.class).orElseThrow();
         assertEquals("bad name", body.message());
         assertEquals(List.of("too short"), body.fields().orElseThrow().get("name"));
-        assertTrue(invalid.getMessage().contains("422") && invalid.getMessage().contains("bad name"));
+        assertEquals("POST /v1/things failed with status 422: bad name", invalid.getMessage());
+
+        statuses.add(429);
+        errorBody = "{\"error\":{\"message\":\"Slow down\",\"type\":\"rate_limit\"}}";
+        RateLimitException limited = assertThrows(
+                RateLimitException.class, () -> client().things().retrieve("t", RequestOptions.builder().maxRetries(0).build()));
+        assertTrue(limited.getMessage().endsWith("failed with status 429: Slow down"), limited.getMessage());
+        assertEquals(errorBody, limited.body());
 
         statuses.add(500);
         errorBody = "{\"anything\":1}";
