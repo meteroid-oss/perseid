@@ -163,7 +163,9 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
   `LastEvent`.
 - A JSON, binary or text response that may also be an event stream gets a `..._stream` twin
   method, as OpenAI's speech: bytes, or audio events. It sets the body's boolean `stream`
-  property to `true` when there is one.
+  property to `true` when there is one. A multipart body's boolean `stream` part, as OpenAI's
+  transcriptions have, is the twins' to send: `true` from the `_stream` twin, left out by the
+  other, and absent from both bodies.
 - Streamed uploads are not retried.
 
 ## Raw responses

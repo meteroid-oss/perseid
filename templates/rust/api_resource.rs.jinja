@@ -282,6 +282,9 @@ impl {{ resource_type_name }} {
             }
             {% endif -%}
             {% endfor -%}
+            {% if op.stream_part is defined and op.response_is_event_stream -%}
+            form = form.field({{ op.stream_part | tojson }}, true)?;
+            {% endif -%}
             Ok(form)
         };
         let form = {% if op.request_body_optional %}body.map(make_form).transpose(){% else %}make_form(body).map(Some){% endif %};

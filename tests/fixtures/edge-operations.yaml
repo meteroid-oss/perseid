@@ -796,6 +796,32 @@ paths:
           content:
             audio/mpeg: {schema: {type: string, format: binary}}
             text/event-stream: {schema: {$ref: '#/components/schemas/Item'}}
+  # A multipart body whose boolean `stream` part asks for an event stream, as OpenAI's
+  # transcriptions: the twins send it themselves.
+  /transcriptions:
+    post:
+      operationId: create_transcription
+      tags: [threads]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+                language: {type: string}
+                stream:
+                  anyOf:
+                    - {type: boolean, default: false}
+                    - {type: 'null'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json: {schema: {$ref: '#/components/schemas/Item'}}
+            text/event-stream: {schema: {$ref: '#/components/schemas/Item'}}
   # OpenAI's list shape, paged without a rule: `after` takes the response's `last_id`.
   /threads:
     get:

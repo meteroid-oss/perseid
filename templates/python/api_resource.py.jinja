@@ -296,12 +296,6 @@ class {{ class_name }}({{ base_class }}):
 {%- set arg_names = namespace(list=param_names | map("ident", "snake", "python") | list) %}
 {%- for f in flat_fields.list %}{% set arg_names.list = arg_names.list + [field_ident(f)] %}{% endfor %}
 {%- set flat_parts = op.multipart_fields if flat_multipart(op) | trim else [] %}
-{#- Like a JSON body's, the boolean `stream` part of a `_stream` twin is set by the twins, not the caller. #}
-{%- set stream_twin = op.response_is_event_stream and op.name is endingwith "_stream" and resource.operations | selectattr("name", "equalto", op.name[:-7]) | list %}
-{%- set has_stream_twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("response_is_event_stream") | list %}
-{%- set stream_part = (flat_parts | selectattr("name", "equalto", "stream") | first) if stream_twin or has_stream_twin else none %}
-{%- if stream_part and py_type(stream_part.type) != "bool" %}{% set stream_part = none %}{% endif %}
-{%- set flat_parts = flat_parts | rejectattr("name", "equalto", "stream") | list if stream_part else flat_parts %}
 {%- for f in flat_parts %}{% set arg_names.list = arg_names.list + [py_field(f.name)] %}{% endfor %}
 {%- set body_param = ("request_body" if "body" in arg_names.list else "body") if not flat and not flat_parts else none %}
 {%- if op.request_body_json_type is defined %}
@@ -477,9 +471,12 @@ class {{ class_name }}({{ base_class }}):
 {%- endif %}
 {%- elif op.request_body_kind == "multipart" %}
                 multipart={% if op.request_body_optional and not flat_parts %}None if {{ body_param }} is None else {% endif %}[
-{%- for field in op.multipart_fields if not (stream_part and field.name == "stream" and not stream_twin) %}
-                    ({{ py_str(field.name) }}, {% if stream_part and field.name == "stream" %}True{% elif flat_parts %}{{ py_field(field.name) }}{% else %}{{ body_param }}.{{ py_field(field.name) }}{% endif %}, {{ "True" if field.is_file else "False" }}, {{ py_str(field.content_type) if field.content_type is defined else "None" }}),
+{%- for field in op.multipart_fields %}
+                    ({{ py_str(field.name) }}, {% if flat_parts %}{{ py_field(field.name) }}{% else %}{{ body_param }}.{{ py_field(field.name) }}{% endif %}, {{ "True" if field.is_file else "False" }}, {{ py_str(field.content_type) if field.content_type is defined else "None" }}),
 {%- endfor %}
+{%- if op.stream_part is defined and op.response_is_event_stream %}
+                    ({{ py_str(op.stream_part) }}, True, False, None),
+{%- endif %}
                 ],
 {%- elif json_value is not none %}
 {%- if op.request_body_is_form %}
