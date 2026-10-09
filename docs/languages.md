@@ -575,7 +575,7 @@ customer, err := client.Customers().Retrieve(ctx, "cus_1", acme.WithMaxRetries(0
   query parameter or a body property the SDK does not know yet.
 - A multipart file is an `Upload`. `acme.UploadFile("a.mp3")` opens the file for each attempt;
   `Upload{Reader: f}` with an `*os.File` is named after it. Its media type defaults to the
-  spec's, then to its extension's.
+  spec's unless `application/octet-stream`, then to its extension's.
 - The `...Stream` twin of a multipart operation sends its `stream` part as true; the other
   leaves it out.
 - An operation that may answer a bodiless 2xx returns nil for it, scalars as a pointer.
@@ -616,7 +616,8 @@ data, err := file.Bytes()                          // or io.Copy(dst, file), or 
 A binary response (`application/octet-stream`, `image/png`, `audio/mpeg`...) is a
 `*BinaryResponse`: an `io.ReadCloser` over the body as it arrives, with `Header` and
 `ContentLength`. `Bytes()` and `WriteToFile(path)` read it whole and close it; otherwise close
-it. An error status is returned as an `*APIError` before any body is handed over, and retries stop
+it. `WriteToFile` writes to a temporary file next to `path`, renamed over it once the body is whole,
+so a failed download leaves an existing file as it was. An error status is returned as an `*APIError` before any body is handed over, and retries stop
 once a 2xx's headers arrive. The timeout covers the wait for the headers, then each `Read`, not the
 whole download; cancelling the context stops a read.
 
@@ -700,7 +701,9 @@ Acme client = new Acme(AcmeOptions.builder()
   `debug`, `proxy(java.net.Proxy)`, `httpClient(OkHttpClient)` and `addInterceptor`.
 - Without `proxy` or `httpClient`, the client goes through the proxy of `HTTPS_PROXY`,
   `HTTP_PROXY` or `ALL_PROXY` (or their lowercase names), read when it is built: an `http://`
-  proxy, with the URL's credentials, tunnelling HTTPS, or `socks5://`. Hosts, domains with their
+  proxy, with the URL's credentials, tunnelling HTTPS, or `socks5://`, whose credentials the JDK
+  only takes from the process-wide `java.net.Authenticator`. OkHttp cannot reach a proxy over
+  TLS, so an `https://` proxy fails the client's construction. Hosts, domains with their
   subdomains, IPs and networks listed in `NO_PROXY` connect directly. Without these variables,
   the JVM's proxy settings apply.
 - Credentials: `tokenProvider`, `clientCredentials(id, secret)`, `clientAuthInBody`,
@@ -722,9 +725,11 @@ var customer = client.customers().retrieve("cus_1",
 - Every method has an overload taking `RequestOptions` last.
 - `client.async()` has the same methods, returning `CompletableFuture`s.
 - An operation that may answer a bodiless 2xx returns an `Optional`.
-- Files are `Upload`s: `Upload.of(Path.of("a.mp3"))` is named after the file and typed by its
-  extension; `Upload.of(bytes)`, `of(File)` and `of(InputStream, length)` take `withFilename` and
-  `withContentType`. Input streams are not retried.
+- Files are `Upload`s: `Upload.of(Path.of("a.mp3"))` is named after the file, and fails at once
+  when it cannot be read; `Upload.of(bytes)`, `of(File)` and `of(InputStream, length)` take
+  `withFilename` and `withContentType`. Without `withContentType`, a part takes the media type of
+  the spec unless `application/octet-stream`, else the one of its file name's extension. Input
+  streams are not retried, nor is a form holding one.
 - The `...Stream` twin of an operation whose body has a `stream` flag sends it as `true`: on a
   copy of a JSON body, and in place of the property the form bodies' builders of both twins
   leave out.
@@ -754,8 +759,9 @@ try (var events = client.completions().createStream(request)) {
 
 Event streams are `EventStream<Chunk>`s, ending at `[DONE]`, with `lastEvent()` for the raw event.
 
-- An `error` event, or an unnamed one whose data is an object with an `error`, ends the stream
-  with an `ApiException` holding that data and the response's status and headers.
+- An `error` event, or one whose data is an object with an `error` the event model does not
+  declare, whatever the event's name, ends the stream with an `ApiException` holding that data and
+  the response's status and headers.
 - Comments, `ping` and `keepalive` events are skipped.
 
 ```java
@@ -769,7 +775,8 @@ try (BinaryResponse file = client.files().content("file_1")) {
 A binary response (`application/octet-stream`, `image/png`, `audio/mpeg`...) is a
 `BinaryResponse`, returned once its headers arrive: `inputStream()` reads the body as it streams
 in, `bytes()` and `writeTo(Path)` read it whole and close it; otherwise close it, e.g. with
-try-with-resources. An error status is thrown before any body is handed over, and retries stop
+try-with-resources. `writeTo` writes to a temporary file next to the path, moved over it once the
+body is whole, so a failed download leaves an existing file as it was. An error status is thrown before any body is handed over, and retries stop
 once a 2xx's headers arrive. The timeout bounds the wait for the headers, then each read of the
 body (OkHttp's read timeout), not the whole download.
 
@@ -850,8 +857,9 @@ new AcmeClientOptions { Log = attempt => Console.WriteLine(attempt) };
 ```
 
 `Log` receives an `ApiAttempt` per HTTP attempt: `Operation`, `Method`, `Url` (without its query
-or user info), `Attempt`, `StatusCode` or `Error`, `Elapsed` and `RetryIn`. It never holds
-headers, credentials or bodies. Log it at debug level, and at information level when
+or user info), `Attempt`, `StatusCode` or `Error`, `Elapsed`, `RetryIn`, and `TokenRenewed` when
+the API rejected the OAuth2 access token, which is renewed and the attempt made again at once. It
+never holds headers, credentials or bodies. Log it at debug level, and at information level when
 `IsRetried`. With [dependency injection](#notes), attempts go to the `ILoggerFactory` of the
 container, in the `Acme` category; `AcmeServiceCollectionExtensions.LogTo(logger)` sends them to
 another `ILogger`.
@@ -867,6 +875,10 @@ await client.Customers.RetrieveAsync("cus_1",
   `IdempotencyKey`), then a `CancellationToken`.
 - Optional parameters go in an options object: `ListAsync(new() { PerPage = 100 })`.
 - An operation that may answer a bodiless 2xx returns `Customer?`.
+- Files are `Upload`s: `Upload.FromFile(path)`, `FromBytes` and `FromStream` take a file name and
+  a content type; streams and files are sent once, without retries. Without a content type, a
+  multipart part takes the spec's unless `application/octet-stream`, else its file name's
+  extension's.
 
 ### Pagination
 
@@ -908,7 +920,8 @@ A binary response (`application/octet-stream`, `image/png`, `audio/mpeg`...) is 
 `BinaryResponse`, returned once its headers arrive (`HttpCompletionOption.ResponseHeadersRead`):
 `OpenStreamAsync()` reads the body as it streams in, `ReadAsBytesAsync()`, `CopyToAsync(stream)`
 and `WriteToFileAsync(path)` read it whole and close it, also straight on the call's task;
-otherwise dispose of it. An error status is thrown before any body is handed over, and retries
+otherwise dispose of it. `WriteToFileAsync` writes to a temporary file next to the path, moved
+over it once the body is whole, so a failed download leaves an existing file as it was. An error status is thrown before any body is handed over, and retries
 stop once a 2xx's headers arrive. The timeout bounds the wait for the headers, then each read of
 the body, not the whole download; the call's `CancellationToken` still cancels the reads.
 
