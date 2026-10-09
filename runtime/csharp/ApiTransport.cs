@@ -273,7 +273,7 @@ internal sealed class ApiTransport : IDisposable
     )
     {
         var raw = await SendEventStreamAsync(request, options, cancellationToken).ConfigureAwait(false);
-        return new(raw, new EventStream<T>(raw.Value, typeInfo));
+        return new(raw, new EventStream<T>(raw.Value, raw, typeInfo));
     }
 
     private readonly record struct Result(ApiResponse Response, byte[] Body, HttpResponseMessage? Stream);
