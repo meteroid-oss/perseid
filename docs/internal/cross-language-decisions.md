@@ -7,18 +7,18 @@ says where it landed and what is left; once every language has it, it moves to t
 
 | Decision | Done in | To do |
 |---|---|---|
-| `allOf` parts are inlined into the model's own fields, so callers never build the parent model. A part that is not an object keeps today's embedding instead of failing generation | Rust, Go, C# (strict), Python (lenient), Java | Check TypeScript |
-| Required multipart bodies are keyword arguments / flat options, like JSON bodies; no `...Body` class is generated for them | Python | Every other language |
-| The boolean `stream` part of a multipart `_stream` twin is set by the twins (`true` on the stream one, left out of the other), like JSON bodies' | Python, Go, Java, C# | Rust, TypeScript; consider moving it to `stream_property` in `src/api/resources.rs` |
 | Enum arguments (body fields, query and header parameters) take the enum or its value; in models only requests send, enum fields do too. Models responses carry keep the enum type, so readers' code does not change | Python, TypeScript (closed enums are literal unions), C# (implicit conversions), Rust (`From<String>`, `impl Into`), Java (`String` setters for open enums) | Go: typed constants, a string variable needs `T(s)` |
-| Responses can be streamed without loading them (Stainless' `with_streaming_response`) | — | Every language (C# would add interface methods, breaking users' fakes) |
-| Types can be renamed in `perseid.toml` (Stainless turns `CreateChatCompletionResponse` into `ChatCompletion`) | — | Every language |
+| Binary responses are returned once their headers arrive, read lazily (whole, as a stream, or to a file); errors raise before, retries stop at the headers, the timeout covers each read, not the download | Go (`*BinaryResponse`, an `io.ReadCloser`), Java (`BinaryResponse`), C# (`BinaryResponse`, interfaces only change their return type) | Python, TypeScript, Rust |
 | Model requests carry also take their JSON as a typed dict (Python's `PetParam`) | Python | Other languages have their own literal or builder form: TypeScript object literals, C# implicit conversions, Rust `From`/`impl Into`, Java builder setters per variant, Go structs |
 
 ## Done in every language
 
 | Decision |
 |---|
+| `[models]` in `perseid.toml` renames types (`CreateChatCompletionResponse = "ChatCompletion"`), before the spec model names anything: nested types follow, implicit discriminator tags keep the schema name; `init --from stainless` imports Stainless' `models` (spec model) |
+| The boolean `stream` part of a multipart body with an event-stream twin is no field of the body: the twin sends `true`, the other method nothing (`stream_part`, spec model) |
+| Optional nullable fields tell `null` from absent (Rust `Option<Option<T>>` + `clear_*`, Python `UNSET`) only in request-only models and PATCH bodies; models responses also carry read `Option<T>` / `X \| None`. Python method arguments still send `None` as `null` (`with_nulls`). Go, Java, C# and TypeScript have their own null forms |
+| `allOf` parts are no parent model to build: Rust, Go, C# inline them (strict), Python (lenient); Java embeds them with `@JsonUnwrapped`; TypeScript `extends` them, which type-checks flat literals and hovers the same |
 | A 429 is retried whatever the method, when the body can be sent again: the server refused the request |
 | Lists of OpenAI's and Anthropic's shape (`after`/`after_id` taking `last_id`, while `has_more`) page without a rule (spec model) |
 | Open enums (`anyOf: [string, enum]`) carry `open: true` (from `x-perseid-open-enum`, set by the spec normalization) and accept any string next to their values |
@@ -38,9 +38,11 @@ says where it landed and what is left; once every language has it, it moves to t
   whose names only differ in case colliding.
 - A hand-written `name = "OpenAI"` still gives `open_ai` packages: `OpenAI` and `PetStore` cannot
   be told apart. `[python] package` and `[context] env_prefix` set them; `init` does it for you.
-- POSTs are not retried on 5xx or connection errors without an idempotency key: replaying them
-  could apply them twice. Stainless and Fern retry them. `idempotency_keys = true` sends a key
-  with every POST and retries them; whether `init` should turn it on is an open question.
+- POSTs are not retried on 5xx or connection errors without an idempotency key, deliberately:
+  replaying them could apply them twice. Stainless and Fern retry them. `idempotency_keys = true`
+  sends a key with every POST and retries them.
+- Required multipart bodies are keyword arguments in Python only. Other languages keep a body
+  type: their multipart bodies are rare and the type carries files and parts per variant.
 - Java's nested variant classes keep their schema names, so `InputItem.InputMessage` hides the
   `InputMessage` model inside the union's file: renaming would rename most variants.
 - Rust's shorter `ArrayOf...` variant names would rename public variants users match on.
