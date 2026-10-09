@@ -639,7 +639,12 @@ Acme client = new Acme(AcmeOptions.builder()
 ```
 
 - `AcmeOptions` is immutable. Its builder also takes `baseUrl`, `header`, `retrySchedule`,
-  `debug`, `httpClient(OkHttpClient)` and `addInterceptor`.
+  `debug`, `proxy(java.net.Proxy)`, `httpClient(OkHttpClient)` and `addInterceptor`.
+- Without `proxy` or `httpClient`, the client goes through the proxy of `HTTPS_PROXY`,
+  `HTTP_PROXY` or `ALL_PROXY` (or their lowercase names), read when it is built: an `http://`
+  proxy, with the URL's credentials, tunnelling HTTPS, or `socks5://`. Hosts, domains with their
+  subdomains, IPs and networks listed in `NO_PROXY` connect directly. Without these variables,
+  the JVM's proxy settings apply.
 - Credentials: `tokenProvider`, `clientCredentials(id, secret)`, `clientAuthInBody`,
   `basicAuth`, `putApiKey`.
 - The base URL defaults to `ACME_BASE_URL`, then `Acme.DEFAULT_BASE_URL`. Without either, the

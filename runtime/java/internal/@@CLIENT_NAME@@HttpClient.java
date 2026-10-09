@@ -218,6 +218,12 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
             dispatcher.setMaxRequestsPerHost(64);
             builder.dispatcher(dispatcher);
         }
+        if (options.proxy().isPresent()) {
+            builder.proxy(options.proxy().get());
+        } else if (options.httpClient().isEmpty()) {
+            EnvProxy.fromEnv(System.getenv())
+                    .ifPresent(proxies -> builder.proxySelector(proxies).proxyAuthenticator(proxies));
+        }
         options.interceptors().forEach(builder::addInterceptor);
         builder.addInterceptor(logger(options.debug() ? System.Logger.Level.INFO : System.Logger.Level.DEBUG));
         builder.addInterceptor(RESTORE_RETRY_AFTER);
