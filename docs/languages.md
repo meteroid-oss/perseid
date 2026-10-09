@@ -685,12 +685,16 @@ try (var events = client.completions().createStream(request)) {
 
 Event streams are `EventStream<Chunk>`s, ending at `[DONE]`, with `lastEvent()` for the raw event.
 
+- An `error` event, or an unnamed one whose data is an object with an `error`, ends the stream
+  with an `ApiException` holding that data and the response's status and headers.
+- Comments, `ping` and `keepalive` events are skipped.
+
 ### Errors
 
 | Exception | When |
 |---|---|
 | `AcmeException` | Base of every exception, all unchecked |
-| `ApiException` | Error response: `statusCode()`, `headers()`, `body()`, `requestId()`, `error()` (the body parsed into the status's error schema, else a `JsonNode`), `error(Type.class)` |
+| `ApiException` | Error response: `statusCode()`, `headers()`, `body()`, `requestId()`, `error()` (the body parsed into the status's error schema, else a `JsonNode`), `error(Type.class)`. Its message gives the body's `error.message`, `message` or `detail` string, else the body: `POST /charges failed with status 429: Slow down` |
 | `BadRequestException`, `AuthenticationException`, `PermissionDeniedException`, `NotFoundException`, `ConflictException`, `UnprocessableEntityException`, `RateLimitException`, `InternalServerException` | Subclasses by status |
 | `ApiConnectionException`, `ApiTimeoutException` | No response, or none within the timeout |
 | `InvalidDataException` | A response that is not what the API describes, such as a missing required property, thrown by its getter |
