@@ -13,6 +13,7 @@ mod generator;
 pub mod github;
 mod http;
 pub mod init;
+pub mod manifest;
 pub mod pack;
 mod postprocessing;
 pub mod pr;

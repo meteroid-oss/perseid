@@ -116,10 +116,7 @@ struct Docs {
 
 /// The skeleton of an SDK checked out at `dir`, relative to it.
 fn skeleton(config: &Config, sdk: &Sdk, dir: &Path, docs: &Docs) -> Result<Vec<(String, Vec<u8>)>> {
-    let mut context = config.context(sdk, dir);
-    let path = context["java_package"].as_str().unwrap().replace('.', "/");
-    context["java_package_path"] = path.into();
-    package_metadata(config, &mut context);
+    let context = skeleton_context(config, sdk, dir);
     let mut files = Vec::new();
     for (path, content) in assets::under(&format!("scaffold/{}", sdk.language)) {
         let mut content = without_unset_metadata(std::str::from_utf8(content)?, &context);
@@ -131,6 +128,28 @@ fn skeleton(config: &Config, sdk: &Sdk, dir: &Path, docs: &Docs) -> Result<Vec<(
         files.push((tokens(path, &context)?, content.into_bytes()));
     }
     Ok(files)
+}
+
+/// The manifests of the skeleton of an SDK checked out at `dir`, relative to it.
+pub fn manifests(config: &Config, sdk: &Sdk, dir: &Path) -> Result<Vec<(String, String)>> {
+    let context = skeleton_context(config, sdk, dir);
+    let mut files = Vec::new();
+    for (path, content) in assets::under(&format!("scaffold/{}", sdk.language)) {
+        let name = Path::new(path).file_name().and_then(|n| n.to_str());
+        if name.is_some_and(crate::manifest::is_manifest) {
+            let content = without_unset_metadata(std::str::from_utf8(content)?, &context);
+            files.push((tokens(path, &context)?, tokens(&content, &context)?));
+        }
+    }
+    Ok(files)
+}
+
+fn skeleton_context(config: &Config, sdk: &Sdk, dir: &Path) -> Value {
+    let mut context = config.context(sdk, dir);
+    let path = context["java_package"].as_str().unwrap().replace('.', "/");
+    context["java_package_path"] = path.into();
+    package_metadata(config, &mut context);
+    context
 }
 
 /// Renders the README template `source` with the `examples` of `docs`.

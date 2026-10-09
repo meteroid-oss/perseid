@@ -411,9 +411,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
                     twice.display()
                 );
             }
+            let mut completed = BTreeMap::new();
             if !check {
                 for (sdk, dir) in sdks.iter().zip(&dirs) {
                     files.extend(scaffold::bootstrap(&config, &root, sdk, dir, &spec)?);
+                    let manifests = perseid::manifest::complete(&config, sdk, dir)?;
+                    files.extend(manifests.iter().map(|m| dir.join(m)));
+                    completed.insert(sdk.language, manifests);
                 }
                 for (repo, checkout) in checkouts.iter().filter(|_| config.release != Some(false)) {
                     let held: Vec<&config::Sdk> =
@@ -448,10 +452,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
             let mut changes = BTreeMap::new();
             for (sdk, result) in sdks.iter().zip(results) {
-                changes.insert(
-                    sdk.language.to_owned(),
-                    result.with_context(|| format!("generating {}", sdk.language))?,
-                );
+                let mut changed = result.with_context(|| format!("generating {}", sdk.language))?;
+                let manifests = completed.remove(sdk.language).unwrap_or_default();
+                changed.extend(manifests.into_iter().map(generate::Change::Modified));
+                changes.insert(sdk.language.to_owned(), changed);
             }
             let places = sdks
                 .iter()

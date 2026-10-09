@@ -269,8 +269,8 @@ logged.
 
 - `src/error.rs` is yours. The runtime only calls `Error::generic(Failure)` and
   `Error::from_response(status, headers, body)`.
-- `Cargo.toml` is yours too. A crate generated before the `tracing` feature declares it with
-  `tracing = { version = "0.1", optional = true }` and `tracing = ["dep:tracing"]`.
+- `Cargo.toml` is yours too. perseid only appends the crates and features it lacks, like the
+  `tracing` feature for a crate generated before it. It leaves out the `default` feature.
 - The `http` crate is re-exported as `acme::api::http`.
 
 ## TypeScript
