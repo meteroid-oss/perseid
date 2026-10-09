@@ -231,7 +231,8 @@ public class Smoke {
                 "count=::2;file=a.txt:text/plain:hello;meta=:application/json:{\"status\":\"ok\"};name=::doc;tags=::a;tags=::b");
         java.nio.file.Path csv = java.nio.file.Files.createTempFile("smoke", ".csv");
         java.nio.file.Files.write(csv, bytes("a,b"));
-        String uploaded = client.streaming().uploadFile(body.toBuilder().file(Upload.of(csv)).build()).status();
+        Streaming.UploadFileBody fromPath = Streaming.UploadFileBody.builder().file(Upload.of(csv)).name("doc").build();
+        String uploaded = client.streaming().uploadFile(fromPath).status();
         expect(uploaded.contains("file=" + csv.getFileName() + ":text/csv:a,b;"), true);
         java.nio.file.Files.delete(csv);
         expect(client.streaming().uploadContent("f1", Upload.of(bytes("raw"))).status(), "application/octet-stream:raw");
