@@ -32,6 +32,17 @@
     {%- endif -%}
 {%- endmacro %}
 
+{#- `yes` when the schema `name`, or a variant of it, has the property `property`. -#}
+{% macro declares(name, property) -%}
+    {%- set t = types[name] | default(none) -%}
+    {%- if t and t.fields is defined -%}
+        {%- for f in t.fields if f.name == property or (f.flatten and f.type.schema_name() and declares(f.type.schema_name(), property)) %}{% if loop.first %}yes{% endif %}{% endfor -%}
+    {%- endif -%}
+    {%- if t and t.variants is defined and t.kind == "struct_enum" -%}
+        {%- for v in t.variants if (v.schema_ref is defined and declares(v.schema_ref, property)) or (v.fields is defined and property in (v.fields | map(attribute="name") | list)) %}{% if loop.first %}yes{% endif %}{% endfor -%}
+    {%- endif -%}
+{%- endmacro %}
+
 {#- `page.a?.b` for the path `["a", "b"]` of a property of the response. -#}
 {% macro at(path) -%}
     page{% for key in path %}{{ "." if loop.first else "?." }}{{ key | ident("camel") }}{% endfor -%}
@@ -142,7 +153,9 @@ export class {{ resource_type_name }} {
                 {{ p.name | ident("camel", "typescript") }}: {% if p.name in op.path_styles and op.path_styles[p.name].type is defined %}{{ m.js_type(op.path_styles[p.name].type) }}{% else %}{{ text_type(p.type) }}{% endif %},
             {% endfor -%}
             {% if op.request_body_schema_name is defined -%}
-                {{ body_arg }}: {{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}[]{% endif %},
+                {#- The `stream` property is the `_stream` twin's to set. -#}
+                {% set twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("stream_property", "defined") | first -%}
+                {{ body_arg }}: {% if twin and not op.request_body_is_list %}{% set body_ty = op.request_body_schema_name | to_upper_camel_case %}{% set stream = twin.stream_property | ident("camel") %}Omit<{{ body_ty }}, {{ stream | tojson }}> & { {{ stream }}?: Extract<{{ body_ty }}[{{ stream | tojson }}], false | null | undefined> }{% else %}{{ op.request_body_schema_name | to_upper_camel_case }}{% if op.request_body_is_list %}[]{% endif %}{% endif %},
             {% elif op.request_body_json_type is defined -%}
                 body: {{ m.js_type(op.request_body_json_type) }},
             {% elif op.request_body_kind in ["binary", "multipart"] -%}
@@ -308,7 +321,7 @@ export class {{ resource_type_name }} {
             {% endif -%}
 
             {% if op.response_is_event_stream and op.event_schema_name is defined -%}
-                return request.sendJsonStream(this.requestCtx, {{ op.event_schema_name | to_upper_camel_case }}Serializer.parse, requestOptions);
+                return request.sendJsonStream(this.requestCtx, {{ op.event_schema_name | to_upper_camel_case }}Serializer.parse, requestOptions{% if declares(op.event_schema_name, "error") %}, false{% endif %});
             {% elif op.response_is_event_stream -%}
                 return request.sendEventStream(this.requestCtx, requestOptions);
             {% elif op.response_is_binary | default(false) -%}

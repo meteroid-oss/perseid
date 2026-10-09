@@ -35,7 +35,7 @@ export class APIError<E = @@CLIENT_NAME@@ErrorBody> extends @@CLIENT_NAME@@Error
     headers: Headers,
     error?: E
   ) {
-    super(`API error ${status}: ${body}`);
+    super(`API error ${status}: ${errorText(body)}`);
     this.error = error;
     headers.forEach((value, key) => {
       this.headers[key] = value;
@@ -46,6 +46,19 @@ export class APIError<E = @@CLIENT_NAME@@ErrorBody> extends @@CLIENT_NAME@@Error
   public get requestId(): string | undefined {
     return this.headers["x-request-id"] ?? this.headers["request-id"];
   }
+}
+
+/** The message of a JSON error body (`error.message`, `message`, `detail`), else the body. */
+function errorText(body: string): string {
+  let json: any;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return body;
+  }
+  const text = (value: unknown) => (typeof value === "string" && value !== "" ? value : undefined);
+  const detail = Array.isArray(json?.detail) ? json.detail.map((d: any) => text(d?.msg) ?? JSON.stringify(d)).join("; ") : json?.detail;
+  return text(json?.error?.message) ?? text(json?.error) ?? text(json?.message) ?? text(detail) ?? body;
 }
 
 /** 400 */

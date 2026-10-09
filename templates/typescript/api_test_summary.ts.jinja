@@ -24,6 +24,6 @@ export function mock(response: MockResponse): { client: {{ sdk.client_name }}; r
       headers,
     });
   };
-  const client = new {{ sdk.client_name }}({ baseURL: "http://localhost", fetch, maxRetries: 0 });
+  const client = new {{ sdk.client_name }}({ apiKey: "test", baseURL: "http://localhost", fetch, maxRetries: 0 });
   return { client, requests };
 }
