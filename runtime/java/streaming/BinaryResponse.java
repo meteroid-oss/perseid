@@ -7,10 +7,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.ThreadLocalRandom;
 import okhttp3.Headers;
 import okhttp3.MediaType;
 import okhttp3.Response;
@@ -105,27 +109,37 @@ public final class BinaryResponse implements AutoCloseable {
     }
 
     /**
-     * Writes the rest of the body to the file at {@code path}, created or replaced, then closes
-     * the response. The file is deleted when the body cannot be read whole; errors of the file
-     * are thrown as {@link UncheckedIOException}.
+     * Writes the rest of the body to the file at {@code path}, created or replaced once the body is
+     * read whole, then closes the response. The body goes to a temporary file next to it first, so
+     * a failed download leaves the file as it was; errors of the file are thrown as {@link
+     * UncheckedIOException}.
      *
      * @param path the file
      */
     public void writeTo(Path path) {
         try {
-            OutputStream out = Files.newOutputStream(path);
-            boolean written = false;
-            try (out) {
-                InputStream in = inputStream();
-                byte[] buffer = new byte[8192];
-                for (int n = read(in, buffer); n >= 0; n = read(in, buffer)) {
-                    out.write(buffer, 0, n);
+            if (Files.isDirectory(path)) {
+                throw new FileSystemException(path.toString(), null, "Is a directory");
+            }
+            Path target = path.toAbsolutePath();
+            String suffix = Long.toHexString(ThreadLocalRandom.current().nextLong());
+            Path temp = target.resolveSibling("." + target.getFileName() + "." + suffix + ".tmp");
+            try {
+                try (OutputStream out = Files.newOutputStream(temp, StandardOpenOption.CREATE_NEW)) {
+                    InputStream in = inputStream();
+                    byte[] buffer = new byte[8192];
+                    for (int n = read(in, buffer); n >= 0; n = read(in, buffer)) {
+                        out.write(buffer, 0, n);
+                    }
                 }
-                written = true;
-            } finally {
-                if (!written) {
-                    Files.deleteIfExists(path);
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException | RuntimeException | Error e) {
+                try {
+                    Files.deleteIfExists(temp);
+                } catch (IOException cleanup) {
+                    e.addSuppressed(cleanup);
                 }
+                throw e;
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);
