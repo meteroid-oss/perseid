@@ -217,9 +217,26 @@ class AsyncEventStream(_AsyncEventSource):
 
 def _decode(event: SseEvent, type_: object, response: httpx.Response) -> object:
     try:
-        return t.cast(object, from_json_value(type_, json.loads(event.data)))
-    except (ValueError, TypeError) as exc:
+        data = json.loads(event.data)
+    except ValueError as exc:
         raise APIResponseValidationError(response, f"event {event.data!r}: {exc}") from exc
+    if event.event == "error":
+        raise _stream_error(response, data)
+    try:
+        return t.cast(object, from_json_value(type_, data))
+    except (ValueError, TypeError) as exc:
+        if isinstance(data, dict) and t.cast("dict[str, object]", data).get("error") is not None:
+            raise _stream_error(response, data) from exc
+        raise APIResponseValidationError(response, f"event {event.data!r}: {exc}") from exc
+
+
+def _stream_error(response: httpx.Response, data: object) -> Exception:
+    """The API error an `error` event of a stream reports, with the message it gives."""
+    from ._errors import APIStatusError
+
+    error = t.cast("dict[str, object]", data).get("error", data) if isinstance(data, dict) else data
+    message = t.cast("dict[str, object]", error).get("message") if isinstance(error, dict) else error
+    return APIStatusError(response, data, str(message) if message else json.dumps(data))
 
 
 class Stream(_EventSource, t.Generic[_T]):
