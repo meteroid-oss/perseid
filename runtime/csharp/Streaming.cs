@@ -115,11 +115,13 @@ public sealed class EventStream : IAsyncEnumerable<SseEvent>, IDisposable, IAsyn
 public sealed class EventStream<T> : IAsyncEnumerable<T>, IDisposable, IAsyncDisposable
 {
     private readonly EventStream _events;
+    private readonly ApiResponse _response;
     private readonly JsonTypeInfo<T> _typeInfo;
 
-    internal EventStream(EventStream events, JsonTypeInfo<T> typeInfo)
+    internal EventStream(EventStream events, ApiResponse response, JsonTypeInfo<T> typeInfo)
     {
         _events = events;
+        _response = response;
         _typeInfo = typeInfo;
     }
 
@@ -129,8 +131,10 @@ public sealed class EventStream<T> : IAsyncEnumerable<T>, IDisposable, IAsyncDis
     /// <summary>The ID of the last event received, to resume from.</summary>
     public string? LastEventId => _events.LastEventId;
 
-    /// <summary>Decodes the events as they arrive. Data that is not a <typeparamref name="T"/>
-    /// throws an <see cref="ApiDecodeException"/>.</summary>
+    /// <summary>Decodes the events as they arrive. An <c>error</c> event, or data that is not a
+    /// <typeparamref name="T"/> but an object with an <c>error</c>, throws an <see cref="ApiException"/>
+    /// with the status and headers of the response; other data that is not a
+    /// <typeparamref name="T"/> throws an <see cref="ApiDecodeException"/>, but for keepalives.</summary>
     public async IAsyncEnumerator<T> GetAsyncEnumerator(CancellationToken cancellationToken = default)
     {
         await foreach (var sse in _events.WithCancellation(cancellationToken).ConfigureAwait(false))
@@ -139,26 +143,66 @@ public sealed class EventStream<T> : IAsyncEnumerable<T>, IDisposable, IAsyncDis
             {
                 yield break;
             }
+            if (sse.Event == "error")
+            {
+                throw Failed(sse);
+            }
+            if (!TryDecode(sse, out var item, out var error))
+            {
+                if (sse.Event is "ping" or "keepalive")
+                {
+                    continue;
+                }
+                throw ReportsError(sse.Data)
+                    ? Failed(sse)
+                    : new ApiDecodeException(
+                        $"the `{sse.Event}` event is not a valid {typeof(T).Name}: {error.Message}",
+                        error
+                    );
+            }
             LastEvent = sse;
-            yield return Decode(sse);
+            yield return item;
         }
     }
 
-    private T Decode(SseEvent sse)
+    private bool TryDecode(
+        SseEvent sse,
+        [MaybeNullWhen(false)] out T item,
+        [NotNullWhen(false)] out JsonException? error
+    )
     {
         try
         {
-            return JsonSerializer.Deserialize(sse.Data, _typeInfo)
+            item = JsonSerializer.Deserialize(sse.Data, _typeInfo)
                 ?? throw new JsonException("the data is null");
+            error = null;
+            return true;
         }
         catch (JsonException e)
         {
-            throw new ApiDecodeException(
-                $"the `{sse.Event}` event is not a valid {typeof(T).Name}: {e.Message}",
-                e
-            );
+            item = default;
+            error = e;
+            return false;
         }
     }
+
+    private static bool ReportsError(string data)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(data);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("error", out var error)
+                && error.ValueKind != JsonValueKind.Null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private ApiException Failed(SseEvent sse) =>
+        ApiExceptionExtensions.ForResponse(_response.StatusCode, sse.Data, _response.Headers, null);
 
     /// <summary>Closes the connection.</summary>
     public void Dispose() => _events.Dispose();
