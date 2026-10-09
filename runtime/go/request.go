@@ -614,8 +614,7 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		apiErr := newAPIError(resp.StatusCode, respBody)
-		apiErr.setHeader(resp.Header)
+		apiErr := newResponseError(req.method, req.path, resp.StatusCode, resp.Header, respBody)
 		apiErr.Body = req.errors.decode(resp.StatusCode, respBody)
 		return attemptResult{
 			status:     resp.StatusCode,

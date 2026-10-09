@@ -569,7 +569,9 @@ for chunk, err := range stream.All() { ... } // stream.Event() is the raw event
 ```
 
 Events with a schema give a `*Stream[T]` ending at `[DONE]`, others an `*EventStream` of
-`SSEEvent`s. Lines are capped at 1 MiB.
+`SSEEvent`s. Lines are capped at 1 MiB. An error the API sends in a `*Stream[T]`, as an
+`error` event or an object with an `error`, ends it with an `*APIError` of the stream's status;
+`ping` and `keepalive` events that are not a `T` are skipped.
 
 ### Errors
 
@@ -589,6 +591,9 @@ case errors.As(err, &apiErr):
 - `errors.Is` tests the status: `ErrNotFound`, `ErrUnauthorized`, `ErrRateLimited`, `ErrServer`...
 - `APIError.Body` holds the body decoded as the declared error schema, else plain JSON.
 - `ErrorBody[T](err)` decodes it as any schema, `APIError.Detail()` as the API-wide one.
+- `err.Error()` reads `acme: POST /charges: 429 Too Many Requests: <message>`. The message is
+  `APIError.Message()`, from `error.message`, `message` or `detail`, else the body cut at 512
+  bytes; `RawBody` keeps it whole. An `errors.go` generated before keeps its own `Error()`.
 
 ### Raw responses
 
