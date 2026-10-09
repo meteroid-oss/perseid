@@ -79,6 +79,12 @@ case "$lang" in
       && perseid init --sdks go --spec "$here/../fixtures/edge-unions.yaml" > /dev/null \
       && perseid generate go > /dev/null \
       && cp "$here/go/_unions/"*_test.go go/ \
+      && cd go && go vet ./... && go test ./...)
+    # Union variants sharing a tag, on the spec of the Rust tests.
+    (mkdir "$work/tags" && cd "$work/tags" \
+      && perseid init --sdks go --spec "$here/rust/tags/openapi.yaml" > /dev/null \
+      && perseid generate go > /dev/null \
+      && cp "$here/go/_tags/"*_test.go go/ \
       && cd go && go vet ./... && go test ./...) ;;
   java)
     gradle_test() {
