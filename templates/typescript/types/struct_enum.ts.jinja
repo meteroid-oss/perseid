@@ -11,6 +11,7 @@ import { type {{ c | to_upper_camel_case }}, {{ c | to_upper_camel_case }}Serial
 {% endif -%}
 
 {% set type_name = type.name | to_upper_camel_case -%}
+{% set received = [] if request_schema else closed_enums | list -%}
 {% set disc_json = type.discriminator_field -%}
 {% set disc = disc_json | ident("camel") -%}
 {% set adjacent = type.repr == "adjacently_tagged" -%}
@@ -23,7 +24,7 @@ import { type {{ c | to_upper_camel_case }}, {{ c | to_upper_camel_case }}Serial
 {% if base -%}
 interface {{ base }} {
     {% for field in type.fields -%}
-    {{ m.field_decl(field) }}
+    {{ m.field_decl(field, received) }}
     {% endfor -%}
 }
 {% endif %}
@@ -37,7 +38,7 @@ interface {{ base }} {
 {% if adjacent and fields -%}
 export interface {{ alias }}{{ content_json | to_upper_camel_case }} {
     {% for field in fields -%}
-    {{ m.field_decl(field) }}
+    {{ m.field_decl(field, received) }}
     {% endfor -%}
 }
 {% endif -%}
@@ -48,7 +49,7 @@ export interface {{ alias }}{{ content_json | to_upper_camel_case }} {
     {% set parents = [base] if base else [] -%}
 {% else -%}
     {% set own %}{{ tag }}{% for field in fields %}
-    {{ m.field_decl(field) }}{% endfor %}{% endset -%}
+    {{ m.field_decl(field, received) }}{% endfor %}{% endset -%}
     {% set parents = ([base] if base else []) + ([ref] if ref else []) -%}
 {% endif -%}
 {% if alias in ns.taken or ref in non_struct_refs -%}
