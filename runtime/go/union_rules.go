@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 )
 
 // unionCondition is a property a JSON object must have, equal to the JSON value want
@@ -157,4 +158,60 @@ func unmarshalAdjacentContent(data []byte, contentField string, into any) error 
 		return nil
 	}
 	return json.Unmarshal(content, into)
+}
+
+// unionBestFit decodes the JSON object data into each candidate, pointers to the variants sharing
+// its tag, and returns the index of the one knowing the most of its properties, the earlier one on
+// ties. It returns -1 and the first error when none decodes.
+func unionBestFit(data []byte, candidates []any) (int, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return -1, err
+	}
+	best, bestScore := -1, -1
+	var firstErr error
+	for i, candidate := range candidates {
+		if err := json.Unmarshal(data, candidate); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		score := 0
+		for _, name := range jsonProperties(reflect.TypeOf(candidate).Elem()) {
+			if _, ok := fields[name]; ok {
+				score++
+			}
+		}
+		if score > bestScore {
+			best, bestScore = i, score
+		}
+	}
+	if best < 0 {
+		return -1, firstErr
+	}
+	return best, nil
+}
+
+// jsonProperties lists the JSON names of the fields of the struct type t, embedded ones included.
+func jsonProperties(t reflect.Type) []string {
+	var names []string
+	for i := range t.NumField() {
+		field := t.Field(i)
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		embedded := field.Type
+		if embedded.Kind() == reflect.Pointer {
+			embedded = embedded.Elem()
+		}
+		switch {
+		case name == "-" || !field.IsExported() && !field.Anonymous:
+		case field.Anonymous && name == "" && embedded.Kind() == reflect.Struct:
+			names = append(names, jsonProperties(embedded)...)
+		case name != "":
+			names = append(names, name)
+		default:
+			names = append(names, field.Name)
+		}
+	}
+	return names
 }

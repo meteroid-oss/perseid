@@ -3,9 +3,13 @@
 package @@PACKAGE_NAME@@
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
 )
 
 // SDKError is implemented by every error the SDK returns: [*APIError] for a
@@ -57,6 +61,67 @@ func (e *RequestError) Unwrap() error { return e.Err }
 
 func requestError(format string, args ...any) *RequestError {
 	return &RequestError{Err: fmt.Errorf(format, args...)}
+}
+
+// newResponseError is the [*APIError] of a response, which learns the request too when its type
+// can hold it.
+func newResponseError(method, path string, status int, header http.Header, body []byte) *APIError {
+	apiErr := newAPIError(status, body)
+	apiErr.setHeader(header)
+	if withRequest, ok := any(apiErr).(interface{ setRequest(method, path string) }); ok {
+		withRequest.setRequest(method, path)
+	}
+	return apiErr
+}
+
+// Message returns the message the API gives in the error body: its error.message, error,
+// message, detail or error_description, or "" when it has none.
+func (e *APIError) Message() string {
+	var body, nested map[string]json.RawMessage
+	if json.Unmarshal(e.RawBody, &body) != nil {
+		return ""
+	}
+	if json.Unmarshal(body["error"], &nested) == nil {
+		if message := jsonText(nested["message"]); message != "" {
+			return message
+		}
+	}
+	for _, key := range []string{"error", "message", "detail", "error_description"} {
+		if message := jsonText(body[key]); message != "" {
+			return message
+		}
+	}
+	return ""
+}
+
+// jsonText is the JSON string raw holds, or "".
+func jsonText(raw json.RawMessage) string {
+	var text string
+	_ = json.Unmarshal(raw, &text)
+	return text
+}
+
+// errorText describes an [*APIError], as `POST /chat/completions: 429 Too Many Requests: message`,
+// with the body, cut at 512 bytes, when it has no message.
+func errorText(method, path string, status int, message string, body []byte) string {
+	var text strings.Builder
+	if method != "" {
+		text.WriteString(method + " " + path + ": ")
+	}
+	text.WriteString(strconv.Itoa(status))
+	if name := http.StatusText(status); name != "" {
+		text.WriteString(" " + name)
+	}
+	if message == "" {
+		message = string(bytes.Trim(body, "\r\n"))
+		if len(message) > 512 {
+			message = strings.ToValidUTF8(message[:512], "") + "..."
+		}
+	}
+	if message != "" {
+		text.WriteString(": " + message)
+	}
+	return text.String()
 }
 
 // Sentinels that errors.Is matches against the status of an [*APIError]:

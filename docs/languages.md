@@ -542,7 +542,13 @@ customer, err := client.Customers().Retrieve(ctx, "cus_1", acme.WithMaxRetries(0
 - Optional query and header parameters go in a `*...Options` struct of pointers
   (`acme.Ptr(v)`), `nil` for none.
 - Per-call options: `WithHeader`, `WithTimeout`, `WithIdempotencyKey`, `WithMaxRetries`,
-  `WithResponseInto`.
+  `WithResponseInto`. `WithQuery(name, value)` and `WithJSONSet("metadata.source", v)` send a
+  query parameter or a body property the SDK does not know yet.
+- A multipart file is an `Upload`. `acme.UploadFile("a.mp3")` opens the file for each attempt;
+  `Upload{Reader: f}` with an `*os.File` is named after it. Its media type defaults to the
+  spec's, then to its extension's.
+- The `...Stream` twin of a multipart operation sends its `stream` part as true; the other
+  leaves it out.
 - An operation that may answer a bodiless 2xx returns nil for it, scalars as a pointer.
 
 ### Pagination
@@ -569,7 +575,9 @@ for chunk, err := range stream.All() { ... } // stream.Event() is the raw event
 ```
 
 Events with a schema give a `*Stream[T]` ending at `[DONE]`, others an `*EventStream` of
-`SSEEvent`s. Lines are capped at 1 MiB.
+`SSEEvent`s. Lines are capped at 1 MiB. An error the API sends in a `*Stream[T]`, as an
+`error` event or an object with an `error`, ends it with an `*APIError` of the stream's status;
+`ping` and `keepalive` events that are not a `T` are skipped.
 
 ### Errors
 
@@ -589,6 +597,9 @@ case errors.As(err, &apiErr):
 - `errors.Is` tests the status: `ErrNotFound`, `ErrUnauthorized`, `ErrRateLimited`, `ErrServer`...
 - `APIError.Body` holds the body decoded as the declared error schema, else plain JSON.
 - `ErrorBody[T](err)` decodes it as any schema, `APIError.Detail()` as the API-wide one.
+- `err.Error()` reads `acme: POST /charges: 429 Too Many Requests: <message>`. The message is
+  `APIError.Message()`, from `error.message`, `message` or `detail`, else the body cut at 512
+  bytes; `RawBody` keeps it whole. An `errors.go` generated before keeps its own `Error()`.
 
 ### Raw responses
 
@@ -608,6 +619,12 @@ case errors.As(err, &apiErr):
 - A tagged union has a `Type` field of its own string type (`ShapeType`, with `ShapeCircle`...
   constants), and a pointer per variant. Variants fill in an empty discriminator.
 - Inline object variants of tagged unions are structs of their own: `ContentPartTextVariant`.
+- Variants sharing a tag, as OpenAI's three `message` input items, are sent with it. `Type`
+  still names the variant (`InputItemInputMessage`, sent as `"message"`), and decoding picks
+  the variant knowing the most properties of the object.
+- An enum is a string type with typed constants. A field takes `acme.StatusActive` or
+  `"active"`; a string variable needs `acme.Status(s)`, a pointer field
+  `acme.Ptr(acme.StatusActive)`.
 
 ### Notes
 
