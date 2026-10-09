@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Petstore;
 using Petstore.Models;
 
@@ -47,6 +48,52 @@ public class ClientTests
         Assert.Equal("https://petstore.test/v1/pets/1", origin.Seen[0].RequestUri!.ToString());
         Assert.Equal("Bearer tok", origin.Seen[0].Headers.Authorization!.ToString());
         Assert.NotSame(client, provider.GetRequiredService<IPetstoreClient>());
+    }
+
+    private sealed class Logs : ILoggerProvider, ILogger
+    {
+        public List<(string Category, LogLevel Level, string Message)> Entries { get; } = [];
+
+        private string _category = "";
+
+        public ILogger CreateLogger(string categoryName) => new Logs { _category = categoryName, Shared = this };
+
+        private Logs? Shared { get; init; }
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        ) => (Shared ?? this).Entries.Add((_category, logLevel, formatter(state, exception)));
+
+        public void Dispose() { }
+    }
+
+    [Fact]
+    public async Task DependencyInjectionLogsAttemptsToTheLoggerFactory()
+    {
+        var logs = new Logs();
+        var services = new ServiceCollection();
+        services.AddLogging(logging => logging.SetMinimumLevel(LogLevel.Debug).AddProvider(logs));
+        services
+            .AddPetstoreClient(options =>
+            {
+                options.Token = "tok";
+                options.BaseUrl = "https://user:secret@petstore.test/v1";
+            })
+            .ConfigurePrimaryHttpMessageHandler(() => new Origin());
+        using var provider = services.BuildServiceProvider();
+        await provider.GetRequiredService<IPetstoreClient>().Pets.RetrieveAsync("1");
+        var entry = Assert.Single(logs.Entries, e => e.Category == "Petstore");
+        Assert.Equal(LogLevel.Debug, entry.Level);
+        Assert.Matches(@"^GET https://petstore\.test/v1/pets/1: 200 in \d+ ms, attempt 0$", entry.Message);
     }
 
     [Fact]

@@ -185,6 +185,50 @@ internal static class Json
         return false;
     }
 
+    /// <summary>The number of properties of <paramref name="element"/> that <typeparamref name="T"/> does
+    /// not know, -1 when it is not a <typeparamref name="T"/>.</summary>
+    public static int Unknown<T>(JsonElement element, JsonSerializerOptions options)
+    {
+        if (!TryDeserialize<T>(element, options, out _))
+        {
+            return -1;
+        }
+        var known = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var property in TypeInfo<T>(options).Properties)
+        {
+            if (!property.IsExtensionData)
+            {
+                known.Add(property.Name);
+            }
+        }
+        var unknown = 0;
+        foreach (var property in element.EnumerateObject())
+        {
+            unknown += known.Contains(property.Name) ? 0 : 1;
+        }
+        return unknown;
+    }
+
+    /// <summary>The index of the candidate <paramref name="element"/> fits with the fewest unknown
+    /// properties, the first one on ties and when none fits.</summary>
+    public static int Pick(
+        JsonElement element,
+        JsonSerializerOptions options,
+        params Func<JsonElement, JsonSerializerOptions, int>[] candidates
+    )
+    {
+        var (best, fewest) = (0, int.MaxValue);
+        for (var i = 0; i < candidates.Length; i++)
+        {
+            var unknown = candidates[i](element, options);
+            if (unknown >= 0 && unknown < fewest)
+            {
+                (best, fewest) = (i, unknown);
+            }
+        }
+        return best;
+    }
+
     public static string? Tag(JsonElement element, string name) =>
         element.ValueKind == JsonValueKind.Object
         && element.TryGetProperty(name, out var tag)

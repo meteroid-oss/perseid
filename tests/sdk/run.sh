@@ -127,7 +127,7 @@ GRADLE
       && perseid generate java > /dev/null \
       && cp -r "$here/java/_forms/src" java/ && cd java && gradle_test) ;;
   csharp)
-    rm -rf _torture _oauth _unions && dotnet test Tests
+    rm -rf _torture _oauth _unions _tags _twins && dotnet test Tests
     # The tests of tests/sdk/csharp/_torture run on the SDK of tests/fixtures/torture.yaml, with no
     # default base URL.
     (mkdir "$work/torture" && cd "$work/torture" \
@@ -146,5 +146,15 @@ GRADLE
     (mkdir "$work/unions" && cd "$work/unions" \
       && perseid init --sdks csharp --spec "$here/../fixtures/edge-unions.yaml" > /dev/null \
       && perseid generate csharp > /dev/null \
-      && cp -r "$here/csharp/_unions/." csharp/ && cd csharp && dotnet test Tests) ;;
+      && cp -r "$here/csharp/_unions/." csharp/ && cd csharp && dotnet test Tests)
+    # Union variants sharing a tag.
+    (mkdir "$work/tags" && cd "$work/tags" \
+      && perseid init --sdks csharp --spec "$here/rust/tags/openapi.yaml" > /dev/null \
+      && perseid generate csharp > /dev/null \
+      && cp -r "$here/csharp/_tags/." csharp/ && cd csharp && dotnet test Tests)
+    # A multipart body with a `_stream` twin.
+    (mkdir "$work/twins" && cd "$work/twins" \
+      && perseid init --sdks csharp --spec "$here/csharp/_twins/openapi.yaml" > /dev/null \
+      && perseid generate csharp > /dev/null \
+      && cp -r "$here/csharp/_twins/Tests" csharp/ && cd csharp && dotnet test Tests) ;;
 esac

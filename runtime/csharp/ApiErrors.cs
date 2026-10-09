@@ -64,6 +64,57 @@ public static partial class ApiExceptionExtensions
         }
     }
 
+    private const int MaxBodyInMessage = 500;
+
+    /// <summary>The message of an error response, as <c>HTTP 429 (rate_limit_exceeded): Slow down</c>:
+    /// the code or type and message of the body's <c>error</c>, else its <c>message</c> or
+    /// <c>detail</c>, else the body itself, shortened.</summary>
+    internal static string Describe(HttpStatusCode statusCode, string body)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        var (code, message) = Summarize(body);
+        var head = code is null
+            ? $"HTTP {(int)statusCode}"
+            : $"HTTP {(int)statusCode} ({code})";
+        message ??= body.Length > MaxBodyInMessage ? $"{body[..MaxBodyInMessage]}…" : body;
+        return message.Length == 0 ? head : $"{head}: {message}";
+    }
+
+    private static (string? Code, string? Message) Summarize(string body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return (null, null);
+            }
+            if (root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.Object)
+            {
+                return (
+                    Text(error, "code") ?? Text(error, "type"),
+                    Text(error, "message") ?? Text(root, "message")
+                );
+            }
+            return (Text(root, "code"), Text(root, "error") ?? Text(root, "message") ?? Text(root, "detail"));
+        }
+        catch (JsonException)
+        {
+            return (null, null);
+        }
+    }
+
+    private static string? Text(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value)
+            ? value.ValueKind switch
+            {
+                JsonValueKind.String when value.GetString() is { Length: > 0 } text => text,
+                JsonValueKind.Number => value.GetRawText(),
+                _ => null,
+            }
+            : null;
+
     internal static string? RequestId(HttpHeaders headers)
     {
         foreach (var name in (string[])["x-request-id", "request-id"])
