@@ -249,6 +249,12 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             (None, _) => draft.package(&sdk),
         };
         toml += &format!("\n[{}]\npackage = {}\n", sdk.language, quote(&package));
+        if let Some(words) = words.as_ref().filter(|_| sdk.language == "go")
+            && draft.go_module(&sdk).is_none()
+            && target.and_then(|t| t.module.as_ref()).is_none()
+        {
+            toml += &format!("module = {}\n", quote(&words.join("-")));
+        }
         let Some(target) = target else { continue };
         if let Some(own) = target.repo.as_ref().filter(|_| repo.is_none()) {
             toml += &format!("repo = {}\n", quote(own));
@@ -756,7 +762,19 @@ fn java_package(doc: &Value, name: &str) -> Option<String> {
     let labels: Vec<&str> = host
         .split('.')
         .filter(|l| !l.is_empty())
-        .skip_while(|l| matches!(*l, "www" | "api" | "docs" | "developer" | "developers"))
+        .skip_while(|l| {
+            matches!(
+                *l,
+                "www"
+                    | "api"
+                    | "docs"
+                    | "developer"
+                    | "developers"
+                    | "help"
+                    | "support"
+                    | "platform"
+            )
+        })
         .collect();
     if labels.len() < 2 || labels.iter().any(|l| l.parse::<u8>().is_ok()) {
         return None;
@@ -852,6 +870,10 @@ mod tests {
         assert_eq!(
             package("https://api.pets.co.uk").as_deref(),
             Some("uk.co.pets.petstore")
+        );
+        assert_eq!(
+            package("https://help.openai.com/").as_deref(),
+            Some("com.openai.petstore")
         );
         assert_eq!(package("http://localhost:8080"), None);
         assert_eq!(package("http://127.0.0.1"), None);
