@@ -126,6 +126,7 @@ pub fn populate_env(
             let s = normalize_doc_text(&s);
             let s: Cow<'_, str> = match &*style {
                 "go" => go::doc_text(&s).into(),
+                "rust" => text_fences(&s).into(),
                 _ => s.into(),
             };
 
@@ -463,6 +464,26 @@ fn contains_required_param(value: Value) -> Result<bool, minijinja::Error> {
     Ok(false)
 }
 
+/// `text` with its code fences that name no language marked as `text`: rustdoc would compile
+/// them as Rust doctests, such as a spec's JSON or SSE examples.
+fn text_fences(text: &str) -> String {
+    let mut open = false;
+    text.lines()
+        .map(|line| {
+            let fence = line.trim_start();
+            if !(fence.starts_with("```") || fence.starts_with("~~~")) {
+                return line.to_owned();
+            }
+            open = !open;
+            match open && fence[3..].trim().is_empty() {
+                true => format!("{line}text"),
+                false => line.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{java_comment, mentions_ident, normalize_doc_text, replace_ident};
@@ -498,6 +519,15 @@ mod tests {
         let out = doc(r"C:\users and \u002a/ and */*", "java");
         assert!(!out.contains('\\'));
         assert_eq!(out.matches("*/").count(), 1);
+    }
+
+    #[test]
+    fn rust_doc_fences_without_a_language_are_text() {
+        let out = doc("eg\n```\n[{ x: 1 }]\n```\n```json\n{}\n```", "rust");
+        assert_eq!(
+            out,
+            "/// eg\n/// ```text\n/// [{ x: 1 }]\n/// ```\n/// ```json\n/// {}\n/// ```"
+        );
     }
 
     #[test]
