@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import json
+import mimetypes
 import os
 import typing as t
 
@@ -486,6 +487,46 @@ _File: t.TypeAlias = (
 )
 
 
+class _PathFile:
+    """The file at a path, opened when ``httpx`` reads it and again for each retry."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.size = os.stat(path).st_size
+        self._file: t.IO[bytes] | None = None
+        self._done = False
+
+    @property
+    def name(self) -> str:
+        return self.path
+
+    def read(self, size: int = -1) -> bytes:
+        if self._done:
+            return b""
+        if self._file is None:
+            self._file = open(self.path, "rb")  # noqa: SIM115
+        chunk = self._file.read(size)
+        if not chunk or size < 0:
+            self.close()
+            self._done = True
+        return chunk
+
+    def tell(self) -> int:
+        return 0
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        if whence == os.SEEK_END:
+            return self.size
+        self.close()
+        self._done = False
+        return 0
+
+    def close(self) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+
+
 def multipart_files(fields: t.Sequence[MultipartField]) -> list[_File]:
     """Renders multipart fields as ``httpx`` files, skipping ``None``.
 
@@ -503,8 +544,11 @@ def multipart_files(fields: t.Sequence[MultipartField]) -> list[_File]:
             for item in items:
                 if isinstance(item, os.PathLike):
                     source = os.fspath(t.cast("os.PathLike[str]", item))
-                    with open(source, "rb") as file:
-                        item = Upload(file.read(), os.path.basename(source))
+                    declared = content_type not in (None, _OCTET_STREAM)
+                    guessed = mimetypes.guess_type(source)[0] or _OCTET_STREAM
+                    kind = content_type if declared and content_type else guessed
+                    file = t.cast("t.IO[bytes]", _PathFile(source))
+                    item = Upload(file, os.path.basename(source), kind)
                 upload = item if isinstance(item, Upload) else Upload(t.cast("bytes", item))
                 if content_type and upload.content_type == _OCTET_STREAM:
                     upload = upload._replace(content_type=content_type)
@@ -525,4 +569,4 @@ def replayable(content: object, files: t.Sequence[_File]) -> bool:
     """Whether a request body can be sent again, for retries."""
     if content is not None and not isinstance(content, (bytes, str)):
         return False
-    return all(isinstance(file[1], (bytes, str)) for _, file in files)
+    return all(isinstance(file[1], (bytes, str, _PathFile)) for _, file in files)

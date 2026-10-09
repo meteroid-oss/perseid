@@ -315,6 +315,39 @@ export type Upload =
 
 const basename = (path: string) => path.split(/[\\/]/).pop() || undefined;
 
+const OCTET_STREAM = "application/octet-stream";
+
+const MEDIA_TYPES: Record<string, string> = {
+  csv: "text/csv",
+  gif: "image/gif",
+  htm: "text/html",
+  html: "text/html",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  json: "application/json",
+  jsonl: "application/jsonl",
+  m4a: "audio/mp4",
+  md: "text/markdown",
+  mp3: "audio/mpeg",
+  mp4: "video/mp4",
+  mpeg: "audio/mpeg",
+  ogg: "audio/ogg",
+  pdf: "application/pdf",
+  png: "image/png",
+  svg: "image/svg+xml",
+  txt: "text/plain",
+  wav: "audio/wav",
+  webm: "video/webm",
+  webp: "image/webp",
+  xml: "application/xml",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  zip: "application/zip",
+};
+
+/** The media type of a file by its extension, if known. */
+const mediaType = (path: string) => MEDIA_TYPES[path.split(".").pop()?.toLowerCase() ?? ""];
+
 function isData(upload: Upload): upload is UploadData {
   return (
     upload instanceof Blob ||
@@ -327,7 +360,9 @@ function isData(upload: Upload): upload is UploadData {
 }
 
 /** The file of `upload` as a `Blob`, which a retry can send again, and its name if it has one. */
-async function readUpload(upload: Upload): Promise<{ blob: Blob; filename?: string | undefined; contentType?: string | undefined }> {
+async function readUpload(
+  upload: Upload
+): Promise<{ blob: Blob; filename?: string | undefined; contentType?: string | undefined; path?: string | undefined }> {
   if (isData(upload)) {
     return readUpload({ data: upload });
   }
@@ -335,7 +370,8 @@ async function readUpload(upload: Upload): Promise<{ blob: Blob; filename?: stri
     // A variable keeps bundlers for the browser or edge runtimes from resolving `node:fs`.
     const fs = "node:fs";
     const { openAsBlob } = await import(/* webpackIgnore: true */ fs);
-    return { blob: await openAsBlob(upload.path), filename: upload.filename ?? basename(upload.path), contentType: upload.contentType };
+    const blob = await openAsBlob(upload.path);
+    return { blob, filename: upload.filename ?? basename(upload.path), contentType: upload.contentType, path: upload.path };
   }
   const { data } = upload;
   let blob: Blob;
@@ -395,8 +431,10 @@ export class MultipartBody {
 
   /** Adds a file part. `contentType` is the media type the spec declares, used unless the upload has its own. */
   public file(name: string, upload: Upload, contentType?: string): this {
-    const part = readUpload(upload).then(({ blob, filename, contentType: own }) => {
-      const partType = own ?? (blob.type || contentType || "application/octet-stream");
+    const part = readUpload(upload).then(({ blob, filename, contentType: own, path }) => {
+      const declared = contentType === OCTET_STREAM ? undefined : contentType;
+      const byPath = path === undefined ? undefined : mediaType(path);
+      const partType = own ?? (blob.type || declared || byPath || contentType || OCTET_STREAM);
       return [
         `--${this.boundary}\r\nContent-Disposition: form-data; name="${quoted(name)}"; filename="${quoted(filename ?? "file")}"\r\nContent-Type: ${partType}\r\n\r\n`,
         blob,

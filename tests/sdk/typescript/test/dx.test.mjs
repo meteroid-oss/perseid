@@ -341,6 +341,13 @@ describe("multipart files", () => {
       assert.ok(body.includes('name="purpose"\r\n\r\nbatch'), body);
     }
   });
+
+  it("type a path by the spec, else by its extension", async () => {
+    assert.ok((await sent({ path })).includes("Content-Type: application/jsonl\r\n"));
+    const { calls, dx } = client(json({ id: "f" }));
+    await dx.images.upload({ file: { path } });
+    assert.ok((await calls[0].body.text()).includes("Content-Type: image/png\r\n"));
+  });
 });
 
 describe("types", () => {

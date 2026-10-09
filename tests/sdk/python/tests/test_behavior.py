@@ -598,13 +598,45 @@ ITEM_URL = r"https://features\.test/api/v2/items/i1"
 
 
 class MultipartTest(unittest.TestCase):
-    def test_a_path_is_read_as_a_file_named_after_it(self) -> None:
+    def test_a_path_is_streamed_as_a_file_named_after_it_and_typed_by_the_spec_or_its_extension(
+        self,
+    ) -> None:
         streaming = importlib.import_module(f"{features.__name__}.api._streaming")
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "a.csv"
             path.write_bytes(b"x,y")
-            files = streaming.multipart_files([("file", path, True, "text/csv")])
-        self.assertEqual(files, [("file", ("a.csv", b"x,y", "text/csv"))])
+            for declared, sent in [
+                ("image/png", "image/png"),
+                ("application/octet-stream", "text/csv"),
+                (None, "text/csv"),
+            ]:
+                with self.subTest(declared=declared):
+                    [(name, (filename, content, content_type))] = streaming.multipart_files(
+                        [("file", path, True, declared)]
+                    )
+                    self.assertEqual((name, filename, content_type), ("file", "a.csv", sent))
+                    self.assertEqual(content.read(), b"x,y")
+                    content.seek(0)
+                    self.assertEqual(content.read(), b"x,y", "read again for a retry")
+            self.assertTrue(streaming.replayable(None, streaming.multipart_files([("f", path, True, None)])))
+            with self.assertRaises(FileNotFoundError):
+                streaming.multipart_files([("file", Path(folder) / "missing.csv", True, None)])
+
+    def test_a_path_upload_is_sent_again_on_a_retry(self) -> None:
+        bodies: list[bytes] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            bodies.append(request.read())
+            return unavailable() if len(bodies) == 1 else httpx.Response(200, json={"status": "ok"})
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "notes.txt"
+            path.write_bytes(b"from disk")
+            with sync_client(handler) as api:
+                api.streaming.upload_file(file=path, name="n")
+        self.assertEqual(len(bodies), 2)
+        self.assertEqual(bodies[0], bodies[1])
+        self.assertIn(b"Content-Type: text/plain\r\n\r\nfrom disk", bodies[1])
 
 
 class LoggingTest(unittest.TestCase):
