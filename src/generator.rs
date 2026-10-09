@@ -285,6 +285,7 @@ impl Generator<'_> {
                     request_only => request_only_schemas.contains(name.as_str()),
                     enum_literals => &enum_literals,
                     open_enums => &open_enums,
+                    variant_tags => variant_tags(&api.types, ty),
                     ..errors.clone()
                 },
             )?);
@@ -464,6 +465,74 @@ fn reachable<'a>(api: &'a Api, roots: BTreeSet<&'a str>) -> BTreeSet<&'a str> {
         }
     }
     seen
+}
+
+/// How a struct variant of an internally tagged union carries its tag.
+#[derive(serde::Serialize)]
+struct VariantTag {
+    /// The tag the struct declares, which several variants may share, else the variant's.
+    tag: String,
+    /// The struct's tag property is optional, for callers to leave out.
+    optional: bool,
+    /// The struct's required and known properties, to tell apart the variants of one tag.
+    required: Vec<String>,
+    known: Vec<String>,
+}
+
+/// The `VariantTag` of each struct variant of the internally tagged union `ty`, by variant name.
+fn variant_tags(types: &Types, ty: &Type) -> std::collections::BTreeMap<String, VariantTag> {
+    let TypeData::StructEnum {
+        discriminator_field: field,
+        repr: StructEnumRepr::InternallyTagged { variants },
+        ..
+    } = &ty.data
+    else {
+        return Default::default();
+    };
+    let mut tags = std::collections::BTreeMap::new();
+    for variant in variants {
+        let EnumVariantType::Ref {
+            schema_ref: Some(target),
+            ..
+        } = &variant.content
+        else {
+            continue;
+        };
+        let (mut required, mut known, mut stack, mut seen) =
+            (vec![], vec![], vec![target.as_str()], BTreeSet::new());
+        while let Some(name) = stack.pop() {
+            let Some(TypeData::Struct { fields, .. }) = types.get(name).map(|t| &t.data) else {
+                continue;
+            };
+            for f in fields {
+                match f.r#type.referenced_schema() {
+                    Some(base) if f.flatten => {
+                        if seen.insert(base) {
+                            stack.push(base);
+                        }
+                    }
+                    _ if f.flatten => {}
+                    _ => {
+                        known.push(f.name.clone());
+                        if f.required {
+                            required.push(f.name.clone());
+                        }
+                    }
+                }
+            }
+        }
+        let tag = types::declared_tag(types, target, field, &variant.name).unwrap_or(&variant.name);
+        tags.insert(
+            variant.name.clone(),
+            VariantTag {
+                tag: tag.to_owned(),
+                optional: known.contains(field) && !required.contains(field),
+                required,
+                known,
+            },
+        );
+    }
+    tags
 }
 
 /// Schemas `ty` holds by value that lead back to it, so a language without indirection by
