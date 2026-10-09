@@ -5,9 +5,11 @@ import @@JAVA_PACKAGE@@.exceptions.InvalidDataException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
+import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.function.ToIntFunction;
 
-/** Picks the variant of an object in a union of several objects without a discriminator. */
+/** Picks the variant of an object in a union of several objects, or of variants sharing a tag. */
 public final class Unions {
     private Unions() {}
 
@@ -62,6 +64,64 @@ public final class Unions {
         } catch (JsonProcessingException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    /**
+     * Decodes a value as one variant.
+     *
+     * @param <T> the variant
+     */
+    @FunctionalInterface
+    public interface Decoder<T> {
+        /**
+         * The decoded value.
+         *
+         * @return the value
+         * @throws IOException if it is not this variant
+         */
+        T decode() throws IOException;
+    }
+
+    /**
+     * The value of the candidate that decodes it with the fewest {@code leftovers}, the first one
+     * on ties; the first one that decodes when {@code leftovers} rejects them all with {@code
+     * Integer.MAX_VALUE}.
+     *
+     * @param <T> the union
+     * @param leftovers the properties a decoded value does not know, or {@code Integer.MAX_VALUE}
+     * @param candidates the variants to try, in order of preference
+     * @return the decoded value
+     * @throws IOException the first failure, when no candidate decodes
+     */
+    @SafeVarargs
+    public static <T> T closest(ToIntFunction<T> leftovers, Decoder<? extends T>... candidates)
+            throws IOException {
+        T best = null;
+        T fallback = null;
+        int fewest = Integer.MAX_VALUE;
+        Exception failure = null;
+        for (Decoder<? extends T> candidate : candidates) {
+            T value;
+            try {
+                value = candidate.decode();
+            } catch (IOException | RuntimeException e) {
+                failure = failure == null ? e : failure;
+                continue;
+            }
+            fallback = fallback == null ? value : fallback;
+            int unknown = leftovers.applyAsInt(value);
+            if (unknown < fewest) {
+                best = value;
+                fewest = unknown;
+            }
+        }
+        if (best != null || fallback != null) {
+            return best != null ? best : fallback;
+        }
+        if (failure instanceof IOException) {
+            throw (IOException) failure;
+        }
+        throw (RuntimeException) failure;
     }
 
     /**
