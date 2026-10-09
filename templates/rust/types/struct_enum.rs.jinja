@@ -29,7 +29,7 @@ use super::{
 {{ doc_comment }}
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct {{ type_name }} {
-    {{ struct_fields(shared, recursive, request_schema, owner=type_name) }}
+    {{ struct_fields(shared, recursive, tri_state, owner=type_name) }}
 
     #[serde(flatten)]
     pub content: {{ enum_name }},
@@ -44,7 +44,7 @@ pub struct {{ type_name }} {
 #[derive(Clone, Debug, {% if not required %}Default, {% endif %}PartialEq, Deserialize, Serialize)]
 {% set extra = extra_name(variant.fields) -%}
 pub struct {{ struct_name }} {
-    {{ struct_fields(variant.fields, recursive, request_schema, tag, owner=struct_name) }}
+    {{ struct_fields(variant.fields, recursive, tri_state, tag, owner=struct_name) }}
     {{- extra_field(extra) }}
 }
 

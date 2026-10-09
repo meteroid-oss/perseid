@@ -72,16 +72,16 @@ pub use self::{
 {% set walk = namespace(schema=schema | to_upper_camel_case, expr=root, option=false, ty="") -%}
 {% set as = "as_mut()" if mut else "as_ref()" -%}
 {% for segment in path -%}
-{% set found = namespace(field=none, in_request=false) -%}
+{% set found = namespace(field=none, tri_state=false) -%}
 {% for _, t in api.types | items if (t.name | to_upper_camel_case) == walk.schema -%}
 {% for f in t.fields if f.name == segment %}{% set found.field = f %}{% endfor -%}
-{% set found.in_request = t.name in request_schemas -%}
+{% set found.tri_state = walk.schema in tri_state_types -%}
 {% endfor -%}
 {% set member = walk.expr ~ ("?" if walk.option else "") ~ "." ~ (found.field.name | to_rust_ident) -%}
 {% set walk.ty = found.field.type.to_rust() -%}
 {% if found.field.required and not found.field.nullable -%}
 {% set walk.expr = member %}{% set walk.option = false -%}
-{% elif found.field.nullable and not found.field.required and found.in_request -%}
+{% elif found.field.nullable and not found.field.required and found.tri_state -%}
 {% set walk.expr = member ~ "." ~ as ~ "?." ~ as %}{% set walk.option = true -%}
 {% else -%}
 {% set walk.expr = member ~ "." ~ as %}{% set walk.option = true -%}

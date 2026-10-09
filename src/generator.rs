@@ -112,6 +112,13 @@ pub(crate) fn generate_with_output_context(
         "request_only_types",
         minijinja::Value::from_serialize(request_only),
     );
+    let tri_state: BTreeSet<String> = (tri_state_schemas(&api).into_iter())
+        .map(|name| name.to_upper_camel_case())
+        .collect();
+    minijinja_env.add_global(
+        "tri_state_types",
+        minijinja::Value::from_serialize(tri_state),
+    );
     minijinja_env.add_template(tpl_path, &tpl_source)?;
     let tpl = minijinja_env.get_template(tpl_path)?;
 
@@ -242,6 +249,7 @@ impl Generator<'_> {
         );
         let request_schemas = request_schemas(&api);
         let request_only_schemas = request_only_schemas(&api);
+        let tri_state_schemas = tri_state_schemas(&api);
         // The enums with a `Literal` alias of their values (no schema takes its name), and the open ones.
         let enum_literals: BTreeSet<String> = (api.types.values())
             .filter(|t| {
@@ -316,6 +324,7 @@ impl Generator<'_> {
                     is_error_schema => api.error_schemas.contains(name),
                     request_schema => request_schemas.contains(name.as_str()),
                     request_only => request_only_schemas.contains(name.as_str()),
+                    tri_state => tri_state_schemas.contains(name.as_str()),
                     enum_literals => &enum_literals,
                     open_enums => &open_enums,
                     convertible_types => &convertible_types,
@@ -330,10 +339,7 @@ impl Generator<'_> {
     }
 
     fn generate_summary(&self, api: Api) -> anyhow::Result<Vec<Utf8PathBuf>> {
-        let request_schemas: BTreeSet<String> = (request_schemas(&api).into_iter())
-            .map(str::to_owned)
-            .collect();
-        self.render_tpl(None, context! { api, request_schemas })
+        self.render_tpl(None, context! { api })
     }
 
     fn render_tpl(
@@ -433,6 +439,14 @@ fn request_only_schemas(api: &Api) -> BTreeSet<&str> {
     );
     let received = reachable(api, received);
     requests.difference(&received).copied().collect()
+}
+
+/// Schemas whose optional nullable fields tell `null` from absent: the request-only ones, where
+/// sending `null` clears a value, and PATCH bodies, even when responses carry them too.
+fn tri_state_schemas(api: &Api) -> BTreeSet<&str> {
+    let mut schemas = request_only_schemas(api);
+    schemas.extend(api.resources.values().flat_map(Resource::patch_bodies));
+    schemas
 }
 
 /// The class names of the models requests carry that SDKs also take as their JSON, typed: Python's

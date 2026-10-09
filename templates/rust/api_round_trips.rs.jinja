@@ -2,8 +2,9 @@
 // this file is @generated
 //! Decodes sample JSON of every model and encodes it back, from round_trips.json.
 //!
-//! Date-times compare as instants, and a `null` optional property may be left out: only request
-//! schemas tell `null` from absent. Everything else must come back exactly.
+//! Date-times compare as instants, and a `null` optional property may be left out: only
+//! request-only schemas and PATCH bodies tell `null` from absent. Everything else must come back
+//! exactly.
 use chrono::DateTime;
 use serde_json::Value;
 

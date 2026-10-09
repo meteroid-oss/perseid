@@ -227,9 +227,10 @@ logged.
 - `new` takes strings, enums and unions as `impl Into<_>`:
   `CreateChatCompletionRequest::new(vec![UserMessage::new("hi").into()], "gpt-4o")`.
 - `Default` is implemented when every required field has a default.
-- In the structs requests send, nullable optional fields are `Option<Option<T>>`: `Some(None)`
-  sends `null`, `None` leaves the field out. Their setters wrap the value, and `clear_*()` sends
-  `null`.
+- In the structs only requests send and in PATCH bodies, nullable optional fields are
+  `Option<Option<T>>`: `Some(None)` sends `null`, `None` leaves the field out. Their setters wrap
+  the value, and `clear_*()` sends `null`. Structs responses carry too read them as `Option<T>`:
+  `null` decodes to `None`, which is left out when sent.
 - A named string schema, such as `CustomerId`, is a newtype over `String`: built `From` any
   string, read as `&str` through `Deref`, `as_str()` or `Display`, compared with strings. One ID
   type cannot be passed where another is expected.
@@ -509,8 +510,10 @@ ACME_LOG=debug python app.py
   are inlined: their fields are the model's own.
 - In models only requests send, enum fields also take their values, as arguments do.
 - Unknown properties are kept in `extra_fields`, readable as attributes, and sent back.
-- In request models, an optional nullable field defaults to `UNSET`: omitted, while `None` sends
-  `null`. In response models it is `X | None = None`.
+- In models only requests send and in PATCH bodies, an optional nullable field defaults to
+  `UNSET`: omitted, while `None` sends `null`. In models responses carry too it is
+  `X | None = None`, `None` omitted unless it was received as `null`. A method's keyword
+  arguments tell them apart whatever the model: `note=None` sends `null`, leaving it out omits it.
 - A property named after a model member (`extra_fields`, `to_dict`) gets a trailing `_`.
 - A discriminated union is the union of its variants:
   `t.Annotated[Circle | Square | UnknownVariant, Discriminator(...)]`.

@@ -66,10 +66,11 @@ over the client's credentials.
 
 ## Models
 
-Models are keyword-only dataclasses with `from_dict`/`to_dict`. In models requests send, an
-optional field that accepts `null` defaults to `UNSET` (from `@@PACKAGE_NAME@@.models`): it is
-left out of the request, while `None` sends `null`; in response models it is simply `None` when
-absent. A field holding a string or an object, such as an expandable id, is typed `str | Model`.
+Models are keyword-only dataclasses with `from_dict`/`to_dict`. In models only requests send
+and in PATCH bodies, an optional field that accepts `null` defaults to `UNSET` (from
+`@@PACKAGE_NAME@@.models`): it is left out of the request, while `None` sends `null`. In models
+responses carry too it is simply `None` when absent or `null`, and `None` is left out of the
+request; the keyword arguments of methods still send `null` for `None`. A field holding a string or an object, such as an expandable id, is typed `str | Model`.
 A discriminated union is the union of its variant models (`Circle | Square | UnknownVariant`),
 decoded into the variant the tag names; when its variants share fields, it is a model holding the
 discriminator and the variant, and passing `content=` alone fills in the tag.

@@ -3117,6 +3117,104 @@ components:
 }
 
 #[test]
+fn null_differs_from_absent_only_in_request_only_models_and_patch_bodies() {
+    let dir = project_from("petstore.yaml", &["rust", "python"]);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Things, version: "1" }
+paths:
+  /things:
+    post:
+      operationId: create_thing
+      tags: [things]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Thing' } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/Thing' } } } }
+  /things/{id}:
+    patch:
+      operationId: update_thing
+      tags: [things]
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/ThingPatch' } } }
+      responses:
+        '200': { description: ok, content: { application/json: { schema: { $ref: '#/components/schemas/ThingPatch' } } } }
+  /drafts:
+    post:
+      operationId: create_draft
+      tags: [drafts]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/Draft' } } }
+      responses:
+        '204': { description: ok }
+components:
+  schemas:
+    Thing:
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        note: { type: [string, 'null'] }
+    ThingPatch:
+      type: object
+      properties:
+        note: { type: [string, 'null'] }
+    Draft:
+      type: object
+      properties:
+        note: { type: [string, 'null'] }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let rust = |path: &str| {
+        fs::read_to_string(dir.path().join("rust/src/models").join(path))
+            .unwrap()
+            .split_whitespace()
+            .collect::<String>()
+    };
+    let python =
+        |path: &str| fs::read_to_string(dir.path().join("python/petstore").join(path)).unwrap();
+
+    // A model responses carry too reads as a plain optional.
+    let thing = rust("thing.rs");
+    assert!(thing.contains("pubnote:Option<String>,"), "{thing}");
+    assert!(!thing.contains("clear_note"), "{thing}");
+    assert!(
+        python("models/thing.py").contains("    note: str | None = None\n"),
+        "{}",
+        python("models/thing.py")
+    );
+    for (rust_file, python_file) in [
+        ("thing_patch.rs", "models/thing_patch.py"),
+        ("draft.rs", "models/draft.py"),
+    ] {
+        let model = rust(rust_file);
+        assert!(model.contains("pubnote:Option<Option<String>>"), "{model}");
+        assert!(model.contains("pubfnclear_note(mutself)"), "{model}");
+        let model = python(python_file);
+        assert!(
+            model.contains("    note: str | None | Unset = UNSET\n"),
+            "{model}"
+        );
+    }
+
+    // An argument still tells `None` (sent as `null`) from left out, whatever its model.
+    let things = python("api/things.py");
+    for text in [
+        "note: str | None | Unset = UNSET,",
+        "with_nulls(Thing(id=id, note=None if isinstance(note, Unset) else note, ), note=note)",
+        "ThingPatch(note=note, )",
+    ] {
+        assert!(things.contains(text), "no `{text}` in {things}");
+    }
+}
+
+#[test]
 fn rust_timeout_stream_and_error_docs_follow_the_config() {
     let dir = project_from("torture.yaml", &["rust"]);
     let read = |path: &str| {

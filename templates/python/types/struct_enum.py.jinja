@@ -50,7 +50,7 @@ from .{{ module_name(c) }} import {{ c | to_upper_camel_case }}{% if param %}, {
     {{ panic("struct enum `" ~ type.name ~ "`: the discriminator, content and shared fields collide") }}
 {%- endif -%}
 {% set runtime_names = ["FROM_CONTENT", "TaggedUnionModel", "UnknownVariant"] -%}
-{% if request_schema and type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
+{% if tri_state and type.fields | selectattr("nullable") | rejectattr("required") | list | length > 0 -%}
     {% set runtime_names = runtime_names + ["UNSET", "Unset"] -%}
 {% endif -%}
 {% set objects = namespace(any=false) -%}
@@ -105,7 +105,7 @@ class {{ class_name }}(TaggedUnionModel):
     {%- set attrs = attr_names(type.fields) | split | list %}
     {%- for field in type.fields %}
 
-    {{ field_ident(field) }}: {{ in_class(field_decl(field, request_schema), attrs) }}
+    {{ field_ident(field) }}: {{ in_class(field_decl(field, tri_state), attrs) }}
         {%- if field.description is defined %}
     {{ docstring(field.description) | indent(4) }}
         {%- endif %}

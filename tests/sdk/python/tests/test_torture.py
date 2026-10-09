@@ -223,6 +223,45 @@ components:
       properties: {type: {type: string, enum: [call]}, name: {type: string}}
 """
 shared = generate("shared", spec=SHARED_TAG_SPEC, base_url=None)
+
+NULLS_SPEC = """
+openapi: 3.1.0
+info: {title: Nulls, version: "1"}
+paths:
+  /notes:
+    post:
+      operationId: create_note
+      tags: [notes]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Note'}}}
+      responses:
+        "200":
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/Note'}}}
+  /notes/{id}:
+    patch:
+      operationId: update_note
+      tags: [notes]
+      parameters: [{name: id, in: path, required: true, schema: {type: string}}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/NotePatch'}}}
+      responses:
+        "200":
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/NotePatch'}}}
+components:
+  schemas:
+    Note:
+      type: object
+      required: [id]
+      properties: {id: {type: string}, text: {type: [string, 'null']}, color: {type: [string, 'null']}}
+    NotePatch:
+      type: object
+      properties: {text: {type: [string, 'null']}}
+"""
+nulls = generate("nulls", spec=NULLS_SPEC)
 from torture import RateLimitError, Torture, models  # noqa: E402
 from torture import (  # noqa: E402
     APIConnectionError,
@@ -962,6 +1001,39 @@ class ScoresTest(unittest.TestCase):
             api.things.update("a/b")
         self.assertEqual(thing.id, "a/b")
         self.assertEqual([r.method for r in self.requests], ["GET", "PATCH"])
+
+
+class SharedModelNullsTest(unittest.TestCase):
+    """A model responses carry too reads an optional nullable field as `None`, PATCH bodies keep UNSET."""
+
+    def setUp(self) -> None:
+        self.bodies: list[object] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            self.bodies.append(body)
+            return httpx.Response(200, json=body)
+
+        self.api = nulls.Nulls(api_key="k", http_client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    def test_shared_models_read_none(self) -> None:
+        Note = nulls.models.Note
+        self.assertIsNone(Note(id="1").text)
+        self.assertEqual(Note(id="1", text=None).to_dict(), {"id": "1"})
+        self.assertEqual(Note.from_dict({"id": "1", "text": None}).to_dict(), {"id": "1", "text": None})
+        self.assertIs(nulls.models.NotePatch().text, nulls.models.UNSET)
+
+    def test_arguments_still_send_null_when_passed_none(self) -> None:
+        note = self.api.notes.create(id="1", text=None)
+        self.assertEqual(self.bodies[-1], {"id": "1", "text": None})
+        self.assertIsNone(note.text)
+        self.assertEqual(note.to_dict(), {"id": "1", "text": None})
+        self.api.notes.create(id="1", color="red")
+        self.assertEqual(self.bodies[-1], {"id": "1", "color": "red"})
+        self.api.notes.update("1", text=None)
+        self.assertEqual(self.bodies[-1], {"text": None})
+        self.api.notes.update("1")
+        self.assertEqual(self.bodies[-1], {})
 
 
 if __name__ == "__main__":
