@@ -46,7 +46,7 @@ export { LIB_VERSION, type RequestOptions } from "./request.js";
 {%- endmacro %}
 {{ runtime_exports("apiPromise", ["APIPromise"]) }}
 {{ runtime_exports("pagination", ["Page", "PagePromise"]) }}
-{{ runtime_exports("streaming", ["EventStream", "Stream"]) }}
+{{ runtime_exports("streaming", ["BinaryResponse", "EventStream", "Stream"]) }}
 export type { WithResponse } from "./apiPromise.js";
 {% for module in sdk.extra_exports | default([]) -%}
 export * from "./{{ module }}.js";

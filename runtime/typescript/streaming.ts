@@ -13,6 +13,8 @@ export type SseEvent = {
 };
 
 const DONE: unique symbol = Symbol("done");
+const SKIP: unique symbol = Symbol("skip");
+const KEEPALIVES = new Set(["ping", "keepalive"]);
 
 /**
  * A live `text/event-stream` response, iterated once with `for await`, yielding the events
@@ -26,17 +28,20 @@ export class Stream<T> implements AsyncIterable<T> {
   constructor(
     /** The HTTP response, for its status and headers. */
     public readonly response: Response,
-    private readonly decode: (event: SseEvent) => T | typeof DONE
+    private readonly decode: (event: SseEvent) => T | typeof DONE | typeof SKIP
   ) {}
 
   /**
    * @internal A stream of the JSON `data` of each event, parsed by `parse`, up to `[DONE]`.
-   * `apiError`, when given, is thrown for an `error` event or data with an `error` property.
+   * `apiError` is thrown for an `error` event, and for data with an `error` property that is not
+   * a `T` or, unless `declaresError`, whose model does not declare it. Keepalives that are not a
+   * `T` are skipped.
    */
   static json<T>(
     response: Response,
     parse: (json: any) => T,
-    apiError?: (data: string, json: unknown) => Error
+    apiError: (data: string, json: unknown) => Error,
+    declaresError = false
   ): Stream<T> {
     return new Stream(response, (event) => {
       if (event.data === "[DONE]") {
@@ -46,16 +51,29 @@ export class Stream<T> implements AsyncIterable<T> {
       try {
         json = parseJson(event.data);
       } catch (error) {
-        if (apiError && event.event === "error") {
+        if (event.event === "error") {
           throw apiError(event.data, undefined);
+        }
+        if (KEEPALIVES.has(event.event)) {
+          return SKIP;
         }
         throw new APIDecodeError("An event's data is not valid JSON.", event.data, { cause: error });
       }
-      const failed = event.event === "error" || (isJsonObject(json) && (json as { error?: unknown }).error != null);
-      if (apiError && failed) {
+      const reported = isJsonObject(json) && (json as { error?: unknown }).error != null;
+      if (event.event === "error" || (reported && !declaresError)) {
         throw apiError(event.data, json);
       }
-      return decodeBody(parse, json, event.data);
+      try {
+        return decodeBody(parse, json, event.data);
+      } catch (error) {
+        if (reported) {
+          throw apiError(event.data, json);
+        }
+        if (KEEPALIVES.has(event.event)) {
+          return SKIP;
+        }
+        throw error;
+      }
     });
   }
 
@@ -95,6 +113,9 @@ export class Stream<T> implements AsyncIterable<T> {
           if (value === DONE) {
             return;
           }
+          if (value === SKIP) {
+            continue;
+          }
           this.event = event;
           yield value;
         }
@@ -112,6 +133,89 @@ export class EventStream extends Stream<SseEvent> {
   /** @internal */
   constructor(response: Response) {
     super(response, (event) => event);
+  }
+}
+
+/**
+ * A binary response, its body read only as it is consumed: `bytes()`, `arrayBuffer()`, `blob()`
+ * and `text()` read it whole, `for await` and `body` give its chunks as they arrive. The body is
+ * read once. The call's timeout covers waiting for the headers, then each read of the body; a
+ * failed read throws an `APIConnectionError`. Call `cancel()` to leave the body unread.
+ */
+export class BinaryResponse implements AsyncIterable<Uint8Array> {
+  /** @internal */
+  constructor(
+    /** The HTTP response, for its status, headers and URL. Read the body through this object. */
+    public readonly response: Response,
+    /** The body as a stream of chunks. */
+    public readonly body: ReadableStream<Uint8Array>
+  ) {}
+
+  /** The HTTP status. */
+  public get status(): number {
+    return this.response.status;
+  }
+
+  /** The response headers, such as `content-type` and `content-length`. */
+  public get headers(): Headers {
+    return this.response.headers;
+  }
+
+  /** The whole body. */
+  public async bytes(): Promise<Uint8Array> {
+    return await this.concat();
+  }
+
+  public async arrayBuffer(): Promise<ArrayBuffer> {
+    return (await this.concat()).buffer as ArrayBuffer;
+  }
+
+  /** The whole body, typed by its `content-type`. */
+  public async blob(): Promise<Blob> {
+    return new Blob([await this.concat()], { type: this.headers.get("content-type") ?? "" });
+  }
+
+  /** The whole body, decoded as UTF-8. */
+  public async text(): Promise<string> {
+    return new TextDecoder().decode(await this.concat());
+  }
+
+  /** Stops reading the body and releases the connection. */
+  public async cancel(): Promise<void> {
+    if (!this.body.locked) {
+      await this.body.cancel();
+    }
+  }
+
+  public async *[Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+    const reader = this.body.getReader();
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          return;
+        }
+        yield chunk.value;
+      }
+    } finally {
+      reader.cancel().catch(() => undefined);
+    }
+  }
+
+  private async concat() {
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    for await (const chunk of this) {
+      chunks.push(chunk);
+      length += chunk.byteLength;
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
   }
 }
 
@@ -211,6 +315,39 @@ export type Upload =
 
 const basename = (path: string) => path.split(/[\\/]/).pop() || undefined;
 
+const OCTET_STREAM = "application/octet-stream";
+
+const MEDIA_TYPES: Record<string, string> = {
+  csv: "text/csv",
+  gif: "image/gif",
+  htm: "text/html",
+  html: "text/html",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  json: "application/json",
+  jsonl: "application/jsonl",
+  m4a: "audio/mp4",
+  md: "text/markdown",
+  mp3: "audio/mpeg",
+  mp4: "video/mp4",
+  mpeg: "audio/mpeg",
+  ogg: "audio/ogg",
+  pdf: "application/pdf",
+  png: "image/png",
+  svg: "image/svg+xml",
+  txt: "text/plain",
+  wav: "audio/wav",
+  webm: "video/webm",
+  webp: "image/webp",
+  xml: "application/xml",
+  yaml: "application/yaml",
+  yml: "application/yaml",
+  zip: "application/zip",
+};
+
+/** The media type of a file by its extension, if known. */
+const mediaType = (path: string) => MEDIA_TYPES[path.split(".").pop()?.toLowerCase() ?? ""];
+
 function isData(upload: Upload): upload is UploadData {
   return (
     upload instanceof Blob ||
@@ -223,7 +360,9 @@ function isData(upload: Upload): upload is UploadData {
 }
 
 /** The file of `upload` as a `Blob`, which a retry can send again, and its name if it has one. */
-async function readUpload(upload: Upload): Promise<{ blob: Blob; filename?: string | undefined; contentType?: string | undefined }> {
+async function readUpload(
+  upload: Upload
+): Promise<{ blob: Blob; filename?: string | undefined; contentType?: string | undefined; path?: string | undefined }> {
   if (isData(upload)) {
     return readUpload({ data: upload });
   }
@@ -231,7 +370,8 @@ async function readUpload(upload: Upload): Promise<{ blob: Blob; filename?: stri
     // A variable keeps bundlers for the browser or edge runtimes from resolving `node:fs`.
     const fs = "node:fs";
     const { openAsBlob } = await import(/* webpackIgnore: true */ fs);
-    return { blob: await openAsBlob(upload.path), filename: upload.filename ?? basename(upload.path), contentType: upload.contentType };
+    const blob = await openAsBlob(upload.path);
+    return { blob, filename: upload.filename ?? basename(upload.path), contentType: upload.contentType, path: upload.path };
   }
   const { data } = upload;
   let blob: Blob;
@@ -291,8 +431,10 @@ export class MultipartBody {
 
   /** Adds a file part. `contentType` is the media type the spec declares, used unless the upload has its own. */
   public file(name: string, upload: Upload, contentType?: string): this {
-    const part = readUpload(upload).then(({ blob, filename, contentType: own }) => {
-      const partType = own ?? (blob.type || contentType || "application/octet-stream");
+    const part = readUpload(upload).then(({ blob, filename, contentType: own, path }) => {
+      const declared = contentType === OCTET_STREAM ? undefined : contentType;
+      const byPath = path === undefined ? undefined : mediaType(path);
+      const partType = own ?? (blob.type || declared || byPath || contentType || OCTET_STREAM);
       return [
         `--${this.boundary}\r\nContent-Disposition: form-data; name="${quoted(name)}"; filename="${quoted(filename ?? "file")}"\r\nContent-Type: ${partType}\r\n\r\n`,
         blob,

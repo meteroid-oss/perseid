@@ -505,3 +505,123 @@ describe("int64 values in the default number mode", () => {
     assert.equal(page.total, 3);
   });
 });
+
+describe("binary responses", () => {
+  /** A response streaming `chunks`, counting those the server produced; then closing, failing or hanging. */
+  function chunked(chunks, { end = "close", headers = {} } = {}) {
+    const state = { sent: 0, cancelled: false };
+    const body = new ReadableStream({
+      pull(controller) {
+        if (state.sent < chunks.length) {
+          controller.enqueue(new TextEncoder().encode(chunks[state.sent++]));
+        } else if (end === "close") {
+          controller.close();
+        } else if (end === "fail") {
+          controller.error(new TypeError("terminated"));
+        } else {
+          return new Promise(() => {});
+        }
+      },
+      cancel() {
+        state.cancelled = true;
+      },
+    });
+    return { state, response: new Response(body, { status: 200, headers }) };
+  }
+
+  it("reads the chunks as they are consumed", async () => {
+    const { state, response } = chunked(["ab", "cd", "ef"], { headers: { "content-type": "image/png" } });
+    const { features } = client([() => response]);
+    const download = await features.content.downloadImage();
+    assert.ok(download instanceof sdk.BinaryResponse);
+    assert.equal(download.status, 200);
+    assert.equal(download.headers.get("content-type"), "image/png");
+    const seen = [];
+    for await (const chunk of download) {
+      seen.push(new TextDecoder().decode(chunk));
+      assert.ok(state.sent <= seen.length + 1, "the body is read no further ahead than the next chunk");
+    }
+    assert.deepEqual(seen, ["ab", "cd", "ef"]);
+  });
+
+  it("reads the whole body as bytes, a buffer, a blob or text", async () => {
+    const { features } = client([() => chunked(["ab", "cd"], { headers: { "content-type": "image/png" } }).response]);
+    assert.deepEqual(Array.from(await (await features.content.downloadBlob()).bytes()), [97, 98, 99, 100]);
+    assert.equal((await (await features.content.downloadBlob()).arrayBuffer()).byteLength, 4);
+    const blob = await (await features.content.downloadBlob()).blob();
+    assert.equal(blob.type, "image/png");
+    assert.equal(await blob.text(), "abcd");
+    assert.equal(await (await features.content.downloadBlob()).text(), "abcd");
+  });
+
+  it("streams to a file with Node's writeFile", async () => {
+    const { mkdtemp, readFile, rm, writeFile } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const directory = await mkdtemp(join(tmpdir(), "binary-"));
+    try {
+      const { features } = client([() => chunked(["ab", "cd"]).response]);
+      await writeFile(join(directory, "blob.bin"), await features.content.downloadBlob());
+      assert.equal(await readFile(join(directory, "blob.bin"), "utf8"), "abcd");
+    } finally {
+      await rm(directory, { recursive: true });
+    }
+  });
+
+  it("raises an error status before giving any body", async () => {
+    const { features } = client([json({ error: "gone" }, 404)]);
+    const error = await failure(() => features.content.downloadBlob());
+    assert.ok(error instanceof sdk.NotFoundError);
+    assert.deepEqual(JSON.parse(error.body), { error: "gone" });
+  });
+
+  it("retries until the headers arrive, not once the body is handed over", async () => {
+    const { calls, features } = client([json({ error: "x" }, 503), () => chunked(["ab"], { end: "fail" }).response], {
+      maxRetries: 2,
+      retryScheduleInMs: [1, 1],
+    });
+    const download = await features.content.downloadBlob();
+    assert.equal(calls.length, 2);
+    const error = await failure(() => download.bytes());
+    assert.ok(error instanceof sdk.APIConnectionError, String(error));
+    assert.equal(calls.length, 2);
+  });
+
+  it("times out a read that stalls, not a long download", async () => {
+    const slow = () => {
+      let sent = 0;
+      const body = new ReadableStream({
+        async pull(controller) {
+          await new Promise((resolve) => setTimeout(resolve, 15));
+          if (sent++ < 6) controller.enqueue(new Uint8Array([sent]));
+          else controller.close();
+        },
+      });
+      return new Response(body);
+    };
+    const { features } = client([slow], { timeout: 50 });
+    assert.equal((await (await features.content.downloadBlob()).bytes()).length, 6, "longer than the timeout in all");
+
+    const stalled = chunked(["ab"], { end: "hang" });
+    const hanging = client([() => stalled.response], { timeout: 30 });
+    const download = await hanging.features.content.downloadBlob();
+    const error = await failure(() => download.bytes());
+    assert.ok(error instanceof sdk.APIConnectionTimeoutError, String(error));
+    assert.ok(stalled.state.cancelled, "the stalled body is cancelled");
+  });
+
+  it("releases an unread body on cancel", async () => {
+    const { state, response } = chunked(["ab", "cd"]);
+    const { features } = client([() => response]);
+    const download = await features.content.downloadBlob();
+    await download.cancel();
+    assert.ok(state.cancelled);
+  });
+
+  it("gives the unread body with the response", async () => {
+    const { features } = client([() => chunked(["ab"], { headers: { "x-request-id": "req_9" } }).response]);
+    const { data, requestId } = await features.content.downloadBlob().withResponse();
+    assert.equal(requestId, "req_9");
+    assert.equal(await data.text(), "ab");
+  });
+});

@@ -11,7 +11,8 @@ but only when replaying it is safe: for GET, HEAD, OPTIONS, TRACE, PUT and DELET
 for any request carrying an ``idempotency-key``, which every POST gets
 automatically when the API deduplicates by it. A timed-out request can therefore take up to
 ``timeout * (1 + max_retries)`` plus the backoff delays before
-:class:`APITimeoutError` is raised.
+:class:`APITimeoutError` is raised. A binary response is retried until its headers arrive;
+its body is then read as the caller consumes it, the timeout applying to each read.
 
 Logging: the ``@@PACKAGE_NAME@@`` logger records each attempt at DEBUG and each retry at INFO,
 without headers, query or body. ``@@ENV_PREFIX@@_LOG=debug`` (or ``info``) sends them to stderr.
@@ -119,6 +120,8 @@ def _setup_logging() -> None:
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
         _logger.addHandler(handler)
+        # A root handler set up later, as by `logging.basicConfig`, would print each line again.
+        _logger.propagate = False
 
 
 _setup_logging()
@@ -374,6 +377,8 @@ class ApiRequest:
     timeout: Timeout | Unset = UNSET
     max_retries: int | None = None
     stream: bool = False
+    binary: bool = False
+    """Whether the 2xx body is left unread, for a ``BinaryResponse`` to stream."""
     replayable: bool = False
     """Whether a POST is safe to retry without an ``idempotency-key``."""
 
@@ -763,7 +768,7 @@ class ApiBaseSync(ApiBase):
         while True:
             started = time.monotonic()
             try:
-                response = self._send(request, spec.stream)
+                response = self._send(request, spec.stream or spec.binary)
             except httpx.RequestError as exc:
                 self._log_attempt(request, attempt, started, exc)
                 delay = self._retry_delay(spec, attempt, replay, None)
@@ -839,7 +844,7 @@ class ApiBaseAsync(ApiBase):
         while True:
             started = time.monotonic()
             try:
-                response = await self._send(request, spec.stream)
+                response = await self._send(request, spec.stream or spec.binary)
             except httpx.RequestError as exc:
                 self._log_attempt(request, attempt, started, exc)
                 delay = self._retry_delay(spec, attempt, replay, None)

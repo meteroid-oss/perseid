@@ -166,11 +166,20 @@ from ._pagination import (
     step,
 )
 {%- endif %}
-{%- if streams or "binary" in body_kinds or "multipart" in body_kinds %}
+{%- set binaries = resource.operations | selectattr("response_is_binary") | list %}
+{%- if streams or binaries or "binary" in body_kinds or "multipart" in body_kinds %}
 from ._streaming import (
+{%- if binaries %}
+    AsyncBinaryResponse,
+{%- endif %}
 {%- if streams %}
     AsyncEventStream,
     AsyncStream,
+{%- endif %}
+{%- if binaries %}
+    BinaryResponse,
+{%- endif %}
+{%- if streams %}
     EventStream,
     Stream,
 {%- endif %}
@@ -272,7 +281,7 @@ class {{ class_name }}({{ base_class }}):
 {%- elif op.response_is_event_stream %}
 {%- set return_type = "AsyncEventStream" if is_async else "EventStream" %}
 {%- elif op.response_is_binary %}
-{%- set return_type = "bytes" %}
+{%- set return_type = "AsyncBinaryResponse" if is_async else "BinaryResponse" %}
 {%- elif op.response_is_text %}
 {%- set return_type = "str" %}
 {%- elif response_type is not none %}
@@ -502,6 +511,8 @@ class {{ class_name }}({{ base_class }}):
 {%- endif %}
 {%- if op.response_is_event_stream %}
                 stream=True,
+{%- elif op.response_is_binary %}
+                binary=True,
 {%- endif %}
 {%- if error_schemas | length > 0 and (op.errors | length > 0 or default_error) %}
 {#- Statuses sharing the default schema are left to the `default` entry. #}
@@ -604,7 +615,7 @@ class {{ class_name }}({{ base_class }}):
 {%- elif op.response_is_event_stream %}
         return {{ return_type }}(response)
 {%- elif op.response_is_binary %}
-        return response.content
+        return {{ return_type }}(response)
 {%- elif op.response_is_text %}
         return response.text
 {%- elif return_type != "None" %}

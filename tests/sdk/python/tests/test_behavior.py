@@ -414,6 +414,28 @@ class StreamErrorTest(unittest.TestCase):
         with self.assertRaises(features.APIResponseValidationError):
             self.stream('data: {"unexpected": 1}\n\n')
 
+    def test_an_error_the_model_does_not_declare_is_an_api_error(self) -> None:
+        with self.assertRaises(features.APIStatusError) as raised:
+            self.stream('data: {"delta": "a", "error": {"message": "overloaded"}}\n\n')
+        self.assertEqual(raised.exception.body["error"]["message"], "overloaded")
+        streaming = importlib.import_module(f"{features.__name__}.api._streaming")
+        event = streaming.SseEvent("message", '{"error": "partial", "code": 1}')
+        reply = httpx.Response(200, request=httpx.Request("GET", BASE))
+        self.assertEqual(streaming._decode(event, models.Error, reply), models.Error(error="partial", code=1))
+
+    def test_an_error_event_keeps_its_data_whatever_it_is(self) -> None:
+        for data, body in [('{"error": {"message": "overloaded"}}', {"error": {"message": "overloaded"}}), ("overloaded", None)]:
+            with self.subTest(data=data), self.assertRaises(features.APIStatusError) as raised:
+                self.stream(f"event: error\ndata: {data}\n\n")
+            self.assertIn("overloaded", str(raised.exception))
+            self.assertEqual(raised.exception.body, body)
+            self.assertEqual(raised.exception.raw_body, data.encode())
+            self.assertEqual(raised.exception.status_code, 200)
+
+    def test_keepalives_that_are_not_items_are_skipped(self) -> None:
+        body = 'event: ping\ndata: alive\n\nevent: keepalive\ndata: {}\n\nevent: ping\ndata: {"delta": "a"}\n\ndata: {"delta": "b"}\n\n'
+        self.assertEqual([chunk.delta for chunk in self.stream(body)], ["a", "b"])
+
 
 class PaginationErrorTest(unittest.TestCase):
     def test_an_error_on_the_first_page_is_raised_by_the_call(self) -> None:
@@ -576,13 +598,45 @@ ITEM_URL = r"https://features\.test/api/v2/items/i1"
 
 
 class MultipartTest(unittest.TestCase):
-    def test_a_path_is_read_as_a_file_named_after_it(self) -> None:
+    def test_a_path_is_streamed_as_a_file_named_after_it_and_typed_by_the_spec_or_its_extension(
+        self,
+    ) -> None:
         streaming = importlib.import_module(f"{features.__name__}.api._streaming")
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "a.csv"
             path.write_bytes(b"x,y")
-            files = streaming.multipart_files([("file", path, True, "text/csv")])
-        self.assertEqual(files, [("file", ("a.csv", b"x,y", "text/csv"))])
+            for declared, sent in [
+                ("image/png", "image/png"),
+                ("application/octet-stream", "text/csv"),
+                (None, "text/csv"),
+            ]:
+                with self.subTest(declared=declared):
+                    [(name, (filename, content, content_type))] = streaming.multipart_files(
+                        [("file", path, True, declared)]
+                    )
+                    self.assertEqual((name, filename, content_type), ("file", "a.csv", sent))
+                    self.assertEqual(content.read(), b"x,y")
+                    content.seek(0)
+                    self.assertEqual(content.read(), b"x,y", "read again for a retry")
+            self.assertTrue(streaming.replayable(None, streaming.multipart_files([("f", path, True, None)])))
+            with self.assertRaises(FileNotFoundError):
+                streaming.multipart_files([("file", Path(folder) / "missing.csv", True, None)])
+
+    def test_a_path_upload_is_sent_again_on_a_retry(self) -> None:
+        bodies: list[bytes] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            bodies.append(request.read())
+            return unavailable() if len(bodies) == 1 else httpx.Response(200, json={"status": "ok"})
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "notes.txt"
+            path.write_bytes(b"from disk")
+            with sync_client(handler) as api:
+                api.streaming.upload_file(file=path, name="n")
+        self.assertEqual(len(bodies), 2)
+        self.assertEqual(bodies[0], bodies[1])
+        self.assertIn(b"Content-Type: text/plain\r\n\r\nfrom disk", bodies[1])
 
 
 class LoggingTest(unittest.TestCase):
@@ -635,6 +689,7 @@ class LoggingTest(unittest.TestCase):
     def test_the_log_variable_configures_the_logger(self) -> None:
         logger = logging.getLogger("features")
         self.addCleanup(setattr, logger, "handlers", [])
+        self.addCleanup(setattr, logger, "propagate", True)
         self.addCleanup(logger.setLevel, logging.NOTSET)
         cases = [
             ("debug", logging.DEBUG, 1),
@@ -646,9 +701,12 @@ class LoggingTest(unittest.TestCase):
             with self.subTest(value=value), mock.patch.object(logging.root, "handlers", []):
                 logger.handlers = []
                 logger.setLevel(logging.NOTSET)
+                logger.propagate = True
                 with mock.patch.dict(os.environ, {"FEATURES_LOG": value or ""}):
                     features.api.common._setup_logging()
                 self.assertEqual((logger.level, len(logger.handlers)), (level, handlers))
+                # A root handler, as `logging.basicConfig` adds, would print each line again.
+                self.assertEqual(logger.propagate, handlers == 0)
 
     def test_the_log_variable_keeps_a_configured_logger(self) -> None:
         logger = logging.getLogger("features")
@@ -712,6 +770,121 @@ class MiddlewareTest(unittest.TestCase):
 
         self.assertEqual(asyncio.run(run()).id, "i1")
         self.assertEqual(log, ["before", "after 503", "before", "after 200"])
+
+
+class Chunks:
+    """A response body sent chunk by chunk, counting what the server produced; it may fail last."""
+
+    def __init__(self, *chunks: bytes, fail: Exception | None = None) -> None:
+        self.chunks = chunks
+        self.fail = fail
+        self.sent = 0
+
+    def __iter__(self):
+        for chunk in self.chunks:
+            self.sent += 1
+            yield chunk
+        if self.fail is not None:
+            raise self.fail
+
+    async def __aiter__(self):
+        for chunk in self:
+            yield chunk
+
+
+class BinaryResponseTest(unittest.TestCase):
+    def test_chunks_are_read_as_they_are_consumed(self) -> None:
+        body = Chunks(b"ab", b"cd", b"ef")
+        with sync_client(Recorder(httpx.Response(200, content=iter(body)))) as api:
+            with api.content.download_blob() as download:
+                self.assertEqual(body.sent, 0, "the body is not read before it is consumed")
+                self.assertEqual(download.status_code, 200)
+                chunks = download.iter_bytes()
+                self.assertEqual(next(chunks), b"ab")
+                self.assertEqual(body.sent, 1)
+                self.assertEqual(list(chunks), [b"cd", b"ef"])
+            self.assertTrue(download.response.is_closed)
+
+    def test_read_gives_the_whole_body_once_and_releases_the_connection(self) -> None:
+        handler = Recorder(httpx.Response(200, content=iter(Chunks(b"ab", b"cd")), headers={"content-type": "image/png"}))
+        with sync_client(handler) as api:
+            download = api.content.download_image()
+            self.assertEqual(download.content_type, "image/png")
+            self.assertEqual(download.read(), b"abcd")
+            self.assertTrue(download.response.is_closed)
+            self.assertEqual(download.read(), b"abcd")
+            self.assertEqual(list(download.iter_bytes(3)), [b"abc", b"d"])
+
+    def test_write_to_file_streams_the_body_to_disk(self) -> None:
+        handler = Recorder(httpx.Response(200, content=iter(Chunks(*(bytes([i]) * 1000 for i in range(5))))))
+        with tempfile.TemporaryDirectory() as directory, sync_client(handler) as api:
+            path = Path(directory) / "blob.bin"
+            download = api.content.download_blob()
+            download.write_to_file(path)
+            self.assertTrue(download.response.is_closed)
+            self.assertEqual(path.read_bytes(), b"".join(bytes([i]) * 1000 for i in range(5)))
+
+    def test_an_error_status_is_raised_before_any_body(self) -> None:
+        handler = Recorder(httpx.Response(404, json={"error": "gone"}))
+        with sync_client(handler, max_retries=0) as api:
+            with self.assertRaises(features.NotFoundError) as raised:
+                api.content.download_blob()
+        self.assertEqual(body_get(raised.exception.body, "error"), "gone")
+
+    def test_retries_stop_once_the_headers_arrive(self) -> None:
+        body = Chunks(b"ab", fail=httpx.ReadError("reset"))
+        handler = Recorder(unavailable(), httpx.Response(200, content=iter(body)))
+        with sync_client(handler) as api:
+            download = api.content.download_blob()
+            self.assertEqual(len(handler.requests), 2, "a 503 before the body is retried")
+            with self.assertRaises(features.APIConnectionError):
+                download.read()
+        self.assertEqual(len(handler.requests), 2, "a failure while reading the body is not")
+
+    def test_a_read_timeout_of_the_body_is_a_timeout_error(self) -> None:
+        body = Chunks(b"ab", fail=httpx.ReadTimeout("slow"))
+        with sync_client(Recorder(httpx.Response(200, content=iter(body)))) as api:
+            with self.assertRaises(features.APITimeoutError):
+                list(api.content.download_blob())
+
+    def test_a_response_dropped_unread_releases_its_connection(self) -> None:
+        with sync_client(Recorder(httpx.Response(200, content=iter(Chunks(b"ab"))))) as api:
+            download = api.content.download_blob()
+            response = download.response
+            del download
+            self.assertTrue(response.is_closed)
+
+    def test_the_raw_response_holds_the_unread_body(self) -> None:
+        handler = Recorder(httpx.Response(200, content=b"abc", headers={"x-request-id": "req_1"}))
+        with sync_client(handler) as api:
+            raw = api.with_raw_response.content.download_blob()
+            self.assertEqual(raw.request_id, "req_1")
+            with raw.parse() as download:
+                self.assertEqual(download.read(), b"abc")
+
+    def test_the_async_client_streams_the_body(self) -> None:
+        body = Chunks(b"ab", b"cd")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=body.__aiter__())
+
+        async def run() -> None:
+            async with async_client(handler) as api:
+                async with await api.content.download_blob() as download:
+                    self.assertEqual(body.sent, 0)
+                    chunks = []
+                    async for chunk in download:
+                        chunks.append(chunk)
+                        self.assertEqual(body.sent, len(chunks))
+                    self.assertEqual(chunks, [b"ab", b"cd"])
+                self.assertTrue(download.response.is_closed)
+                self.assertEqual(await (await api.content.download_blob()).read(), b"abcd")
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "blob.bin"
+                    await (await api.content.download_blob()).write_to_file(path)
+                    self.assertEqual(path.read_bytes(), b"abcd")
+
+        asyncio.run(run())
 
 
 class CancellationTest(unittest.TestCase):

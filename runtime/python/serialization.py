@@ -47,6 +47,7 @@ __all__ = [
     "TaggedUnionModel",
     "UnknownVariant",
     "Unset",
+    "declares_key",
     "format_decimal",
     "from_json_value",
     "parse_datetime",
@@ -810,6 +811,12 @@ class BaseModel:
     def from_json(cls: type[_M], data: str | bytes) -> _M:
         """Build a model from a JSON string."""
         return cls.from_dict(json.loads(data))
+
+
+def declares_key(model: BaseModel, key: str) -> bool:
+    """Whether ``model`` has a field for the JSON ``key``, or takes any key."""
+    known = type(model)._known_keys()
+    return known is None or key in known
 
 
 def _model_of(annotation: t.Any) -> type[BaseModel] | None:

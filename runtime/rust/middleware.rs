@@ -117,7 +117,7 @@ impl Response {
     }
 
     /// The body left open from the server, or the bytes a middleware buffered.
-    pub(crate) fn into_events(self) -> (Option<Incoming>, Bytes) {
+    pub(crate) fn into_body(self) -> (Option<Incoming>, Bytes) {
         match self.body {
             Body::Upstream(body) => (Some(body), Bytes::new()),
             Body::Buffered(bytes) => (None, bytes),

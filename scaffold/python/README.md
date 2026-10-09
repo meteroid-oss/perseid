@@ -2,6 +2,7 @@
 {% set call = examples.call -%}
 {% set list = examples.list -%}
 {% set stream = examples.stream -%}
+{% set download = examples.download -%}
 {% set result = docs.var(call.result, "result") if call else "result" -%}
 {% macro call_of(kwargs="", raw=false) %}{% if call %}{{ docs.call(call, kwargs, raw) }}{% else %}client.{{ "with_raw_response." if raw }}some_resource.some_method({{ kwargs }}){% endif %}{% endmacro -%}
 {% set with_body = examples.create -%}
@@ -120,6 +121,23 @@ with {{ docs.call(stream) }} as stream:
 ```
 
 Other streams yield `SseEvent`s.
+{% endif %}
+{%- if download %}
+## Downloads
+
+A binary response comes as a `BinaryResponse`, its body unread until you consume it: `read()`
+gives the bytes, `iter_bytes()` the chunks as they arrive and `write_to_file(path)` streams them
+to disk. Use it in a `with` block when the body may be left unread:
+
+```python
+{{ docs.imports([download]) }}content = {{ docs.call(download) }}.read()
+
+with {{ docs.call(download) }} as response:
+    response.write_to_file("download.bin")
+```
+
+An error status raises before any body, retries end once the headers arrive, and the timeout
+applies to each read, not to the whole download.
 {% endif %}
 Multipart bodies take `Upload(content, filename, content_type)` files, and binary bodies bytes or
 file objects.

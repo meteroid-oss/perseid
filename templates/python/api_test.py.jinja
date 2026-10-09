@@ -22,6 +22,9 @@ class {{ resource.name | to_upper_camel_case }}Test(unittest.TestCase):
 {%- if op.response_is_event_stream %}
         for _ in call({{ args.list | join(", ") }}):
             pass
+{%- elif op.response_is_binary %}
+        with call({{ args.list | join(", ") }}) as response:
+            self.assertEqual(response.read(), {{ case.response.body | tojson }}.encode())
 {%- else %}
         call({{ args.list | join(", ") }})
 {%- endif %}

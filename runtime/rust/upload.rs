@@ -29,6 +29,8 @@ pub struct Upload {
     source: Source,
     filename: Option<String>,
     content_type: String,
+    /// The content type comes from the file extension.
+    guessed: bool,
 }
 
 /// Makes a `Send` reader `Sync` so request futures stay `Send + Sync`.
@@ -85,6 +87,7 @@ impl Upload {
             source: Source::Bytes(bytes.into()),
             filename: None,
             content_type: DEFAULT_CONTENT_TYPE.into(),
+            guessed: false,
         }
     }
 
@@ -98,11 +101,12 @@ impl Upload {
             },
             filename: None,
             content_type: DEFAULT_CONTENT_TYPE.into(),
+            guessed: false,
         }
     }
 
     /// The file at `path`, read in memory, named after it and typed by its extension
-    /// (`application/octet-stream` for an unknown one).
+    /// (`application/octet-stream` for an unknown one) unless the spec types the part.
     ///
     /// # Errors
     ///
@@ -115,7 +119,8 @@ impl Upload {
         })
         .await
         .map_err(io::Error::other)?;
-        let upload = Self::bytes(bytes?).with_content_type(content_type_of(&path));
+        let mut upload = Self::bytes(bytes?).with_content_type(content_type_of(&path));
+        upload.guessed = true;
         Ok(match path.file_name() {
             Some(name) => upload.with_filename(name.to_string_lossy()),
             None => upload,
@@ -133,6 +138,7 @@ impl Upload {
     #[must_use]
     pub fn with_content_type(mut self, content_type: impl Into<String>) -> Self {
         self.content_type = content_type.into();
+        self.guessed = false;
         self
     }
 
@@ -274,14 +280,15 @@ impl Multipart {
     }
 
     /// Like [`Self::file`], with the media type the spec declares for the part, used unless
-    /// the upload sets its own.
+    /// the upload sets its own; it wins over a file extension unless it is the default one.
     pub(crate) fn file_as(
         self,
         name: &str,
         mut upload: Upload,
         content_type: &str,
     ) -> Result<Self, Error> {
-        if upload.content_type == DEFAULT_CONTENT_TYPE {
+        let specific = content_type != DEFAULT_CONTENT_TYPE;
+        if upload.content_type == DEFAULT_CONTENT_TYPE || (upload.guessed && specific) {
             upload.content_type = content_type.to_owned();
         }
         self.file(name, upload)
@@ -461,5 +468,30 @@ impl Body for RequestBody {
             hint.set_exact(length);
         }
         hint
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn part_type(upload: Upload, declared: &str) -> String {
+        let form = Multipart::new().file_as("file", upload, declared).unwrap();
+        let header = String::from_utf8_lossy(&form.parts[0].0).into_owned();
+        header.rsplit("Content-Type: ").next().unwrap().trim().to_owned()
+    }
+
+    #[test]
+    fn the_spec_types_a_part_unless_the_upload_names_its_own() {
+        let guessed = || {
+            let mut upload = Upload::bytes("x").with_content_type("application/pdf");
+            upload.guessed = true;
+            upload
+        };
+        assert_eq!(part_type(guessed(), "image/png"), "image/png", "the spec over the extension");
+        assert_eq!(part_type(guessed(), DEFAULT_CONTENT_TYPE), "application/pdf");
+        assert_eq!(part_type(Upload::bytes("x"), "image/png"), "image/png");
+        let own = Upload::bytes("x").with_content_type("text/csv");
+        assert_eq!(part_type(own, "image/png"), "text/csv");
     }
 }

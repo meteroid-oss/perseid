@@ -6,8 +6,8 @@ use serde_json::{Map, Value, json};
 
 use crate::api::Api;
 
-/// `{call, list, stream, create, download}`: a plain call, a paginated list, an event stream, a
-/// call with body fields and a binary response, each `null` when no operation fits.
+/// `{call, list, stream, download, create}`: a plain call, a paginated list, an event stream, a
+/// binary response and a call with body fields, each `null` when no operation fits.
 pub(crate) fn examples(api: &Api) -> Value {
     serde_json::to_value(api).map_or(Value::Null, |model| pick(&model))
 }
@@ -56,6 +56,8 @@ fn pick(model: &Value) -> Value {
         &|op, _| streams(op) && op.get("event_schema_name").is_some(),
         &|op, _| streams(op),
     ]);
+    let binary = |op: &Value| op["response_is_binary"] == true;
+    let download = first(&[&|op, _| binary(op) && get(op), &|op, _| binary(op)]);
     let call = call.or_else(|| list.clone());
     let create = first(&[&|op, ex| {
         plain(op)
@@ -63,9 +65,7 @@ fn pick(model: &Value) -> Value {
                 .as_array()
                 .is_some_and(|f| !f.is_empty())
     }]);
-    let binary = |op: &Value| op["response_is_binary"] == true && !streams(op);
-    let download = first(&[&|op, _| get(op) && binary(op), &|op, _| binary(op)]);
-    json!({ "call": call, "list": list, "stream": stream, "create": create, "download": download })
+    json!({ "call": call, "list": list, "stream": stream, "download": download, "create": create })
 }
 
 /// Every `(resource, operation)`, child resources after their parent.
@@ -450,7 +450,7 @@ mod tests {
         });
         assert_eq!(
             pick(&model),
-            json!({ "call": null, "list": null, "stream": null, "create": null, "download": null })
+            json!({ "call": null, "list": null, "stream": null, "download": null, "create": null })
         );
     }
 

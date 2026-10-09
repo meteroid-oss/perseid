@@ -5,11 +5,14 @@ pub mod client;
 pub mod upload;
 #[path = "../event_stream.rs"]
 mod event_stream;
+#[path = "../binary_response.rs"]
+mod binary_response;
 #[path = "../middleware.rs"]
 pub mod middleware;
 #[path = "../call.rs"]
 mod call;
 pub use crate::connector::{http_client, HttpClient};
+pub use binary_response::BinaryResponse;
 pub use call::{ApiResponse, Call};
 pub use event_stream::{EventStream, SseEvent};
 pub use upload::{RequestBody, Upload};

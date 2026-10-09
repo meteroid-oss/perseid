@@ -154,8 +154,9 @@ client.customers().with_options(options).list(None).await?;
 - `with_options` on a resource sets headers, timeout, retries or idempotency key for its calls.
 - An operation that also declares a bodiless 2xx returns `Option<T>`.
 - Files are `Upload`s: `Upload::path("a.csv").await?` reads the file, named after it and typed by
-  its extension; `Upload::bytes(...)` and `Upload::reader(...)` take `with_filename` and
-  `with_content_type`. Readers stream and are not retried.
+  the part's media type in the spec, else by its extension; `Upload::bytes(...)` and
+  `Upload::reader(...)` take `with_filename` and `with_content_type`. Readers stream and are not
+  retried.
 
 ### Pagination
 
@@ -183,11 +184,27 @@ while let Some(customer) = customers.next().await {
 Event streams are `Stream`s of the model each event carries, ending at `[DONE]`, or of raw
 `SseEvent`s. `last_event()` gives the raw event, `into_raw()` the raw stream.
 
-- An `error` event, or data that is not the model but an object with an `error`, ends the stream
-  with an `Error::Api` holding that data and the response's status and headers.
+- An `error` event, whatever its data, or data that is an object with an `error` the model does
+  not decode or does not declare, ends the stream with an `Error::Api` holding that data and the
+  response's status and headers.
 - Comments are skipped, and so are `ping` and `keepalive` events that are not the model.
 - The `_stream` twin of a multipart operation sends its `stream` part as `true`, the other leaves
   it out, and neither body struct has a `stream` field.
+
+A file download (a binary response) is a `BinaryResponse`, its body unread:
+
+```rust
+let audio = client.audio().speech(request).await?.bytes().await?;
+let mut download = client.files().content(id).await?;
+tokio::io::copy(&mut download, &mut tokio::fs::File::create("out.bin").await?).await?;
+```
+
+- `bytes()` reads the whole body, `chunk()` and the `futures_core::Stream` give its chunks, and
+  as a `tokio::io::AsyncRead` it streams anywhere; `status()`, `headers()` and
+  `content_length()` are there before the body.
+- An error status fails the call before any body. Retries end once the headers arrive.
+- The timeout covers the headers, then each read of the body: a long download is not cut short,
+  a stalled one fails with `Error::Timeout`. Dropping the response closes the connection.
 
 ### Errors
 
@@ -302,7 +319,8 @@ const customer = await client.customers.retrieve("cus_1", { timeout: 5_000, maxR
 - A multipart file is a `Blob`, `File`, `Uint8Array`, `ArrayBuffer`, `ReadableStream`, fetch
   `Response`, Node `fs.ReadStream` (any `AsyncIterable` of bytes), or `{ data, filename?,
   contentType? }`. `{ path }` reads a file on Node and is named after it, as a `Response` is
-  after its URL. The file is read once, before the first attempt, so retries resend it.
+  after its URL, and typed by the part's media type in the spec, else by its extension. The file
+  is read once, before the first attempt, so retries resend it.
 - `int64 = "bigint"` or `"string"` under `[typescript]` parses int64 values without losing digits.
   With `"string"`, the int64 values of a union variant are `number | bigint`, as a string would
   read as a string variant.
@@ -332,10 +350,28 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
 - The body of the non-stream twin cannot ask for the stream: `create({ stream: true })` does not
   compile. A multipart body has no `stream` part: `createStream` sends it as `true`, `create`
   leaves it out.
-- An `error` event, or data with an `error` property the event schema does not declare, throws
-  an `APIError` holding it.
+- An `error` event, whatever its data, or data with an `error` property the event schema does
+  not declare, throws an `APIError` holding it. `ping` and `keepalive` events that are not the
+  model are skipped.
 - Other streams are an `EventStream` of raw events.
 - Breaking out of the loop or calling `stream.close()` closes the connection.
+
+A file download (a binary response) is a `BinaryResponse`, its body unread:
+
+```ts
+const audio = await (await client.audio.speech({ input: "hi" })).bytes();
+await writeFile("out.bin", await client.files.content(id)); // node:fs/promises, streamed
+```
+
+- `bytes()`, `arrayBuffer()`, `blob()` and `text()` read the whole body; `for await` and
+  `body` (a `ReadableStream`) give its chunks; `status`, `headers` and `response` (the fetch
+  `Response`) are there before the body. `cancel()` leaves the body unread.
+- An error status rejects the call before any body. Retries end once the headers arrive.
+- The timeout covers the headers, then each read of the body: a long download is not cut short,
+  a stalled one fails with `APIConnectionTimeoutError`, any other failed read with
+  `APIConnectionError`.
+- A typed wrapper rather than the bare fetch `Response`, for these errors and the per-read
+  timeout; `asResponse()` still gives the raw `Response`.
 
 ### Errors
 
@@ -439,8 +475,9 @@ client.files.create(file=Upload(b"...", "a.csv"), purpose="import")
 - Every method takes `extra_headers=`, `extra_query=`, `extra_body=`, `timeout=` and
   `max_retries=`, prefixed with `request_` when a parameter has that name.
 - These headers, like `default_headers`, win over the client's credentials.
-- Multipart file fields take bytes, a binary file, a path (`Path("a.csv")`, read and named after
-  it), or `Upload(content, filename, content_type)`.
+- Multipart file fields take bytes, a binary file, a path (`Path("a.csv")`, streamed from disk,
+  again for a retry, named after it and typed by the part's media type in the spec, else by its
+  extension), or `Upload(content, filename, content_type)`.
 - An operation that also declares a bodiless 2xx returns `Model | None`.
 
 ### Pagination
@@ -468,7 +505,27 @@ with client.completions.create_stream(prompt="hi") as stream:
 ```
 
 Events with a documented schema yield models until `[DONE]`, with `stream.last_event` the raw
-event. Other streams yield `SseEvent`s.
+event. Other streams yield `SseEvent`s. An `error` event, whatever its data, or data with an
+`error` the model does not decode or declare, raises an `APIStatusError` whose `raw_body` is that
+data; `ping` and `keepalive` events that are not the model are skipped.
+
+A file download (a binary response) is a `BinaryResponse` (`AsyncBinaryResponse`), its body
+unread:
+
+```python
+audio = client.audio.speech(input="hi").read()
+with client.files.content(file_id) as download:
+    download.write_to_file("out.bin")
+```
+
+- `read()` gives the whole body (kept for later calls), `iter_bytes(chunk_size=None)` (or
+  iterating it) the chunks as they arrive and `write_to_file(path)` streams them to disk; each
+  releases the connection. `status_code`, `headers`, `content_type` and `response` (the `httpx`
+  response) are there before the body.
+- An error status raises before any body. Retries end once the headers arrive.
+- The timeout applies to each read, as `httpx` does: a long download is not cut short.
+- Use it in a `with` (`async with`) block, or call `close()`, when the body may be left unread.
+  A sync response dropped unread closes itself; an async one keeps its connection until closed.
 
 ### Errors
 

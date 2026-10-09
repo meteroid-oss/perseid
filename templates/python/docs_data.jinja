@@ -46,9 +46,11 @@ for {{ docs.var(ex.item, "item") }} in {{ call }}:
 with {{ call }} as stream:
     for event in stream:
         print(event)
+    {%- elif op.response_is_binary -%}
+content = {{ call }}.read()
     {%- elif ex.result -%}
 {{ docs.var(ex.result, "result") }} = {{ call }}
-    {%- elif op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_text or op.response_is_binary -%}
+    {%- elif op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_text -%}
 result = {{ call }}
     {%- else -%}
 {{ call }}

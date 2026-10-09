@@ -34,7 +34,7 @@
 {%- endmacro -%}
 {% macro returned(op) -%}
     {%- if op.response_is_event_stream %}EventStream{% if op.event_schema_name is defined %}<{{ op.event_schema_name | to_upper_camel_case }}>{% endif %}
-    {%- elif op.response_is_binary %}Bytes
+    {%- elif op.response_is_binary %}BinaryResponse
     {%- elif op.response_is_text %}String
     {%- else -%}
         {%- if op.response_body_json_type is defined %}{% set body = short(rust_type(op.response_body_json_type)) -%}
@@ -46,7 +46,7 @@
 {%- endmacro -%}
 {% macro returns(op) -%}
     {%- if op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
-    {%- elif op.response_is_binary %}bytes
+    {%- elif op.response_is_binary %}bytes, streamed
     {%- elif op.response_is_text %}text
     {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
     {%- elif op.response_body_json_type is defined %}`{{ short(rust_type(op.response_body_json_type)) }}`
@@ -75,6 +75,11 @@ retries or idempotency key of its calls.
 {%- if ns.paginated %} A paginated list returns a `PageCall<Body, Item>`:
 awaited, a `Page` that dereferences to the body (`page.field`) and lists `page.items()`, with
 `next_page()`; `.items()` streams every item across pages and `.pages()` every page.
+{%- endif %}
+{%- set binary = namespace(any=false) %}{% for resource in api.resources %}{% for op in resource.operations if op.response_is_binary %}{% set binary.any = true %}{% endfor %}{% endfor %}
+{%- if binary.any %} A file download returns a `BinaryResponse`, its body unread:
+`.bytes().await` reads it whole, `.chunk().await` (or the `Stream`) gives its chunks and, as an
+`AsyncRead`, `tokio::io::copy` streams it to a file.
 {%- endif %} Models are
 in [`src/models`](src/models), and the options structs next to their resource.
 {% if api.resources | length > 1 %}

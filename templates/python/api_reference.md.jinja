@@ -85,7 +85,7 @@
     {%- elif op.response_is_event_stream -%}
         {%- set returned = "Stream[" ~ (op.event_schema_name | to_upper_camel_case) ~ "]" if op.event_schema_name is defined else "EventStream" -%}
     {%- elif op.response_is_binary -%}
-        {%- set returned = "bytes" -%}
+        {%- set returned = "BinaryResponse" -%}
     {%- elif op.response_is_text -%}
         {%- set returned = "str" -%}
     {%- elif response -%}
@@ -98,7 +98,7 @@
 {% macro returns(op) -%}
     {%- if op.pagination is defined %}{{ model(op.response_body_schema_name) }} pages of {{ model(op.pagination.item_schema) }}
     {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
-    {%- elif op.response_is_binary %}bytes
+    {%- elif op.response_is_binary %}bytes, streamed
     {%- elif op.response_is_text %}text
     {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
     {%- elif op.response_body_json_type is defined %}`{{ (named_type(op.response_body_json_type, op.response_body_union | to_upper_camel_case) if op.response_body_union is defined else py_type(op.response_body_json_type)) | replace("|", "\\|") }}`
@@ -125,6 +125,13 @@ marks optional keyword arguments. Models are in [`{{ docs.package() }}/models`](
 A list method returns its first page, such as a `{{ paged.page }}`: a subclass of the response
 model (`{{ paged.model }}`) with the paging members `items`, `has_next_page()`, `get_next_page()`,
 `iter_pages()` and `body`, which iterates every item. The page classes are in `{{ docs.package() }}.api`.
+{%- endif %}
+{%- set binary = namespace(any=false) %}
+{%- for resource in api.resources %}{% for op in resource.operations if op.response_is_binary %}{% set binary.any = true %}{% endfor %}{% endfor %}
+{%- if binary.any %}
+A method answering a file returns a `BinaryResponse` (`AsyncBinaryResponse`), its body unread:
+`read()` gives the bytes, `iter_bytes()` the chunks as they arrive and `write_to_file(path)`
+streams them to disk. Use it in a `with` block when the body may be left unread.
 {%- endif %}
 {% if api.resources | length > 1 %}
 {{ docs.contents(api.resources) }}

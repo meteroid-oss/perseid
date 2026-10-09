@@ -50,6 +50,8 @@ let mut events = {{ docs.call(ex) }}.await?;
 while let Some(event) = events.next().await {
     println!("{:?}", event?);
 }
+    {%- elif op.response_is_binary -%}
+let content = {{ docs.call(ex) }}.await?.bytes().await?;
     {%- elif ex.result -%}
 let {{ docs.var(ex.result, "result") }} = {{ docs.call(ex) }}.await?;
     {%- else -%}

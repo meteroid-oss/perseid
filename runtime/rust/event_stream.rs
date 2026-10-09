@@ -79,27 +79,27 @@ fn raw(event: &SseEvent) -> Result<Step<SseEvent>, Error> {
     Ok(Step::Item(event.clone()))
 }
 
-/// An `error` event, or data that is not a `T` but an object with an `error`, is the API's error;
-/// a keepalive that is not a `T` is skipped.
-fn json<T: DeserializeOwned>(event: &SseEvent) -> Result<Step<T>, Error> {
+/// An `error` event, or data that is an object with an `error` which is not a `T` or a `T` that
+/// does not declare `error` (`DECLARES_ERROR`), is the API's error; a keepalive that is not a `T`
+/// is skipped.
+fn json<T: DeserializeOwned, const DECLARES_ERROR: bool>(event: &SseEvent) -> Result<Step<T>, Error> {
     if event.data == "[DONE]" {
         return Ok(Step::Done);
     }
     if event.event == "error" {
         return Ok(Step::Failed(Bytes::from(event.data.clone())));
     }
+    let reported = || {
+        event.data.contains("\"error\"")
+            && serde_json::from_str::<serde_json::Value>(&event.data)
+                .is_ok_and(|value| value.get("error").is_some_and(|error| !error.is_null()))
+    };
     match serde_json::from_str(&event.data) {
+        Ok(_) if !DECLARES_ERROR && reported() => Ok(Step::Failed(Bytes::from(event.data.clone()))),
         Ok(item) => Ok(Step::Item(item)),
+        Err(_) if reported() => Ok(Step::Failed(Bytes::from(event.data.clone()))),
         Err(_) if matches!(event.event.as_str(), "ping" | "keepalive") => Ok(Step::Skip),
-        Err(error) => {
-            let reported = serde_json::from_str::<serde_json::Value>(&event.data)
-                .is_ok_and(|value| value.get("error").is_some_and(|error| !error.is_null()));
-            if reported {
-                Ok(Step::Failed(Bytes::from(event.data.clone())))
-            } else {
-                Err(decode_error(error))
-            }
-        }
+        Err(error) => Err(decode_error(error)),
     }
 }
 
@@ -144,8 +144,9 @@ impl EventStream<SseEvent> {
         }
     }
 
-    pub(crate) fn typed<T: DeserializeOwned>(self) -> EventStream<T> {
-        self.decoding(json::<T>)
+    /// The stream of `T`s, whose model declares an `error` property when `declares_error`.
+    pub(crate) fn typed<T: DeserializeOwned>(self, declares_error: bool) -> EventStream<T> {
+        self.decoding(if declares_error { json::<T, true> } else { json::<T, false> })
     }
 }
 
@@ -383,5 +384,30 @@ impl Parser {
         };
         self.line.clear();
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(serde::Deserialize, Debug)]
+    struct Reply {
+        error: Option<String>,
+    }
+
+    async fn first(body: &'static str, declares_error: bool) -> Result<Reply, Error> {
+        let stream = EventStream::new(StatusCode::OK, HeaderMap::new(), None, Bytes::from(body));
+        stream.typed::<Reply>(declares_error).next().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_error_property_is_an_api_error_unless_the_model_declares_it() {
+        let body = "data: {\"text\":\"a\",\"error\":\"partial\"}\n\n";
+        let item = first(body, true).await.unwrap();
+        assert_eq!(item.error.as_deref(), Some("partial"));
+        assert!(first(body, false).await.unwrap_err().api().is_some());
+        let error = first("event: error\ndata: {\"error\":\"x\"}\n\n", true).await.unwrap_err();
+        assert!(error.api().is_some(), "an `error` event always is");
     }
 }
