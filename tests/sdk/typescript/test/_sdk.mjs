@@ -17,16 +17,20 @@ assert.ok(fixtures, "set FIXTURES to the perseid tests/fixtures directory");
 export const tsc = resolve("node_modules/typescript/bin/tsc");
 
 /**
- * Generates the SDK of `fixtures/<spec>` named `name` with the given `int64` mode, with its round
- * trips when `roundTrips` is set, automatic idempotency keys when `idempotencyKeys` is set and
- * `[typescript]` keys of `settings`. `build` compiles it and
+ * Generates the SDK of `fixtures/<spec>`, or of the spec `text`, named `name` with the given
+ * `int64` mode, with its round trips when `roundTrips` is set, automatic idempotency keys when
+ * `idempotencyKeys` is set and `[typescript]` keys of `settings`. `build` compiles it and
  * imports it as `sdk`.
  */
-export async function generate(spec, { name, int64 = "number", roundTrips = false, idempotencyKeys = false, build = true, settings = "" }) {
+export async function generate(spec, { name, text, int64 = "number", roundTrips = false, idempotencyKeys = false, build = true, settings = "" }) {
   const dir = mkdtempSync(join(tmpdir(), `perseid-${name.toLowerCase()}-`));
   const cleanup = () => rmSync(dir, { recursive: true, force: true });
   try {
-    copyFileSync(join(fixtures, spec), join(dir, "openapi.yaml"));
+    if (text === undefined) {
+      copyFileSync(join(fixtures, spec), join(dir, "openapi.yaml"));
+    } else {
+      writeFileSync(join(dir, "openapi.yaml"), text);
+    }
     writeFileSync(
       join(dir, "perseid.toml"),
       `spec = "openapi.yaml"\nsdks = ["typescript"]\nname = "${name}"\nbase_url = "https://${name.toLowerCase()}.test/v1"\nround_trips = ${roundTrips}\nidempotency_keys = ${idempotencyKeys}\n[typescript]\nint64 = "${int64}"\n${settings}`

@@ -11,6 +11,7 @@ import { type {{ c | to_upper_camel_case }}, {{ c | to_upper_camel_case }}Serial
 {% endif -%}
 
 {% set type_name = type.name | to_upper_camel_case -%}
+{% set received = [] if request_schema else closed_enums | list -%}
 {% set disc_json = type.discriminator_field -%}
 {% set disc = disc_json | ident("camel") -%}
 {% set adjacent = type.repr == "adjacently_tagged" -%}
@@ -23,7 +24,7 @@ import { type {{ c | to_upper_camel_case }}, {{ c | to_upper_camel_case }}Serial
 {% if base -%}
 interface {{ base }} {
     {% for field in type.fields -%}
-    {{ m.field_decl(field) }}
+    {{ m.field_decl(field, received) }}
     {% endfor -%}
 }
 {% endif %}
@@ -37,17 +38,18 @@ interface {{ base }} {
 {% if adjacent and fields -%}
 export interface {{ alias }}{{ content_json | to_upper_camel_case }} {
     {% for field in fields -%}
-    {{ m.field_decl(field) }}
+    {{ m.field_decl(field, received) }}
     {% endfor -%}
 }
 {% endif -%}
-{% set tag %}{{ disc }}: {{ variant.name | tojson }};{% endset -%}
+{% set vt = variant_tags[variant.name] | default(none) -%}
+{% set tag %}{{ disc }}{% if vt and vt.optional %}?{% endif %}: {{ (vt.tag if vt else variant.name) | tojson }}{% if vt and vt.optional %} | undefined{% endif %};{% endset -%}
 {% if adjacent -%}
     {% set own %}{{ tag }}{% if ref %} {{ content }}: {{ ref }};{% elif fields %} {{ content }}: {{ alias }}{{ content_json | to_upper_camel_case }};{% endif %}{% endset -%}
     {% set parents = [base] if base else [] -%}
 {% else -%}
     {% set own %}{{ tag }}{% for field in fields %}
-    {{ m.field_decl(field) }}{% endfor %}{% endset -%}
+    {{ m.field_decl(field, received) }}{% endfor %}{% endset -%}
     {% set parents = ([base] if base else []) + ([ref] if ref else []) -%}
 {% endif -%}
 {% if alias in ns.taken or ref in non_struct_refs -%}
@@ -66,14 +68,9 @@ export type {{ type_name }} =
     | {{ member }}
     {%- endfor %};
 
-/** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
-export const {{ type_name }}Serializer = {
-    parse(json: any, path = "$"): {{ type_name }} {
-        decodeObject(json, path);
-        switch (json[{{ disc_json | tojson }}]) {
-        {%- for variant in type.variants %}
-            case {{ variant.name | tojson }}:
-                return {
+{#- The object literal of `variant`, tagged `tag`, parsed from `json`. -#}
+{% macro parse_variant(variant, tag) -%}
+{
                     {% if adjacent -%}
                     ...extraProperties(json, {{ m.names(type.fields, false, [disc_json, content_json]) }}),
                     {% if variant.type == "ref" and variant.schema_ref is defined -%}
@@ -92,20 +89,13 @@ export const {{ type_name }}Serializer = {
                     {% endif -%}
                     {% if type.fields %}{{ m.parse_fields(type.fields, "json") }}
                     {% endif -%}
-                    {{ disc }}: {{ variant.name | tojson }},
-                };
-        {%- endfor %}
-            default:
-                // A variant added to the API after this SDK was generated, kept as received.
-                return json;
-        }
-    },
+                    {{ disc }}: {{ tag | tojson }},
+                }
+{%- endmacro %}
 
-    serialize(value: {{ type_name }}): any {
-        switch (value.{{ disc }}) {
-        {%- for variant in type.variants %}
-            case {{ variant.name | tojson }}:
-                return {
+{#- The JSON object of `variant`, tagged `tag`, serialized from `value`. -#}
+{% macro serialize_variant(variant, tag) -%}
+{
                     {% if adjacent -%}
                     ...extraProperties(value, {{ m.names(type.fields, true, [disc_json, content_json]) }}),
                     {% if variant.type == "ref" and variant.schema_ref is defined -%}
@@ -124,9 +114,67 @@ export const {{ type_name }}Serializer = {
                     {% endif -%}
                     {% if type.fields %}{{ m.serialize_fields(type.fields, "value") }}
                     {% endif -%}
-                    {{ disc_json | tojson }}: {{ variant.name | tojson }},
-                };
-        {%- endfor %}
+                    {{ disc_json | tojson }}: {{ tag | tojson }},
+                }
+{%- endmacro %}
+
+{#- The variants by the tag they carry, which several may share (OpenAI's `message` items).
+    Those whose tag is optional also take a value without one. -#}
+{% set groups = namespace(tags=[], untagged=[]) -%}
+{% for variant in type.variants -%}
+{% set vt = variant_tags[variant.name] | default(none) -%}
+{% set tag = vt.tag if vt else variant.name -%}
+{% if tag not in groups.tags %}{% set groups.tags = groups.tags + [tag] %}{% endif -%}
+{% if vt and vt.optional %}{% set groups.untagged = groups.untagged + [variant] %}{% endif -%}
+{% endfor -%}
+
+{#- The `case` returning the variant of `members` that `obj` is, by its properties if several. -#}
+{% macro case(label, members, outgoing) -%}
+{% set obj = "value" if outgoing else "json" %}
+            case {{ label }}:
+                {%- if members | length == 1 %}
+                {%- set vt = variant_tags[members[0].name] | default(none) %}
+                {%- set tag = vt.tag if vt else members[0].name %}
+                return {% if outgoing %}{{ serialize_variant(members[0], tag) }}{% else %}{{ parse_variant(members[0], tag) }}{% endif %};
+                {%- else %}
+                return unionTagged({{ obj }}, [
+                    {%- for variant in members %}
+                    {%- set vt = variant_tags[variant.name] %}
+                    [{{ m.names([], outgoing, vt.required) }}, {{ m.names([], outgoing, vt.known) }}, ({{ obj }}: any) => ({% if outgoing %}{{ serialize_variant(variant, vt.tag) }}{% else %}{{ parse_variant(variant, vt.tag) }}{% endif %})],
+                    {%- endfor %}
+                ]);
+                {%- endif %}
+{%- endmacro %}
+
+{% macro cases(outgoing) -%}
+{% for tag in groups.tags -%}
+{% set group = namespace(members=[]) -%}
+{% for variant in type.variants -%}
+{% set vt = variant_tags[variant.name] | default(none) -%}
+{% if (vt.tag if vt else variant.name) == tag %}{% set group.members = group.members + [variant] %}{% endif -%}
+{% endfor -%}
+{{ case(tag | tojson, group.members, outgoing) }}
+{%- endfor -%}
+{% if groups.untagged -%}
+{{ case("undefined", groups.untagged, outgoing) }}
+{%- endif -%}
+{%- endmacro %}
+
+/** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
+export const {{ type_name }}Serializer = {
+    parse(json: any, path = "$"): {{ type_name }} {
+        decodeObject(json, path);
+        switch (json[{{ disc_json | tojson }}]) {
+            {{- cases(false) }}
+            default:
+                // A variant added to the API after this SDK was generated, kept as received.
+                return json;
+        }
+    },
+
+    serialize(value: {{ type_name }}): any {
+        switch (value.{{ disc }}) {
+            {{- cases(true) }}
             default:
                 return value;
         }
