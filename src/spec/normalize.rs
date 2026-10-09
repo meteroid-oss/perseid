@@ -112,28 +112,31 @@ pub(super) fn drop_format(value: &mut Value, format: &str) {
 /// Gives each `$ref` variant of a discriminated union that targets a schema in `tags` (by its
 /// current name) and that no `mapping` entry names an explicit entry keyed by the tag given
 /// there: the implicit tag is the schema name as the spec spells it, and renaming the schema
-/// (unsafe characters, reserved names) must not change what is on the wire.
-fn pin_implicit_tags(value: &mut Value, tags: &BTreeMap<String, String>) {
+/// (unsafe characters, reserved names) must not change what is on the wire. A variant declaring
+/// its tag (`type: {enum: [message]}`) keeps it, as other variants may share it.
+fn pin_implicit_tags(doc: &mut Value, tags: &BTreeMap<String, String>) {
+    let schemas = doc.pointer("/components/schemas").cloned();
+    pin_tags(doc, tags, schemas.as_ref().unwrap_or(&Value::Null));
+}
+
+fn pin_tags(value: &mut Value, tags: &BTreeMap<String, String>, schemas: &Value) {
     match value {
-        Value::Array(items) => items.iter_mut().for_each(|v| pin_implicit_tags(v, tags)),
+        Value::Array(items) => items.iter_mut().for_each(|v| pin_tags(v, tags, schemas)),
         Value::Object(map) => {
             for (key, child) in map.iter_mut() {
                 if !matches!(
                     key.as_str(),
                     "example" | "examples" | "default" | "enum" | "const"
                 ) {
-                    pin_implicit_tags(child, tags);
+                    pin_tags(child, tags, schemas);
                 }
             }
             let Some(Value::Object(discriminator)) = map.get("discriminator") else {
                 return;
             };
-            if !discriminator
-                .get("propertyName")
-                .is_some_and(Value::is_string)
-            {
+            let Some(property) = discriminator.get("propertyName").and_then(Value::as_str) else {
                 return;
-            }
+            };
             let mut mapping = discriminator
                 .get("mapping")
                 .and_then(Value::as_object)
@@ -156,7 +159,10 @@ fn pin_implicit_tags(value: &mut Value, tags: &BTreeMap<String, String>) {
                         .values()
                         .filter_map(Value::as_str)
                         .any(|t| target_name(t).as_deref() == Some(name.as_str()));
-                    if !mapped && !mapping.contains_key(tag) {
+                    let declared = &schemas[name.as_str()]["properties"][property];
+                    let declared = declared.get("const").is_some()
+                        || declared["enum"].as_array().is_some_and(|e| e.len() == 1);
+                    if !mapped && !declared && !mapping.contains_key(tag) {
                         mapping.insert(tag.clone(), Value::from(reference));
                         added = true;
                     }
@@ -856,9 +862,9 @@ fn rename_models(
     for (from, to) in models {
         let canonical = renames.get(from).unwrap_or(from);
         match schemas.contains_key(canonical) {
-            true if to.to_upper_camel_case().is_empty() => {
-                bail!("`{from}` in the [models] table of perseid.toml has no name")
-            }
+            true if !is_type_name(to) => bail!(
+                "`{from} = \"{to}\"` in the [models] table of perseid.toml: a name starts with a letter, then letters, digits and `_`"
+            ),
             true if canonical != to => {
                 models_renames.insert(canonical.clone(), to.clone());
             }
@@ -893,6 +899,11 @@ fn rename_models(
     }
     renames.extend(models_renames);
     Ok(())
+}
+
+fn is_type_name(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_alphabetic())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Renames schemas, their references and discriminator mappings.
@@ -2423,7 +2434,17 @@ fn without_documentation(value: &Value) -> Value {
         Value::Object(map) => Value::Object(
             map.iter()
                 .filter(|(key, _)| !DOCUMENTATION.contains(&key.as_str()))
-                .map(|(key, value)| (key.clone(), without_documentation(value)))
+                .map(
+                    |(key, value)| match (upgrade::NAME_MAPS.contains(&key.as_str()), value) {
+                        (true, Value::Object(named)) => {
+                            let named = named
+                                .iter()
+                                .map(|(k, v)| (k.clone(), without_documentation(v)));
+                            (key.clone(), Value::Object(named.collect()))
+                        }
+                        _ => (key.clone(), without_documentation(value)),
+                    },
+                )
                 .collect(),
         ),
         Value::Array(items) => Value::Array(items.iter().map(without_documentation).collect()),
@@ -2713,6 +2734,40 @@ mod tests {
         );
         let mapping = &schemas["Event"]["discriminator"]["mapping"];
         assert_eq!(mapping["Odd/Choice"], json!("#/components/schemas/Choice"));
+    }
+
+    #[test]
+    fn renamed_variants_declaring_their_tag_are_not_pinned_to_their_old_name() {
+        let message = |role: &str| {
+            json!({ "type": "object", "properties": {
+                "type": { "type": "string", "enum": ["message"] }, "role": { "const": role } } })
+        };
+        let mut doc = json!({ "paths": {}, "components": { "schemas": {
+            "InputMessage": message("user"), "OutputMessage": message("assistant"),
+            "Item": { "oneOf": [
+                { "$ref": "#/components/schemas/OutputMessage" },
+                { "$ref": "#/components/schemas/InputMessage" }],
+                "discriminator": { "propertyName": "type" } } } } });
+        let models = BTreeMap::from([("InputMessage".to_owned(), "ResponseInput".to_owned())]);
+        normalize(&mut doc, &models).unwrap();
+        let mapping = &doc["components"]["schemas"]["Item"]["discriminator"]["mapping"];
+        assert_eq!(mapping.get("InputMessage"), None, "{mapping}");
+    }
+
+    #[test]
+    fn documentation_is_left_out_but_properties_named_like_it_are_kept() {
+        let schema = json!({ "description": "d", "properties": {
+            "description": { "type": "string", "title": "t" } } });
+        let expected = json!({ "properties": { "description": { "type": "string" } } });
+        assert_eq!(without_documentation(&schema), expected);
+    }
+
+    #[test]
+    fn models_names_are_identifiers() {
+        let mut doc = json!({ "paths": {}, "components": { "schemas": { "A": {} } } });
+        let models = BTreeMap::from([("A".to_owned(), "chat/completion".to_owned())]);
+        let error = format!("{:#}", normalize(&mut doc, &models).unwrap_err());
+        assert!(error.contains("a name starts with a letter"), "{error}");
     }
 
     #[test]

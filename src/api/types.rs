@@ -532,7 +532,7 @@ pub(crate) fn set_discriminator_defaults(types: &mut Types) {
                 schema_ref: Some(target),
                 ..
             } = &variant.content
-                && !implicit_tag_of_a_constant(types, target, discriminator_field, &variant.name)
+                && declared_tag(types, target, discriminator_field, &variant.name).is_none()
             {
                 values
                     .entry((target.clone(), discriminator_field.clone()))
@@ -595,13 +595,8 @@ pub(crate) fn set_discriminator_defaults(types: &mut Types) {
     }
 }
 
-/// Whether `tag` is only the schema name `target` gets without a mapping, while its `field`
-/// declares another constant: OpenAI's `InputMessage` is tagged `message`, as its `type` says.
-fn implicit_tag_of_a_constant(types: &Types, target: &str, field: &str, tag: &str) -> bool {
-    declared_tag(types, target, field, tag).is_some()
-}
-
-/// The constant the variant `target`, tagged `tag` by default, declares for `field` instead.
+/// The constant the variant `target`, tagged `tag` by default, declares for `field` instead:
+/// OpenAI's `InputMessage` is tagged `message`, as its `type` says.
 pub(crate) fn declared_tag<'a>(
     types: &'a Types,
     target: &str,
@@ -1409,12 +1404,12 @@ pub(crate) struct Type {
     pub data: TypeData,
 }
 
-/// Whether a `oneOf`/`anyOf` part only states which properties are required, which constrains
-/// values without adding a type.
 fn is_open_enum(extensions: &BTreeMap<String, serde_json::Value>) -> bool {
     extensions.get(crate::spec::OPEN_ENUM) == Some(&serde_json::Value::Bool(true))
 }
 
+/// Whether a `oneOf`/`anyOf` part only states which properties are required, which constrains
+/// values without adding a type.
 fn is_required_only(part: &Schema) -> bool {
     let Schema::Object(obj) = part else {
         return false;

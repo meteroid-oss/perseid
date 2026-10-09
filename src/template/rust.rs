@@ -154,6 +154,35 @@ pub(crate) fn convertible_types(types: &Types) -> BTreeSet<String> {
         .collect()
 }
 
+/// The schema each alias of a schema stands for (`Updated` for `Created`), through chains;
+/// a recursive alias is a newtype, a type of its own.
+pub(crate) fn alias_targets(
+    types: &Types,
+    recursive: &BTreeSet<String>,
+) -> BTreeMap<String, String> {
+    let target = |name: &str| match types.get(name).map(|t| &t.data) {
+        Some(TypeData::Alias { target }) if !recursive.contains(name) => match &**target {
+            FieldType::SchemaRef { name, .. } => Some(name.clone()),
+            _ => None,
+        },
+        _ => None,
+    };
+    let mut aliases = BTreeMap::new();
+    for name in types.keys() {
+        let mut resolved = name.clone();
+        for _ in 0..types.len() {
+            match target(&resolved) {
+                Some(next) if next != *name => resolved = next,
+                _ => break,
+            }
+        }
+        if resolved != *name {
+            aliases.insert(name.to_upper_camel_case(), resolved.to_upper_camel_case());
+        }
+    }
+    aliases
+}
+
 fn variants(repr: &StructEnumRepr) -> &[SimpleVariant] {
     match repr {
         StructEnumRepr::AdjacentlyTagged { variants, .. }

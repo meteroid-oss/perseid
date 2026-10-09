@@ -587,14 +587,25 @@ impl Import {
                 }
             }
         }
+        let mut names_of: BTreeMap<String, Vec<&String>> = BTreeMap::new();
+        for (name, schemas) in &named {
+            schemas
+                .iter()
+                .for_each(|s| names_of.entry(s.clone()).or_default().push(name));
+        }
         let mut shared = Vec::new();
-        for (name, schemas) in named {
-            match schemas.len() {
-                1 => self
-                    .models
-                    .extend(schemas.into_iter().map(|s| (s, name.clone()))),
-                _ => shared.push(format!("{name} is {}", Vec::from_iter(schemas).join(", "))),
+        for (schema, names) in &names_of {
+            let one_schema = |name: &String| named[name].len() == 1;
+            match names.as_slice() {
+                [name] if one_schema(name) => {
+                    self.models.insert(schema.clone(), (*name).clone());
+                }
+                [_] => {}
+                _ => shared.push(format!("{schema} is {}", joined(names))),
             }
+        }
+        for (name, schemas) in named.iter().filter(|(_, s)| s.len() > 1) {
+            shared.push(format!("{name} is {}", joined(schemas)));
         }
         if !shared.is_empty() {
             self.skip(
@@ -984,7 +995,6 @@ impl Import {
         }
     }
 
-    /// The top-level keys of perseid.toml, after `base_url`.
     /// Keeps the model names of schemas the spec has, which no other schema has.
     fn check_models(&mut self, spec: &Value) {
         let schemas = spec
@@ -1012,6 +1022,7 @@ impl Import {
         }
     }
 
+    /// The top-level keys of perseid.toml, after `base_url`.
     pub(crate) fn top_level(&self) -> String {
         let mut out = String::new();
         if let Some(timeout) = self.timeout {
@@ -1072,6 +1083,11 @@ impl Import {
         }
         out
     }
+}
+
+fn joined(names: impl IntoIterator<Item = impl AsRef<str>>) -> String {
+    let names: Vec<String> = names.into_iter().map(|n| n.as_ref().to_owned()).collect();
+    names.join(", ")
 }
 
 /// The client class Stainless names after `organization.name`: `onebusaway-sdk` is

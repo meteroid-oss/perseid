@@ -5586,3 +5586,39 @@ components:
         kind: {type: string}
         good: {type: boolean}
 "#;
+
+#[test]
+fn init_from_stainless_writes_one_env_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = r#"{"openapi":"3.1.0","info":{"title":"OpenAI API","version":"1"},"paths":{}}"#;
+    fs::write(dir.path().join("openapi.json"), spec).unwrap();
+    let stainless = "targets:\n  python:\n    package_name: foo\nclient_settings:\n  default_env_prefix: FOO_\n";
+    fs::write(dir.path().join("stainless.yml"), stainless).unwrap();
+    let args = ["init", "--from", "stainless.yml", "--spec", "openapi.json"];
+    let (ok, out) = perseid(dir.path(), &args);
+    assert!(ok, "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    assert_eq!(config.matches("[context]").count(), 1, "{config}");
+    assert!(config.contains("env_prefix = \"FOO\""), "{config}");
+}
+
+#[test]
+fn rust_union_variants_of_one_type_through_an_alias_convert_into_neither() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = r##"{"openapi":"3.1.0","info":{"title":"Alias","version":"1"},
+"paths":{"/e":{"post":{"operationId":"send","requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/Event"}}}},"responses":{"200":{"description":""}}}}},
+"components":{"schemas":{
+"Event":{"oneOf":[{"$ref":"#/components/schemas/Created"},{"$ref":"#/components/schemas/Updated"}],"discriminator":{"propertyName":"type","mapping":{"created":"#/components/schemas/Created","updated":"#/components/schemas/Updated"}}},
+"Created":{"type":"object","properties":{"type":{"type":"string"},"id":{"type":"string"}},"required":["type"]},
+"Updated":{"$ref":"#/components/schemas/Created"}}}}"##;
+    fs::write(dir.path().join("openapi.json"), spec).unwrap();
+    let (ok, out) = perseid(
+        dir.path(),
+        &["init", "--sdks", "rust", "--spec", "openapi.json"],
+    );
+    assert!(ok, "{out}");
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let event = fs::read_to_string(dir.path().join("rust/src/models/event.rs")).unwrap();
+    assert!(!event.contains("impl From<"), "{event}");
+}

@@ -212,7 +212,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         toml += &format!("user_agent = {}\n", quote(&words.join("-")));
     }
     // An API streaming its answers, such as an LLM's, may take minutes to give a whole one.
-    let streams = doc["paths"].to_string().contains("text/event-stream");
+    let streams = doc.to_string().contains("\"text/event-stream\":");
     if streams
         && !imported
             .as_ref()
@@ -266,7 +266,8 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
             toml += &format!("exclude = {}\n", crate::stainless::list(&target.exclude));
         }
     }
-    if let Some(words) = &words {
+    let stainless_prefix = imported.as_ref().is_some_and(|s| s.env_prefix.is_some());
+    if let Some(words) = words.as_ref().filter(|_| !stainless_prefix) {
         toml += &format!(
             "\n[context]\nenv_prefix = {}\n",
             quote(&words.join("_").to_uppercase())

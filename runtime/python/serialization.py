@@ -287,7 +287,7 @@ def to_json_value(value: t.Any, annotation: t.Any = t.Any) -> t.Any:
     return value
 
 
-def with_nulls(model: _M, **fields: object) -> _M:
+def with_nulls(model: _M, /, **fields: object) -> _M:
     """``model``, sending ``null`` for those of ``fields`` that are ``None`` rather than ``UNSET``.
 
     Methods pass their arguments, to send ``null`` for an optional field defaulting to ``None``.

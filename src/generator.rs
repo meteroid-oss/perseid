@@ -280,6 +280,10 @@ impl Generator<'_> {
             "rs" => template::rust::convertible_types(&api.types),
             _ => BTreeSet::new(),
         };
+        let alias_targets = match self.tpl_file_ext {
+            "rs" => template::rust::alias_targets(&api.types, &recursive_aliases),
+            _ => std::collections::BTreeMap::new(),
+        };
         for (name, ty) in &api.types {
             let mut referenced_components = ty.referenced_components();
             // A recursive type refers to itself, which is not an import.
@@ -328,6 +332,7 @@ impl Generator<'_> {
                     enum_literals => &enum_literals,
                     open_enums => &open_enums,
                     convertible_types => &convertible_types,
+                    alias_targets => &alias_targets,
                     closed_enums => &closed_enums,
                     variant_tags => variant_tags(&api.types, ty),
                     ..errors.clone()

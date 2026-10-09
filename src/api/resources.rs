@@ -1266,8 +1266,8 @@ impl Operation {
                     }
                 }
                 found.or_else(|| {
-                    let detected = super::pagination::detected();
-                    (detected.iter().filter(|_| detect))
+                    let detected = detect.then(super::pagination::detected).unwrap_or_default();
+                    (detected.iter())
                         .find_map(|rule| Pagination::resolve(rule, &candidate, types, true).ok())
                 })
             }

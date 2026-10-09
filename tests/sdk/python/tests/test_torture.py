@@ -256,7 +256,11 @@ components:
     Note:
       type: object
       required: [id]
-      properties: {id: {type: string}, text: {type: [string, 'null']}, color: {type: [string, 'null']}}
+      properties:
+        id: {type: string}
+        text: {type: [string, 'null']}
+        color: {type: [string, 'null']}
+        model: {type: [string, 'null']}
     NotePatch:
       type: object
       properties: {text: {type: [string, 'null']}}
@@ -1030,6 +1034,8 @@ class SharedModelNullsTest(unittest.TestCase):
         self.assertEqual(note.to_dict(), {"id": "1", "text": None})
         self.api.notes.create(id="1", color="red")
         self.assertEqual(self.bodies[-1], {"id": "1", "color": "red"})
+        self.api.notes.create(id="1", model=None)
+        self.assertEqual(self.bodies[-1], {"id": "1", "model": None})
         self.api.notes.update("1", text=None)
         self.assertEqual(self.bodies[-1], {"text": None})
         self.api.notes.update("1")

@@ -97,12 +97,13 @@ impl {{ enum_name }} {
 {#- A variant's payload converts into the union, unless another variant holds the same type. -#}
 {% set payloads = namespace(all=[]) -%}
 {% for variant in type.variants -%}
-{% set payloads.all = payloads.all + [payload(variant) | replace("Box<", "") | replace(">", "")] -%}
+{% set unboxed = payload(variant) | replace("Box<", "") | replace(">", "") -%}
+{% set payloads.all = payloads.all + [alias_targets[unboxed] if unboxed in alias_targets else unboxed] -%}
 {% endfor -%}
 {% for variant in type.variants -%}
 {% set p = payload(variant) -%}
-{% set inner = payloads.all[loop.index0] -%}
-{% if p and payloads.all | select("equalto", inner) | list | length == 1 %}
+{% set inner = payload(variant) | replace("Box<", "") | replace(">", "") -%}
+{% if p and payloads.all | select("equalto", payloads.all[loop.index0]) | list | length == 1 %}
 
 impl From<{{ inner }}> for {{ enum_name }} {
     fn from(value: {{ inner }}) -> Self {

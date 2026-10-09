@@ -287,6 +287,7 @@ pub(crate) fn python_attr(name: &str) -> bool {
         .next()
         .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !name.starts_with("__")
         && ![PYTHON, PYTHON_SHADOWING, ANNOTATIONS]
             .iter()
             .any(|set| set.contains(&name))
@@ -418,7 +419,9 @@ mod tests {
     #[test]
     fn python_attrs_are_identifiers_hiding_nothing() {
         assert!(python_attr("petType") && python_attr("_id"));
-        for name in ["class", "1a", "a-b", "", "str", "date", "list", "t"] {
+        for name in [
+            "class", "1a", "a-b", "", "str", "date", "list", "t", "__type",
+        ] {
             assert!(!python_attr(name), "{name}");
         }
     }
