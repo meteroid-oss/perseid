@@ -29,7 +29,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run clean && tsc && tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json', JSON.stringify({ type: 'commonjs' }))\"",
+    "build": "npm run clean && tsc && tsc -p tsconfig.cjs.json && node -e \"require('fs').writeFileSync('dist/cjs/package.json', JSON.stringify({ type: 'commonjs' }))\" && npm run bundle",
+    "bundle": "esbuild dist/esm/index.js --bundle --format=esm --platform=neutral --sourcemap --allow-overwrite --log-level=warning --outfile=dist/esm/index.js && esbuild dist/cjs/index.js --bundle --format=cjs --platform=neutral --sourcemap --allow-overwrite --log-level=warning --outfile=dist/cjs/index.js",
     "clean": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "prepublishOnly": "npm run build",
     "test": "tsc -p tsconfig.test.json && cd dist-test && node --test"
@@ -39,6 +40,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.24.0",
     "typescript": "^5.5.0"
   }
 }

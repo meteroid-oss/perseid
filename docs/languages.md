@@ -231,7 +231,9 @@ npm install acme
 ```
 
 ESM and CommonJS builds behind an `exports` map. The package only needs `fetch`, and
-type-checks under `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
+type-checks under `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`. Its
+`build` script bundles each entry point with esbuild, so that Node loads one module rather than
+one per model.
 
 ### Client
 
