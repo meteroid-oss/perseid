@@ -359,7 +359,7 @@ internal sealed class ApiTransport : IDisposable
             var started = Stopwatch.GetTimestamp();
             HttpStatusCode? status = null;
             string? failure = null;
-            void Log(TimeSpan? retryIn) =>
+            void Log(TimeSpan? retryIn, bool tokenRenewed = false) =>
                 _log?.Invoke(
                     new ApiAttempt(
                         request.Operation,
@@ -369,7 +369,8 @@ internal sealed class ApiTransport : IDisposable
                         status,
                         failure,
                         Stopwatch.GetElapsedTime(started),
-                        retryIn
+                        retryIn,
+                        tokenRenewed
                     )
                 );
             if (attempt > 0)
@@ -482,7 +483,7 @@ internal sealed class ApiTransport : IDisposable
             }
             if (renew)
             {
-                Log(TimeSpan.Zero);
+                Log(null, tokenRenewed: true);
                 renewed = true;
                 oauthUse = await _auth.RenewAsync(oauthUse!, _credentials, cancellationToken).ConfigureAwait(false);
                 headers["Authorization"] = $"Bearer {oauthUse.Token}";

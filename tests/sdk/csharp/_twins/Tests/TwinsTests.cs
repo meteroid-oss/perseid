@@ -42,4 +42,34 @@ public class TwinsTests
         Assert.DoesNotContain("name=\"stream\"", server.Bodies[0], StringComparison.Ordinal);
         Assert.Matches("name=\"stream\"\r\n(.+\r\n)*\r\ntrue\r\n", server.Bodies[1]);
     }
+
+    [Fact]
+    public async Task APartIsTypedByTheSpecUnlessOctetStreamThenByTheExtension()
+    {
+        var server = new Server();
+        using var client = new AudioClient("key", new() { HttpMessageHandler = server });
+        var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.json");
+        await File.WriteAllTextAsync(path, "{}");
+        try
+        {
+            await client.Audio.CreateUploadAsync(new() { Image = Upload.FromFile(path), Doc = Upload.FromFile(path) });
+            await client.Audio.CreateUploadAsync(new()
+            {
+                Image = Upload.FromFile(path, "text/csv"),
+                Doc = Upload.FromBytes([1], "a.bin"),
+            });
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+        Assert.Contains("Content-Type: image/png", Part(server.Bodies[0], "image"));
+        Assert.Contains("Content-Type: application/json", Part(server.Bodies[0], "doc"));
+        Assert.Contains("Content-Type: text/csv", Part(server.Bodies[1], "image"));
+        Assert.Contains("Content-Type: application/octet-stream", Part(server.Bodies[1], "doc"));
+    }
+
+    /// <summary>The headers of the part named <paramref name="name"/>.</summary>
+    private static string Part(string body, string name) =>
+        body.Split("\r\n\r\n").First(headers => headers.Contains($"name=\"{name}\"", StringComparison.Ordinal));
 }

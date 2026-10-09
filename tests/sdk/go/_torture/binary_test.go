@@ -98,6 +98,37 @@ func TestBinaryResponsesReadWholeOrToAFile(t *testing.T) {
 	}
 }
 
+func TestAFailedDownloadLeavesTheFileAsItWas(t *testing.T) {
+	client, _ := server(t, func(attempt int32, w http.ResponseWriter, _ *http.Request) {
+		length := "8"
+		if attempt == 1 {
+			length = "100"
+		}
+		w.Header().Set("Content-Length", length)
+		_, _ = io.WriteString(w, "%PDF-1.7")
+	})
+	dir := t.TempDir()
+	path := filepath.Join(dir, "t1.pdf")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"old", "%PDF-1.7"} {
+		body, err := client.Things().Download(context.Background(), "t1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := body.WriteToFile(path); (err == nil) != (want != "old") {
+			t.Errorf("WriteToFile: %v", err)
+		}
+		if written, _ := os.ReadFile(path); string(written) != want {
+			t.Errorf("file holds %q, want %q", written, want)
+		}
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("files left: %v", entries)
+	}
+}
+
 func TestBinaryErrorStatusesAreReturnedBeforeTheBody(t *testing.T) {
 	client, rec := server(t, func(_ int32, w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -94,36 +94,51 @@ public sealed class BinaryResponse : IDisposable, IAsyncDisposable
     }
 
     /// <summary>Writes the rest of the body to the file at <paramref name="path"/>, created or
-    /// replaced, then closes the response. The file is deleted when the body cannot be read whole.</summary>
+    /// replaced once the body is read whole, then closes the response. The body goes to a temporary
+    /// file next to it first, so a failed download leaves the file as it was.</summary>
     /// <param name="path">The file.</param>
     /// <param name="cancellationToken">Cancels the download.</param>
     public async Task WriteToFileAsync(string path, CancellationToken cancellationToken = default)
     {
+        string temp;
         FileStream file;
         try
         {
-            file = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+            if (Directory.Exists(path))
+            {
+                throw new IOException($"{path} is a directory");
+            }
+            var full = Path.GetFullPath(path);
+            temp = Path.Combine(
+                Path.GetDirectoryName(full)!,
+                $".{Path.GetFileName(full)}.{Guid.NewGuid():N}.tmp"
+            );
+            file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
         }
         catch
         {
             Dispose();
             throw;
         }
-        var written = false;
         try
         {
             await using (file.ConfigureAwait(false))
             {
                 await CopyToAsync(file, cancellationToken).ConfigureAwait(false);
             }
-            written = true;
+            File.Move(temp, path, overwrite: true);
         }
-        finally
+        catch
         {
-            if (!written)
+            try
             {
-                File.Delete(path);
+                File.Delete(temp);
             }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // The download's own error is the one to report.
+            }
+            throw;
         }
     }
 

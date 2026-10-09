@@ -122,6 +122,24 @@ class BinaryTest {
     }
 
     @Test
+    void aFailedDownloadLeavesTheFileAsItWas(@TempDir Path dir) throws Exception {
+        Torture client = serve((n, exchange) -> {
+            exchange.getResponseHeaders().add("content-type", "application/pdf");
+            exchange.sendResponseHeaders(200, n == 1 ? 100 : 8);
+            exchange.getResponseBody().write("%PDF-1.7".getBytes(StandardCharsets.UTF_8));
+        });
+        Path file = dir.resolve("t1.pdf");
+        Files.writeString(file, "old");
+        assertThrows(ApiConnectionException.class, () -> client.things().download("t1").writeTo(file));
+        assertEquals("old", Files.readString(file));
+        client.things().download("t1").writeTo(file);
+        assertEquals("%PDF-1.7", Files.readString(file));
+        try (var files = Files.list(dir)) {
+            assertEquals(List.of(file), files.collect(java.util.stream.Collectors.toList()));
+        }
+    }
+
+    @Test
     void anErrorStatusIsThrownBeforeTheBody() throws Exception {
         Torture client = serve((n, exchange) -> {
             byte[] body = "{\"message\":\"no such thing\"}".getBytes(StandardCharsets.UTF_8);

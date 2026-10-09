@@ -3,9 +3,11 @@ package @@JAVA_INTERNAL_PACKAGE@@;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.BeanDescription;
 import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.introspect.AnnotatedMember;
 import @@JAVA_PACKAGE@@.ApiResponse;
 import @@JAVA_PACKAGE@@.@@CLIENT_NAME@@Options;
 import @@JAVA_PACKAGE@@.RequestOptions;
@@ -549,7 +551,10 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         public <T> Exchange<EventStream<T>> returningEvents(Class<T> type) {
             JavaType eventType = objectMapper.getTypeFactory().constructType(type);
             return new Exchange<>(
-                    this, Body.EVENTS, response -> EventStream.typed(response, event -> decodeEvent(event, eventType)));
+                    this,
+                    Body.EVENTS,
+                    response -> EventStream.typed(
+                            response, event -> decodeEvent(event, eventType), item -> declaresError(item)));
         }
 
         /**
@@ -563,7 +568,10 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         public <T> Exchange<EventStream<T>> returningEvents(TypeReference<T> type) {
             JavaType eventType = objectMapper.getTypeFactory().constructType(type);
             return new Exchange<>(
-                    this, Body.EVENTS, response -> EventStream.typed(response, event -> decodeEvent(event, eventType)));
+                    this,
+                    Body.EVENTS,
+                    response -> EventStream.typed(
+                            response, event -> decodeEvent(event, eventType), item -> declaresError(item)));
         }
 
         private Request request(Body mode) {
@@ -775,6 +783,30 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
             return null;
         }
         return objectMapper.readValue(text, type);
+    }
+
+    /** Whether {@code item} has an {@code error} property: a model, or the variant a union holds. */
+    private boolean declaresError(Object item) {
+        if (item == null
+                || item instanceof JsonNode
+                || item instanceof Map
+                || item instanceof Collection
+                || item.getClass().isEnum()
+                || item.getClass().getName().startsWith("java.")) {
+            return true;
+        }
+        BeanDescription bean =
+                objectMapper.getSerializationConfig().introspect(objectMapper.constructType(item.getClass()));
+        AnnotatedMember value = bean.findJsonValueAccessor();
+        if (value == null) {
+            return bean.findProperties().stream().anyMatch(property -> property.getName().equals("error"));
+        }
+        // A value no variant of a union decodes is `Unrecognized`.
+        if (item.getClass().getSimpleName().equals("Unrecognized")) {
+            return false;
+        }
+        value.fixAccess(true);
+        return declaresError(value.getValue(item));
     }
 
     private <T> T decodeEvent(SseEvent event, JavaType type) {

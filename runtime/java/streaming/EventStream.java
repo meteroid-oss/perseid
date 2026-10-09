@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import okhttp3.Response;
@@ -21,9 +22,9 @@ import okio.BufferedSource;
  * {@code [DONE]} event, with {@link #lastEvent()} giving the event behind the last item; untyped
  * ones yield the {@link SseEvent}s. Read errors are thrown as {@link ApiConnectionException}.
  *
- * <p>In a typed stream, an {@code error} event, or an unnamed one whose data is an object with an
- * {@code error}, is thrown as an {@link ApiException} holding that data; {@code ping} and {@code
- * keepalive} events are skipped.
+ * <p>In a typed stream, an {@code error} event, or one whose data is an object with an {@code
+ * error} that the item type does not declare, is thrown as an {@link ApiException} holding that
+ * data; {@code ping} and {@code keepalive} events are skipped.
  *
  * @param <T> the type of the items
  */
@@ -31,6 +32,7 @@ public final class EventStream<T> implements Iterable<T>, AutoCloseable {
     private final Response response;
     private final BufferedSource source;
     private final Function<SseEvent, T> decode;
+    private final Predicate<? super T> declaresError;
     private final boolean typed;
     private final StringBuilder line = new StringBuilder();
     private final StringBuilder data = new StringBuilder();
@@ -51,7 +53,7 @@ public final class EventStream<T> implements Iterable<T>, AutoCloseable {
      * @return the stream
      */
     public static EventStream<SseEvent> raw(Response response) {
-        return new EventStream<>(response, event -> event, false);
+        return new EventStream<>(response, event -> event, event -> true, false);
     }
 
     /**
@@ -60,16 +62,23 @@ public final class EventStream<T> implements Iterable<T>, AutoCloseable {
      * @param <T> the type of the items
      * @param response the open response
      * @param decode decodes the data of an event
+     * @param declaresError whether an item has an {@code error} property of its own
      * @return the stream
      */
-    public static <T> EventStream<T> typed(Response response, Function<SseEvent, T> decode) {
-        return new EventStream<>(response, decode, true);
+    public static <T> EventStream<T> typed(
+            Response response, Function<SseEvent, T> decode, Predicate<? super T> declaresError) {
+        return new EventStream<>(response, decode, declaresError, true);
     }
 
-    private EventStream(Response response, Function<SseEvent, T> decode, boolean typed) {
+    private EventStream(
+            Response response,
+            Function<SseEvent, T> decode,
+            Predicate<? super T> declaresError,
+            boolean typed) {
         this.response = response;
         this.source = response.body().source();
         this.decode = decode;
+        this.declaresError = declaresError;
         this.typed = typed;
     }
 
@@ -114,9 +123,11 @@ public final class EventStream<T> implements Iterable<T>, AutoCloseable {
                     SseEvent event = read();
                     if (event == null || (typed && event.data().equals("[DONE]"))) {
                         done = true;
-                    } else if (!typed || !(event.event().equals("ping") || event.event().equals("keepalive"))) {
-                        failIfError(event);
+                    } else if (!typed) {
                         item = decode.apply(event);
+                        next = event;
+                    } else if (!(event.event().equals("ping") || event.event().equals("keepalive"))) {
+                        item = decodeTyped(event);
                         next = event;
                     }
                 }
@@ -149,17 +160,32 @@ public final class EventStream<T> implements Iterable<T>, AutoCloseable {
         }
     }
 
-    private void failIfError(SseEvent event) {
-        boolean named = typed && event.event().equals("error");
-        boolean unnamed = typed && event.event().equals("message") && event.data().contains("\"error\"");
-        JsonNode data = named || unnamed ? Utils.jsonOrNull(event.data()) : null;
-        if (!named && (data == null || !data.hasNonNull("error"))) {
-            return;
+    private T decodeTyped(SseEvent event) {
+        JsonNode data = event.data().contains("\"error\"") ? Utils.jsonOrNull(event.data()) : null;
+        boolean reportsError = data != null && data.hasNonNull("error");
+        if (event.event().equals("error")) {
+            throw apiError(event, data != null ? data : Utils.jsonOrNull(event.data()));
         }
+        T value;
+        try {
+            value = decode.apply(event);
+        } catch (RuntimeException e) {
+            if (reportsError) {
+                throw apiError(event, data);
+            }
+            throw e;
+        }
+        if (reportsError && !declaresError.test(value)) {
+            throw apiError(event, data);
+        }
+        return value;
+    }
+
+    private ApiException apiError(SseEvent event, JsonNode data) {
         done = true;
         close();
         String message = Utils.errorMessage(data);
-        throw new ApiException(
+        return new ApiException(
                 response.request().method()
                         + " "
                         + response.request().url().encodedPath()

@@ -135,6 +135,28 @@ public class BinaryTests
     }
 
     [Fact]
+    public async Task AFailedDownloadLeavesTheFileAsItWas()
+    {
+        var (client, _) = Client(n => Pdf(new Parts(_ => Task.CompletedTask, n == 1, "%PDF-", "1.7")));
+        using var _ = client;
+        var dir = Directory.CreateTempSubdirectory();
+        try
+        {
+            var path = Path.Combine(dir.FullName, "t1.pdf");
+            await File.WriteAllTextAsync(path, "old");
+            await Assert.ThrowsAsync<ApiConnectionException>(() => client.Things.DownloadAsync("t1").WriteToFileAsync(path));
+            Assert.Equal("old", await File.ReadAllTextAsync(path));
+            await client.Things.DownloadAsync("t1").WriteToFileAsync(path);
+            Assert.Equal("%PDF-1.7", await File.ReadAllTextAsync(path));
+            Assert.Equal([path], Directory.GetFiles(dir.FullName));
+        }
+        finally
+        {
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task AnErrorStatusIsThrownBeforeTheBody()
     {
         var (client, server) = Client(_ =>

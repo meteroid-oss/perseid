@@ -97,6 +97,22 @@ public class ClientTests
     }
 
     [Fact]
+    public void ARenewedAccessTokenIsLoggedAtDebugLevel()
+    {
+        var logs = new Logs();
+        var log = PetstoreServiceCollectionExtensions.LogTo(logs);
+        log(new ApiAttempt("pets.retrieve", "GET", "https://petstore.test/pets/1", 0, HttpStatusCode.Unauthorized, null, TimeSpan.FromMilliseconds(3), null, TokenRenewed: true));
+        log(new ApiAttempt("pets.retrieve", "GET", "https://petstore.test/pets/1", 0, HttpStatusCode.TooManyRequests, null, TimeSpan.FromMilliseconds(3), TimeSpan.FromMilliseconds(500)));
+        Assert.Equal(
+            [
+                (LogLevel.Debug, "GET https://petstore.test/pets/1: 401 in 3 ms, retried with a renewed access token"),
+                (LogLevel.Information, "GET https://petstore.test/pets/1: 429 in 3 ms, retried in 500 ms"),
+            ],
+            logs.Entries.Select(e => (e.Level, e.Message))
+        );
+    }
+
+    [Fact]
     public async Task TheServerOfTheSpecIsTheDefaultBaseUrl()
     {
         Assert.Equal("https://petstore.example.com", PetstoreClientOptions.DefaultBaseUrl);

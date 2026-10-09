@@ -23,6 +23,34 @@ paths:
               schema: {$ref: '#/components/schemas/Transcription'}
             text/event-stream:
               schema: {$ref: '#/components/schemas/TranscriptionDelta'}
+  /uploads:
+    post:
+      operationId: createUpload
+      tags: [uploads]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/UploadRequest'}
+            encoding:
+              image: {contentType: image/png}
+              doc: {contentType: application/octet-stream}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Transcription'}
+  /deltas:
+    get:
+      operationId: listDeltas
+      tags: [deltas]
+      responses:
+        '200':
+          description: ok
+          content:
+            text/event-stream:
+              schema: {$ref: '#/components/schemas/Delta'}
 components:
   schemas:
     TranscriptionRequest:
@@ -42,3 +70,14 @@ components:
       required: [delta]
       properties:
         delta: {type: string}
+    UploadRequest:
+      type: object
+      required: [image]
+      properties:
+        image: {type: string, format: binary}
+        doc: {type: string, format: binary}
+    Delta:
+      type: object
+      properties:
+        text: {type: string}
+        error: {type: string}
