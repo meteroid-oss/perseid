@@ -689,6 +689,7 @@ class LoggingTest(unittest.TestCase):
     def test_the_log_variable_configures_the_logger(self) -> None:
         logger = logging.getLogger("features")
         self.addCleanup(setattr, logger, "handlers", [])
+        self.addCleanup(setattr, logger, "propagate", True)
         self.addCleanup(logger.setLevel, logging.NOTSET)
         cases = [
             ("debug", logging.DEBUG, 1),
@@ -700,9 +701,12 @@ class LoggingTest(unittest.TestCase):
             with self.subTest(value=value), mock.patch.object(logging.root, "handlers", []):
                 logger.handlers = []
                 logger.setLevel(logging.NOTSET)
+                logger.propagate = True
                 with mock.patch.dict(os.environ, {"FEATURES_LOG": value or ""}):
                     features.api.common._setup_logging()
                 self.assertEqual((logger.level, len(logger.handlers)), (level, handlers))
+                # A root handler, as `logging.basicConfig` adds, would print each line again.
+                self.assertEqual(logger.propagate, handlers == 0)
 
     def test_the_log_variable_keeps_a_configured_logger(self) -> None:
         logger = logging.getLogger("features")

@@ -120,6 +120,8 @@ def _setup_logging() -> None:
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
         _logger.addHandler(handler)
+        # A root handler set up later, as by `logging.basicConfig`, would print each line again.
+        _logger.propagate = False
 
 
 _setup_logging()
