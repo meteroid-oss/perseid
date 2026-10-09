@@ -11,7 +11,6 @@ namespace @@PACKAGE_NAME@@;
 /// </summary>
 public class ApiException : @@CLIENT_NAME@@Exception
 {
-    private const int MaxBodyInMessage = 500;
     private readonly Lazy<object?> _error;
 
     /// <summary>Creates the exception of an error response.</summary>
@@ -19,10 +18,7 @@ public class ApiException : @@CLIENT_NAME@@Exception
     /// <param name="body">The raw response body.</param>
     /// <param name="headers">The response headers.</param>
     public ApiException(HttpStatusCode statusCode, string body, HttpResponseHeaders headers)
-        : base(
-            $"@@CLIENT_NAME@@ API error (status {(int)statusCode}): "
-                + (body.Length > MaxBodyInMessage ? $"{body[..MaxBodyInMessage]}…" : body)
-        )
+        : base(ApiExceptionExtensions.Describe(statusCode, body))
     {
         StatusCode = statusCode;
         Body = body;
