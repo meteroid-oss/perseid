@@ -542,7 +542,13 @@ customer, err := client.Customers().Retrieve(ctx, "cus_1", acme.WithMaxRetries(0
 - Optional query and header parameters go in a `*...Options` struct of pointers
   (`acme.Ptr(v)`), `nil` for none.
 - Per-call options: `WithHeader`, `WithTimeout`, `WithIdempotencyKey`, `WithMaxRetries`,
-  `WithResponseInto`.
+  `WithResponseInto`. `WithQuery(name, value)` and `WithJSONSet("metadata.source", v)` send a
+  query parameter or a body property the SDK does not know yet.
+- A multipart file is an `Upload`. `acme.UploadFile("a.mp3")` opens the file for each attempt;
+  `Upload{Reader: f}` with an `*os.File` is named after it. Its media type defaults to the
+  spec's, then to its extension's.
+- The `...Stream` twin of a multipart operation sends its `stream` part as true; the other
+  leaves it out.
 - An operation that may answer a bodiless 2xx returns nil for it, scalars as a pointer.
 
 ### Pagination

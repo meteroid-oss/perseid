@@ -14,6 +14,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -309,12 +311,63 @@ func enableStream(field any) {
 	}
 }
 
-// Upload is a multipart file. Readers implementing io.Seeker are rewound for
-// retries; other readers are sent once.
+// Upload is a multipart file. Seekable readers are rewound for retries, others
+// sent once. Filename defaults to the base name of an *os.File, ContentType to
+// the part's media type in the spec, then to the one of Filename's extension.
 type Upload struct {
 	Reader      io.Reader
 	Filename    string
 	ContentType string
+	path        string
+}
+
+// UploadFile is an [Upload] of the file at path, named after it. The file is
+// opened for each attempt, and closed once sent.
+func UploadFile(path string) (Upload, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return Upload{}, err
+	}
+	if info.IsDir() {
+		return Upload{}, fmt.Errorf("@@PACKAGE_NAME@@: %s is a directory", path)
+	}
+	return Upload{Filename: filepath.Base(path), path: path}, nil
+}
+
+// send writes the file to part.
+func (u *Upload) send(part io.Writer) error {
+	reader := u.Reader
+	if reader == nil {
+		if u.path == "" {
+			return errors.New("@@PACKAGE_NAME@@: an Upload needs a Reader, or UploadFile")
+		}
+		file, err := os.Open(u.path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = file.Close() }()
+		reader = file
+	}
+	_, err := io.Copy(part, reader)
+	return err
+}
+
+func (u *Upload) filename() string {
+	if u.Filename != "" {
+		return u.Filename
+	}
+	if named, ok := u.Reader.(interface{ Name() string }); ok && named.Name() != "" {
+		return filepath.Base(named.Name())
+	}
+	if u.path != "" {
+		return filepath.Base(u.path)
+	}
+	return "file"
+}
+
+func (u *Upload) replayable() bool {
+	_, seekable := u.Reader.(io.Seeker)
+	return seekable || u.Reader == nil && u.path != ""
 }
 
 // multipartField is a form field: a JSON-encodable value, one file, or a list of
@@ -386,7 +439,7 @@ func (r *request) SetMultipartBody(fields []multipartField) {
 	}
 	for _, field := range fields {
 		for _, upload := range field.uploads() {
-			if _, ok := upload.Reader.(io.Seeker); !ok {
+			if !upload.replayable() {
 				r.oneShot = true
 			}
 		}
@@ -413,13 +466,13 @@ func writeMultipartField(form *multipart.Writer, field multipartField) error {
 	header := textproto.MIMEHeader{}
 	if uploads := field.uploads(); len(uploads) > 0 {
 		for _, upload := range uploads {
-			filename := upload.Filename
-			if filename == "" {
-				filename = "file"
-			}
+			filename := upload.filename()
 			contentType := upload.ContentType
 			if contentType == "" {
 				contentType = field.contentType
+			}
+			if contentType == "" {
+				contentType = mime.TypeByExtension(filepath.Ext(filename))
 			}
 			if contentType == "" {
 				contentType = "application/octet-stream"
@@ -429,7 +482,7 @@ func writeMultipartField(form *multipart.Writer, field multipartField) error {
 			header.Set("Content-Type", contentType)
 			part, err := form.CreatePart(header)
 			if err == nil {
-				_, err = io.Copy(part, upload.Reader)
+				err = upload.send(part)
 			}
 			if err != nil {
 				return err

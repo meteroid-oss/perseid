@@ -174,6 +174,44 @@ func (r *request) SetJSONBody(v any) {
 	r.contentType = "application/json"
 }
 
+// setJSON applies the settings of WithJSONSet to the JSON body, an object.
+func (r *request) setJSON(settings []jsonSetting) error {
+	if len(settings) == 0 {
+		return nil
+	}
+	if r.newBody != nil || r.contentType != "" && r.contentType != "application/json" {
+		return requestError("WithJSONSet needs a JSON body, not %s", r.contentType)
+	}
+	body := json.RawMessage(r.body)
+	for _, setting := range settings {
+		var err error
+		if body, err = setJSONPath(body, setting.path, setting.value); err != nil {
+			return requestError("WithJSONSet %q: %w", strings.Join(setting.path, "."), err)
+		}
+	}
+	r.body, r.contentType = body, "application/json"
+	return nil
+}
+
+func setJSONPath(object json.RawMessage, path []string, value any) (json.RawMessage, error) {
+	fields := map[string]json.RawMessage{}
+	if len(object) > 0 && string(object) != "null" {
+		if err := json.Unmarshal(object, &fields); err != nil {
+			return nil, err
+		}
+	}
+	var err error
+	if len(path) == 1 {
+		fields[path[0]], err = json.Marshal(value)
+	} else {
+		fields[path[0]], err = setJSONPath(fields[path[0]], path[1:], value)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(fields)
+}
+
 // AddStructuredQueryParam sends the JSON value of v: objects as name[key]=value,
 // lists as style says.
 func (r *request) AddStructuredQueryParam(name string, v any, style queryStyle) {
@@ -446,6 +484,12 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 
 	cfg := c.cfg
 	call := cfg.callConfig(req.options)
+	for name, values := range call.query {
+		req.query[name] = values
+	}
+	if err := req.setJSON(call.jsonSet); err != nil {
+		return nil, 0, err
+	}
 	security := req.security
 	if security == nil {
 		security = defaultSecurity
