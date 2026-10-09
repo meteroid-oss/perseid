@@ -5,10 +5,11 @@ The generated models are plain :mod:`dataclasses`. All JSON conversion lives
 here, driven by their type annotations, so the generated code stays declarative
 and dependency free.
 
-* An optional field left to ``None`` is omitted from the payload. An optional
-  field that the API accepts as ``null`` defaults to :data:`UNSET` instead:
-  ``UNSET`` is omitted, while ``None`` is sent as ``null`` (to clear a value).
-  A required field is always sent.
+* An optional field left to ``None`` is omitted from the payload, unless it was
+  received as ``null``. In models only requests send and in PATCH bodies, an
+  optional field that the API accepts as ``null`` defaults to :data:`UNSET`
+  instead: ``UNSET`` is omitted, while ``None`` is sent as ``null`` (to clear a
+  value). A required field is always sent.
 * JSON properties, enum values and union variants added to the API after
   this SDK was generated are kept as received, and sent back unchanged.
   Models whose schema types its ``additionalProperties`` decode the
@@ -51,6 +52,7 @@ __all__ = [
     "parse_datetime",
     "parse_decimal",
     "to_json_value",
+    "with_nulls",
 ]
 
 _M = t.TypeVar("_M", bound="BaseModel")
@@ -283,6 +285,17 @@ def to_json_value(value: t.Any, annotation: t.Any = t.Any) -> t.Any:
         entries = t.cast("t.Mapping[object, object]", value).items()
         return {str(k): to_json_value(v, inner) for k, v in entries}
     return value
+
+
+def with_nulls(model: _M, **fields: object) -> _M:
+    """``model``, sending ``null`` for those of ``fields`` that are ``None`` rather than ``UNSET``.
+
+    Methods pass their arguments, to send ``null`` for an optional field defaulting to ``None``.
+    """
+    nulls = {name for name, value in fields.items() if value is None}
+    if nulls:
+        model.__dict__["_nulls"] = nulls | model.__dict__.get("_nulls", set())
+    return model
 
 
 def format_decimal(value: Decimal) -> str:

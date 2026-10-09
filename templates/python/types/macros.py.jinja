@@ -167,18 +167,18 @@
 {%- endmacro %}
 
 {#- Whether a field is optional and also accepts `null`, so needs UNSET to tell them apart:
-    only in the schemas requests send, as responses never need to. -#}
-{% macro is_tristate(field, in_request=true) -%}
-    {%- if field.nullable and not field.required and in_request %}1{% endif -%}
+    only in `tri_state` schemas (request-only ones and PATCH bodies) and arguments. -#}
+{% macro is_tristate(field, tri_state=true) -%}
+    {%- if field.nullable and not field.required and tri_state %}1{% endif -%}
 {%- endmacro %}
 
 {#- The annotation of a struct field: required `X`, required nullable `X | None`, optional
-    `X | None`, optional nullable `X | None | Unset` in request schemas. `ty` replaces the
+    `X | None`, optional nullable `X | None | Unset` with `tri_state`. `ty` replaces the
     annotation of the value, such as an enum taking its literals too. -#}
-{% macro field_type(field, in_request=true, ty=none) -%}
+{% macro field_type(field, tri_state=true, ty=none) -%}
     {%- set ty = ty or literal_type(field) or py_type(field.type) -%}
     {%- if ty == "t.Any" or (field.required and not field.nullable) %}{{ ty }}
-    {%- elif field.required or not is_tristate(field, in_request) %}{{ ty }} | None
+    {%- elif field.required or not is_tristate(field, tri_state) %}{{ ty }} | None
     {%- else %}{{ ty }} | None | Unset{% endif -%}
 {%- endmacro %}
 
@@ -187,8 +187,6 @@
     {%- if field.literal is defined %}t.Literal[{{ py_str(field.literal) }}]{% endif -%}
 {%- endmacro %}
 
-{#- The annotation and default of a struct field: optional ones default to `None`, or to
-    `UNSET` when `None` sends `null`. -#}
 {#- `annotation` in a class with the attributes `attrs`: an attribute `date` hides the type. -#}
 {% macro in_class(annotation, attrs) -%}
     {{ annotation | replace_ident("date", "_datetime.date") if "date" in attrs else annotation }}
@@ -199,9 +197,11 @@
     {%- for field in fields %}{{ field_ident(field) }} {% endfor -%}
 {%- endmacro %}
 
-{% macro field_decl(field, in_request=true, ty=none) -%}
-    {{ field_type(field, in_request, ty) }}
-    {%- if not field.required %} = {% if is_tristate(field, in_request) %}UNSET{% else %}None{% endif %}{% endif -%}
+{#- The annotation and default of a struct field: optional ones default to `None`, or to
+    `UNSET` when `None` sends `null`. -#}
+{% macro field_decl(field, tri_state=true, ty=none) -%}
+    {{ field_type(field, tri_state, ty) }}
+    {%- if not field.required %} = {% if is_tristate(field, tri_state) %}UNSET{% else %}None{% endif %}{% endif -%}
 {%- endmacro %}
 
 {#- The models `ty` names, each followed by a space. -#}

@@ -34,6 +34,7 @@ from features.models import (
     Filter,
     FilterAmount,
     Health,
+    ItemPatch,
     RangeQuerySpecs,
     SearchRange,
     WidgetList,
@@ -230,6 +231,7 @@ item = client.items.retrieve("i1")
 assert (item.id, item.name, item.note) == ("i1", "first", "hi"), item
 patched = client.items.update("i1", name="renamed")
 assert (patched.name, patched.note) == ("renamed", None), patched
+assert ItemPatch(name="renamed").note is UNSET
 assert client.items.delete("i1") is None
 
 # Content and decoding.
@@ -250,7 +252,7 @@ assert nulls.name is None and nulls.note is None, nulls
 assert nulls.tags == ["a", None, "b"] and nulls.counts == {"x": 1, "y": None}, nulls
 echoed = client.content.nulls.create(name=None, tags=["a", None], counts={"x": None, "y": 2})
 assert (echoed.name, echoed.tags, echoed.counts) == (None, ["a", None], {"x": None, "y": 2}), echoed
-assert echoed.note is UNSET, echoed
+assert echoed.note is None, echoed
 assert echoed.to_dict() == {"name": None, "tags": ["a", None], "counts": {"x": None, "y": 2}}, echoed
 bag = client.content.retrieve_scenarios_bag()
 assert bag.id == "b1" and bag.extra_fields == {"a": 1, "b": 2}, bag
