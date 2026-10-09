@@ -7,29 +7,32 @@
     {%- if sdk.int64 | default("number") != "number" and type.to_go() in ["int64", "uint64"] %}yes{% endif -%}
 {%- endmacro %}
 
-{# `unknown` for any-JSON values, so callers narrow them before use. -#}
-{% macro js_type(type) -%}
+{# `unknown` for any-JSON values, so callers narrow them before use. The enums of `received`,
+   in the models only responses carry, also take the values a later API version adds. -#}
+{% macro js_type(type, received=[]) -%}
     {%- if type.is_nullable() -%}
-        {{ js_type(type.inner_type()) }} | null
+        {{ js_type(type.inner_type(), received) }} | null
     {%- elif type.is_union() -%}
         {%- for v in type.union_variants() -%}
-            {% if not loop.first %} | {% endif %}{% if v.empty %}""{% elif untyped_int64(v) %}{{ untyped_js_type(v.type) }}{% else %}{{ js_type(v.type) }}{% endif %}
+            {% if not loop.first %} | {% endif %}{% if v.empty %}""{% elif untyped_int64(v) %}{{ untyped_js_type(v.type) }}{% else %}{{ js_type(v.type, received) }}{% endif %}
         {%- endfor -%}
     {%- elif type.is_json_object() -%}
         unknown
     {%- elif is_int64(type) -%}
         {{ sdk.int64 }}
     {%- elif type.is_list() or type.is_set() -%}
-        {% if type.inner_type().is_union() or type.inner_type().is_nullable() %}({{ js_type(type.inner_type()) }})[]{% else %}{{ js_type(type.inner_type()) }}[]{% endif %}
+        {% if type.inner_type().is_union() or type.inner_type().is_nullable() %}({{ js_type(type.inner_type(), received) }})[]{% else %}{{ js_type(type.inner_type(), received) }}[]{% endif %}
     {%- elif type.is_map() -%}
-        { [key: string]: {{ js_type(type.value_type()) }} }
+        { [key: string]: {{ js_type(type.value_type(), received) }} }
+    {%- elif type.is_schema_ref() and type.to_js() in received -%}
+        ({{ type.to_js() }} | (string & {}))
     {%- else -%}
         {{ type.to_js() }}
     {%- endif -%}
 {%- endmacro %}
 
-{% macro field_type(field) -%}
-    {{- field.literal | tojson if field.literal is defined else js_type(field.type) }}{% if field.nullable %} | null{% endif -%}
+{% macro field_type(field, received=[]) -%}
+    {{- field.literal | tojson if field.literal is defined else js_type(field.type, received) }}{% if field.nullable %} | null{% endif -%}
 {%- endmacro %}
 
 {% macro doc(description, deprecated) -%}
@@ -41,8 +44,8 @@
 {%- endmacro %}
 
 {# Optional fields also take `undefined`, which parsing leaves in absent fields. -#}
-{% macro field_decl(field) -%}
-    {{ doc(field.description, field.deprecated) }}{{ field.name | ident("camel") }}{% if not field.required %}?{% endif %}: {{ field_type(field) }}{% if not field.required %} | undefined{% endif %};
+{% macro field_decl(field, received=[]) -%}
+    {{ doc(field.description, field.deprecated) }}{{ field.name | ident("camel") }}{% if not field.required %}?{% endif %}: {{ field_type(field, received) }}{% if not field.required %} | undefined{% endif %};
 {%- endmacro %}
 
 {#- The int64 values of a union variant, alone or in lists and maps, stay numbers, or `bigint`

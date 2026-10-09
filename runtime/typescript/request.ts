@@ -257,6 +257,7 @@ function checkedPath(name: string, path: string): string {
 /** @internal */
 export class @@CLIENT_NAME@@Request {
   private body?: BodyInit;
+  private multipart: MultipartBody | undefined;
   private oneShot = false;
   private retrySafe = false;
   private security?: Security;
@@ -394,9 +395,9 @@ export class @@CLIENT_NAME@@Request {
     this.oneShot = typeof ReadableStream !== "undefined" && value instanceof ReadableStream;
   }
 
-  /** Sets a `multipart/form-data` body. */
+  /** Sets a `multipart/form-data` body, read before the first attempt. */
   public setMultipartBody(value: MultipartBody) {
-    this.body = value.blob();
+    this.multipart = value;
     this.headers["content-type"] = `multipart/form-data; boundary=${value.boundary}`;
   }
 
@@ -477,13 +478,24 @@ export class @@CLIENT_NAME@@Request {
     return new APIPromise(this.openEventStream(ctx, options), async (response) => new EventStream(response));
   }
 
-  /** Same as `sendEventStream`, decoding the JSON `data` of each event, up to `[DONE]`. */
+  /**
+   * Same as `sendEventStream`, decoding the JSON `data` of each event, up to `[DONE]`. An `error`
+   * event, or data with an `error` property, throws an `APIError` unless `errorEvents` is false:
+   * the events declare that property.
+   */
   public sendJsonStream<T>(
     ctx: @@CLIENT_NAME@@RequestContext,
     parse: (json: any) => T,
-    options?: RequestOptions
+    options?: RequestOptions,
+    errorEvents = true
   ): APIPromise<Stream<T>> {
-    return new APIPromise(this.openEventStream(ctx, options), async (response) => Stream.json(response, parse));
+    return new APIPromise(this.openEventStream(ctx, options), async (response) =>
+      Stream.json(
+        response,
+        parse,
+        errorEvents ? (data, json) => this.errorOf(ctx, response.status, data, response.headers, json) : undefined
+      )
+    );
   }
 
   /** Same as `send`, discarding the response body. */
@@ -509,6 +521,10 @@ export class @@CLIENT_NAME@@Request {
     options: RequestOptions = {},
     stream = false
   ): Promise<Response> {
+    if (this.multipart !== undefined) {
+      this.body = await this.multipart.blob();
+      this.multipart = undefined;
+    }
     const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(this.path) ? this.path : ctx.baseUrl + this.path);
     const baseName = (name: string) => name.split("[")[0] ?? name;
     const overrides = options.query ?? {};
@@ -565,7 +581,7 @@ export class @@CLIENT_NAME@@Request {
     const credentials = "credentials" in Request.prototype ? "same-origin" : undefined;
     const log = (message: string) => {
       if (ctx.debug) {
-        console.error(`@@PACKAGE_NAME@@: ${this.method} ${url} ${message}`);
+        console.error(`@@NPM_PACKAGE@@: ${this.method} ${url} ${message}`);
       }
     };
 
@@ -654,7 +670,12 @@ export class @@CLIENT_NAME@@Request {
     } catch {
       return apiError(response.status, body, response.headers, undefined);
     }
-    const parse = errorParser(this.errors, response.status) ?? ctx.parseError;
+    return this.errorOf(ctx, response.status, body, response.headers, json);
+  }
+
+  /** The `APIError` of `status`, its JSON `body` parsed with the error schema of the status. */
+  private errorOf(ctx: @@CLIENT_NAME@@RequestContext, status: number, body: string, headers: Headers, json: unknown) {
+    const parse = errorParser(this.errors, status) ?? ctx.parseError;
     let error: unknown = json;
     if (parse && json !== undefined) {
       try {
@@ -663,7 +684,7 @@ export class @@CLIENT_NAME@@Request {
         error = json;
       }
     }
-    return apiError(response.status, body, response.headers, error);
+    return apiError(status, body, headers, error);
   }
 }
 

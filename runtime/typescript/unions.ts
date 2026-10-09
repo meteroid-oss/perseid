@@ -36,6 +36,31 @@ export function unionBestMatch(value: unknown, candidates: [string[], string[]][
   return best;
 }
 
+/**
+ * @internal The object converted as the first of the variants sharing its tag that converts it,
+ * each given as its required and known properties and conversion, the best match first. The
+ * error of the best match is thrown when none converts it.
+ */
+export function unionTagged(value: unknown, candidates: [string[], string[], (value: any) => unknown][]): any {
+  const object = value as Record<string, unknown>;
+  const ranked = candidates
+    .map(([required, known, convert], index) => ({
+      convert,
+      index,
+      score: fit(required, known, object),
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index);
+  let first: unknown;
+  for (const { convert } of ranked) {
+    try {
+      return convert(value);
+    } catch (error) {
+      first ??= error;
+    }
+  }
+  throw first;
+}
+
 /** @internal What a union variant looks like in JSON: its type, and that of the items of a list. */
 export interface UnionShape {
   type: "string" | "integer" | "number" | "boolean" | "array" | "object";
@@ -89,10 +114,11 @@ function matches(candidate: UnionCandidate, value: unknown, outgoing: boolean): 
 }
 
 function score(candidate: UnionCandidate, object: Record<string, unknown>): number {
-  if (!(candidate.required ?? []).every((p) => p in object)) {
-    return -1;
-  }
-  return (candidate.known ?? []).filter((p) => p in object).length;
+  return fit(candidate.required ?? [], candidate.known ?? [], object);
+}
+
+function fit(required: string[], known: string[], object: Record<string, unknown>): number {
+  return required.every((p) => p in object) ? known.filter((p) => p in object).length : -1;
 }
 
 /**

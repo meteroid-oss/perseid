@@ -32,7 +32,7 @@
 {% if json_helpers -%}
 import { {{ json_helpers | join(", ") }} } from "../json.js";
 {% endif -%}
-{% set union_helpers = ["unionBestMatch", "unionHas", "unionTry"] | select("in", body) | list -%}
+{% set union_helpers = ["unionBestMatch", "unionHas", "unionTagged", "unionTry"] | select("in", body) | list -%}
 {% if union_helpers -%}
 import { {{ union_helpers | join(", ") }} } from "../unions.js";
 {% endif -%}
