@@ -394,6 +394,27 @@ class ErrorTest(unittest.TestCase):
         self.assertEqual(raised.exception.body, models.Error(error="forbidden", code=403))
 
 
+class StreamErrorTest(unittest.TestCase):
+    def stream(self, body: str) -> list[object]:
+        reply = httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+        with sync_client(Recorder(reply)) as api:
+            return list(api.streaming.create_completion_stream(prompt="hi"))
+
+    def test_an_error_event_is_an_api_error_with_its_message(self) -> None:
+        for body in [
+            'event: error\ndata: {"error": {"message": "overloaded", "type": "server_error"}}\n\n',
+            'data: {"error": {"message": "overloaded"}}\n\n',
+        ]:
+            with self.assertRaises(features.APIStatusError) as raised:
+                self.stream('data: {"delta": "a"}\n\n' + body)
+            self.assertIn("overloaded", str(raised.exception))
+            self.assertEqual(raised.exception.body["error"]["message"], "overloaded")
+
+    def test_an_event_that_is_neither_the_model_nor_an_error_is_a_decode_error(self) -> None:
+        with self.assertRaises(features.APIResponseValidationError):
+            self.stream('data: {"unexpected": 1}\n\n')
+
+
 class PaginationErrorTest(unittest.TestCase):
     def test_an_error_on_the_first_page_is_raised_by_the_call(self) -> None:
         handler = Recorder(httpx.Response(409, json={"error": "page_gone", "code": 409}))

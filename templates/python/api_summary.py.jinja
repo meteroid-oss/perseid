@@ -481,8 +481,8 @@ class APIStatusError(APIError):
     """The JSON of the error response, `None` when it is not JSON."""
 {%- endif %}
 
-    def __init__(self, response: httpx.Response, body: object) -> None:
-        detail = _body_text(response) or response.reason_phrase or "error"
+    def __init__(self, response: httpx.Response, body: object, detail: str | None = None) -> None:
+        detail = detail or _body_text(response) or response.reason_phrase or "error"
         super().__init__(f"Error code: {response.status_code} - {detail}", request_of(response))
         self.response = response
         self.status_code = response.status_code
