@@ -149,10 +149,16 @@ public class OAuthTests
     public async Task ATokenTheApiRejectsIsReplacedOnce()
     {
         var server = new Server { Revoked = { "at-1" } };
-        using (var client = Client(server))
+        var attempts = new List<ApiAttempt>();
+        using (var client = Client(server, configure: o => o.Log = attempts.Add))
         {
             Assert.Equal("at-2", (await client.Account.RetrieveMachineAsync()).Status);
             Assert.Equal(2, server.Tokens.Count);
+            var rejected = Assert.Single(attempts, attempt => attempt.StatusCode == HttpStatusCode.Unauthorized);
+            Assert.True(rejected.TokenRenewed);
+            Assert.Null(rejected.RetryIn);
+            Assert.Contains(": 401 in ", rejected.ToString());
+            Assert.EndsWith(" ms, retried with a renewed access token", rejected.ToString());
             Assert.Equal(2, server.Seen.Count - server.Tokens.Count);
             Assert.Equal("at-2", (await client.Account.RetrieveMachineAsync()).Status);
             Assert.Equal(2, server.Tokens.Count);

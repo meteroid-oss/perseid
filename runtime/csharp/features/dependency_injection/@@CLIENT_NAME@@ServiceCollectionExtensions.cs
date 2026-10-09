@@ -25,6 +25,13 @@ public static class @@CLIENT_NAME@@ServiceCollectionExtensions
             "{Method} {Url}: {Outcome} in {ElapsedMs} ms, retried in {DelayMs} ms"
         );
 
+    private static readonly Action<ILogger, string, string, string, long, Exception?> s_renewal =
+        LoggerMessage.Define<string, string, string, long>(
+            LogLevel.Debug,
+            new EventId(3, "HttpTokenRenewal"),
+            "{Method} {Url}: {Outcome} in {ElapsedMs} ms, retried with a renewed access token"
+        );
+
     /// <summary>
     /// Registers <see cref="@@CLIENT_NAME@@Client"/> and <see cref="I@@CLIENT_NAME@@Client"/> as a typed
     /// client of <c>IHttpClientFactory</c>, configured by <paramref name="configure"/> and any
@@ -80,7 +87,7 @@ public static class @@CLIENT_NAME@@ServiceCollectionExtensions
     }
 
     /// <summary>Logs attempts to <paramref name="logger"/>: at debug level, retried ones at
-    /// information level.</summary>
+    /// information level, and those repeated with a renewed access token at debug level.</summary>
     /// <param name="logger">The logger.</param>
     /// <returns>A <see cref="@@CLIENT_NAME@@ClientOptions.Log"/> callback.</returns>
     public static Action<ApiAttempt> LogTo(ILogger logger)
@@ -92,6 +99,10 @@ public static class @@CLIENT_NAME@@ServiceCollectionExtensions
             if (attempt.RetryIn is { } delay)
             {
                 s_retry(logger, attempt.Method, attempt.Url, attempt.Outcome, elapsed, (long)delay.TotalMilliseconds, null);
+            }
+            else if (attempt.TokenRenewed)
+            {
+                s_renewal(logger, attempt.Method, attempt.Url, attempt.Outcome, elapsed, null);
             }
             else
             {

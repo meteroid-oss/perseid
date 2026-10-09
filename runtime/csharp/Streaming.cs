@@ -328,7 +328,9 @@ public sealed class Upload
     /// <summary>The file name sent in multipart bodies, <c>file</c> if null.</summary>
     public string? FileName { get; }
 
-    /// <summary>The content type, <c>application/octet-stream</c> if null.</summary>
+    /// <summary>The content type. If null, a multipart part takes the one the spec declares for it
+    /// unless <c>application/octet-stream</c>, else the one of the file name's extension, and a
+    /// raw body the operation's.</summary>
     public string? ContentType { get; }
 
     internal bool IsStream => _stream is not null;
@@ -366,6 +368,33 @@ public sealed class Upload
     /// <summary>Uploads what <paramref name="stream"/> reads, once.</summary>
     /// <param name="stream">The content, disposed with the request.</param>
     public static implicit operator Upload(Stream stream) => FromStream(stream);
+
+    private static readonly Dictionary<string, string> s_extensionTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [".json"] = "application/json",
+        [".jsonl"] = "application/jsonl",
+        [".txt"] = "text/plain",
+        [".csv"] = "text/csv",
+        [".pdf"] = "application/pdf",
+        [".png"] = "image/png",
+        [".jpg"] = "image/jpeg",
+        [".jpeg"] = "image/jpeg",
+        [".gif"] = "image/gif",
+        [".webp"] = "image/webp",
+        [".mp3"] = "audio/mpeg",
+        [".wav"] = "audio/wav",
+        [".m4a"] = "audio/mp4",
+        [".mp4"] = "video/mp4",
+        [".webm"] = "video/webm",
+    };
+
+    internal HttpContent CreatePart(string? declared) =>
+        CreateContent(
+            declared is not null
+            && !declared.Trim().Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase)
+                ? declared
+                : s_extensionTypes.GetValueOrDefault(Path.GetExtension(FileName ?? ""), "application/octet-stream")
+        );
 
     internal HttpContent CreateContent(string defaultType = "application/octet-stream")
     {
@@ -444,9 +473,9 @@ internal sealed class MultipartBody
     }
 
     /// <summary>Adds a file. <paramref name="contentType"/> is the media type the spec declares,
-    /// used unless the upload sets its own.</summary>
+    /// see <see cref="Upload.ContentType"/> for the one the part gets.</summary>
     public void File(string name, Upload upload, string? contentType = null) =>
-        _parts.Add((name, () => upload.CreateContent(contentType ?? "application/octet-stream"), upload));
+        _parts.Add((name, () => upload.CreatePart(contentType), upload));
 
     public HttpContent CreateContent()
     {

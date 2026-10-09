@@ -66,6 +66,8 @@ public sealed partial class @@CLIENT_NAME@@ClientOptions
 /// <param name="Error">Why no response came, such as a timeout.</param>
 /// <param name="Elapsed">The time until the response headers or the failure.</param>
 /// <param name="RetryIn">The delay before the next attempt, when this one is retried.</param>
+/// <param name="TokenRenewed">Whether the API rejected the OAuth2 access token, which is renewed
+/// and the attempt made again at once, without using up a retry.</param>
 public sealed record ApiAttempt(
     string Operation,
     string Method,
@@ -74,7 +76,8 @@ public sealed record ApiAttempt(
     HttpStatusCode? StatusCode,
     string? Error,
     TimeSpan Elapsed,
-    TimeSpan? RetryIn
+    TimeSpan? RetryIn,
+    bool TokenRenewed = false
 )
 {
     /// <summary>Whether another attempt follows this one.</summary>
@@ -91,8 +94,10 @@ public sealed record ApiAttempt(
     {
         var invariant = System.Globalization.CultureInfo.InvariantCulture;
         var line = string.Create(invariant, $"{Method} {Url}: {Outcome} in {Elapsed.TotalMilliseconds:0} ms");
-        return RetryIn is { } delay
-            ? string.Create(invariant, $"{line}, retried in {delay.TotalMilliseconds:0} ms")
-            : line;
+        if (RetryIn is { } delay)
+        {
+            return string.Create(invariant, $"{line}, retried in {delay.TotalMilliseconds:0} ms");
+        }
+        return TokenRenewed ? $"{line}, retried with a renewed access token" : line;
     }
 }
