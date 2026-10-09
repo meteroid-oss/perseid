@@ -4,6 +4,7 @@ package @@PACKAGE_NAME@@
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -150,6 +151,9 @@ func (s *Stream[T]) Next() bool {
 // reportsError reports whether data is an object with an `error`, which does not decode as a T,
 // or decodes as no known variant of the union T, or as a T without an `error` property.
 func reportsError[T any](data []byte, value T, decodeErr error) bool {
+	if !bytes.Contains(data, []byte(`"error"`)) {
+		return false
+	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(data, &fields) != nil || len(fields["error"]) == 0 || string(fields["error"]) == "null" {
 		return false
@@ -344,11 +348,20 @@ func (b *BinaryResponse) Bytes() ([]byte, error) {
 	return io.ReadAll(b)
 }
 
-// WriteToFile writes the rest of the body to the file at path, created or truncated, then
-// closes it. The file is removed when the body cannot be read whole.
+// WriteToFile writes the rest of the body to the file at path, created or replaced once the body
+// is read whole, then closes it. The body goes to a temporary file next to it first, so a failed
+// download leaves the file at path as it was.
 func (b *BinaryResponse) WriteToFile(path string) error {
 	defer func() { _ = b.Close() }()
-	file, err := os.Create(path)
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return &os.PathError{Op: "open", Path: path, Err: errors.New("is a directory")}
+	}
+	suffix, err := randomHex(8)
+	if err != nil {
+		return err
+	}
+	temp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+"."+suffix+".tmp")
+	file, err := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return err
 	}
@@ -356,8 +369,11 @@ func (b *BinaryResponse) WriteToFile(path string) error {
 	if closeErr := file.Close(); err == nil {
 		err = closeErr
 	}
+	if err == nil {
+		err = os.Rename(temp, path)
+	}
 	if err != nil {
-		_ = os.Remove(path)
+		_ = os.Remove(temp)
 	}
 	return err
 }
@@ -398,7 +414,8 @@ func enableStream(field any) {
 
 // Upload is a multipart file. Seekable readers are rewound for retries, others
 // sent once. Filename defaults to the base name of an *os.File, ContentType to
-// the part's media type in the spec, then to the one of Filename's extension.
+// the part's media type in the spec unless application/octet-stream, then to
+// the one of Filename's extension.
 type Upload struct {
 	Reader      io.Reader
 	Filename    string
@@ -553,7 +570,7 @@ func writeMultipartField(form *multipart.Writer, field multipartField) error {
 		for _, upload := range uploads {
 			filename := upload.filename()
 			contentType := upload.ContentType
-			if contentType == "" {
+			if contentType == "" && !strings.EqualFold(field.contentType, "application/octet-stream") {
 				contentType = field.contentType
 			}
 			if contentType == "" {

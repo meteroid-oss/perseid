@@ -89,6 +89,8 @@ func TestUploadsAreNamedAfterTheirFile(t *testing.T) {
 		{name: "opened", file: &Upload{Reader: opened}},
 		{name: "path", files: []Upload{fromPath}},
 		{name: "named", file: &Upload{Reader: strings.NewReader("x"), Filename: "given.json"}},
+		{name: "generic", file: &Upload{Reader: strings.NewReader("y"), Filename: "generic.json"}, contentType: "application/octet-stream"},
+		{name: "declared", file: &Upload{Reader: strings.NewReader("z"), Filename: "declared.json"}, contentType: "image/png"},
 	})
 	if req.oneShot {
 		t.Error("files are not replayable")
@@ -96,6 +98,7 @@ func TestUploadsAreNamedAfterTheirFile(t *testing.T) {
 	for attempt := range 2 {
 		files := multipartFiles(t, req)
 		if files["data.bin"] != [2]string{"application/octet-stream", "bytes"} || files["given.json"] != [2]string{"application/json", "x"} ||
+			files["generic.json"] != [2]string{"application/json", "y"} || files["declared.json"] != [2]string{"image/png", "z"} ||
 			files["notes.txt"][1] != "hello" || !strings.HasPrefix(files["notes.txt"][0], "text/plain") {
 			t.Errorf("attempt %d: %v", attempt, files)
 		}
