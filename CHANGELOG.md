@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.14.0](https://github.com/meteroid-oss/perseid/compare/v0.13.0...v0.14.0) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **rust:** serde impls of models through non-generic code, duplicate models aliased ([#117](https://github.com/meteroid-oss/perseid/issues/117))
+* SDK DX pass in every language: streamed downloads, [models] renames, 429 retries, Python keyword bodies ([#115](https://github.com/meteroid-oss/perseid/issues/115))
+
+### Features
+
+* add the runtime dependencies an existing manifest lacks on generate ([#116](https://github.com/meteroid-oss/perseid/issues/116)) ([23ec5b5](https://github.com/meteroid-oss/perseid/commit/23ec5b58dd491bf853072b5afbc192cf11e8195a))
+* **api:** constraints of fields and parameters, and display paths of resources, for packs ([#113](https://github.com/meteroid-oss/perseid/issues/113)) ([c838e51](https://github.com/meteroid-oss/perseid/commit/c838e5147d9ca2635913592c33bf71d6cf8c5ce0))
+* pack targets, rendering programs that wrap an SDK ([#112](https://github.com/meteroid-oss/perseid/issues/112)) ([94d8314](https://github.com/meteroid-oss/perseid/commit/94d8314bba062b6ba8cbac0957032542e1f3c111))
+* **rust:** serde impls of models through non-generic code, duplicate models aliased ([#117](https://github.com/meteroid-oss/perseid/issues/117)) ([85f7319](https://github.com/meteroid-oss/perseid/commit/85f7319127153b7a8575ee105302d5370aa152e8))
+* SDK DX pass in every language: streamed downloads, [models] renames, 429 retries, Python keyword bodies ([#115](https://github.com/meteroid-oss/perseid/issues/115)) ([1084737](https://github.com/meteroid-oss/perseid/commit/10847370a489d4a5d7b18d0355d8f96031614259))
+* targets, starting with docs ([#110](https://github.com/meteroid-oss/perseid/issues/110)) ([307e795](https://github.com/meteroid-oss/perseid/commit/307e795b8ccc801e58deb9b9d4e141df86ebc793))
+
+
+### Bug Fixes
+
+* **sync:** give pack target repositories the release credentials of SDK repositories ([#114](https://github.com/meteroid-oss/perseid/issues/114)) ([af3d08a](https://github.com/meteroid-oss/perseid/commit/af3d08a978c174214a70f8c393d4f522b3d766eb))
+
 ## [0.13.0](https://github.com/meteroid-oss/perseid/compare/v0.12.1...v0.13.0) (2026-10-08)
 
 
