@@ -9,11 +9,14 @@ use heck::{ToSnakeCase as _, ToUpperCamelCase as _};
 use crate::{api::Types, template::ident::ident};
 
 /// Rewrites each model of `models` whose code another model's repeats as aliases of the items
-/// of the one with the shortest name, likely a named schema rather than one an owner inlines. Returns the schemas aliased.
+/// of the one with the shortest name, likely a named schema rather than one an owner inlines.
+/// Models that trait impls take as a parameter, such as union variants (`From<Card>`), stay
+/// apart: two impls for one type would conflict. Returns the schemas aliased.
 pub(crate) fn alias_duplicates(
     types: &Types,
     models: &Utf8Path,
 ) -> anyhow::Result<BTreeSet<String>> {
+    let parameters = impl_parameters(models.parent().unwrap_or(models))?;
     let mut shapes: BTreeMap<String, Vec<Model>> = BTreeMap::new();
     for name in types.keys() {
         let path = models.join(format!("{}.rs", name.to_snake_case()));
@@ -21,7 +24,9 @@ pub(crate) fn alias_duplicates(
             continue;
         }
         let text = fs_err::read_to_string(&path)?;
-        if let Some(model) = Model::read(name, text) {
+        if let Some(model) = Model::read(name, text)
+            && !model.items.iter().any(|item| parameters.contains(item))
+        {
             shapes.entry(model.shape()).or_default().push(model);
         }
     }
@@ -130,6 +135,32 @@ impl Model {
     }
 }
 
+/// The identifiers in the trait of the `impl Trait for Type` headers of the Rust files under
+/// `dir`, such as `Card` in `impl From<Card> for PaymentSource`.
+fn impl_parameters(dir: &Utf8Path) -> anyhow::Result<BTreeSet<String>> {
+    let mut parameters = BTreeSet::new();
+    for entry in fs_err::read_dir(dir)? {
+        let path = entry?.path();
+        let path = camino::Utf8PathBuf::try_from(path)?;
+        if path.is_dir() {
+            parameters.extend(impl_parameters(&path)?);
+        } else if path.extension() == Some("rs") {
+            for line in fs_err::read_to_string(&path)?.lines() {
+                let Some(header) = line.trim_start().strip_prefix("impl") else {
+                    continue;
+                };
+                if let Some((on, _)) = header.split_once(" for ") {
+                    map_identifiers(on, |ident| {
+                        parameters.insert(ident.to_owned());
+                        None
+                    });
+                }
+            }
+        }
+    }
+    Ok(parameters)
+}
+
 /// The names of the `pub struct`, `pub enum` and `pub type` items of `text`.
 fn public_items(text: &str) -> BTreeSet<String> {
     let mut items = BTreeSet::new();
@@ -148,7 +179,7 @@ fn public_items(text: &str) -> BTreeSet<String> {
 }
 
 /// `text` with the identifiers `rename` maps replaced.
-fn map_identifiers(text: &str, rename: impl Fn(&str) -> Option<String>) -> String {
+fn map_identifiers(text: &str, mut rename: impl FnMut(&str) -> Option<String>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find(|c: char| c.is_alphanumeric() || c == '_') {

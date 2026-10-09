@@ -4461,6 +4461,48 @@ components:
 }
 
 #[test]
+fn rust_union_variants_stay_apart_though_identical() {
+    let dir = project_from("petstore.yaml", &["rust"]);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Periods, version: "1.0.0" }
+servers: [{ url: "https://x.example.com" }]
+paths:
+  /periods:
+    get:
+      operationId: get_period
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Period" }
+components:
+  schemas:
+    Period:
+      oneOf:
+        - { $ref: "#/components/schemas/Calendar" }
+        - { $ref: "#/components/schemas/Never" }
+    Calendar:
+      type: object
+      properties:
+        days: { type: integer }
+    Never:
+      type: object
+      properties:
+        days: { type: integer }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let models = dir.path().join("rust/src/models");
+    for model in ["calendar.rs", "never.rs"] {
+        let text = fs::read_to_string(models.join(model)).unwrap();
+        assert!(text.contains("pub struct"), "{model} is an alias: {text}");
+    }
+}
+
+#[test]
 fn models_with_extra_properties_keep_them_in_every_language() {
     let dir = project_from(
         "petstore.yaml",
