@@ -236,8 +236,15 @@ type-checks under `strict`, `noUncheckedIndexedAccess` and `exactOptionalPropert
 ### Client
 
 ```ts
+import Acme from "acme";   // or { Acme }
+
 const client = new Acme({ apiKey: "sk_live_...", timeout: 20_000, maxRetries: 5 });
+const fast = client.withOptions({ timeout: 5_000 });   // a copy, other options kept
 ```
+
+When every operation requires an API key or bearer token, a client without credentials (no
+`apiKey`, `ACME_API_KEY`, `tokenProvider`, `apiKeys` or `Authorization` default header) throws
+an `AcmeError` up front.
 
 | Option | Description |
 |---|---|
@@ -245,7 +252,7 @@ const client = new Acme({ apiKey: "sk_live_...", timeout: 20_000, maxRetries: 5 
 | `timeout` | Milliseconds, `Infinity` to wait forever |
 | `maxRetries`, `retryScheduleInMs` | Retry count, or explicit delays |
 | `defaultHeaders`, `defaultQuery` | Sent with every request. A `null` header removes one the SDK sets |
-| `fetch`, `middleware`, `debug` | Custom `fetch`, [middleware](customizing.md#middleware), a summary of each request on stderr |
+| `fetch`, `middleware`, `debug` | Custom `fetch`, [middleware](customizing.md#middleware), a summary of each request on stderr, prefixed with the npm package name |
 | `tokenProvider`, `clientId`, `clientSecret`, `oauthClientAuth`, `basicAuth`, `apiKeys` | [Credentials](features.md#authentication) |
 
 ### Calls and options
@@ -256,6 +263,10 @@ const customer = await client.customers.retrieve("cus_1", { timeout: 5_000, maxR
 
 - The last argument of every method is `{ signal, headers, query, timeout, maxRetries, idempotencyKey }`.
 - Unions of scalars, lists and objects are typed in query, header and path parameters.
+- A multipart file is a `Blob`, `File`, `Uint8Array`, `ArrayBuffer`, `ReadableStream`, fetch
+  `Response`, Node `fs.ReadStream` (any `AsyncIterable` of bytes), or `{ data, filename?,
+  contentType? }`. `{ path }` reads a file on Node and is named after it, as a `Response` is
+  after its URL. The file is read once, before the first attempt, so retries resend it.
 - `int64 = "bigint"` or `"string"` under `[typescript]` parses int64 values without losing digits.
   With `"string"`, the int64 values of a union variant are `number | bigint`, as a string would
   read as a string variant.
@@ -282,6 +293,10 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
 ```
 
 - Events with a schema give a `Stream<Model>` ending at `[DONE]`, with `stream.lastEvent`.
+- The body of the non-stream twin cannot ask for the stream: `create({ stream: true })` does not
+  compile.
+- An `error` event, or data with an `error` property the event schema does not declare, throws
+  an `APIError` holding it.
 - Other streams are an `EventStream` of raw events.
 - Breaking out of the loop or calling `stream.close()` closes the connection.
 
@@ -298,7 +313,7 @@ try {
 | Error | When |
 |---|---|
 | `AcmeError` | Base of everything the SDK throws |
-| `APIError` | Non-2xx: `status`, `headers`, `requestId`, `body` (raw text), `error` (parsed, typed `AcmeErrorBody`) |
+| `APIError` | Non-2xx: `status`, `headers`, `requestId`, `body` (raw text), `error` (parsed, typed `AcmeErrorBody`). The `message` quotes the body's `error.message`, `message` or `detail` when it has one |
 | `BadRequestError`, `AuthenticationError`, `PermissionDeniedError`, `NotFoundError`, `ConflictError`, `UnprocessableEntityError`, `RateLimitError`, `InternalServerError` | 400, 401, 403, 404, 409, 422, 429, 5xx |
 | `APIConnectionError`, `APIConnectionTimeoutError` | No response, or none within the timeout |
 | `APIUserAbortError` | The `signal` aborted |
@@ -320,8 +335,12 @@ Methods return an `APIPromise`. `.withResponse()` gives `{ data, response, reque
   got string "abc"`). Unknown properties, unknown enum values and values no union variant holds
   are kept. `validate_responses = false` under `[typescript]` turns the checks off.
 - With a non-default `int64`, `parseJson` and `stringifyJson` do the same for webhook payloads.
-- Enums are `const` objects with a union type of their values.
-- Tagged unions are unions of interfaces keyed by the discriminator.
+- Enums are `const` objects with a union type of their values: a typo does not compile. An
+  open enum (`anyOf: [string, enum]`) also takes any string, and so do the enums of the models
+  only responses carry, as a later API version may send new values. Parsing keeps them either way.
+- Tagged unions are unions of interfaces keyed by the discriminator. A tag the variant's schema
+  makes optional is optional, filled in when sent. Variants sharing a tag (OpenAI's `message`
+  items) are sent with it and told apart by their properties.
 - Expandable fields are `string | Customer`, and `expandableId(value)` gives the id either way.
 - A union of objects parses with the serializer of the variant it matches, and keeps other
   objects as received.

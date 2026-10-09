@@ -150,6 +150,15 @@ const AUTH: { schemes: Record<string, SecurityScheme>; security: Security } = {
   security: {{ api.security | tojson }},
 };
 
+{#- Every operation requires keys or tokens `apiKey` holds: a client without credentials fails
+    up front. Not so for the bearer scheme perseid assumes when the spec declares none. -#}
+{% set key_schemes = api.security_schemes | rejectattr("token_url") | selectattr("kind", "in", ["bearer", "api_key"]) | map(attribute="name") | list -%}
+{% set implicit = api.security_schemes | length == 1 and api.security == [["bearer"]] and api.security_schemes[0].name == "bearer" and api.security_schemes[0].description is not defined -%}
+{% set req = namespace(all=api.security and not implicit) -%}
+{#- `yes` when an alternative of `security` needs no key. -#}
+{% macro unkeyed(security) %}{% for alternative in security if not alternative or alternative | reject("in", key_schemes) | list %}{% if loop.first %}yes{% endif %}{% endfor %}{% endmacro -%}
+{% if unkeyed(api.security) %}{% set req.all = false %}{% endif -%}
+{% for resource in api.resources %}{% for op in resource.operations if op.security is defined and (not op.security or unkeyed(op.security)) %}{% set req.all = false %}{% endfor %}{% endfor -%}
 {% set summary = sdk.client_name ~ " API client for " ~ sdk.tagline if sdk.tagline else sdk.description | default(sdk.client_name ~ " API client", true) -%}
 /**
  * {{ summary | doc | replace("\n", " ") | replace("*/", "*\\/") | trim | trim(".") }}.
@@ -172,6 +181,7 @@ export class {{ sdk.client_name }} {
   static readonly {{ name }} = {{ name }}{% if name in model_names %}Class{% endif %};
   {% endfor %}
   private readonly requestCtx: {{ sdk.client_name }}RequestContext;
+  readonly #options: {{ sdk.client_name }}Options;
   {% for resource in top -%}
   private _{{ resource.name | to_lower_camel_case }}?: {{ resource.name | to_upper_camel_case }};
   {% endfor %}
@@ -181,6 +191,7 @@ export class {{ sdk.client_name }} {
    * unless `options` sets them.
    */
   public constructor(options: {{ sdk.client_name }}Options = {}) {
+    this.#options = options;
     const token = options.apiKey ?? readEnv("{{ sdk.env_prefix }}_API_KEY");
     const baseUrl = options.baseURL ?? readEnv("{{ sdk.env_prefix }}_BASE_URL"){% if sdk.has_default_base_url %} ?? DEFAULT_BASE_URL{% endif %};
     {% if not sdk.has_default_base_url -%}
@@ -193,6 +204,21 @@ export class {{ sdk.client_name }} {
     {% if oauth -%}
     const clientId = options.clientId ?? readEnv("{{ sdk.env_prefix }}_CLIENT_ID");
     const clientSecret = options.clientSecret ?? readEnv("{{ sdk.env_prefix }}_CLIENT_SECRET");
+    {% endif -%}
+    {% if req.all -%}
+    const headers = Object.keys(options.defaultHeaders ?? {}).map((name) => name.toLowerCase());
+    if (
+      token === undefined{% if "bearer" in kinds %} &&
+      options.tokenProvider === undefined{% endif %}{% if "api_key" in kinds %} &&
+      Object.values(options.apiKeys ?? {}).every((key) => key === undefined){% endif %}{% if oauth %} &&
+      !(clientId && clientSecret){% endif %} &&
+      !headers.includes("authorization"){% for scheme in api.security_schemes if scheme.kind == "api_key" and scheme.in == "header" %} &&
+      !headers.includes({{ scheme.param | lower | tojson }}){% endfor %}
+    ) {
+      throw new {{ sdk.client_name }}Error{% if sdk.client_name ~ "Error" in model_names %}Class{% endif %}(
+        "Missing API key: pass the `apiKey` option or set the `{{ sdk.env_prefix }}_API_KEY` environment variable."
+      );
+    }
     {% endif -%}
     this.requestCtx = {
       auth: AUTH,
@@ -226,6 +252,11 @@ export class {{ sdk.client_name }} {
     };
   }
 
+  /** A client with the options of this one, `options` overriding them. */
+  public withOptions(options: Partial<{{ sdk.client_name }}Options>): {{ sdk.client_name }} {
+    return new {{ sdk.client_name }}({ ...this.#options, ...options });
+  }
+
   {% for resource in top %}
   {% set words = resource.name | to_snake_case | replace("_", " ") -%}
   {% if words == "api" %}{% set words = "" %}{% elif words[-4:] == " api" %}{% set words = words[:-4] %}{% endif -%}
@@ -236,3 +267,5 @@ export class {{ sdk.client_name }} {
   }
   {% endfor %}
 }
+
+export default {{ sdk.client_name }};
