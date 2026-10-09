@@ -715,6 +715,9 @@ Event streams are `EventStream<Chunk>`s, ending at `[DONE]`, with `lastEvent()` 
   a value as another variant.
 - `accept(Visitor<R>)` has a `visitX` per variant. `visitUnknown` throws `InvalidDataException`
   unless overridden.
+- Variants declaring the same tag, as OpenAI's three `message` input items, are sent with it,
+  and decoded as the one that has the data's required properties and knows the most of the
+  others, else as the variant the tag names.
 
 ### Notes
 

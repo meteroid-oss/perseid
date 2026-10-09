@@ -8,10 +8,16 @@
 {% set disc_getter = disc_getter ~ "_" if disc_getter in ["builder", "toBuilder", "hashCode", "toString", "getClass", "toJson", "copy", "getValue"] else disc_getter -%}
 {% set ns = namespace(names=[]) -%}
 {% for variant in type.variants %}{% set ns.names = ns.names + [variant.name] %}{% endfor -%}
+{#- The tag each variant is sent with: the constant it declares, which several may share. -#}
+{% set wire = namespace(tags=[]) -%}
+{% for variant in type.variants -%}
+{% set wire.tags = wire.tags + [declared_tags[variant.name] if variant.name in declared_tags else variant.name] -%}
+{% endfor -%}
+{% set shares_tags = declared_tags | length > 0 -%}
 {% set ns.classes = [] -%}
 {#- A nested class shadows the types of the same name that the union itself uses. -#}
 {% for cls in (ns.names + ["unrecognized"]) | idents("pascal", "java", owner) -%}
-{% set shadowed = cls in ["String", "Object", "Override", "Deprecated", "Utils", "Objects", "List",
+{% set shadowed = (shares_tags and cls in ["Deserializer", "JsonDeserializer"]) or cls in ["String", "Object", "Override", "Deprecated", "Utils", "Objects", "List",
     "Map", "Set", "Optional", "ArrayList", "HashMap", "LinkedHashMap", "LinkedHashSet", "BigDecimal", "BigInteger",
     "LocalDate", "OffsetDateTime", "URI", "UUID", "Visibility", "JsonAnyGetter", "JsonAnySetter", "JsonAutoDetect",
     "JsonIgnoreProperties", "JsonInclude", "JsonProperty", "JsonSubTypes", "JsonTypeInfo",
@@ -57,6 +63,7 @@ import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.fasterxml.jackson.annotation.JsonValue;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import java.io.IOException;
@@ -92,6 +99,9 @@ parses as {@link {{ classes | last }}}, which keeps its properties.
 {%- endset -%}
 {{ summary | to_doc_comment(style="java") }}
 {% if type.deprecated %}@Deprecated{% endif %}
+{% if shares_tags -%}
+@JsonDeserialize(using = {{ type_name }}.Deserializer.class)
+{% else -%}
 @JsonTypeInfo(
     use = JsonTypeInfo.Id.NAME,
     include = JsonTypeInfo.As.EXISTING_PROPERTY,
@@ -105,6 +115,7 @@ parses as {@link {{ classes | last }}}, which keeps its properties.
 
     {% endfor -%}
 })
+{% endif -%}
 @JsonInclude(JsonInclude.Include.NON_NULL)
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonAutoDetect(
@@ -220,8 +231,67 @@ public abstract class {{ type_name }} {
 
     {{ m.union_class(field.type, unions[loop.index0], classes + [type_name]) }}
     {%- endif %}{% endfor %}
+    {% if shares_tags %}
+
+    {#- A tag several variants declare picks the one the data fits best, the one it names first. #}
+    static final class Deserializer extends Utils.UnionDeserializer<{{ type_name }}> {
+        private static final long serialVersionUID = 1L;
+
+        Deserializer() {
+            super({{ type_name }}.class);
+        }
+
+        @Override
+        protected {{ type_name }} decode(JsonNode node, DeserializationContext ctxt) throws IOException {
+            JsonNode tag = node.get({{ disc | tojson }});
+            switch (tag != null && tag.isTextual() ? tag.textValue() : "") {
+                {% for wire_tag in wire.tags | unique -%}
+                {% set sharing = namespace(classes=[]) -%}
+                {% for variant in type.variants -%}
+                {% if wire.tags[loop.index0] == wire_tag -%}
+                {% set sharing.classes = sharing.classes + [classes[loop.index0]] if variant.name in declared_tags else [classes[loop.index0]] + sharing.classes -%}
+                {% endif -%}
+                {% endfor -%}
+                case {{ wire_tag | tojson }}:
+                    {% if sharing.classes | length > 1 -%}
+                    return Unions.closest(
+                            Deserializer::leftovers{% for c in sharing.classes %},
+                            () -> ctxt.readTreeAsValue(node, {{ c }}.class){% endfor %});
+                    {% else -%}
+                    return ctxt.readTreeAsValue(node, {{ sharing.classes[0] }}.class);
+                    {% endif -%}
+                {% endfor -%}
+                default:
+                    return ctxt.readTreeAsValue(node, {{ classes | last }}.class);
+            }
+        }
+
+        /** The properties {@code value} does not know, MAX_VALUE when it misses a required one. */
+        private static int leftovers({{ type_name }} value) {
+            try {
+                {% for variant in type.variants -%}
+                {% set cls = classes[loop.index0] -%}
+                {% set shared_tag = wire.tags | select("equalto", wire.tags[loop.index0]) | list | length > 1 -%}
+                {% if shared_tag and variant.type == "ref" and variant.schema_ref is defined and (variant.schema_ref | to_upper_camel_case) not in non_struct_refs -%}
+                if (value instanceof {{ cls }}) {
+                    return (({{ cls }}) value).data().toBuilder().build().additionalProperties().size();
+                }
+                {% elif shared_tag and variant.type == "struct" and variant.fields is defined and variant.fields | length > 0 and not adjacent -%}
+                if (value instanceof {{ cls }}) {
+                    return (({{ cls }}) value).toBuilder().build().additionalProperties().size();
+                }
+                {% endif -%}
+                {% endfor -%}
+                return 0;
+            } catch (IllegalStateException e) {
+                return Integer.MAX_VALUE;
+            }
+        }
+    }
+    {%- endif %}
     {% for variant in type.variants -%}
     {% set cls = classes[loop.index0] -%}
+    {% set tag = wire.tags[loop.index0] -%}
     {% set content = type.content_field if adjacent else none -%}
     {% set accept -%}
         @Override
@@ -231,7 +301,9 @@ public abstract class {{ type_name }} {
     {%- endset %}
 
     /** The {@code {{ m.html(variant.name) }}} variant. */
-    @JsonTypeName({{ variant.name | tojson }})
+    @JsonTypeName({{ tag | tojson }})
+    {% if shares_tags %}@JsonDeserialize(using = JsonDeserializer.None.class)
+    {% endif -%}
     public static final class {{ cls }} extends {{ type_name }} {
     {% if variant.type == "ref" and variant.schema_ref is defined -%}
         {% set data_ty = variant.schema_ref | to_upper_camel_case -%}
@@ -270,7 +342,7 @@ public abstract class {{ type_name }} {
         @Override
         @JsonProperty({{ disc | tojson }})
         public String {{ disc_getter }}() {
-            return {{ variant.name | tojson }};
+            return {{ tag | tojson }};
         }
 
         /**
@@ -355,7 +427,7 @@ public abstract class {{ type_name }} {
         @Override
         @JsonProperty({{ disc | tojson }})
         public String {{ disc_getter }}() {
-            return {{ variant.name | tojson }};
+            return {{ tag | tojson }};
         }
 
         {{ accept }}
@@ -366,7 +438,7 @@ public abstract class {{ type_name }} {
         @Override
         @JsonProperty({{ disc | tojson }})
         public String {{ disc_getter }}() {
-            return {{ variant.name | tojson }};
+            return {{ tag | tojson }};
         }
 
         {{ accept }}
@@ -377,6 +449,8 @@ public abstract class {{ type_name }} {
     {% endfor %}
 
     /** A variant this version of the SDK does not know. */
+    {% if shares_tags %}@JsonDeserialize(using = JsonDeserializer.None.class)
+    {% endif -%}
     public static final class {{ classes | last }} extends {{ type_name }} {
         @JsonProperty({{ disc | tojson }})
         private String discriminator;
