@@ -84,6 +84,7 @@ fn init_keeps_a_title_word_in_mixed_case_one_word() {
         "header_prefix = \"openai\"",
         "[python]\npackage = \"openai\"",
         "[typescript]\npackage = \"openai\"",
+        "[go]\npackage = \"openai\"\nmodule = \"openai\"",
         "[context]\nenv_prefix = \"OPENAI\"",
     ] {
         assert!(config.contains(text), "no `{text}` in {config}");
