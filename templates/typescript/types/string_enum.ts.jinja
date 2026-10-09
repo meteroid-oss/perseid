@@ -7,17 +7,18 @@ export const {{ type_name }} = {
     {% endfor -%}
 } as const;
 
-{#- Open: the API may send, and accept, values this SDK version does not list. `string & {}`
-    keeps the editor's completion of the known values. -#}
-export type {{ type_name }} = (typeof {{ type_name }})[keyof typeof {{ type_name }}] | (string & {});
+{#- An open enum (any string, in the spec) takes values this SDK version does not list, and
+    `string & {}` keeps the editor's completion of the known ones. A closed one takes its values,
+    though parsing keeps those a later API version adds, as the models of responses type them. -#}
+export type {{ type_name }} = (typeof {{ type_name }})[keyof typeof {{ type_name }}]{% if type.open %} | (string & {}){% endif %};
 
 /** Converts `{{ type_name }}` values from (`parse`) and to (`serialize`) their JSON form. */
 export const {{ type_name }}Serializer = {
     parse(json: any, path = "$"): {{ type_name }} {
-        return decodeString(json, path);
+        return decodeString(json, path){% if not type.open %} as {{ type_name }}{% endif %};
     },
 
-    serialize(value: {{ type_name }}): any {
+    serialize(value: {{ type_name }}{% if not type.open %} | (string & {}){% endif %}): any {
         return value;
     },
 };

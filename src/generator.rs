@@ -261,6 +261,10 @@ impl Generator<'_> {
             .filter(|t| matches!(t.data, TypeData::StringEnum { open: true, .. }))
             .map(|t| t.name.to_upper_camel_case())
             .collect();
+        let closed_enums: BTreeSet<String> = (api.types.values())
+            .filter(|t| matches!(t.data, TypeData::StringEnum { open: false, .. }))
+            .map(|t| t.name.to_upper_camel_case())
+            .collect();
         let errors = errors_context(&api);
         let recursive_aliases = types::recursive_aliases(&api.types);
         for (name, ty) in &api.types {
@@ -302,6 +306,7 @@ impl Generator<'_> {
                     request_only => request_only_schemas.contains(name.as_str()),
                     enum_literals => &enum_literals,
                     open_enums => &open_enums,
+                    closed_enums => &closed_enums,
                     variant_tags => variant_tags(&api.types, ty),
                     ..errors.clone()
                 },
