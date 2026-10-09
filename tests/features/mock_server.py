@@ -419,7 +419,8 @@ def h_csv(req):
 
 
 def h_blob(req):
-    return Reply(200, BLOB, "application/octet-stream")
+    # Streamed in 8 parts 50 ms apart: longer than a 250 ms timeout as a whole, but no read is.
+    return Chunked([BLOB[i : i + 32] for i in range(0, 256, 32)], "application/octet-stream", delay=0.05)
 
 
 def h_image(req):
@@ -788,7 +789,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.flush()
         for chunk in stream.chunks:
-            data = chunk.encode()
+            data = chunk if isinstance(chunk, bytes) else chunk.encode()
             self.wfile.write(f"{len(data):X}\r\n".encode() + data + b"\r\n")
             self.wfile.flush()
             time.sleep(stream.delay)

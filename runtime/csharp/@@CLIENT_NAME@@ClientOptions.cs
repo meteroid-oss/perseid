@@ -24,7 +24,8 @@ public sealed partial class @@CLIENT_NAME@@ClientOptions
     /// <summary>The <see cref="Timeout"/> used when it is not set: @@TIMEOUT@@ seconds.</summary>
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(@@TIMEOUT@@);
 
-    /// <summary>Bounds each attempt, body included except for event streams.
+    /// <summary>Bounds each attempt, body included, except for event streams (their headers only) and
+    /// <see cref="BinaryResponse"/>s (their headers, then each read of their body).
     /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> disables it.</summary>
     public TimeSpan Timeout { get; set; } = DefaultTimeout;
 

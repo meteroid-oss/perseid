@@ -57,7 +57,8 @@ type Options struct {
 	Middleware []Middleware
 
 	// Timeout bounds a single attempt, from dialing until the response body has
-	// been read. Zero selects DefaultTimeout; a negative value disables it.
+	// been read; an event stream until its headers, a [BinaryResponse] until its
+	// headers then each read. Zero selects DefaultTimeout; negative disables it.
 	Timeout time.Duration
 
 	// MaxRetries is the number of retries attempted on transient failures,

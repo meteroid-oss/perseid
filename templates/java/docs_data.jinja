@@ -63,6 +63,8 @@ try (var events = {{ docs.call(ex) }}) {
         System.out.println(event);
     }
 }
+    {%- elif op.response_is_binary -%}
+byte[] {{ docs.var(ex.result, "result") }} = {{ docs.call(ex) }}.bytes();
     {%- elif ex.result -%}
 var {{ docs.var(ex.result, "result") }} = {{ docs.call(ex) }};
     {%- else -%}

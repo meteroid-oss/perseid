@@ -44,7 +44,7 @@
     {%- if op.pagination is defined %}{{ page(resource, op) }}
     {%- elif op.response_is_event_stream and op.event_json_type is defined %}EventStream<{{ import_m.java_type(op.event_json_type, op.event_schema_name | to_upper_camel_case) }}>
     {%- elif op.response_is_event_stream %}EventStream<{{ op.event_schema_name | to_upper_camel_case if op.event_schema_name is defined else "SseEvent" }}>
-    {%- elif op.response_is_binary %}byte[]
+    {%- elif op.response_is_binary %}BinaryResponse
     {%- elif op.response_is_text %}String
     {%- else -%}
         {%- if op.response_body_json_type is defined %}{% set body = import_m.java_type(op.response_body_json_type, op.response_body_union | to_upper_camel_case) if op.response_body_union is defined else op.response_body_json_type.to_java() -%}
@@ -58,7 +58,7 @@
     {%- if op.pagination is defined %}[page]({{ docs.package_path() }}/api/{{ page(resource, op) }}.java) of {{ model(op.pagination.item_schema) }}, with the properties of {{ model(op.response_body_schema_name) }}
     {%- elif op.response_is_event_stream and op.event_json_type is defined %}stream of `{{ import_m.java_type(op.event_json_type, op.event_schema_name | to_upper_camel_case) }}`
     {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
-    {%- elif op.response_is_binary %}bytes
+    {%- elif op.response_is_binary %}streamed bytes
     {%- elif op.response_is_text %}text
     {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
     {%- elif op.response_body_json_type is defined %}`{{ import_m.java_type(op.response_body_json_type, op.response_body_union | to_upper_camel_case) if op.response_body_union is defined else op.response_body_json_type.to_java() }}`

@@ -65,7 +65,18 @@ for event, err := range stream.All() {
 	}
 	fmt.Println(event)
 }
-    {%- elif ex.result or op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_text or op.response_is_binary -%}
+    {%- elif op.response_is_binary -%}
+    {%- set data = "content" if result == "data" else "data" -%}
+{{ result }}, err := {{ docs.call(ex) }}
+if err != nil {
+	return err
+}
+{{ data }}, err := {{ result }}.Bytes()
+if err != nil {
+	return err
+}
+fmt.Println(len({{ data }}))
+    {%- elif ex.result or op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_text -%}
 {{ result }}, err := {{ docs.call(ex) }}
 if err != nil {
 	return err

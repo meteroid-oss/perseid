@@ -221,15 +221,23 @@ internal sealed class ApiTransport : IDisposable
         return text.Length == 0 || text == "null";
     }
 
-    public async Task<ApiResponse<byte[]>> SendBytesAsync(
+    /// <summary>Opens a binary response. The timeout covers the response headers, then each read of
+    /// the body.</summary>
+    public async Task<ApiResponse<BinaryResponse>> SendBinaryAsync(
         ApiRequest request,
         RequestOptions? options,
         CancellationToken cancellationToken
     )
     {
-        var result = await SendWithRetriesAsync(request, options, false, cancellationToken)
+        var result = await SendWithRetriesAsync(request, options, true, cancellationToken)
             .ConfigureAwait(false);
-        return new(result.Response, result.Body);
+        var body = new BinaryResponse(
+            result.Stream!,
+            options?.Timeout ?? _timeout,
+            $"{request.Method} {request.Path}",
+            cancellationToken
+        );
+        return new(result.Response, body);
     }
 
     public async Task<ApiResponse<string>> SendTextAsync(

@@ -18,12 +18,16 @@ class {{ test_class }} {
 {%- set call = docs.accessors(resource.path, "mock.client") ~ "." ~ docs.method(op) ~ "(" ~ (args.list | join(", ")) ~ ")" %}
 
     @Test
-    void {{ docs.method(op) }}() throws Exception {
+    {#- A test named like a method of Object would override it. -#}
+    {%- set test = docs.method(op) %}
+    void {{ test ~ "Operation" if test in ["clone", "finalize", "getClass", "hashCode", "notify", "notifyAll", "toString", "wait"] else test }}() throws Exception {
         PerseidMock mock = new PerseidMock({{ case.response.status }}, {{ case.response.content_type | tojson if case.response.content_type else "null" }}, {{ case.response.body | tojson }});
 {%- if op.response_is_event_stream %}
         try (var stream = {{ call }}) {
             stream.forEach(event -> { });
         }
+{%- elif op.response_is_binary %}
+        assertEquals({{ case.response.body | tojson }}, new String({{ call }}.bytes(), java.nio.charset.StandardCharsets.UTF_8));
 {%- else %}
         {{ call }};
 {%- endif %}

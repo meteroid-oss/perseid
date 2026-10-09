@@ -12,7 +12,6 @@ import @@JAVA_PACKAGE@@.RequestOptions;
 import @@JAVA_PACKAGE@@.exceptions.@@CLIENT_NAME@@Exception;
 import @@JAVA_PACKAGE@@.exceptions.ApiConnectionException;
 import @@JAVA_PACKAGE@@.exceptions.ApiException;
-import @@JAVA_PACKAGE@@.exceptions.ApiTimeoutException;
 import @@JAVA_PACKAGE@@.exceptions.AuthenticationException;
 import @@JAVA_PACKAGE@@.exceptions.BadRequestException;
 import @@JAVA_PACKAGE@@.exceptions.ConflictException;
@@ -22,11 +21,11 @@ import @@JAVA_PACKAGE@@.exceptions.NotFoundException;
 import @@JAVA_PACKAGE@@.exceptions.PermissionDeniedException;
 import @@JAVA_PACKAGE@@.exceptions.RateLimitException;
 import @@JAVA_PACKAGE@@.exceptions.UnprocessableEntityException;
+import @@JAVA_PACKAGE@@.streaming.BinaryResponse;
 import @@JAVA_PACKAGE@@.streaming.EventStream;
 import @@JAVA_PACKAGE@@.streaming.SseEvent;
 import java.io.IOException;
 import java.io.InterruptedIOException;
-import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -330,6 +329,16 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         T read(Response response) throws IOException;
     }
 
+    /**
+     * Whether a response is read whole, or handed over open: as events, whose reads have no
+     * timeout, or as binary content, whose reads keep the read timeout.
+     */
+    private enum Body {
+        READ,
+        EVENTS,
+        BINARY
+    }
+
     /** One request, before its response type is set. */
     public final class Call {
         private final String method;
@@ -464,7 +473,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
          * @return the exchange
          */
         public <T> Exchange<T> returning(JavaType type) {
-            return new Exchange<>(this, false, response -> readJson(response, type, true));
+            return new Exchange<>(this, Body.READ, response -> readJson(response, type, true));
         }
 
         /**
@@ -490,7 +499,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         }
 
         private <T> Exchange<Optional<T>> returningOptional(JavaType type) {
-            return new Exchange<>(this, false, response -> Optional.ofNullable(readJson(response, type, false)));
+            return new Exchange<>(this, Body.READ, response -> Optional.ofNullable(readJson(response, type, false)));
         }
 
         /**
@@ -499,17 +508,16 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
          * @return the exchange
          */
         public Exchange<Void> returningNothing() {
-            return new Exchange<>(this, false, response -> null);
+            return new Exchange<>(this, Body.READ, response -> null);
         }
 
         /**
-         * Expects a binary body.
+         * Expects a binary body, handed over unread once the headers arrive.
          *
          * @return the exchange
          */
-        public Exchange<byte[]> returningBytes() {
-            return new Exchange<>(
-                    this, false, response -> response.body() == null ? new byte[0] : response.body().bytes());
+        public Exchange<BinaryResponse> returningBinary() {
+            return new Exchange<>(this, Body.BINARY, BinaryResponse::of);
         }
 
         /**
@@ -519,7 +527,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
          */
         public Exchange<String> returningText() {
             return new Exchange<>(
-                    this, false, response -> response.body() == null ? "" : response.body().string());
+                    this, Body.READ, response -> response.body() == null ? "" : response.body().string());
         }
 
         /**
@@ -528,7 +536,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
          * @return the exchange
          */
         public Exchange<EventStream<SseEvent>> returningEvents() {
-            return new Exchange<>(this, true, EventStream::raw);
+            return new Exchange<>(this, Body.EVENTS, EventStream::raw);
         }
 
         /**
@@ -541,7 +549,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         public <T> Exchange<EventStream<T>> returningEvents(Class<T> type) {
             JavaType eventType = objectMapper.getTypeFactory().constructType(type);
             return new Exchange<>(
-                    this, true, response -> EventStream.typed(response, event -> decodeEvent(event, eventType)));
+                    this, Body.EVENTS, response -> EventStream.typed(response, event -> decodeEvent(event, eventType)));
         }
 
         /**
@@ -555,10 +563,10 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
         public <T> Exchange<EventStream<T>> returningEvents(TypeReference<T> type) {
             JavaType eventType = objectMapper.getTypeFactory().constructType(type);
             return new Exchange<>(
-                    this, true, response -> EventStream.typed(response, event -> decodeEvent(event, eventType)));
+                    this, Body.EVENTS, response -> EventStream.typed(response, event -> decodeEvent(event, eventType)));
         }
 
-        private Request request(boolean streaming) {
+        private Request request(Body mode) {
             RequestBody content = body;
             if (json != null) {
                 try {
@@ -584,7 +592,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
             if (headers != null) {
                 headers.forEach(pair -> setHeader(request, pair.getFirst(), pair.getSecond()));
             }
-            if (streaming) {
+            if (mode == Body.EVENTS) {
                 request.header("Accept", "text/event-stream");
             }
             options.headers().forEach((name, value) -> setHeader(request, name, value));
@@ -606,14 +614,17 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
             return request.build();
         }
 
-        private OkHttpClient http(boolean streaming) {
-            if (!streaming && options.timeout().isEmpty()) {
+        private OkHttpClient http(Body mode) {
+            if (mode == Body.READ && options.timeout().isEmpty()) {
                 return client;
             }
             OkHttpClient.Builder builder = client.newBuilder();
             options.timeout().ifPresent(timeout -> withTimeout(builder, timeout));
-            if (streaming) {
-                builder.readTimeout(Duration.ZERO).callTimeout(Duration.ZERO);
+            if (mode == Body.EVENTS) {
+                builder.readTimeout(Duration.ZERO);
+            }
+            if (mode != Body.READ) {
+                builder.callTimeout(Duration.ZERO);
             }
             return builder.build();
         }
@@ -631,12 +642,12 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
      */
     public final class Exchange<T> {
         private final Call call;
-        private final boolean streaming;
+        private final Body mode;
         private final BodyReader<T> reader;
 
-        private Exchange(Call call, boolean streaming, BodyReader<T> reader) {
+        private Exchange(Call call, Body mode, BodyReader<T> reader) {
             this.call = call;
-            this.streaming = streaming;
+            this.mode = mode;
             this.reader = reader;
         }
 
@@ -655,10 +666,10 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
          * @return the status, headers and body
          */
         public ApiResponse<T> sendRaw() {
-            Request request = call.request(streaming);
+            Request request = call.request(mode);
             Response response;
             try {
-                response = execute(request, call.http(streaming), call.retries());
+                response = execute(request, call.http(mode), call.retries());
             } catch (IOException e) {
                 throw transportError(e);
             }
@@ -687,7 +698,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
             CompletableFuture<R> out = new CompletableFuture<>();
             CompletableFuture<Response> responses;
             try {
-                responses = executeAsync(call.request(streaming), call.http(streaming), call.retries());
+                responses = executeAsync(call.request(mode), call.http(mode), call.retries());
             } catch (RuntimeException e) {
                 out.completeExceptionally(e);
                 return out;
@@ -721,11 +732,11 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
                 if (!response.isSuccessful()) {
                     throw error(response, call.errors);
                 }
-                if (streaming) {
+                if (mode == Body.EVENTS) {
                     checkEventStream(response);
                 }
                 T body = reader.read(response);
-                keepOpen = streaming;
+                keepOpen = mode != Body.READ;
                 return new ApiResponse<>(response.code(), response.headers(), body);
             } catch (JsonProcessingException e) {
                 throw new InvalidDataException(
@@ -797,10 +808,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
     }
 
     private static ApiConnectionException transportError(IOException e) {
-        boolean timeout =
-                e instanceof SocketTimeoutException
-                        || (e instanceof InterruptedIOException && "timeout".equals(e.getMessage()));
-        return timeout ? new ApiTimeoutException(e) : new ApiConnectionException(e);
+        return Utils.transportError(e);
     }
 
     private ApiException error(Response response, Map<String, Class<?>> errors) throws IOException {

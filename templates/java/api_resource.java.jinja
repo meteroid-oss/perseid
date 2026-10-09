@@ -8,6 +8,7 @@
 {% set RESPONSE = root ~ "ApiResponse" if "ApiResponse" in models else "ApiResponse" -%}
 {% set STREAM = root ~ "streaming.EventStream" if "EventStream" in models else "EventStream" -%}
 {% set SSE = root ~ "streaming.SseEvent" if "SseEvent" in models else "SseEvent" -%}
+{% set BINARY = root ~ "streaming.BinaryResponse" if "BinaryResponse" in models else "BinaryResponse" -%}
 {% set UPLOAD = root ~ "streaming.Upload" if "Upload" in models else "Upload" -%}
 {% set MULTIPART = root ~ "streaming.Multipart" if "Multipart" in models else "Multipart" -%}
 {% set http_client_type = sdk.client_name ~ "HttpClient" -%}
@@ -53,8 +54,8 @@
             {% set returns = "returningEvents()" -%}
         {% endif -%}
     {% elif op.response_is_binary -%}
-        {% set res_type = "byte[]" -%}
-        {% set returns = "returningBytes()" -%}
+        {% set res_type = BINARY -%}
+        {% set returns = "returningBinary()" -%}
     {% elif op.response_is_text -%}
         {% set res_type = "String" -%}
         {% set returns = "returningText()" -%}
@@ -192,7 +193,7 @@
         "page": page,
         "full": full,
         "full_args": full_args,
-        "empty_note": ", empty when the response has none" if may_be_empty else "",
+        "empty_note": ", empty when the response has none" if may_be_empty else (", streamed as it arrives: close it" if returns == "returningBinary()" else ""),
     }] -%}
 {% endfor -%}
 
@@ -399,6 +400,7 @@ public final class {{ cls }} extends {{ "AsyncPage" if is_async else "Page" }}<{
 {%- endmacro %}
 
 {% set has_streams = resource.operations | selectattr("response_is_event_stream") | list | length > 0 -%}
+{% set has_binary = resource.operations | rejectattr("response_is_event_stream") | selectattr("response_is_binary") | list | length > 0 -%}
 {% set body_kinds = resource.operations | map(attribute="request_body_kind") | list -%}
 {% set async_source -%}
 // this file is @generated
@@ -414,6 +416,8 @@ import {{ sdk.java_internal_package }}.Utils;
 {% if has_streams and STREAM == "EventStream" %}import {{ sdk.java_package }}.streaming.EventStream;
 {% endif -%}
 {% if has_streams and SSE == "SseEvent" %}import {{ sdk.java_package }}.streaming.SseEvent;
+{% endif -%}
+{% if has_binary and BINARY == "BinaryResponse" %}import {{ sdk.java_package }}.streaming.BinaryResponse;
 {% endif -%}
 import java.math.BigDecimal;
 import java.math.BigInteger;
@@ -538,6 +542,8 @@ import {{ sdk.java_internal_package }}.Utils;
 {% if has_streams and STREAM == "EventStream" %}import {{ sdk.java_package }}.streaming.EventStream;
 {% endif -%}
 {% if has_streams and SSE == "SseEvent" %}import {{ sdk.java_package }}.streaming.SseEvent;
+{% endif -%}
+{% if has_binary and BINARY == "BinaryResponse" %}import {{ sdk.java_package }}.streaming.BinaryResponse;
 {% endif -%}
 
 import java.math.BigDecimal;
