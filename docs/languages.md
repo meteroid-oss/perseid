@@ -659,6 +659,11 @@ var customer = client.customers().retrieve("cus_1",
 - Every method has an overload taking `RequestOptions` last.
 - `client.async()` has the same methods, returning `CompletableFuture`s.
 - An operation that may answer a bodiless 2xx returns an `Optional`.
+- Files are `Upload`s: `Upload.of(Path.of("a.mp3"))` is named after the file and typed by its
+  extension; `Upload.of(bytes)`, `of(File)` and `of(InputStream, length)` take `withFilename` and
+  `withContentType`. Input streams are not retried.
+- The `...Stream` twin of an operation whose body has a `stream` flag sends it as `true`: on a
+  copy of a JSON body, and in place of the property a form body's builder leaves out.
 
 ### Pagination
 

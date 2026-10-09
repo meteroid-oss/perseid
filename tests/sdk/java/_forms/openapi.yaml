@@ -1,0 +1,44 @@
+openapi: 3.1.0
+info:
+  title: Forms
+  version: 1.0.0
+  description: "A form operation that also answers an event stream, as OpenAI's transcriptions."
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /transcriptions:
+    post:
+      operationId: createTranscription
+      tags: [transcriptions]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/TranscriptionRequest'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Transcription'}
+            text/event-stream:
+              schema: {$ref: '#/components/schemas/TranscriptionDelta'}
+components:
+  schemas:
+    TranscriptionRequest:
+      type: object
+      required: [file, model]
+      properties:
+        file: {type: string, format: binary}
+        model: {type: string}
+        stream: {type: boolean}
+    Transcription:
+      type: object
+      required: [text]
+      properties:
+        text: {type: string}
+    TranscriptionDelta:
+      type: object
+      required: [delta]
+      properties:
+        delta: {type: string}

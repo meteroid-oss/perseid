@@ -618,11 +618,15 @@ public final class {{ resource_type_name }} {
 
 {% for op in resource.operations if op.request_body_kind == "multipart" %}
     {% set owner = "operation `" ~ op.id ~ "`" -%}
-    {% set fields = op.multipart_fields | map(attribute="name") | list | idents("camel", "java", owner) -%}
+    {#- The event stream twin of a form operation asks for the stream itself: its body leaves it out. -#}
+    {% set twin = op.response_is_event_stream and resource.operations | selectattr("id", "equalto", op.id) | rejectattr("response_is_event_stream") | list | length > 0 -%}
+    {% set form = namespace(fields=[]) -%}
+    {% for field in op.multipart_fields if not (twin and field.name == "stream" and not field.is_file) %}{% set form.fields = form.fields + [field] %}{% endfor -%}
+    {% set fields = form.fields | map(attribute="name") | list | idents("camel", "java", owner) -%}
     {% set mp = namespace(vars=[], types=[]) -%}
     {% for f in fields %}{% set mp.vars = mp.vars + [f ~ "_" if f in ["builder", "toBuilder", "hashCode", "toString", "getClass", "build"] else f] %}{% endfor -%}
     {#- A list of files is sent as repeated parts. -#}
-    {% for field in op.multipart_fields -%}
+    {% for field in form.fields -%}
         {% set mp.types = mp.types + [(("List<" ~ UPLOAD ~ ">") if field.is_file_list else UPLOAD) if field.is_file else field.type.to_java()] -%}
     {% endfor -%}
     {% set body_cls = op.name | to_upper_camel_case ~ "Body" -%}
@@ -631,12 +635,12 @@ public final class {{ resource_type_name }} {
      * {@link #builder()}.
      */
     public static final class {{ body_cls }} {
-        {% for field in op.multipart_fields -%}
+        {% for field in form.fields -%}
         private final {{ mp.types[loop.index0] }} {{ mp.vars[loop.index0] }};
         {% endfor %}
 
         private {{ body_cls }}(Builder builder) {
-            {% for field in op.multipart_fields -%}
+            {% for field in form.fields -%}
             {% set v = mp.vars[loop.index0] -%}
             this.{{ v }} = {{ "Utils.copyList(builder." ~ v ~ ")" if (field.type.is_list() and not field.is_file) or field.is_file_list else "builder." ~ v }};
             {% endfor -%}
@@ -650,7 +654,7 @@ public final class {{ resource_type_name }} {
         public static Builder builder() {
             return new Builder();
         }
-        {% for field in op.multipart_fields %}
+        {% for field in form.fields %}
         {% set ty = mp.types[loop.index0] %}
 
 {% set text -%}
@@ -672,12 +676,12 @@ public final class {{ resource_type_name }} {
 
         /** Builds {@link {{ body_cls }}}. */
         public static final class Builder {
-            {% for field in op.multipart_fields -%}
+            {% for field in form.fields -%}
             private {{ mp.types[loop.index0] }} {{ mp.vars[loop.index0] }};
             {% endfor %}
 
             private Builder() {}
-            {% for field in op.multipart_fields %}
+            {% for field in form.fields %}
             {% set ty = mp.types[loop.index0] %}
             {% set v = mp.vars[loop.index0] %}
 
@@ -701,7 +705,7 @@ public final class {{ resource_type_name }} {
              * @throws IllegalStateException when a required field is not set
              */
             public {{ body_cls }} build() {
-                {% for field in op.multipart_fields -%}
+                {% for field in form.fields -%}
                 {% if field.required -%}
                 Utils.checkRequired({{ mp.vars[loop.index0] }}, {{ field.name | tojson }});
                 {% endif -%}
@@ -876,14 +880,20 @@ public final class {{ resource_type_name }} {
             {% set body_expr = body_var ~ ".toRequestBody(" ~ (op.request_body_content_type | default("application/octet-stream") | tojson) ~ ")" -%}
             {% set chain = chain + [".body(" ~ (body_var ~ " == null ? null : " if op.request_body_optional else "") ~ body_expr ~ ")"] -%}
         {% elif op.request_body_kind == "multipart" -%}
-            {% set fields = op.multipart_fields | map(attribute="name") | list | idents("camel", "java", op_owner) -%}
+            {% set twin = op.response_is_event_stream and resource.operations | selectattr("id", "equalto", op.id) | rejectattr("response_is_event_stream") | list | length > 0 -%}
+            {% set form = namespace(fields=[]) -%}
+            {% for field in op.multipart_fields if not (twin and field.name == "stream" and not field.is_file) %}{% set form.fields = form.fields + [field] %}{% endfor -%}
+            {% set fields = form.fields | map(attribute="name") | list | idents("camel", "java", op_owner) -%}
             {% set body_expr -%}
                 new {{ MULTIPART }}()
-                {%- for field in op.multipart_fields %}
+                {%- for field in form.fields %}
                 {%- set f = fields[loop.index0] %}
                 {%- set f = f ~ "_" if f in ["builder", "toBuilder", "hashCode", "toString", "getClass", "build"] else f %}
                     .{% if field.is_file and field.is_file_list %}files{% elif field.is_file %}file{% else %}field{% endif %}({{ field.name | tojson }}, {{ body_var }}.{{ f }}(){% if not field.required %}.orElse(null){% endif %}{% if field.content_type is defined %}, {{ field.content_type | tojson }}{% elif field.is_file and field.is_file_list %}, null{% endif %})
                 {%- endfor %}
+                {%- if form.fields | length < op.multipart_fields | length %}
+                    .field("stream", true)
+                {%- endif %}
                     .build()
             {%- endset -%}
             {% set chain = chain + [".body(" ~ (body_var ~ " == null ? null : " if op.request_body_optional else "") ~ body_expr ~ ")"] -%}
