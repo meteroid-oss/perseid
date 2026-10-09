@@ -1,0 +1,39 @@
+openapi: 3.1.0
+info:
+  title: Audio
+  version: 1.0.0
+  description: A multipart body whose `stream` part switches the response to server-sent events, as OpenAI's transcriptions.
+servers:
+  - url: https://api.example.com/v1
+paths:
+  /transcriptions:
+    post:
+      operationId: createTranscription
+      tags: [audio]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema: {$ref: '#/components/schemas/TranscriptionRequest'}
+      responses:
+        '200':
+          description: the text, or its deltas as server-sent events with `stream`
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Transcription'}
+            text/event-stream:
+              schema: {$ref: '#/components/schemas/Transcription'}
+components:
+  schemas:
+    TranscriptionRequest:
+      type: object
+      required: [file]
+      properties:
+        file: {type: string, format: binary}
+        language: {type: string}
+        stream: {type: boolean}
+    Transcription:
+      type: object
+      required: [text]
+      properties:
+        text: {type: string}
