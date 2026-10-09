@@ -18,6 +18,7 @@ use crate::spec::IncludeMode;
 use heck::{ToSnakeCase as _, ToUpperCamelCase as _};
 
 use super::{
+    constraints::Constraints,
     get_schema_name,
     resources::{self, Resource, Resources},
     unions::{self, Condition, JsonShape, UnionDecode, UnionMode},
@@ -83,6 +84,7 @@ pub(crate) fn from_referenced_components(
                         description: None,
                         deprecated: false,
                         discriminator_defaults: BTreeMap::new(),
+                        constraints: None,
                         data: TypeData::Alias {
                             target: Box::new(FieldType::JsonObject),
                         },
@@ -207,6 +209,7 @@ pub(crate) fn hoist_inline_variants(types: &mut Types) {
                     nullable: false,
                     deprecated: false,
                     example: None,
+                    constraints: Constraints::default(),
                     read_only: false,
                     write_only: false,
                     flatten: false,
@@ -221,6 +224,7 @@ pub(crate) fn hoist_inline_variants(types: &mut Types) {
                 description: None,
                 deprecated: false,
                 discriminator_defaults,
+                constraints: None,
                 data: TypeData::Struct {
                     fields: own,
                     additional_properties: None,
@@ -700,6 +704,7 @@ fn resolve_schema_ref_in_field_type(
                 description: None,
                 deprecated: false,
                 discriminator_defaults: BTreeMap::new(),
+                constraints: None,
                 data: TypeData::StringAlias,
             });
         }
@@ -716,6 +721,50 @@ fn resolve_schema_ref_in_field_type(
         }
         _ => {}
     }
+}
+
+/// Gives the fields and parameters referencing an alias, such as a constrained string or
+/// number, its constraints, which they keep once targets inline the alias.
+pub(crate) fn inherit_alias_constraints(types: &mut Types, resources: &mut Resources) {
+    let aliases = alias_constraints(types);
+    if aliases.is_empty() {
+        return;
+    }
+    for ty in types.values_mut() {
+        (ty.data).for_each_field(|f| f.constraints.inherit(&f.r#type, &aliases));
+    }
+    let mut stack: Vec<&mut Resource> = resources.values_mut().collect();
+    while let Some(resource) = stack.pop() {
+        for op in &mut resource.operations {
+            op.inherit_constraints(&aliases);
+        }
+    }
+}
+
+/// The constraints of each alias, with those of the aliases it leads to.
+fn alias_constraints(types: &Types) -> BTreeMap<String, Constraints> {
+    let target = |name: &str| match types.get(name).map(|t| &t.data) {
+        Some(TypeData::Alias { target }) => match target.non_null() {
+            FieldType::SchemaRef { name, .. } => types.get(name),
+            _ => None,
+        },
+        _ => None,
+    };
+    types
+        .iter()
+        .filter(|(_, ty)| matches!(ty.data, TypeData::Alias { .. } | TypeData::StringAlias))
+        .filter_map(|(name, ty)| {
+            let own = |ty: &Type| ty.constraints.as_deref().cloned().unwrap_or_default();
+            let mut constraints = own(ty);
+            let mut next = target(name);
+            for _ in 0..16 {
+                let Some(ty) = next else { break };
+                constraints = constraints.or(own(ty));
+                next = target(&ty.name);
+            }
+            (!constraints.is_empty()).then(|| (name.clone(), constraints))
+        })
+        .collect()
 }
 
 /// See [`super::Api::settle_object_unions`].
@@ -1141,6 +1190,7 @@ fn add_promoted(
         description: None,
         deprecated: false,
         discriminator_defaults: BTreeMap::new(),
+        constraints: None,
         data,
     });
     name
@@ -1260,6 +1310,9 @@ pub(crate) struct Type {
     /// `{"type": "circle"}`, when every such union agrees: constructors can default it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) discriminator_defaults: BTreeMap<String, String>,
+    /// The constraints of an alias, which the fields and parameters referencing it inherit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) constraints: Option<Box<Constraints>>,
     #[serde(flatten)]
     pub data: TypeData,
 }
@@ -1335,11 +1388,16 @@ impl Type {
     pub(crate) fn from_schema(name: String, mut s: SchemaObject) -> anyhow::Result<Self> {
         drop_required_only_alternatives(&mut s);
         let metadata = s.metadata.clone().unwrap_or_default();
+        let constraints = Some(Box::new(Constraints::from_schema(&s))).filter(|c| !c.is_empty());
         let ty = |data| Self {
             name: name.clone(),
             description: super::html::doc(metadata.description.clone()),
             deprecated: metadata.deprecated,
             discriminator_defaults: BTreeMap::new(),
+            constraints: match &data {
+                TypeData::Alias { .. } | TypeData::StringAlias => constraints.clone(),
+                _ => None,
+            },
             data,
         };
         let alias = |s: SchemaObject| -> anyhow::Result<Self> {
@@ -1560,7 +1618,7 @@ pub(super) fn extract_nullable_variant(variants: &[Schema]) -> Option<&Schema> {
 }
 
 /// The type implied by validation keywords when `type` is absent.
-fn implied_type(obj: &SchemaObject) -> Option<InstanceType> {
+pub(super) fn implied_type(obj: &SchemaObject) -> Option<InstanceType> {
     if obj.reference.is_some() || obj.const_value.is_some() {
         None
     } else if obj.array.is_some() {
@@ -1765,6 +1823,7 @@ impl TypeData {
                 nullable: false,
                 deprecated: false,
                 example: None,
+                constraints: Constraints::default(),
                 read_only: false,
                 write_only: false,
                 flatten: true,
@@ -2021,8 +2080,11 @@ pub(crate) struct Field {
     pub(crate) required: bool,
     pub(crate) nullable: bool,
     deprecated: bool,
+    /// The `example` of the schema, else the first of its `examples`.
     #[serde(skip_serializing_if = "Option::is_none")]
     example: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Constraints::is_empty")]
+    pub(crate) constraints: Constraints,
     /// Only sent by the server (`readOnly`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     read_only: bool,
@@ -2048,8 +2110,10 @@ impl Field {
             Schema::Bool(_) => SchemaObject::default(),
             Schema::Object(o) => o,
         };
-        let example = obj.extensions.get("example").cloned();
         let metadata = obj.metadata.clone().unwrap_or_default();
+        let example =
+            (obj.extensions.get("example").cloned()).or_else(|| metadata.examples.first().cloned());
+        let constraints = Constraints::from_schema(&obj);
         let constant = obj
             .const_value
             .clone()
@@ -2086,6 +2150,7 @@ impl Field {
             nullable,
             deprecated: metadata.deprecated,
             example,
+            constraints,
             read_only: metadata.read_only,
             write_only: metadata.write_only,
             flatten: false,
@@ -2630,14 +2695,7 @@ impl FieldType {
                     let title = obj.metadata.as_ref().and_then(|m| m.title.clone());
                     return Ok((Self::StringEnum { values, title }, nullable));
                 }
-                match obj.format.as_deref() {
-                    Some("decimal") => Self::Decimal,
-                    Some("date-time") => Self::DateTime,
-                    Some("date") => Self::Date,
-                    Some("uri") => Self::Uri,
-                    Some("uuid") => Self::Uuid,
-                    _ => Self::String,
-                }
+                Self::of_string_format(obj.format.as_deref())
             }
             Some(InstanceType::Array) => {
                 let array = obj.array.unwrap_or_default();
@@ -2685,6 +2743,18 @@ impl FieldType {
         };
 
         Ok((result, nullable))
+    }
+
+    /// The type of a string of `format`: [`Self::String`] unless the format makes it another.
+    pub(crate) fn of_string_format(format: Option<&str>) -> Self {
+        match format {
+            Some("decimal") => Self::Decimal,
+            Some("date-time") => Self::DateTime,
+            Some("date") => Self::Date,
+            Some("uri") => Self::Uri,
+            Some("uuid") => Self::Uuid,
+            _ => Self::String,
+        }
     }
 
     fn to_csharp_typename(&self) -> Cow<'_, str> {

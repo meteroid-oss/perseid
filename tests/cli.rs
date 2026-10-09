@@ -2535,10 +2535,65 @@ fn edit_config(dir: &Path, edit: impl FnOnce(String) -> String) {
     fs::write(path, edit(text)).unwrap();
 }
 
+/// The model `perseid inspect` prints, before the warnings that follow it.
 fn inspect(dir: &Path) -> serde_json::Value {
     let (ok, out) = perseid(dir, &["inspect"]);
     assert!(ok, "{out}");
-    serde_json::from_str(&out).unwrap()
+    let mut values = serde_json::Deserializer::from_str(&out).into_iter();
+    values.next().unwrap().unwrap()
+}
+
+#[test]
+fn inspect_shows_constraints_display_paths_and_path_parameter_descriptions() {
+    let dir = project_from("edge-types.yaml", &["rust", "typescript"]);
+    let model = inspect(dir.path());
+    let resource = model["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "constraints_api")
+        .unwrap();
+    assert_eq!(resource["renamed_from"], "constraints");
+    assert_eq!(resource["display_path"], json!(["constraints"]));
+    let op = operation(&model, "echo_constraints");
+    assert_eq!(op["path_styles"]["id"]["style"], "simple");
+    let id = &op["typed_path_params"][0];
+    assert_eq!(id["description"], "The id.");
+    assert_eq!(id["constraints"], json!({ "minimum": 1, "maximum": 999 }));
+    let limit = &op["query_params"][0];
+    assert_eq!(
+        (&limit["default"], &limit["example"]),
+        (&json!(20), &json!(10))
+    );
+    assert_eq!(op["query_params"][1]["constraints"]["format"], "email");
+    assert_eq!(op["header_params"][0]["deprecated"], true);
+    let fields: std::collections::BTreeMap<&str, &Value> = model["types"]["Constraints"]["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| (f["name"].as_str().unwrap(), &f["constraints"]))
+        .collect();
+    assert_eq!(
+        fields["ratio"],
+        &json!({ "exclusive_minimum": 0, "exclusive_maximum": 1, "multiple_of": 0.25 })
+    );
+    assert_eq!(
+        fields["tags"],
+        &json!({ "min_items": 1, "max_items": 3, "unique_items": true,
+            "items": { "max_length": 8 } })
+    );
+    assert_eq!(
+        fields["emails"],
+        &json!({ "items": { "max_length": 254, "format": "email" } })
+    );
+    assert_eq!(fields["host"], &json!({ "format": "hostname" }));
+    assert_eq!(fields["legacy"], &Value::Null);
+
+    // OpenAPI 3.0 boolean `exclusiveMinimum` reads as 3.1's bound.
+    let dir = project_from("edge-legacy.yaml", &["rust"]);
+    let model = inspect(dir.path());
+    let n = &model["types"]["Bounded"]["fields"][0];
+    assert_eq!(n["constraints"], json!({ "exclusive_minimum": 1 }));
 }
 
 #[test]

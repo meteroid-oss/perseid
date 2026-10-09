@@ -149,6 +149,22 @@ perseid eject typescript   # copies the templates and runtime to .perseid/
 | `is_error_schema` | Type templates | Whether the type is an error schema |
 | `types` | Resource templates | Every schema by name, to read the fields of a request body |
 | `type.discriminator_defaults` | Type templates | The discriminator value of a struct that is a union variant |
+| `constraints` | Fields, `typed_path_params`, `query_params`, `header_params`, alias types | Validation keywords, below |
+| `default`, `example`, `deprecated` | Fields and parameters | The schema's `default`, its `example` (else the first of its `examples`), `deprecated` |
+| `description` | Parameters, `typed_path_params` included | The parameter's description |
+| `resource.path` | Resource templates | The accessors leading to it from the client: `["pet_api", "photos"]` |
+| `resource.display_path`, `renamed_from` | Resource templates | `path` before resources named like a type became `<name>_api`: `["pet", "photos"]`, the words a CLI names commands with. `renamed_from` is the name a renamed resource had |
+
+`constraints` is absent when the schema has none, else holds those it has: `minimum`, `maximum`,
+`exclusive_minimum`, `exclusive_maximum`, `multiple_of`, `min_length`, `max_length`, `pattern`,
+`min_items`, `max_items`, `unique_items`, `format` and `items`, the constraints of list items.
+
+- Exclusive bounds are numbers, as in OpenAPI 3.1: 3.0's `minimum: 1` with `exclusiveMinimum:
+  true` is `exclusive_minimum: 1`.
+- `format` is a string's when its type does not already say it: `email`, `hostname`, `password`,
+  but not `date-time`, `uuid`, `uri` or `decimal`.
+- A reference to an alias, such as `Email: {type: string, format: email}` or a bounded integer,
+  gets the alias's constraints, which it keeps when SDKs inline the alias. Its own win.
 
 Union field types, for values of several types such as Stripe's `string | Customer` or
 `object | ""`:
@@ -215,7 +231,12 @@ api_reference = { dir = ".", extension = "md" }
   It can't hold a file the templates or runtime generate. Pull requests leave out its workflows,
   `.github/workflows/`, which CI tokens can't push: their description lists them to add by hand.
 - `model` must be the `model_version` that `perseid inspect` prints: a pack written for another
-  fails, naming what to upgrade.
+  fails, naming what to upgrade. Additions to the model, such as `constraints`, keep the version,
+  as packs written for it read what they know. Only removing or renaming what templates read
+  raises it.
+- A resource template has the resource's whole command path: `resource.display_path` names it,
+  `["pet", "photos"]`, and `resource.path` reaches it from the client, `["pet_api", "photos"]`.
+  `parent` and `children` name the resources around it.
 
 ## Docs data
 

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::spec::IncludeMode;
 
 use super::{
+    constraints::Constraints,
     get_schema_name,
     pagination::{Candidate, Pagination},
     security::{Requirement, Security},
@@ -259,6 +260,9 @@ pub(crate) fn rename_resources_named_like_types(
             if let Some(top) = renamed.get(&resource.path[0]) {
                 resource.path[0].clone_from(top);
             }
+            if renamed.contains_key(&resource.name) {
+                resource.renamed_from = Some(resource.name.clone());
+            }
             rename(&mut resource.name);
             resource.parent.iter_mut().for_each(rename);
             resource
@@ -311,6 +315,13 @@ pub(crate) struct Resource {
     pub name: String,
     /// The accessors leading to it from the client: `["workspaces", "peers"]`.
     pub path: Vec<String>,
+    /// `path` before resources named like a type were renamed, `["pet", "photos"]` for
+    /// `["pet_api", "photos"]`: what programs wrapping the SDK, such as CLIs, call it.
+    #[serde(default)]
+    pub display_path: Vec<String>,
+    /// The name of a resource renamed `<name>_api` because a type is named like it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renamed_from: Option<String>,
     /// The name of the resource holding it.
     pub parent: Option<String>,
     /// The description of the tag it is named after.
@@ -404,7 +415,9 @@ impl Resource {
     pub(crate) fn new(path: Vec<String>) -> Self {
         Self {
             name: path.join("_"),
+            display_path: path.clone(),
             path,
+            renamed_from: None,
             parent: None,
             description: None,
             children: Vec::new(),
@@ -761,6 +774,19 @@ impl Operation {
         self.request_body_kind != RequestBodyKind::None
     }
 
+    /// Gives the parameters referencing an alias its constraints.
+    pub(crate) fn inherit_constraints(&mut self, aliases: &BTreeMap<String, Constraints>) {
+        for p in &mut self.typed_path_params {
+            p.constraints.inherit(&p.r#type, aliases);
+        }
+        for p in &mut self.query_params {
+            p.constraints.inherit(&p.r#type, aliases);
+        }
+        for p in &mut self.header_params {
+            p.constraints.inherit(&p.r#type, aliases);
+        }
+    }
+
     /// Whether a pagination rule or `x-pagination` pages it.
     pub(crate) fn paginated(&self) -> bool {
         self.pagination.is_some()
@@ -832,6 +858,9 @@ impl Operation {
                 return Err(SpecError("unresolved `$ref` parameter").into());
             };
             let name = param.parameter_data_ref().name.clone();
+            let (constraints, default) = parameter_schema(param.parameter_data_ref());
+            let deprecated = param.parameter_data_ref().deprecated == Some(true);
+            let example = parameter_example(param.parameter_data_ref(), component_schemas);
             match param {
                 openapi::Parameter::Path {
                     parameter_data,
@@ -848,7 +877,11 @@ impl Operation {
                     typed_path_params.push(TypedParam {
                         name: parameter_data.name.clone(),
                         r#type,
-                        example: parameter_example(&parameter_data, component_schemas),
+                        description: super::html::doc(parameter_data.description.clone()),
+                        deprecated,
+                        default,
+                        example,
+                        constraints,
                     });
                     path_styles.extend(path_style.map(|style| (name.clone(), style)));
                     path_params.push(parameter_data.name);
@@ -876,6 +909,10 @@ impl Operation {
                         description: super::html::doc(parameter_data.description.clone()),
                         name: parameter_data.name,
                         required: parameter_data.required,
+                        deprecated,
+                        default,
+                        example,
+                        constraints,
                         cookie: false,
                         json,
                         r#type,
@@ -893,6 +930,10 @@ impl Operation {
                         description: super::html::doc(parameter_data.description.clone()),
                         name: parameter_data.name,
                         required: parameter_data.required,
+                        deprecated,
+                        default,
+                        example,
+                        constraints,
                         cookie: true,
                         json: false,
                         r#type: header_type(parameter_data.format),
@@ -941,6 +982,10 @@ impl Operation {
                         name,
                         description: super::html::doc(parameter_data.description),
                         required: parameter_data.required,
+                        deprecated,
+                        default,
+                        example,
+                        constraints,
                         r#type,
                         explode,
                         deep_object,
@@ -958,7 +1003,11 @@ impl Operation {
             typed_path_params.push(TypedParam {
                 name: name.clone(),
                 r#type: FieldType::String,
+                description: None,
+                deprecated: false,
+                default: None,
                 example: None,
+                constraints: Constraints::default(),
             });
         }
         disambiguate_parameters(&path_params, &mut query_params, &mut header_params);
@@ -1559,6 +1608,20 @@ fn is_collection_schema(
     false
 }
 
+/// The constraints and default of the schema of a parameter, `content` ones having none.
+fn parameter_schema(data: &openapi::ParameterData) -> (Constraints, Option<serde_json::Value>) {
+    match &data.format {
+        openapi::ParameterSchemaOrContent::Schema(s) => match &s.json_schema {
+            Schema::Object(obj) => (
+                Constraints::from_schema(obj),
+                obj.metadata.as_ref().and_then(|m| m.default.clone()),
+            ),
+            Schema::Bool(_) => Default::default(),
+        },
+        openapi::ParameterSchemaOrContent::Content(_) => Default::default(),
+    }
+}
+
 /// The `example` of a parameter, else its first `examples` value, else its schema's example.
 fn parameter_example(
     data: &openapi::ParameterData,
@@ -1975,6 +2038,15 @@ pub(crate) struct HeaderParam {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     required: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    deprecated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default: Option<serde_json::Value>,
+    /// The example of the parameter, else of its schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    example: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Constraints::is_empty")]
+    pub(crate) constraints: Constraints,
     /// A cookie parameter: sent in the `Cookie` header, percent-encoded, with the others.
     #[serde(default)]
     cookie: bool,
@@ -1992,9 +2064,17 @@ pub(crate) struct TypedParam {
     pub(crate) name: String,
     #[serde(serialize_with = "serialize_field_type")]
     pub(crate) r#type: FieldType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    deprecated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default: Option<serde_json::Value>,
     /// The example of the parameter, else of its schema.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) example: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Constraints::is_empty")]
+    pub(crate) constraints: Constraints,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -2006,6 +2086,15 @@ pub(crate) struct QueryParam {
     #[serde(skip_serializing_if = "Option::is_none")]
     description: Option<String>,
     required: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    deprecated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default: Option<serde_json::Value>,
+    /// The example of the parameter, else of its schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    example: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Constraints::is_empty")]
+    pub(crate) constraints: Constraints,
     #[serde(serialize_with = "serialize_field_type")]
     pub(crate) r#type: FieldType,
     /// Whether array values are exploded into repeated query parameters
@@ -2769,6 +2858,30 @@ mod tests {
             op.response_body_union.as_deref(),
             Some("CreateThingResponseBody")
         );
+    }
+    #[test]
+    fn resources_renamed_like_types_keep_their_display_path() {
+        let ok = json!({ "200": { "description": "", "content": { "application/json": {
+            "schema": { "$ref": "#/components/schemas/Pet" } } } } });
+        let spec = json!({
+            "openapi": "3.1.0", "info": { "title": "T", "version": "1" },
+            "paths": {
+                "/pet": { "get": { "operationId": "get_pet", "tags": ["pet"], "responses": ok } },
+                "/pet/photos": { "get": { "operationId": "list_photos", "tags": ["pet"],
+                    "x-perseid-resource": "pet.photos", "responses": ok } },
+            },
+            "components": { "schemas": { "Pet": { "type": "object", "properties": {} } } },
+        });
+        let api = crate::spec::api(&spec.to_string(), &Default::default()).unwrap();
+        let pet = &api.resources["pet_api"];
+        assert_eq!(pet.renamed_from.as_deref(), Some("pet"));
+        assert_eq!(pet.path, ["pet_api"]);
+        assert_eq!(pet.display_path, ["pet"]);
+        let photos = &api.resources["pet_photos"];
+        assert_eq!(photos.renamed_from, None);
+        assert_eq!(photos.parent.as_deref(), Some("pet_api"));
+        assert_eq!(photos.path, ["pet_api", "photos"]);
+        assert_eq!(photos.display_path, ["pet", "photos"]);
     }
 }
 

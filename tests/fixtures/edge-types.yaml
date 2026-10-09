@@ -94,8 +94,45 @@ paths:
           content:
             application/json:
               schema: {type: array, items: {$ref: '#/components/schemas/Pet'}}
+  /constraints/{id}:
+    post:
+      operationId: echo_constraints
+      tags: [constraints]
+      parameters:
+        - {name: id, in: path, required: true, style: simple, description: The id., schema: {type: integer, minimum: 1, maximum: 999}}
+        - {name: limit, in: query, description: Page size., schema: {type: integer, minimum: 1, maximum: 100, default: 20, examples: [10]}}
+        - {name: contact, in: query, schema: {$ref: '#/components/schemas/Email'}}
+        - {name: X-Trace, in: header, deprecated: true, schema: {type: string, pattern: '^[a-f0-9]+$'}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/Constraints'}
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Constraints'}
 components:
   schemas:
+    # Validation keywords, kept for programs wrapping the SDKs. `constraints` is renamed
+    # `constraints_api`, being named like this schema.
+    Email: {type: string, format: email, maxLength: 254}
+    Percent: {type: integer, minimum: 0, maximum: 100}
+    Constraints:
+      type: object
+      properties:
+        name: {type: string, minLength: 1, maxLength: 40, pattern: '^[a-z]+$', examples: [rex, max]}
+        ratio: {type: number, exclusiveMinimum: 0, exclusiveMaximum: 1, multipleOf: 0.25}
+        count: {type: integer, minimum: 1, default: 1}
+        tags: {type: array, minItems: 1, maxItems: 3, uniqueItems: true, items: {type: string, maxLength: 8}}
+        emails: {type: array, items: {$ref: '#/components/schemas/Email'}}
+        contact: {$ref: '#/components/schemas/Email'}
+        percent: {$ref: '#/components/schemas/Percent'}
+        host: {type: [string, 'null'], format: hostname}
+        secret: {type: string, format: password, writeOnly: true}
+        legacy: {type: string, deprecated: true}
     # Type arrays, constants, empty and boolean schemas.
     MultiType: {type: [string, integer, 'null']}
     StrOrNum: {type: [string, number]}

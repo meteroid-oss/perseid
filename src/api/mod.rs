@@ -1,3 +1,4 @@
+pub(crate) mod constraints;
 pub(crate) mod html;
 pub(crate) mod naming;
 pub(crate) mod nesting;
@@ -121,6 +122,7 @@ impl Api {
         resources::resolve_schema_refs_in_resources(&mut resources, &string_alias_names);
 
         types::set_discriminator_defaults(&mut types);
+        types::inherit_alias_constraints(&mut types, &mut resources);
 
         let generated = operation_ids(&resources);
         let security = security::Security::from_spec(raw_spec, |id| generated.contains(id))?;
