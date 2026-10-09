@@ -363,6 +363,8 @@ Methods return an `APIPromise`. `.withResponse()` gives `{ data, response, reque
 ### Models and unions
 
 - Models are plain objects with camelCase properties.
+- The schemas an `allOf` references are extended (`interface Cat extends PetBase`), unions
+  intersected: literals take every property flat, and a property the model redeclares wins.
 - `CustomerSerializer.parse(json)` and `.serialize(value)` convert them, keeping unknown
   properties under their JSON names. A typed `additionalProperties` gives the model an index
   signature.
