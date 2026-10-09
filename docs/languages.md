@@ -154,8 +154,9 @@ client.customers().with_options(options).list(None).await?;
 - `with_options` on a resource sets headers, timeout, retries or idempotency key for its calls.
 - An operation that also declares a bodiless 2xx returns `Option<T>`.
 - Files are `Upload`s: `Upload::path("a.csv").await?` reads the file, named after it and typed by
-  its extension; `Upload::bytes(...)` and `Upload::reader(...)` take `with_filename` and
-  `with_content_type`. Readers stream and are not retried.
+  the part's media type in the spec, else by its extension; `Upload::bytes(...)` and
+  `Upload::reader(...)` take `with_filename` and `with_content_type`. Readers stream and are not
+  retried.
 
 ### Pagination
 
@@ -183,8 +184,9 @@ while let Some(customer) = customers.next().await {
 Event streams are `Stream`s of the model each event carries, ending at `[DONE]`, or of raw
 `SseEvent`s. `last_event()` gives the raw event, `into_raw()` the raw stream.
 
-- An `error` event, or data that is not the model but an object with an `error`, ends the stream
-  with an `Error::Api` holding that data and the response's status and headers.
+- An `error` event, whatever its data, or data that is an object with an `error` the model does
+  not decode or does not declare, ends the stream with an `Error::Api` holding that data and the
+  response's status and headers.
 - Comments are skipped, and so are `ping` and `keepalive` events that are not the model.
 
 A file download (a binary response) is a `BinaryResponse`, its body unread:
@@ -314,7 +316,8 @@ const customer = await client.customers.retrieve("cus_1", { timeout: 5_000, maxR
 - A multipart file is a `Blob`, `File`, `Uint8Array`, `ArrayBuffer`, `ReadableStream`, fetch
   `Response`, Node `fs.ReadStream` (any `AsyncIterable` of bytes), or `{ data, filename?,
   contentType? }`. `{ path }` reads a file on Node and is named after it, as a `Response` is
-  after its URL. The file is read once, before the first attempt, so retries resend it.
+  after its URL, and typed by the part's media type in the spec, else by its extension. The file
+  is read once, before the first attempt, so retries resend it.
 - `int64 = "bigint"` or `"string"` under `[typescript]` parses int64 values without losing digits.
   With `"string"`, the int64 values of a union variant are `number | bigint`, as a string would
   read as a string variant.
@@ -343,8 +346,9 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
 - Events with a schema give a `Stream<Model>` ending at `[DONE]`, with `stream.lastEvent`.
 - The body of the non-stream twin cannot ask for the stream: `create({ stream: true })` does not
   compile.
-- An `error` event, or data with an `error` property the event schema does not declare, throws
-  an `APIError` holding it.
+- An `error` event, whatever its data, or data with an `error` property the event schema does
+  not declare, throws an `APIError` holding it. `ping` and `keepalive` events that are not the
+  model are skipped.
 - Other streams are an `EventStream` of raw events.
 - Breaking out of the loop or calling `stream.close()` closes the connection.
 
@@ -465,8 +469,9 @@ client.files.create(file=Upload(b"...", "a.csv"), purpose="import")
 - Every method takes `extra_headers=`, `extra_query=`, `extra_body=`, `timeout=` and
   `max_retries=`, prefixed with `request_` when a parameter has that name.
 - These headers, like `default_headers`, win over the client's credentials.
-- Multipart file fields take bytes, a binary file, a path (`Path("a.csv")`, read and named after
-  it), or `Upload(content, filename, content_type)`.
+- Multipart file fields take bytes, a binary file, a path (`Path("a.csv")`, streamed from disk,
+  again for a retry, named after it and typed by the part's media type in the spec, else by its
+  extension), or `Upload(content, filename, content_type)`.
 - An operation that also declares a bodiless 2xx returns `Model | None`.
 
 ### Pagination
@@ -494,7 +499,9 @@ with client.completions.create_stream(prompt="hi") as stream:
 ```
 
 Events with a documented schema yield models until `[DONE]`, with `stream.last_event` the raw
-event. Other streams yield `SseEvent`s.
+event. Other streams yield `SseEvent`s. An `error` event, whatever its data, or data with an
+`error` the model does not decode or declare, raises an `APIStatusError` whose `raw_body` is that
+data; `ping` and `keepalive` events that are not the model are skipped.
 
 A file download (a binary response) is a `BinaryResponse` (`AsyncBinaryResponse`), its body
 unread:
