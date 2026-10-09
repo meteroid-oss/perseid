@@ -20,8 +20,23 @@
 {%- endfor %}
             }{% endif %}
 {%- endmacro -%}
+{#- The tag a variant is sent with: the constant it declares, which several may share. -#}
+{% set wire = namespace(tags=[]) -%}
+{% for variant in type.variants -%}
+{% set wire.tags = wire.tags + [declared_tags[variant.name] if variant.name in declared_tags else variant.name] -%}
+{% endfor -%}
 {% set nested = namespace(names="|") -%}
 {% for variant in type.variants %}{% set nested.names = nested.names ~ variant_class(variant) ~ "|" %}{% endfor -%}
+{#- The type a variant holds, as the converter names it, empty for a variant without fields. -#}
+{% macro payload_type(variant) -%}
+{% if variant.type == "ref" and variant.schema_ref is defined %}{{ variant.schema_ref | to_upper_camel_case }}
+{%- elif variant.type == "struct" and variant.fields | default([]) | length > 0 %}{{ type_name }}.{{ variant_class(variant) }}Data{% endif %}
+{%- endmacro -%}
+{#- A variant's model converts into the union, unless another variant holds it or the union
+    has required fields. -#}
+{% set payloads = namespace(all=[]) -%}
+{% for variant in type.variants %}{% set payloads.all = payloads.all + [payload_type(variant)] %}{% endfor -%}
+{% set convertible = type.fields | selectattr("required") | list | length == 0 -%}
 {% macro ref_type(name) -%}
 {% set ty = name | to_upper_camel_case -%}
 {% if ("|" ~ ty ~ "|") in nested.names %}global::{{ sdk.package_name }}.Models.{% endif %}{{ ty }}
@@ -62,7 +77,7 @@ public abstract partial record {{ type_name }}
 {%- endif %}
     {
         /// <inheritdoc/>
-        public override string {{ tag_prop }} => {{ variant.name | tojson }};
+        public override string {{ tag_prop }} => {{ wire.tags[loop.index0] | tojson }};
     }
 {%- if variant.type == "struct" and variant.fields | default([]) | length > 0 %}
 
@@ -74,6 +89,13 @@ public abstract partial record {{ type_name }}
 {%- with fields = variant.fields, owner = class ~ "Data", extension = true, sealed = true, depth = 8 %}{% include "types/members.cs.jinja" %}{% endwith %}
 {%- endfilter %}
     }
+{%- endif %}
+{%- set held = ref_type(variant.schema_ref) if variant.type == "ref" and variant.schema_ref is defined else (class ~ "Data" if payload_type(variant) else "") %}
+{%- if held and convertible and held != type_name and payloads.all | select("equalto", payload_type(variant)) | list | length == 1 %}
+
+    /// <summary>Wraps <paramref name="value"/> in <see cref="{{ class }}"/>.</summary>
+    /// <param name="value">The fields of the variant.</param>
+    {{ m.arrow("public static implicit operator " ~ type_name ~ "(" ~ held ~ " value)", "new " ~ class ~ "(value)", 4) }}
 {%- endif %}
 {%- endfor %}
 
@@ -107,17 +129,37 @@ internal sealed class {{ type_name }}Converter : JsonConverter<{{ type_name }}>
         var root = document.RootElement;
         return Json.Tag(root, {{ tag_json | tojson }}) switch
         {
-{%- for variant in type.variants %}
-{%- set class = variant_class(variant) %}
 {%- set source %}{% if adjacent %}Json.Property(root, {{ type.content_field | tojson }}){% else %}root{% endif %}{% endset %}
-{%- if variant.type == "ref" and variant.schema_ref is defined %}
-{%- set args = ["Json.Deserialize<" ~ (variant.schema_ref | to_upper_camel_case) ~ ">(" ~ source ~ ", options)"] %}
-{%- elif variant.type == "struct" and variant.fields | default([]) | length > 0 %}
-{%- set args = ["Json.Deserialize<" ~ type_name ~ "." ~ class ~ "Data>(" ~ source ~ ", options)"] %}
+{%- macro decode(variant, depth, tail) %}
+{%- set args = ["Json.Deserialize<" ~ payload_type(variant) ~ ">(" ~ source ~ ", options)"] if payload_type(variant) else [] %}
+{{- m.wrap("new " ~ type_name ~ "." ~ variant_class(variant), args, depth, "" if type.fields else tail) }}{{ base_init() }}{% if type.fields %}{{ tail }}{% endif %}
+{%- endmacro %}
+{%- for wire_tag in wire.tags | unique %}
+{%- set sharing = namespace(variants=[], units=[]) %}
+{%- for variant in type.variants %}
+{%- if wire.tags[loop.index0] != wire_tag %}
+{%- elif payload_type(variant) and variant.name in declared_tags %}
+{%- set sharing.variants = sharing.variants + [variant] %}
+{%- elif payload_type(variant) %}
+{%- set sharing.variants = [variant] + sharing.variants %}
 {%- else %}
-{%- set args = [] %}
+{%- set sharing.units = sharing.units + [variant] %}
 {%- endif %}
-            {{ m.wrap((variant.name | tojson) ~ " => new " ~ type_name ~ "." ~ class, args, 12, "" if type.fields else ",") }}{{ base_init() }}{% if type.fields %},{% endif %}
+{%- endfor %}
+{%- if sharing.variants | length > 1 %}
+{#- The variant the tag names, else one declaring it too, that knows the most of the data. #}
+{%- set candidates = namespace(list=[]) %}
+{%- for variant in sharing.variants %}{% set candidates.list = candidates.list + ["Json.Unknown<" ~ payload_type(variant) ~ ">"] %}{% endfor %}
+            {{ m.wrap((wire_tag | tojson) ~ " => Json.Pick", [source, "options"] + candidates.list, 12, " switch") }}
+            {
+{%- for variant in sharing.variants[1:] %}
+                {{ loop.index }} => {{ decode(variant, 16, ",") }}
+{%- endfor %}
+                _ => {{ decode(sharing.variants[0], 16, ",") }}
+            },
+{%- else %}
+            {{ wire_tag | tojson }} => {{ decode((sharing.variants + sharing.units) | first, 12, ",") }}
+{%- endif %}
 {%- endfor %}
             var tag => new {{ type_name }}.Unrecognized(tag ?? string.Empty, root.Clone()){{ base_init() }},
         };
