@@ -44,12 +44,12 @@ impl crate::request::QueryParamValue for chrono::NaiveDate {
 {% set ids.all = ids.all + [(type.name | to_snake_case) ~ (":required" if field.required and not field.nullable else ":optional")] -%}
 {% endfor -%}
 {% endfor -%}
-{% macro union_exports(module, owner, fields) -%}
+{% macro union_exports(module, owner, fields, aliased=false) -%}
 {% for field in fields -%}
 {% set union = union_name(owner, field.name, field.type, type_names) -%}
 {% if union %}pub use self::{{ module }}::{{ union }};
 {{ nested_exports(module, union, field.type) }}
-{% if field.type.is_union() %}{{ expandable_id(module, union, field.type) }}{% endif -%}
+{% if field.type.is_union() and not aliased %}{{ expandable_id(module, union, field.type) }}{% endif -%}
 {% endif -%}
 {% endfor -%}
 {%- endmacro %}
@@ -93,14 +93,16 @@ impl {{ module }}::{{ union }} {
 {% for _, type in api.types | items -%}
 {% set module = type.name | to_rust_ident -%}
 {% set type_name = type.name | to_upper_camel_case -%}
+{#- An alias's unions are its model's, which gets their impls. -#}
+{% set aliased = type.name in api.model_aliases -%}
 {% if type.kind == "struct" -%}
-{{ union_exports(module, type_name, type.fields + ([{"name": "additional_properties", "type": type.additional_properties}] if type.additional_properties is defined else [])) }}
+{{ union_exports(module, type_name, type.fields + ([{"name": "additional_properties", "type": type.additional_properties}] if type.additional_properties is defined else []), aliased) }}
 {%- elif type.kind == "struct_enum" -%}
-{{ union_exports(module, type_name, type.fields | rejectattr("name", "equalto", type.discriminator_field)) }}
+{{ union_exports(module, type_name, type.fields | rejectattr("name", "equalto", type.discriminator_field), aliased) }}
 {%- for variant in type.variants if variant.type == "struct" and variant.fields -%}
-{{ union_exports(module, type_name ~ (variant.name | to_rust_variant) ~ "Variant", variant.fields) }}
+{{ union_exports(module, type_name ~ (variant.name | to_rust_variant) ~ "Variant", variant.fields, aliased) }}
 {%- endfor -%}
 {%- elif type.kind == "alias" and not type.target.is_union() -%}
-{{ union_exports(module, type_name, [{"name": "item", "type": type.target}]) }}
+{{ union_exports(module, type_name, [{"name": "item", "type": type.target}], aliased) }}
 {%- endif -%}
 {% endfor -%}

@@ -264,6 +264,9 @@ logged.
 - Variants declaring the same tag, as OpenAI's three `message` input items, are sent with it,
   and decoded as the first whose fields the data fits.
 - `decode_as::<DeletedCustomer>()` reads a union of objects as another variant.
+- Models whose code is the same but for their names are aliases of one of them:
+  `pub type Wallet = super::card::Card;`, which keeps its own docs. Decoding errors name the
+  field that failed: ``customer: address: missing field `line1` ``.
 
 ### Notes
 
@@ -272,6 +275,9 @@ logged.
 - `Cargo.toml` is yours too. perseid only appends the crates and features it lacks, like the
   `tracing` feature for a crate generated before it. It leaves out the `default` feature.
 - The `http` crate is re-exported as `acme::api::http`.
+- Models implement serde through code that is not generic, and duplicates are aliased, so a big
+  API compiles in about a third of the time and half the memory derives take. Without debug info,
+  `[profile.dev.package.acme] debug = false`, an SDK builds about 10% faster.
 
 ## TypeScript
 

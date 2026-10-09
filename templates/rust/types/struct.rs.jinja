@@ -1,5 +1,4 @@
-{% from "types/macros.rs.jinja" import default_trait, extra_field, extra_name, rust_type, struct_fields, struct_new, struct_setters, union_enums, union_imports, union_name -%}
-use serde::{Deserialize, Serialize};
+{% from "types/macros.rs.jinja" import default_trait, extra_field, extra_name, rust_type, struct_fields, struct_new, struct_serde, struct_setters, union_enums, union_imports, union_name -%}
 
 {% if referenced_components -%}
 use super::{
@@ -24,7 +23,7 @@ use super::{
 {% set defaulted = required | selectattr("name", "in", defaults) | map(attribute="name") | list -%}
 {% set has_default = (required | length) == (defaulted | length) -%}
 {{ doc_comment }}
-#[derive(Clone, Debug, {% if has_default and not defaulted %}Default, {% endif %}PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, {% if has_default and not defaulted %}Default, {% endif %}PartialEq)]
 {% if not request_schema -%}
 #[non_exhaustive]
 {% endif -%}
@@ -40,6 +39,8 @@ impl {{ type_name }} {
     {{ struct_setters(type.fields, recursive, tri_state, owner=type_name) }}
     {%- endif %}
 }
+
+{{ struct_serde(type_name, type.fields, recursive, tri_state, owner=type_name, rest=extra) }}
 {% if has_default and defaulted %}
 
 /// Sets {% for field in defaulted %}{% if not loop.first %}, {% endif %}`{{ field }}` to `{{ defaults[field] }}`{% endfor %}.

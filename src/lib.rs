@@ -14,6 +14,7 @@ pub mod github;
 mod http;
 pub mod init;
 pub mod manifest;
+mod model_aliases;
 pub mod pack;
 mod postprocessing;
 pub mod pr;

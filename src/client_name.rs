@@ -194,6 +194,7 @@ const RESERVED_PACKAGES: &[&str] = &[
     "test",
     "serde",
     "serde_json",
+    "erased_serde",
     "tokio",
     "hyper",
     "hyper_util",
