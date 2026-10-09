@@ -3,6 +3,7 @@
 {% set list = examples.list -%}
 {% set stream = examples.stream -%}
 {% set create = examples.create -%}
+{% set download = examples.download -%}
 {% set result = docs.var(call.result, "result") if call else "result" -%}
 {% macro call_of(opts="") %}{% if call %}{{ docs.call(call, opts) }}{% else %}client.SomeResource().SomeMethod(ctx{{ ", " ~ opts if opts }}){% endif %}{% endmacro -%}
 {% macro assign(ex, name) %}{% if ex and ex.result %}{{ name }}, err :={% else %}err :={% endif %}{% endmacro -%}
@@ -119,6 +120,22 @@ for event, err := range stream.All() {
 	fmt.Println(event){% if stream.operation.event_schema_name %} // stream.Event() is the raw event{% endif %}
 }
 ```
+{% endif %}
+{%- if download %}
+### Downloads
+
+Binary responses come as a `*BinaryResponse`, returned once the headers arrive: an
+`io.ReadCloser` over the body as it streams in, with its `Header`. Close it, or read it whole:
+
+```go
+file, err := {{ docs.call(download) }}
+if err != nil {
+	return err
+}
+data, err := file.Bytes() // or io.Copy(dst, file), or file.WriteToFile(path), then Close
+```
+
+The timeout covers the wait for the headers, then each read, not the whole download.
 {% endif %}
 ### Raw responses
 

@@ -45,10 +45,14 @@ type request struct {
 	oneShot bool
 	// replayable marks a POST that is safe to retry without an Idempotency-Key.
 	replayable bool
-	// stream keeps the response open in response, until cancel.
+	// stream keeps the response open in response, until cancel. expire cancels it as timed
+	// out after timeout, and fail turns its read errors into the SDK's.
 	stream   bool
 	response *http.Response
 	cancel   context.CancelFunc
+	expire   func()
+	timeout  time.Duration
+	fail     func(error) error
 }
 
 // autoIdempotencyKey is whether the API deduplicates POSTs by Idempotency-Key, so that each gets
@@ -459,13 +463,6 @@ func (c *Client) execute(ctx context.Context, req *request, out any) error {
 	return nil
 }
 
-// executeBinary performs the request and returns the raw response body, for
-// endpoints that serve PDFs or other binary content.
-func (c *Client) executeBinary(ctx context.Context, req *request) ([]byte, error) {
-	body, _, err := c.do(ctx, req)
-	return body, err
-}
-
 // executeText performs the request and returns the response body as text.
 func (c *Client) executeText(ctx context.Context, req *request) (string, error) {
 	body, _, err := c.do(ctx, req)
@@ -583,6 +580,7 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	cfg := c.cfg
 
 	cancel := context.CancelFunc(func() {})
+	expire := func() {}
 	keep := false
 	switch {
 	case req.stream:
@@ -590,8 +588,9 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 		var cancelCause context.CancelCauseFunc
 		ctx, cancelCause = context.WithCancelCause(ctx)
 		cancel = func() { cancelCause(context.Canceled) }
+		expire = func() { cancelCause(context.DeadlineExceeded) }
 		if timeout > 0 {
-			defer time.AfterFunc(timeout, func() { cancelCause(context.DeadlineExceeded) }).Stop()
+			defer time.AfterFunc(timeout, expire).Stop()
 		}
 	case timeout > 0:
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -641,7 +640,8 @@ func (c *Client) attempt(ctx context.Context, req *request, endpoint string, att
 	}
 	if req.stream && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		keep = true
-		req.response, req.cancel = resp, cancel
+		req.response, req.cancel, req.expire, req.timeout = resp, cancel, expire, timeout
+		req.fail = func(err error) error { return failure(ctx, req, err) }
 		return attemptResult{status: resp.StatusCode, response: resp}
 	}
 	defer func() { _ = resp.Body.Close() }()

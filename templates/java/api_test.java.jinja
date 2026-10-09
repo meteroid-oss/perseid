@@ -24,6 +24,8 @@ class {{ test_class }} {
         try (var stream = {{ call }}) {
             stream.forEach(event -> { });
         }
+{%- elif op.response_is_binary %}
+        assertEquals({{ case.response.body | tojson }}, new String({{ call }}.bytes(), java.nio.charset.StandardCharsets.UTF_8));
 {%- else %}
         {{ call }};
 {%- endif %}

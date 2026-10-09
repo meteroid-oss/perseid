@@ -30,6 +30,9 @@ public class {{ test_class }}
         {
             Assert.NotNull(item);
         }
+{%- elif op.response_is_binary %}
+        await using var body = await {{ call }};
+        Assert.Equal({{ case.response.body | tojson }}, System.Text.Encoding.UTF8.GetString(await body.ReadAsBytesAsync()));
 {%- else %}
         await {{ call }};
 {%- endif %}

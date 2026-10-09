@@ -153,6 +153,7 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
 | Media type | SDK |
 |---|---|
 | `text/event-stream` response | An event stream: `for await`, `for`, `range`, `Stream`, `Iterable`, `await foreach` |
+| Binary response (`application/octet-stream`, `image/png`, `audio/mpeg`...) | Go, Java and C#: the body streamed as it arrives (`io.ReadCloser`, `InputStream`, `Stream`), or read whole in one call (`Bytes()`, `bytes()`, `ReadAsBytesAsync()`) or to a file. [Languages](languages.md) |
 | `multipart/form-data` body | A typed `...Body` (keyword arguments in Python), with `Upload` files. List fields are one part per item |
 | `application/octet-stream` body | Bytes or a stream |
 | Any other media type (`image/png`, `text/plain`...) | Sent as given, with its media type |
@@ -165,6 +166,9 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
   method, as OpenAI's speech: bytes, or audio events. It sets the body's boolean `stream`
   property to `true` when there is one.
 - Streamed uploads are not retried.
+- A streamed binary response is returned once its headers arrive: an error status is raised
+  before, with its body, and retries stop there. The timeout then bounds each read of the body,
+  not the whole download.
 
 ## Raw responses
 

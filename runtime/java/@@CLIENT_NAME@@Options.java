@@ -144,7 +144,8 @@ public final class @@CLIENT_NAME@@Options {
     }
 
     /**
-     * Timeout of each attempt, from connecting to reading the whole response.
+     * Timeout of each attempt, from connecting to reading the whole response; for a binary
+     * response, until its headers, then of each read of its body.
      *
      * @return the timeout
      */
@@ -356,7 +357,8 @@ public final class @@CLIENT_NAME@@Options {
         }
 
         /**
-         * Timeout of each attempt, from connecting to reading the whole response.
+         * Timeout of each attempt, from connecting to reading the whole response; for a binary
+         * response, until its headers, then of each read of its body.
          *
          * @param timeout the timeout
          * @return this builder

@@ -404,13 +404,28 @@ internal static class Scenarios
         Equal("hello text\n", await content.RetrieveScenariosTextAsync());
         Equal("id,name\n1,alpha\n2,\"be,ta\"\n", await content.RetrieveScenariosCsvAsync());
 
-        var blob = await content.DownloadBlobAsync();
-        Equal(256, blob.Length);
-        Same(Enumerable.Range(0, 256).Select(i => (byte)i), blob);
+        var all = Enumerable.Range(0, 256).Select(i => (byte)i).ToArray();
+        // The 250 ms timeout bounds each read, not the whole download.
+        var perRead = new RequestOptions { Timeout = TimeSpan.FromMilliseconds(250) };
+        await using (var blob = await content.DownloadBlobAsync(perRead))
+        {
+            Equal("application/octet-stream", blob.ContentType);
+            var stream = await blob.OpenStreamAsync();
+            var first = new byte[32];
+            await stream.ReadExactlyAsync(first);
+            Same(all.Take(32), first);
+            var rest = await blob.ReadAsBytesAsync();
+            Equal(224, rest.Length);
+            Same(all.Skip(32), rest);
+        }
+        var file = Path.GetTempFileName();
+        await content.DownloadBlobAsync().WriteToFileAsync(file);
+        Same(all, await File.ReadAllBytesAsync(file));
+        File.Delete(file);
         var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }
             .Concat(Enumerable.Repeat(new byte[] { 0x00, 0x01, 0xFE, 0xFF }, 4).SelectMany(part => part))
             .ToArray();
-        var image = await content.DownloadImageAsync();
+        var image = await content.DownloadImageAsync().ReadAsBytesAsync();
         Equal(24, image.Length);
         Same(png, image);
 

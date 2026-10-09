@@ -52,8 +52,8 @@ func decode[T any](t *testing.T, text string) T {
 }
 
 // call calls method with a background context and args, nil standing for a zero value and
-// untyped constants converted to the parameter's type, then reads the stream it returns, if
-// any, and fails on any error.
+// untyped constants converted to the parameter's type, then reads the stream or body it
+// returns, if any, and fails on any error.
 func call(t *testing.T, method any, args ...any) {
 	t.Helper()
 	fn := reflect.ValueOf(method)
@@ -77,6 +77,15 @@ func call(t *testing.T, method any, args ...any) {
 		for stream.Next() {
 		}
 		if err := stream.Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if body, ok := out[0].Interface().(io.ReadCloser); len(out) == 2 && ok {
+		_, err := io.ReadAll(body)
+		if closeErr := body.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
 			t.Fatal(err)
 		}
 	}

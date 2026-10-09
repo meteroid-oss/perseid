@@ -50,6 +50,8 @@ await foreach (var item in stream)
 {
     Console.WriteLine(item);
 }
+    {%- elif op.response_is_binary -%}
+byte[] {{ docs.var(ex.result, "result") }} = await {{ docs.call(ex) }}.ReadAsBytesAsync();
     {%- elif ex.result -%}
 var {{ docs.var(ex.result, "result") }} = await {{ docs.call(ex) }};
     {%- else -%}

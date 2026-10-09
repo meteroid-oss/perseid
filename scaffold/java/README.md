@@ -3,6 +3,7 @@
 {% set list = examples.list -%}
 {% set stream = examples.stream -%}
 {% set create = examples.create -%}
+{% set download = examples.download -%}
 {% set result = docs.var(call.result, "result") if call else "result" -%}
 {% macro call_of(raw=false, request_options="") %}{% if call %}{{ docs.call(call, raw=raw, request_options=request_options) }}{% else %}client.{{ "withRawResponse()." if raw }}someResource().someMethod({{ request_options }}){% endif %}{% endmacro -%}
 # @@CLIENT_NAME@@ Java SDK
@@ -159,6 +160,23 @@ try (var events = {{ docs.call(stream) }}) {
     }
 }
 ```
+{% endif %}
+{%- if download %}
+## Downloads
+
+Binary responses come as a `BinaryResponse`, returned once the headers arrive. Read the body
+whole, to a file, or as it streams in, closing it after use:
+
+```java
+{% set uses = docs.uses(download) | trim %}{% if uses %}{{ uses }}
+{% endif %}byte[] data = {{ docs.call(download) }}.bytes();
+{{ docs.call(download) }}.writeTo(Path.of("download.bin"));
+try (BinaryResponse file = {{ docs.call(download) }}) {
+    file.inputStream().transferTo(System.out); // file.headers(), contentType()
+}
+```
+
+The timeout covers the wait for the headers, then each read, not the whole download.
 {% endif %}
 ## Errors
 

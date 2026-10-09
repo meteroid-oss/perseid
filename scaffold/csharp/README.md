@@ -3,6 +3,7 @@
 {% set list = examples.list -%}
 {% set stream = examples.stream -%}
 {% set create = examples.create -%}
+{% set download = examples.download -%}
 {% set result = docs.var(call.result, "result") if call else "result" -%}
 {% macro call_of(raw=false, request_options="") %}{% if call %}{{ docs.call(call, raw=raw, request_options=request_options) }}{% else %}client.SomeResource{{ ".WithRawResponse" if raw }}.SomeMethodAsync({{ "requestOptions: " ~ request_options if request_options }}){% endif %}{% endmacro -%}
 {% macro models_using(ex) %}{% if ex and ex.body %}using @@PACKAGE_NAME@@.Models;
@@ -134,6 +135,22 @@ await foreach (var item in stream)
     Console.WriteLine(item);
 }
 ```
+{% endif %}
+{%- if download %}
+## Downloads
+
+Binary responses come as a `BinaryResponse`, returned once the headers arrive. Read the body
+whole, to a file, or as it streams in, disposing of it after use:
+
+```csharp
+{{ models_using(download) -}}
+byte[] data = await {{ docs.call(download) }}.ReadAsBytesAsync();
+await {{ docs.call(download) }}.WriteToFileAsync("download.bin");
+await using var file = await {{ docs.call(download) }};
+var stream = await file.OpenStreamAsync(); // file.Headers, ContentType, ContentLength
+```
+
+The timeout covers the wait for the headers, then each read, not the whole download.
 {% endif %}
 ## Raw responses
 

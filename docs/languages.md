@@ -600,6 +600,18 @@ Events with a schema give a `*Stream[T]` ending at `[DONE]`, others an `*EventSt
 `error` event or an object with an `error`, ends it with an `*APIError` of the stream's status;
 `ping` and `keepalive` events that are not a `T` are skipped.
 
+```go
+file, err := client.Files().Content(ctx, "file_1") // *acme.BinaryResponse, returned once the headers arrive
+data, err := file.Bytes()                          // or io.Copy(dst, file), or file.WriteToFile("a.pdf")
+```
+
+A binary response (`application/octet-stream`, `image/png`, `audio/mpeg`...) is a
+`*BinaryResponse`: an `io.ReadCloser` over the body as it arrives, with `Header` and
+`ContentLength`. `Bytes()` and `WriteToFile(path)` read it whole and close it; otherwise close
+it. An error status is returned as an `*APIError` before any body is handed over, and retries stop
+once a 2xx's headers arrive. The timeout covers the wait for the headers, then each `Read`, not the
+whole download; cancelling the context stops a read.
+
 ### Errors
 
 ```go
@@ -737,6 +749,21 @@ Event streams are `EventStream<Chunk>`s, ending at `[DONE]`, with `lastEvent()` 
   with an `ApiException` holding that data and the response's status and headers.
 - Comments, `ping` and `keepalive` events are skipped.
 
+```java
+byte[] pdf = client.files().content("file_1").bytes();
+client.files().content("file_1").writeTo(Path.of("a.pdf"));
+try (BinaryResponse file = client.files().content("file_1")) {
+    file.inputStream().transferTo(out); // file.headers(), contentType(), contentLength()
+}
+```
+
+A binary response (`application/octet-stream`, `image/png`, `audio/mpeg`...) is a
+`BinaryResponse`, returned once its headers arrive: `inputStream()` reads the body as it streams
+in, `bytes()` and `writeTo(Path)` read it whole and close it; otherwise close it, e.g. with
+try-with-resources. An error status is thrown before any body is handed over, and retries stop
+once a 2xx's headers arrive. The timeout bounds the wait for the headers, then each read of the
+body (OkHttp's read timeout), not the whole download.
+
 ### Errors
 
 | Exception | When |
@@ -860,6 +887,21 @@ event. Streams are enumerated once. An `error` event, or data that is no `T` but
 `error`, throws an `ApiException` with the status and headers of the response and the event's data
 as `Body`; `ping` and `keepalive` events that are no `T` are skipped. The `CreateStreamAsync` twin
 of a multipart operation sends `stream=true` itself, and neither body has a `Stream` property.
+
+```csharp
+byte[] pdf = await client.Files.ContentAsync("file_1").ReadAsBytesAsync();
+await client.Files.ContentAsync("file_1").WriteToFileAsync("a.pdf");
+await using var file = await client.Files.ContentAsync("file_1");
+var stream = await file.OpenStreamAsync(); // file.Headers, ContentType, ContentLength
+```
+
+A binary response (`application/octet-stream`, `image/png`, `audio/mpeg`...) is a
+`BinaryResponse`, returned once its headers arrive (`HttpCompletionOption.ResponseHeadersRead`):
+`OpenStreamAsync()` reads the body as it streams in, `ReadAsBytesAsync()`, `CopyToAsync(stream)`
+and `WriteToFileAsync(path)` read it whole and close it, also straight on the call's task;
+otherwise dispose of it. An error status is thrown before any body is handed over, and retries
+stop once a 2xx's headers arrive. The timeout bounds the wait for the headers, then each read of
+the body, not the whole download; the call's `CancellationToken` still cancels the reads.
 
 ### Errors
 

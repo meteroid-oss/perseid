@@ -133,7 +133,7 @@ func (a *{{ resource_type_name }}) {{ name }}() *{{ go_ident(child.name) }} {
 {% set call %}{% for p in op.path_params %}, {{ go_arg(p) }}{% endfor %}{% for p in required_query + required_headers %}, {{ go_arg(p.ident) }}{% endfor %}{% if op.request_body_schema_name is defined or op.request_body_json_type is defined or op.request_body_kind in ["binary", "multipart"] %}, {{ body_var }}{% endif %}{% endset %}
 {% if op.response_is_event_stream and op.event_schema_name is defined %}{% set ret_type = "*Stream[" ~ go_ident(op.event_schema_name) ~ "]" %}
 {% elif op.response_is_event_stream %}{% set ret_type = "*EventStream" %}
-{% elif op.response_is_binary %}{% set ret_type = "[]byte" %}
+{% elif op.response_is_binary %}{% set ret_type = "*BinaryResponse" %}
 {% elif op.response_is_text %}{% set ret_type = "string" %}
 {% elif op.response_body_json_type is defined %}{% set ret_type = resp_type(op, types) %}{% if op.response_may_be_empty | default(false) and not (ret_type is startingwith("[]") or ret_type is startingwith("map[") or ret_type is startingwith("*") or ret_type in ["any", "json.RawMessage"]) %}{% set ret_type = "*" ~ ret_type %}{% endif %}
 {% elif op.response_body_is_list %}{% set ret_type = "[]" ~ go_ident(op.response_body_schema_name) %}
@@ -155,6 +155,9 @@ func (a *{{ resource_type_name }}) {{ name }}() *{{ go_ident(child.name) }} {
 // [{{ resource_type_name }}.{{ name }}AutoPaging] iterates over every item instead.
 {% elif op.response_may_be_empty | default(false) %}//
 // It returns nil when the response has no body.
+{% elif op.response_is_binary %}//
+// It returns once the headers arrive: read the body as it streams in, or whole with Bytes,
+// and close it.
 {% endif %}{% if op.stream_property is defined %}//
 // It sets {{ op.stream_property }} to true in the body it sends, leaving {{ body_var }} unchanged.
 {% elif stream_part and stream_twin %}//

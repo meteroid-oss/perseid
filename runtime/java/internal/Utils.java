@@ -18,10 +18,14 @@ import com.fasterxml.jackson.datatype.jdk8.Jdk8Module;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.math.BigDecimal;
+import java.net.SocketTimeoutException;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
 import @@JAVA_PACKAGE@@.exceptions.@@CLIENT_NAME@@Exception;
+import @@JAVA_PACKAGE@@.exceptions.ApiConnectionException;
+import @@JAVA_PACKAGE@@.exceptions.ApiTimeoutException;
 import @@JAVA_PACKAGE@@.exceptions.InvalidDataException;
 import java.util.AbstractMap;
 import java.util.ArrayList;
@@ -547,6 +551,19 @@ public final class Utils {
             }
         }
         return null;
+    }
+
+    /**
+     * The exception of a failed exchange: an {@link ApiTimeoutException} when it timed out.
+     *
+     * @param e the failure
+     * @return the exception to throw
+     */
+    public static ApiConnectionException transportError(IOException e) {
+        boolean timeout =
+                e instanceof SocketTimeoutException
+                        || (e instanceof InterruptedIOException && "timeout".equals(e.getMessage()));
+        return timeout ? new ApiTimeoutException(e) : new ApiConnectionException(e);
     }
 
     /**

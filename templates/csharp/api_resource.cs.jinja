@@ -16,7 +16,7 @@
 {% set f.response_type = m.response_type(op, types) -%}
 {% if op.response_is_event_stream and op.event_schema_name is defined %}{% set f.value = "EventStream<" ~ m.event_type(op, types) ~ ">" -%}
 {% elif op.response_is_event_stream %}{% set f.value = "EventStream" -%}
-{% elif op.response_is_binary %}{% set f.value = "byte[]" -%}
+{% elif op.response_is_binary %}{% set f.value = "BinaryResponse" -%}
 {% elif op.response_is_text %}{% set f.value = "string" -%}
 {% else %}{% set f.value = f.response_type -%}
 {% endif -%}
@@ -174,6 +174,8 @@ public interface {{ interface_name }}
 {%- elif op.pagination is defined %}
     /// <returns>Awaited, the first <see cref="{{ f.page_type }}"/>; enumerated with <c>await foreach</c>,
     /// every item of every page, each page fetched as the enumeration reaches it.</returns>
+{%- elif op.response_is_binary and not op.response_is_event_stream %}
+    /// <returns>The response once its headers arrive, its body streaming in: dispose of it.</returns>
 {%- endif %}
 {%- for class in thrown.classes %}
 {%- set statuses = namespace(list=[], schemas=[]) %}
@@ -514,7 +516,7 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
 {%- elif op.response_is_event_stream %}
 {%- set send = ["_transport.SendEventStreamAsync", ["request", "requestOptions", "cancellationToken"]] %}
 {%- elif op.response_is_binary %}
-{%- set send = ["_transport.SendBytesAsync", ["request", "requestOptions", "cancellationToken"]] %}
+{%- set send = ["_transport.SendBinaryAsync", ["request", "requestOptions", "cancellationToken"]] %}
 {%- elif op.response_is_text %}
 {%- set send = ["_transport.SendTextAsync", ["request", "requestOptions", "cancellationToken"]] %}
 {%- elif f.may_be_empty %}

@@ -300,6 +300,91 @@ func executeStream[T any](ctx context.Context, c *Client, req *request) (*Stream
 	return &Stream[T]{events: events}, nil
 }
 
+// BinaryResponse is a binary response body, read as it arrives: it is an [io.ReadCloser], or
+// Bytes and WriteToFile take it whole. Close it once done. The client timeout covers the wait
+// for the headers, then each read of the body, never the whole download.
+type BinaryResponse struct {
+	// Header holds the response headers, such as Content-Type and Content-Disposition.
+	Header http.Header
+	// ContentLength is the length of the body, or -1 when unknown.
+	ContentLength int64
+
+	body    io.ReadCloser
+	cancel  context.CancelFunc
+	fail    func(error) error
+	idle    *time.Timer
+	timeout time.Duration
+}
+
+// Read reads the next bytes of the body.
+func (b *BinaryResponse) Read(p []byte) (int, error) {
+	if b.idle != nil {
+		b.idle.Reset(b.timeout)
+		defer b.idle.Stop()
+	}
+	n, err := b.body.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = b.fail(err)
+	}
+	return n, err
+}
+
+// Close closes the connection, which stops any read in progress.
+func (b *BinaryResponse) Close() error {
+	defer b.cancel()
+	if b.idle != nil {
+		b.idle.Stop()
+	}
+	return b.body.Close()
+}
+
+// Bytes reads the rest of the body, then closes it.
+func (b *BinaryResponse) Bytes() ([]byte, error) {
+	defer func() { _ = b.Close() }()
+	return io.ReadAll(b)
+}
+
+// WriteToFile writes the rest of the body to the file at path, created or truncated, then
+// closes it. The file is removed when the body cannot be read whole.
+func (b *BinaryResponse) WriteToFile(path string) error {
+	defer func() { _ = b.Close() }()
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(file, b)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		_ = os.Remove(path)
+	}
+	return err
+}
+
+// executeBinary opens a binary response: an error status is read and returned, a success is
+// returned before its body is read.
+func (c *Client) executeBinary(ctx context.Context, req *request) (*BinaryResponse, error) {
+	req.stream = true
+	if _, _, err := c.do(ctx, req); err != nil {
+		return nil, err
+	}
+	resp := req.response
+	binary := &BinaryResponse{
+		Header:        resp.Header,
+		ContentLength: resp.ContentLength,
+		body:          resp.Body,
+		cancel:        req.cancel,
+		fail:          req.fail,
+		timeout:       req.timeout,
+	}
+	if req.timeout > 0 {
+		binary.idle = time.AfterFunc(req.timeout, req.expire)
+		binary.idle.Stop()
+	}
+	return binary, nil
+}
+
 // enableStream sets the boolean body property asking for an event stream,
 // whether the field is a bool or a *bool.
 func enableStream(field any) {

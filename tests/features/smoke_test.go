@@ -382,21 +382,40 @@ func TestScenarioContent(t *testing.T) {
 		expect(t, csv, "id,name\n1,alpha\n2,\"be,ta\"\n")
 	})
 	t.Run("binary", func(t *testing.T) {
-		blob, err := content.DownloadBlob(ctx)
-		must(t, err)
 		all := make([]byte, 256)
 		for i := range all {
 			all[i] = byte(i)
 		}
-		expect(t, blob, all)
+		// The 250 ms timeout bounds each read, not the whole download.
+		blob, err := content.DownloadBlob(ctx, WithTimeout(250*time.Millisecond))
+		must(t, err)
+		expect(t, blob.Header.Get("Content-Type"), "application/octet-stream")
+		first := make([]byte, 32)
+		_, err = io.ReadFull(blob, first)
+		must(t, err)
+		expect(t, first, all[:32])
+		rest, err := blob.Bytes()
+		must(t, err)
+		expect(t, rest, all[32:])
+
+		path := t.TempDir() + "/blob.bin"
+		blob, err = content.DownloadBlob(ctx)
+		must(t, err)
+		must(t, blob.WriteToFile(path))
+		written, err := os.ReadFile(path)
+		must(t, err)
+		expect(t, written, all)
+
 		image, err := content.DownloadImage(ctx)
 		must(t, err)
 		png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
 		for range 4 {
 			png = append(png, 0x00, 0x01, 0xfe, 0xff)
 		}
-		expect(t, len(image), 24)
-		expect(t, image, png)
+		data, err := image.Bytes()
+		must(t, err)
+		expect(t, len(data), 24)
+		expect(t, data, png)
 	})
 	t.Run("malformed JSON is a decode error", func(t *testing.T) {
 		health, err := content.RetrieveScenariosMalformed(ctx)

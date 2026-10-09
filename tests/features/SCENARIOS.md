@@ -60,7 +60,7 @@ property. Every response carries `x-request-id: req_mock`.
 | `nullable_body` | `GET /scenarios/nullable-body` | `200 application/json` body `null` | result is null/None/Option::None/nullable-empty, no decode error |
 | `text_plain` | `GET /scenarios/text` | `200 text/plain; charset=utf-8` body `hello text\n` | string equals `"hello text\n"` |
 | `text_csv` | `GET /scenarios/csv` | `200 text/csv; charset=utf-8` body `id,name\n1,alpha\n2,"be,ta"\n` | string equals that text exactly |
-| `download_blob` | `GET /scenarios/blob` | `200 application/octet-stream`, the 256 bytes `0x00..0xFF` in order | bytes equal `bytes(range(256))`, length 256 (not decoded as text) |
+| `download_blob` | `GET /scenarios/blob` | `200 application/octet-stream`, the 256 bytes `0x00..0xFF` in order, chunked in 8 parts of 32 bytes 50 ms apart | bytes equal `bytes(range(256))`, length 256 (not decoded as text); Go, Java and C# also stream them, read them whole and write them to a file, with a 250 ms timeout the whole download outlasts (it bounds each read, not the body) |
 | `download_image` | `GET /scenarios/image` | `200 image/png`, bytes `89 50 4E 47 0D 0A 1A 0A` followed by `00 01 FE FF` repeated 4 times (24 bytes) | bytes equal those 24 bytes |
 | `malformed_json` | `GET /scenarios/malformed` | `200 application/json` body `{"status": ` (truncated) | a decode/deserialization error is raised; never a silent default |
 | `empty_body` | `GET /scenarios/empty-body` | `200 application/json`, empty body | a decode error is raised (the response type is a required object) |

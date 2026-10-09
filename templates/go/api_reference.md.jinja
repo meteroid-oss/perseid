@@ -40,7 +40,7 @@
     {%- if op.pagination is defined %}*{{ (go_ident(resource.name) ~ (op.name | ident("pascal", "go")) ~ "Page") | go_name }}
     {%- elif op.response_is_event_stream and op.event_schema_name is defined %}*Stream[{{ go_ident(op.event_schema_name) }}]
     {%- elif op.response_is_event_stream %}*EventStream
-    {%- elif op.response_is_binary %}[]byte
+    {%- elif op.response_is_binary %}*BinaryResponse
     {%- elif op.response_is_text %}string
     {%- elif op.response_body_json_type is defined -%}
         {%- set t = go_type(op.response_body_json_type) -%}
@@ -51,7 +51,7 @@
 {% macro returns(op) -%}
     {%- if op.pagination is defined %}{{ model(op.response_body_schema_name) }} page of {{ model(op.pagination.item_schema) }}
     {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
-    {%- elif op.response_is_binary %}bytes
+    {%- elif op.response_is_binary %}streamed bytes
     {%- elif op.response_is_text %}text
     {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
     {%- elif op.response_body_json_type is defined %}`{{ go_type(op.response_body_json_type) }}`
