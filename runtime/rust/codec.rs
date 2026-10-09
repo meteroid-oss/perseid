@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 use serde::{
     de::{DeserializeOwned, Error as _},
-    ser::Error as _,
+    ser::{Error as _, SerializeMap},
     Deserialize, Deserializer, Serialize, Serializer,
 };
 use serde_json::{Map, Value};
@@ -57,6 +57,170 @@ pub(crate) fn split_tag<'de, D: Deserializer<'de>>(
     Ok((tag, value))
 }
 
+pub(crate) type Object = Map<String, Value>;
+
+/// A struct read from its JSON object. Its `Deserialize` goes through it, so each model
+/// compiles to one function instead of a visitor generic over the deserializer.
+pub(crate) trait Decode: Sized {
+    fn decode(object: Object) -> Result<Self, serde_json::Error>;
+}
+
+/// A struct written as the entries of a map, which `Serialize` sends to any serializer.
+pub(crate) trait Encode {
+    fn encode(&self, out: &mut dyn Out) -> Result<(), Stop>;
+}
+
+/// The map an [`Encode`] writes to; its error is kept aside, behind `Stop`.
+pub(crate) trait Out {
+    fn put(&mut self, key: &str, value: &dyn erased_serde::Serialize) -> Result<(), Stop>;
+    fn fail(&mut self, message: String) -> Stop;
+}
+
+pub(crate) struct Stop;
+
+struct Entries<M: SerializeMap> {
+    map: M,
+    error: Option<M::Error>,
+}
+
+impl<M: SerializeMap> Out for Entries<M> {
+    fn put(&mut self, key: &str, value: &dyn erased_serde::Serialize) -> Result<(), Stop> {
+        self.map.serialize_entry(key, value).map_err(|error| {
+            self.error = Some(error);
+            Stop
+        })
+    }
+
+    fn fail(&mut self, message: String) -> Stop {
+        self.error = Some(M::Error::custom(message));
+        Stop
+    }
+}
+
+pub(crate) fn serialize<S: Serializer>(
+    value: &dyn Encode,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut out = Entries {
+        map: serializer.serialize_map(None)?,
+        error: None,
+    };
+    match value.encode(&mut out) {
+        Ok(()) => out.map.end(),
+        Err(Stop) => Err(out
+            .error
+            .unwrap_or_else(|| S::Error::custom("cannot serialize"))),
+    }
+}
+
+pub(crate) fn deserialize<'de, D: Deserializer<'de>, T: Decode>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    match Value::deserialize(deserializer)? {
+        Value::Object(object) => T::decode(object).map_err(D::Error::custom),
+        other => Err(D::Error::custom(format!(
+            "invalid type: {}, expected {}",
+            json_type(&other).replace("empty", "string"),
+            std::any::type_name::<T>()
+                .rsplit("::")
+                .next()
+                .unwrap_or("an object")
+        ))),
+    }
+}
+
+/// Writes `value` unless it is `None`.
+pub(crate) fn put_some<T: Serialize>(
+    out: &mut dyn Out,
+    key: &str,
+    value: &Option<T>,
+) -> Result<(), Stop> {
+    match value {
+        Some(value) => out.put(key, value),
+        None => Ok(()),
+    }
+}
+
+/// Writes the entries of the object `value` serializes to, such as the properties a struct
+/// does not declare.
+pub(crate) fn flatten<T: Serialize>(out: &mut dyn Out, value: &T) -> Result<(), Stop> {
+    match serde_json::to_value(value) {
+        Ok(Value::Object(object)) => object
+            .iter()
+            .try_for_each(|(key, value)| out.put(key, value)),
+        Ok(other) => Err(out.fail(format!(
+            "cannot flatten {} into an object",
+            json_type(&other)
+        ))),
+        Err(error) => Err(out.fail(error.to_string())),
+    }
+}
+
+/// The properties of an object, which the fields of a struct take one by one.
+pub(crate) struct Fields {
+    object: Object,
+    taken: Vec<&'static str>,
+}
+
+impl Fields {
+    pub(crate) fn new(object: Object) -> Self {
+        Self {
+            object,
+            taken: Vec::new(),
+        }
+    }
+
+    fn take(&mut self, key: &'static str) -> Option<Value> {
+        self.taken.push(key);
+        self.object.get_mut(key).map(Value::take)
+    }
+
+    pub(crate) fn required<T: DeserializeOwned>(
+        &mut self,
+        key: &'static str,
+    ) -> Result<T, serde_json::Error> {
+        match self.take(key) {
+            Some(value) => field(key, value),
+            None => Err(serde::de::Error::custom(format!("missing field `{key}`"))),
+        }
+    }
+
+    /// An absent or `null` property is `None`.
+    pub(crate) fn optional<T: DeserializeOwned>(
+        &mut self,
+        key: &'static str,
+    ) -> Result<Option<T>, serde_json::Error> {
+        match self.take(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => field(key, value).map(Some),
+        }
+    }
+
+    /// An absent property is `None`, `null` is `Some(None)`.
+    #[allow(clippy::option_option)]
+    pub(crate) fn nullable<T: DeserializeOwned>(
+        &mut self,
+        key: &'static str,
+    ) -> Result<Option<Option<T>>, serde_json::Error> {
+        match self.take(key) {
+            None => Ok(None),
+            Some(Value::Null) => Ok(Some(None)),
+            Some(value) => field(key, value).map(|value| Some(Some(value))),
+        }
+    }
+
+    /// The properties no field took, in their order.
+    pub(crate) fn rest<T: DeserializeOwned>(mut self) -> Result<T, serde_json::Error> {
+        let taken = &self.taken;
+        self.object.retain(|key, _| !taken.contains(&key.as_str()));
+        T::deserialize(Value::Object(self.object))
+    }
+}
+
+fn field<T: DeserializeOwned>(key: &str, value: Value) -> Result<T, serde_json::Error> {
+    T::deserialize(value).map_err(|error| serde::de::Error::custom(format!("{key}: {error}")))
+}
+
 pub(crate) fn from_value<T: DeserializeOwned, E: serde::de::Error>(value: Value) -> Result<T, E> {
     serde_json::from_value(value).map_err(E::custom)
 }
@@ -71,16 +235,6 @@ pub(crate) fn without(mut value: Value, field: &str) -> Value {
 
 pub(crate) fn take(value: &mut Value, field: &str) -> Value {
     value.get_mut(field).map(Value::take).unwrap_or_default()
-}
-
-/// Reads a field that may be absent (`None`), `null` (`Some(None)`) or set.
-#[allow(clippy::option_option)]
-pub(crate) fn nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// The JSON type telling apart the variants of an untagged union; `""` is `empty`.

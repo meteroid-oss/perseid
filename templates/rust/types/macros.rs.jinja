@@ -340,25 +340,81 @@ use super::{{ c | to_rust_ident }}::{{ c | to_upper_camel_case }};
         #[deprecated]
     {% endif -%}
     {% set ty = value_type(field.type, recursive, union_name(owner, field.name, field.type)) -%}
-    {% set rename = "" -%}
-    {% if field.name != field.name | to_rust_ident | replace("r#", "") -%}
-        {% set rename %}rename = {{ field.name | rust_str }}{% endset -%}
-    {% endif -%}
-    {% set presence = "" -%}
     {% if field.required and not field.nullable -%}
-    {% elif field.required -%}
-        {% set ty %}Option<{{ ty }}>{% endset -%}
-    {% elif field.nullable and tri_state -%}
-        {% set presence = 'default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::models::codec::nullable"' -%}
+    {% elif field.nullable and tri_state and not field.required -%}
         {% set ty %}Option<Option<{{ ty }}>>{% endset -%}
     {% else -%}
-        {% set presence = 'skip_serializing_if = "Option::is_none"' -%}
         {% set ty %}Option<{{ ty }}>{% endset -%}
     {% endif -%}
-    {% set args = [rename, presence] | select | join(", ") -%}
-    {% if args %}#[serde({{ args }})]{% endif %}
     pub {{ field_name(field.name) }}: {{ ty }},
 {% endfor %}
+{%- endmacro %}
+
+{# The `codec::Fields` method reading a field: absent fields are `None`, but required ones,
+   unless their type is optional. -#}
+{% macro field_decoder(field, recursive, tri_state, owner) -%}
+{% if field.required and not field.nullable -%}
+{% if value_type(field.type, recursive, union_name(owner, field.name, field.type)) is startingwith("Option<") %}optional{% else %}required{% endif -%}
+{% elif field.nullable and tri_state and not field.required %}nullable{% else %}optional{% endif -%}
+{%- endmacro %}
+
+{# The serde impls of a struct, through `codec::Decode` and `codec::Encode`. `rest` is the
+   field holding the properties the others do not take, flattened into the same object. -#}
+{% macro struct_serde(name, fields, recursive, tri_state, skip=none, owner=none, rest="") -%}
+{% set declared = fields | rejectattr("name", "equalto", skip) | list -%}
+{% set deprecated = declared | selectattr("deprecated") | list -%}
+{% if deprecated %}#[allow(deprecated)]
+{% endif -%}
+impl crate::models::codec::Decode for {{ name }} {
+    fn decode({% if not (declared or rest) %}_{% endif %}object: crate::models::codec::Object) -> Result<Self, serde_json::Error> {
+        {% if declared or rest -%}
+        let {% if declared %}mut {% endif %}fields = crate::models::codec::Fields::new(object);
+        {% endif -%}
+        {#- Decoding into `let`s, then moving them, keeps the cleanup of each `?` shared. -#}
+        {% for field in declared -%}
+        let field_{{ loop.index0 }} = fields.{{ field_decoder(field, recursive, tri_state, owner) }}({{ field.name | rust_str }})?;
+        {% endfor -%}
+        {% if rest %}let rest = fields.rest()?;
+        {% endif -%}
+        Ok(Self {
+            {% for field in declared -%}
+            {{ field.name | to_rust_ident }}: field_{{ loop.index0 }},
+            {% endfor -%}
+            {% if rest %}{{ rest }}: rest,{% endif %}
+        })
+    }
+}
+
+{% if deprecated %}#[allow(deprecated)]
+{% endif -%}
+impl crate::models::codec::Encode for {{ name }} {
+    fn encode(&self, {% if not (declared or rest) %}_{% endif %}out: &mut dyn crate::models::codec::Out) -> Result<(), crate::models::codec::Stop> {
+        {% for field in declared -%}
+        {% if field.required -%}
+        out.put({{ field.name | rust_str }}, &self.{{ field.name | to_rust_ident }})?;
+        {% else -%}
+        crate::models::codec::put_some(out, {{ field.name | rust_str }}, &self.{{ field.name | to_rust_ident }})?;
+        {% endif -%}
+        {% endfor -%}
+        {% if rest -%}
+        crate::models::codec::flatten(out, &self.{{ rest }})
+        {%- else -%}
+        Ok(())
+        {%- endif %}
+    }
+}
+
+impl serde::Serialize for {{ name }} {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::models::codec::serialize(self, serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for {{ name }} {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::models::codec::deserialize(deserializer)
+    }
+}
 {%- endmacro %}
 
 {# Chainable setters of the fields `new` leaves unset; with `tri_state`, `clear_*` sends `null`
@@ -406,7 +462,6 @@ pub fn clear_{{ bare }}(mut self) -> Self {
 {% macro extra_field(name, ty="") -%}
 {% if name %}
     /// Properties this version of the SDK does not know, sent back as received.
-    #[serde(flatten)]
     pub {{ name }}: {% if ty %}{{ ty }}{% else %}serde_json::Map<String, serde_json::Value>{% endif %},
 {% endif -%}
 {%- endmacro %}

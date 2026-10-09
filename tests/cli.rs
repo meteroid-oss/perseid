@@ -3190,13 +3190,16 @@ components:
         "{}",
         python("models/thing.py")
     );
-    for (rust_file, python_file) in [
-        ("thing_patch.rs", "models/thing_patch.py"),
-        ("draft.rs", "models/draft.py"),
-    ] {
-        let model = rust(rust_file);
-        assert!(model.contains("pubnote:Option<Option<String>>"), "{model}");
-        assert!(model.contains("pubfnclear_note(mutself)"), "{model}");
+    // Identical in Rust, `ThingPatch` is an alias of `Draft`.
+    let patch = rust("thing_patch.rs");
+    assert!(
+        patch.contains("pubtypeThingPatch=super::draft::Draft;"),
+        "{patch}"
+    );
+    let draft = rust("draft.rs");
+    assert!(draft.contains("pubnote:Option<Option<String>>"), "{draft}");
+    assert!(draft.contains("pubfnclear_note(mutself)"), "{draft}");
+    for python_file in ["models/thing_patch.py", "models/draft.py"] {
         let model = python(python_file);
         assert!(
             model.contains("    note: str | None | Unset = UNSET\n"),
@@ -4399,6 +4402,65 @@ paths:
 }
 
 #[test]
+fn rust_models_identical_but_for_their_names_alias_one_of_them() {
+    let dir = project_from("petstore.yaml", &["rust"]);
+    let spec = r##"
+openapi: 3.1.0
+info: { title: Twins, version: "1.0.0" }
+servers: [{ url: "https://x.example.com" }]
+paths:
+  /cards:
+    get:
+      operationId: get_card
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Card" }
+  /wallets:
+    get:
+      operationId: get_wallet
+      responses:
+        "200":
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Wallet" }
+components:
+  schemas:
+    Card:
+      description: A card.
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        balance: { type: integer }
+    Wallet:
+      description: A wallet.
+      type: object
+      required: [id]
+      properties:
+        id: { type: string }
+        balance: { type: integer }
+"##;
+    fs::write(dir.path().join("openapi.yaml"), spec).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    let models = dir.path().join("rust/src/models");
+    let wallet = fs::read_to_string(models.join("wallet.rs")).unwrap();
+    assert!(
+        wallet.contains("/// A wallet.\npub type Wallet = super::card::Card;"),
+        "{wallet}"
+    );
+    assert!(
+        fs::read_to_string(models.join("card.rs"))
+            .unwrap()
+            .contains("pub struct Card")
+    );
+}
+
+#[test]
 fn models_with_extra_properties_keep_them_in_every_language() {
     let dir = project_from(
         "petstore.yaml",
@@ -4435,7 +4497,7 @@ components:
         (
             "rust",
             &[
-                "#[serde(flatten)]",
+                "fields.rest()?",
                 ": std::collections::HashMap<String, i64>,",
             ],
         ),

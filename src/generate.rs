@@ -287,7 +287,9 @@ pub(crate) fn draw(
     stage: &Path,
 ) -> Result<Vec<PathBuf>> {
     let mut produced = Vec::new();
+    let mut api = api.clone();
     for (template, output, output_extension) in &layout.tasks {
+        let models = extension == "rs" && template == "component_type";
         let template = layout
             .templates
             .join(format!("{template}.{output_extension}.jinja"));
@@ -305,6 +307,9 @@ pub(crate) fn draw(
         )?;
         for path in paths {
             produced.push(clean(path.as_std_path().strip_prefix(stage)?));
+        }
+        if models {
+            api.model_aliases = crate::model_aliases::alias_duplicates(&api.types, &out)?;
         }
     }
     let (runtime_dir, runtime) = &layout.runtime;

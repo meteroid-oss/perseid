@@ -37,6 +37,9 @@ pub(crate) struct Api {
     /// decode any API error with.
     #[serde(default)]
     pub default_error: Option<String>,
+    /// Schemas whose Rust models are aliases of an identical one's.
+    #[serde(default)]
+    pub model_aliases: std::collections::BTreeSet<String>,
 }
 
 impl Api {
@@ -142,6 +145,7 @@ impl Api {
             security: security.default,
             error_schemas: Vec::new(),
             default_error: None,
+            model_aliases: Default::default(),
         };
         api.collect_errors();
         Ok(api)

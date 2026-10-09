@@ -881,6 +881,7 @@ mod tests {
             added,
             [
                 "hyper-tls",
+                "erased-serde",
                 "tracing",
                 "the `http1` feature",
                 "the `http2` feature",
@@ -889,7 +890,7 @@ mod tests {
             ]
         );
         assert!(text.starts_with(&current[..current.find("[dev-dependencies]").unwrap() - 1]));
-        assert!(text.contains("tokio = \"1\"\nhyper-tls = { version = \"0.6\", optional = true }\ntracing = { version = \"0.1\", optional = true }\n\n[dev-dependencies]"));
+        assert!(text.contains("tokio = \"1\"\nhyper-tls = { version = \"0.6\", optional = true }\nerased-serde = \"0.4\"\ntracing = { version = \"0.1\", optional = true }\n\n[dev-dependencies]"));
         assert!(text.ends_with("tracing = [\"dep:tracing\"]\n"));
         assert!(!text.contains("default = [\"http1\""));
         assert_eq!(cargo(&text, &scaffold("rust/Cargo.toml")).unwrap(), None);
