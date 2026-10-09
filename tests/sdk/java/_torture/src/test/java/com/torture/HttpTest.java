@@ -311,6 +311,9 @@ class HttpTest {
             assertFalse(proxies.bypasses(host), host);
         }
         assertTrue(EnvProxy.fromEnv(Map.of("NO_PROXY", "*")).isEmpty());
+        TortureException tls = assertThrows(TortureException.class, () -> EnvProxy.fromEnv(Map.of("HTTPS_PROXY", "HTTPS://p:443")));
+        assertTrue(tls.getMessage().contains("https:// proxy"), tls.getMessage());
+        assertTrue(EnvProxy.fromEnv(Map.of("HTTP_PROXY", "p:1", "HTTPS_PROXY", "p:1", "ALL_PROXY", "https://q")).isPresent());
         assertTrue(EnvProxy.fromEnv(Map.of("ALL_PROXY", "http://p:8080", "NO_PROXY", "*")).orElseThrow().bypasses("a.b"));
         okhttp3.Response challenge = new okhttp3.Response.Builder()
                 .request(new okhttp3.Request.Builder().url("https://api.torture.dev").build())

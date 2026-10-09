@@ -4,12 +4,14 @@ package @@JAVA_PACKAGE@@.streaming;
 import com.fasterxml.jackson.databind.JsonNode;
 import @@JAVA_INTERNAL_PACKAGE@@.Utils;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 import okhttp3.Headers;
 import okhttp3.MediaType;
 import okhttp3.MultipartBody;
 import okhttp3.RequestBody;
+import okio.BufferedSink;
 
 /** Builds a {@code multipart/form-data} body. Null fields are left out. */
 public final class Multipart {
@@ -71,8 +73,8 @@ public final class Multipart {
     }
 
     /**
-     * Adds a file; {@code contentType} is the media type the spec declares, used unless the
-     * upload sets its own.
+     * Adds a file; {@code contentType} is the media type the spec declares, see {@link Upload}
+     * for the one the part gets.
      *
      * @param name the field name
      * @param upload the file, left out when null
@@ -103,11 +105,36 @@ public final class Multipart {
     }
 
     /**
-     * The body.
+     * The body, sent once when a part is, such as a file read from an input stream.
      *
      * @return the multipart body
      */
     public RequestBody build() {
-        return builder.build();
+        MultipartBody body = builder.build();
+        if (body.parts().stream().noneMatch(part -> part.body().isOneShot())) {
+            return body;
+        }
+        // OkHttp 4's MultipartBody does not report its one-shot parts.
+        return new RequestBody() {
+            @Override
+            public MediaType contentType() {
+                return body.contentType();
+            }
+
+            @Override
+            public long contentLength() throws IOException {
+                return body.contentLength();
+            }
+
+            @Override
+            public boolean isOneShot() {
+                return true;
+            }
+
+            @Override
+            public void writeTo(BufferedSink sink) throws IOException {
+                body.writeTo(sink);
+            }
+        };
     }
 }

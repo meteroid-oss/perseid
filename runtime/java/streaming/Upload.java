@@ -4,8 +4,11 @@ package @@JAVA_PACKAGE@@.streaming;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Locale;
 import java.util.Map;
 
@@ -15,7 +18,11 @@ import okio.BufferedSink;
 import okio.Okio;
 import okio.Source;
 
-/** A file or raw request body. Bytes and files are retried; input streams are sent once. */
+/**
+ * A file or raw request body. Bytes and files are retried; input streams are sent once. A part of
+ * a multipart form is typed by {@link #withContentType}, else by the media type the spec declares
+ * for it unless {@code application/octet-stream}, else by the extension of its file name.
+ */
 public final class Upload {
     private static final String DEFAULT_CONTENT_TYPE = "application/octet-stream";
     private static final Map<String, String> CONTENT_TYPES =
@@ -53,7 +60,7 @@ public final class Upload {
      * @return the upload
      */
     public static Upload of(byte[] bytes) {
-        return new Upload(RequestBody.create(bytes), null, DEFAULT_CONTENT_TYPE);
+        return new Upload(RequestBody.create(bytes), null, null);
     }
 
     /**
@@ -61,23 +68,28 @@ public final class Upload {
      *
      * @param file the file
      * @return the upload
+     * @throws UncheckedIOException if the file cannot be read, such as a missing file
      */
     public static Upload of(File file) {
-        return new Upload(RequestBody.create(file, null), file.getName(), DEFAULT_CONTENT_TYPE);
+        return of(file.toPath());
     }
 
     /**
-     * The file at {@code path}, which can be retried, named after it and typed by its extension in
-     * multipart forms ({@code application/octet-stream} for an unknown one).
+     * The file at {@code path}, which can be retried, named after it in multipart forms.
      *
      * @param path the file
      * @return the upload
+     * @throws UncheckedIOException if the file cannot be read, such as a missing file
      */
     public static Upload of(Path path) {
+        try {
+            if (Files.readAttributes(path, BasicFileAttributes.class).isDirectory()) {
+                throw new FileSystemException(path.toString(), null, "Is a directory");
+            }
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
         Path name = path.getFileName();
-        String filename = name == null ? null : name.toString();
-        int dot = filename == null ? -1 : filename.lastIndexOf('.');
-        String extension = dot < 0 ? "" : filename.substring(dot + 1).toLowerCase(Locale.ROOT);
         RequestBody body =
                 new RequestBody() {
                     @Override
@@ -97,7 +109,7 @@ public final class Upload {
                         }
                     }
                 };
-        return new Upload(body, filename, CONTENT_TYPES.getOrDefault(extension, DEFAULT_CONTENT_TYPE));
+        return new Upload(body, name == null ? null : name.toString(), null);
     }
 
     /**
@@ -132,7 +144,7 @@ public final class Upload {
                         }
                     }
                 };
-        return new Upload(body, null, DEFAULT_CONTENT_TYPE);
+        return new Upload(body, null, null);
     }
 
     /**
@@ -190,13 +202,19 @@ public final class Upload {
         };
     }
 
-    RequestBody part() {
-        return toRequestBody(contentType);
-    }
-
-    /** The multipart part, sent with {@code declared} unless the upload sets its own content type. */
+    /**
+     * The multipart part, typed by the upload's content type, else the {@code declared} one but
+     * {@code application/octet-stream}, else the file name's extension.
+     */
     RequestBody part(String declared) {
-        boolean unset = DEFAULT_CONTENT_TYPE.equals(contentType);
-        return toRequestBody(declared != null && unset ? declared : contentType);
+        if (contentType != null) {
+            return toRequestBody(contentType);
+        }
+        if (declared != null && !DEFAULT_CONTENT_TYPE.equalsIgnoreCase(declared.trim())) {
+            return toRequestBody(declared);
+        }
+        int dot = filename == null ? -1 : filename.lastIndexOf('.');
+        String extension = dot < 0 ? "" : filename.substring(dot + 1).toLowerCase(Locale.ROOT);
+        return toRequestBody(CONTENT_TYPES.getOrDefault(extension, DEFAULT_CONTENT_TYPE));
     }
 }
