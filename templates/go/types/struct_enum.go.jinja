@@ -13,6 +13,10 @@
 {{ panic("go codegen: struct enum `" ~ type.name ~ "` uses the `" ~ type.repr ~ "` representation, which the Go templates do not implement yet") }}
 {%- endif -%}
 {% set adjacent = type.repr == "adjacently_tagged" -%}
+{#- The tag a variant is sent with: the constant it declares, which several may share. -#}
+{% macro wire_tag(variant) %}{{ (declared_tags[variant.name] if variant.name in declared_tags else variant.name) | tojson }}{% endmacro -%}
+{% set wire = namespace(tags=[]) -%}
+{% for variant in type.variants %}{% set wire.tags = wire.tags + [wire_tag(variant) | string] %}{% endfor -%}
 {% for variant in type.variants -%}
 {% if variant.type != "ref" -%}
 {{ panic("go codegen: struct enum `" ~ type.name ~ "` has an inline-struct variant `" ~ variant.name ~ "`, which should have been declared as a struct of its own") }}
@@ -77,7 +81,7 @@ type {{ tag_type }} string
 
 // Discriminator values for {{ type_name }}.
 const (
-{% for variant in type.variants %}{{ go_const(type.name, variant.name, type_names) }} {{ tag_type }} = {{ variant.name | tojson }}
+{% for variant in type.variants %}{{ go_const(type.name, variant.name, type_names) }} {{ tag_type }} = {{ variant.name | tojson }}{% if variant.name in declared_tags %} // sent as {{ wire_tag(variant) }}{% endif %}
 {% endfor %})
 
 {% for variant in known %}// New{{ type_name }}{{ go_export(variant.name) }} builds a {{ type_name }} holding the {{ variant.name }} variant.
@@ -123,7 +127,7 @@ func (u {{ type_name }}) MarshalJSON() ([]byte, error) {
 		if u.{{ variant_field(variant) }} == nil {
 			return nil, &UnionError{Union: "{{ type_name }}", Discriminator: string(u.{{ disc_field }}), Reason: "variant payload is nil"}
 		}
-		return {% if adjacent %}marshalAdjacentVariant({{ type.discriminator_field | tojson }}, string(u.{{ disc_field }}), {{ type.content_field | tojson }}, u.{{ variant_field(variant) }}{% else %}marshalUnionVariant({{ type.discriminator_field | tojson }}, string(u.{{ disc_field }}), u.{{ variant_field(variant) }}{% endif %}{% if shared %}, shared{% endif %})
+		return {% if adjacent %}marshalAdjacentVariant({{ type.discriminator_field | tojson }}, string(u.{{ disc_field }}), {{ type.content_field | tojson }}, u.{{ variant_field(variant) }}{% else %}marshalUnionVariant({{ type.discriminator_field | tojson }}, {{ wire_tag(variant) }}, u.{{ variant_field(variant) }}{% endif %}{% if shared %}, shared{% endif %})
 {% endfor %}{% for variant in bare %}	case {{ go_const(type.name, variant.name, type_names) }}:
 		return marshalAdjacentVariant({{ type.discriminator_field | tojson }}, string(u.{{ disc_field }}), {{ type.content_field | tojson }}, nil{% if shared %}, shared{% endif %})
 {% endfor %}	}
@@ -154,10 +158,23 @@ func (u *{{ type_name }}) UnmarshalJSON(data []byte) error {
 
 	*u = {{ type_name }}{ {{ disc_field }}: tag.{{ disc_field }}{% for field in shared %}, {{ go_export(field.name) }}: tag.{{ go_export(field.name) }}{% endfor %} }
 	switch tag.{{ disc_field }} {
-{% for variant in known %}	case {{ go_const(type.name, variant.name, type_names) }}:
-		u.{{ variant_field(variant) }} = new({{ go_ident(variant.schema_ref) }})
+{% for tag in wire.tags | unique %}{% set sharing = namespace(variants=[]) %}{% for variant in known if wire_tag(variant) | string == tag %}{% set sharing.variants = sharing.variants + [variant] if variant.name in declared_tags else [variant] + sharing.variants %}{% endfor %}
+{%- set lead = sharing.variants | first if sharing.variants else none %}
+{%- if lead %}	case {% if lead.name in declared_tags %}{{ tag }}{% else %}{{ go_const(type.name, lead.name, type_names) }}{% endif %}:
+{% endif %}
+{#- The variant the tag names first, then those declaring it too, as the data fits them best. #}
+{%- if sharing.variants | length > 1 %}		candidates := []any{ {% for variant in sharing.variants %}{% if not loop.first %}, {% endif %}new({{ go_ident(variant.schema_ref) }}){% endfor %} }
+		switch fit, err := unionBestFit(data, candidates); fit {
+{% for variant in sharing.variants %}		case {{ loop.index0 }}:
+			u.{{ disc_field }}, u.{{ variant_field(variant) }} = {{ go_const(type.name, variant.name, type_names) }}, candidates[{{ loop.index0 }}].(*{{ go_ident(variant.schema_ref) }})
+{% endfor %}		default:
+			return err
+		}
+		return nil
+{% elif lead %}{% set variant = lead %}{% if variant.name in declared_tags %}		u.{{ disc_field }} = {{ go_const(type.name, variant.name, type_names) }}
+{% endif %}		u.{{ variant_field(variant) }} = new({{ go_ident(variant.schema_ref) }})
 		return {% if adjacent %}unmarshalAdjacentContent(data, {{ type.content_field | tojson }}, u.{{ variant_field(variant) }}){% else %}json.Unmarshal(data, u.{{ variant_field(variant) }}){% endif %}
-{% endfor %}{% for variant in bare %}	case {{ go_const(type.name, variant.name, type_names) }}:
+{% endif %}{% endfor %}{% for variant in bare %}	case {{ go_const(type.name, variant.name, type_names) }}:
 		return nil
 {% endfor %}	default:
 		u.raw = append(json.RawMessage(nil), data...)

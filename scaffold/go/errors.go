@@ -8,6 +8,10 @@ import (
 // APIError is returned for every non-2xx response. errors.Is matches it against
 // status sentinels such as [ErrNotFound], and [ErrorBody] decodes its body.
 type APIError struct {
+	// Method and Path are those of the operation, such as "GET" and "/pets/{id}".
+	Method string
+	Path   string
+
 	StatusCode int
 	// Header holds the response headers, such as the request id to quote to support.
 	Header http.Header
@@ -26,6 +30,11 @@ func (e *APIError) setHeader(header http.Header) {
 	e.Header = header
 }
 
+// setRequest is called by the SDK with the operation that failed.
+func (e *APIError) setRequest(method, path string) {
+	e.Method, e.Path = method, path
+}
+
 // RequestID returns the id the API gave the request, to quote to support.
 func (e *APIError) RequestID() string {
 	for _, name := range []string{"X-Request-Id", "Request-Id"} {
@@ -36,12 +45,10 @@ func (e *APIError) RequestID() string {
 	return ""
 }
 
+// Error reads like "@@PACKAGE_NAME@@: POST /items: 429 Too Many Requests: " and the
+// [APIError.Message] of the body, else the body itself, cut.
 func (e *APIError) Error() string {
-	body := e.RawBody
-	if len(body) > 512 {
-		body = append(body[:512:512], "..."...)
-	}
-	return fmt.Sprintf("@@PACKAGE_NAME@@: API error (status %d): %s", e.StatusCode, body)
+	return "@@PACKAGE_NAME@@: " + errorText(e.Method, e.Path, e.StatusCode, e.Message(), e.RawBody)
 }
 
 // TransportError is returned when no response was received: the connection

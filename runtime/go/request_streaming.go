@@ -12,7 +12,12 @@ import (
 	"iter"
 	"mime"
 	"mime/multipart"
+	"net/http"
 	"net/textproto"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -41,6 +46,7 @@ type EventStream struct {
 	method string
 	path   string
 	status int
+	header http.Header
 	parser sseParser
 	event  SSEEvent
 	err    error
@@ -101,7 +107,7 @@ func (s *EventStream) All() iter.Seq2[SSEEvent, error] {
 
 // Stream is a live text/event-stream response whose events carry JSON T
 // values: loop on Next, check Err, and Close it once done. It ends at a
-// `[DONE]` event.
+// `[DONE]` event, or at an error the API sends in it, an [*APIError].
 type Stream[T any] struct {
 	events  *EventStream
 	current T
@@ -115,22 +121,54 @@ func (s *Stream[T]) Next() bool {
 	if s.done || s.err != nil {
 		return false
 	}
-	if !s.events.Next() {
-		s.err = s.events.Err()
+	for s.events.Next() {
+		event := s.events.Event()
+		if event.Data == "[DONE]" {
+			s.done = true
+			return false
+		}
+		data := []byte(event.Data)
+		var value T
+		err := json.Unmarshal(data, &value)
+		switch {
+		case event.Event == "error" || reportsError(data, value, err):
+			s.err = s.events.apiError(data)
+		case err == nil:
+			s.current = value
+			return true
+		case event.Event == "ping" || event.Event == "keepalive":
+			continue
+		default:
+			s.err = &DecodeError{StatusCode: s.events.status, RawBody: data, Err: err}
+		}
 		return false
 	}
-	event := s.events.Event()
-	if event.Data == "[DONE]" {
-		s.done = true
+	s.err = s.events.Err()
+	return false
+}
+
+// reportsError reports whether data is an object with an `error`, which does not decode as a T,
+// or decodes as no known variant of the union T, or as a T without an `error` property.
+func reportsError[T any](data []byte, value T, decodeErr error) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) != nil || len(fields["error"]) == 0 || string(fields["error"]) == "null" {
 		return false
 	}
-	var value T
-	if err := json.Unmarshal([]byte(event.Data), &value); err != nil {
-		s.err = &DecodeError{StatusCode: s.events.status, RawBody: []byte(event.Data), Err: err}
-		return false
+	if decodeErr != nil {
+		return true
 	}
-	s.current = value
-	return true
+	if union, ok := any(value).(interface{ IsKnown() bool }); ok {
+		return !union.IsKnown()
+	}
+	model := reflect.TypeFor[T]()
+	return model.Kind() == reflect.Struct && !slices.Contains(jsonProperties(model), "error")
+}
+
+// apiError is the error an event of the stream reports, with the response's status and headers.
+func (s *EventStream) apiError(data []byte) *APIError {
+	apiErr := newResponseError(s.method, s.path, s.status, s.header, data)
+	apiErr.Body = errorSchemas(nil).decode(s.status, data)
+	return apiErr
 }
 
 // Current returns the value Next decoded.
@@ -249,6 +287,7 @@ func (c *Client) executeEventStream(ctx context.Context, req *request) (*EventSt
 		method: req.method,
 		path:   req.path,
 		status: resp.StatusCode,
+		header: resp.Header,
 	}, nil
 }
 
@@ -272,12 +311,63 @@ func enableStream(field any) {
 	}
 }
 
-// Upload is a multipart file. Readers implementing io.Seeker are rewound for
-// retries; other readers are sent once.
+// Upload is a multipart file. Seekable readers are rewound for retries, others
+// sent once. Filename defaults to the base name of an *os.File, ContentType to
+// the part's media type in the spec, then to the one of Filename's extension.
 type Upload struct {
 	Reader      io.Reader
 	Filename    string
 	ContentType string
+	path        string
+}
+
+// UploadFile is an [Upload] of the file at path, named after it. The file is
+// opened for each attempt, and closed once sent.
+func UploadFile(path string) (Upload, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return Upload{}, err
+	}
+	if info.IsDir() {
+		return Upload{}, fmt.Errorf("@@PACKAGE_NAME@@: %s is a directory", path)
+	}
+	return Upload{Filename: filepath.Base(path), path: path}, nil
+}
+
+// send writes the file to part.
+func (u *Upload) send(part io.Writer) error {
+	reader := u.Reader
+	if reader == nil {
+		if u.path == "" {
+			return errors.New("@@PACKAGE_NAME@@: an Upload needs a Reader, or UploadFile")
+		}
+		file, err := os.Open(u.path)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = file.Close() }()
+		reader = file
+	}
+	_, err := io.Copy(part, reader)
+	return err
+}
+
+func (u *Upload) filename() string {
+	if u.Filename != "" {
+		return u.Filename
+	}
+	if named, ok := u.Reader.(interface{ Name() string }); ok && named.Name() != "" {
+		return filepath.Base(named.Name())
+	}
+	if u.path != "" {
+		return filepath.Base(u.path)
+	}
+	return "file"
+}
+
+func (u *Upload) replayable() bool {
+	_, seekable := u.Reader.(io.Seeker)
+	return seekable || u.Reader == nil && u.path != ""
 }
 
 // multipartField is a form field: a JSON-encodable value, one file, or a list of
@@ -349,7 +439,7 @@ func (r *request) SetMultipartBody(fields []multipartField) {
 	}
 	for _, field := range fields {
 		for _, upload := range field.uploads() {
-			if _, ok := upload.Reader.(io.Seeker); !ok {
+			if !upload.replayable() {
 				r.oneShot = true
 			}
 		}
@@ -376,13 +466,13 @@ func writeMultipartField(form *multipart.Writer, field multipartField) error {
 	header := textproto.MIMEHeader{}
 	if uploads := field.uploads(); len(uploads) > 0 {
 		for _, upload := range uploads {
-			filename := upload.Filename
-			if filename == "" {
-				filename = "file"
-			}
+			filename := upload.filename()
 			contentType := upload.ContentType
 			if contentType == "" {
 				contentType = field.contentType
+			}
+			if contentType == "" {
+				contentType = mime.TypeByExtension(filepath.Ext(filename))
 			}
 			if contentType == "" {
 				contentType = "application/octet-stream"
@@ -392,7 +482,7 @@ func writeMultipartField(form *multipart.Writer, field multipartField) error {
 			header.Set("Content-Type", contentType)
 			part, err := form.CreatePart(header)
 			if err == nil {
-				_, err = io.Copy(part, upload.Reader)
+				err = upload.send(part)
 			}
 			if err != nil {
 				return err
