@@ -161,8 +161,9 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
   decodes into that model and the stream ends at `data: [DONE]`.
 - The raw event (`event`, `id`) of the last item is `lastEvent` / `last_event` / `Event()` /
   `LastEvent`.
-- A JSON response that may also be an event stream gets a `..._stream` twin method. It sets the
-  body's boolean `stream` property to `true` when there is one.
+- A JSON, binary or text response that may also be an event stream gets a `..._stream` twin
+  method, as OpenAI's speech: bytes, or audio events. It sets the body's boolean `stream`
+  property to `true` when there is one.
 - Streamed uploads are not retried.
 
 ## Raw responses

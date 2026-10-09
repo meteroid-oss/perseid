@@ -1033,8 +1033,8 @@ impl Operation {
         Ok(Some((tag, op)))
     }
 
-    /// The `{name}_stream` twin of an operation answering JSON or an event stream, for the
-    /// requests that ask for the stream (such as OpenAI's `stream: true`).
+    /// The `{name}_stream` twin of an operation answering JSON, binary content or text, or an
+    /// event stream, for the requests that ask for the stream (such as OpenAI's `stream: true`).
     fn event_stream_variant(&self) -> Option<Self> {
         self.json_or_event_stream.then(|| Self {
             name: format!("{}_stream", self.name),
@@ -1044,6 +1044,8 @@ impl Operation {
             response_body_json_type: None,
             response_body_union: None,
             response_is_event_stream: true,
+            response_is_binary: false,
+            response_is_text: false,
             response_may_be_empty: false,
             stream_property: self.body_stream_property.clone(),
             json_or_event_stream: false,
@@ -1844,7 +1846,8 @@ impl ResponseBody {
                 Schema::Bool(_) => None,
             })
             .filter(|name| schemas.contains_key(name));
-        if also_event_stream && !content.contains_key("application/json") {
+        // Only an event stream; else the other content, with a `_stream` twin for the stream.
+        if also_event_stream && content.keys().all(|k| k == "text/event-stream") {
             return Ok(Self {
                 event_schema_name,
                 ..kind(ResponseKind::EventStream)
@@ -1884,10 +1887,19 @@ impl ResponseBody {
                 ..Self::default()
             });
         }
-        if content.keys().any(|k| k.starts_with("text/")) {
-            return Ok(kind(ResponseKind::Text));
+        let other = |kind| Self {
+            kind,
+            also_event_stream,
+            event_schema_name: event_schema_name.clone(),
+            ..Self::default()
+        };
+        if content
+            .keys()
+            .any(|k| k.starts_with("text/") && k != "text/event-stream")
+        {
+            return Ok(other(ResponseKind::Text));
         }
-        Ok(kind(ResponseKind::Binary))
+        Ok(other(ResponseKind::Binary))
     }
 }
 
@@ -2276,6 +2288,29 @@ mod tests {
         );
         assert!(stream.response_is_event_stream && stream.response_body_schema_name.is_none());
         assert_eq!(op.response_body_schema_name.as_deref(), Some("Widget"));
+    }
+
+    #[test]
+    fn binary_or_event_stream_responses_are_binary_with_a_stream_twin() {
+        let content = json!({ "audio/mpeg": {}, "text/event-stream": {} });
+        let op = serde_json::from_value(json!({ "operationId": "speech", "responses": {
+            "200": { "description": "", "content": content } } }))
+        .unwrap();
+        let (_, op) = Operation::from_openapi(
+            "/speech",
+            "post",
+            op,
+            &schemas(json!({})),
+            IncludeMode::OnlyPublic,
+            &BTreeSet::new(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(op.response_is_binary && !op.response_is_event_stream);
+        let stream = op.event_stream_variant().unwrap();
+        assert!(stream.response_is_event_stream && !stream.response_is_binary);
+        let only = json!({ "200": { "description": "", "content": { "text/event-stream": {} } } });
+        assert_eq!(responses(only).unwrap().0.kind, ResponseKind::EventStream);
     }
 
     #[test]
