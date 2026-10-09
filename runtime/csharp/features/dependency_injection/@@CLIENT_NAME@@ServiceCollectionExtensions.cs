@@ -3,6 +3,7 @@ using System;
 using System.Net.Http;
 using System.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace @@PACKAGE_NAME@@;
@@ -10,6 +11,20 @@ namespace @@PACKAGE_NAME@@;
 /// <summary>Registers the client with <c>Microsoft.Extensions.DependencyInjection</c>.</summary>
 public static class @@CLIENT_NAME@@ServiceCollectionExtensions
 {
+    private static readonly Action<ILogger, string, string, string, long, int, Exception?> s_attempt =
+        LoggerMessage.Define<string, string, string, long, int>(
+            LogLevel.Debug,
+            new EventId(1, "HttpAttempt"),
+            "{Method} {Url}: {Outcome} in {ElapsedMs} ms, attempt {Attempt}"
+        );
+
+    private static readonly Action<ILogger, string, string, string, long, long, Exception?> s_retry =
+        LoggerMessage.Define<string, string, string, long, long>(
+            LogLevel.Information,
+            new EventId(2, "HttpRetry"),
+            "{Method} {Url}: {Outcome} in {ElapsedMs} ms, retried in {DelayMs} ms"
+        );
+
     /// <summary>
     /// Registers <see cref="@@CLIENT_NAME@@Client"/> and <see cref="I@@CLIENT_NAME@@Client"/> as a typed
     /// client of <c>IHttpClientFactory</c>, configured by <paramref name="configure"/> and any
@@ -20,7 +35,9 @@ public static class @@CLIENT_NAME@@ServiceCollectionExtensions
     /// <see cref="@@CLIENT_NAME@@ClientOptions.Timeout"/> or the per-call one to each attempt.
     /// Add middleware to the returned builder with <c>AddHttpMessageHandler</c>, not to
     /// <see cref="@@CLIENT_NAME@@ClientOptions.Handlers"/>, and leave
-    /// <see cref="@@CLIENT_NAME@@ClientOptions.HttpMessageHandler"/> unset.
+    /// <see cref="@@CLIENT_NAME@@ClientOptions.HttpMessageHandler"/> unset. Unless
+    /// <see cref="@@CLIENT_NAME@@ClientOptions.Log"/> is set, attempts are logged to the
+    /// <c>@@PACKAGE_NAME@@</c> category of the container's <see cref="ILoggerFactory"/>.
     /// </remarks>
     /// <param name="services">The service collection.</param>
     /// <param name="configure">Sets the token, base URL, timeout or retries.</param>
@@ -36,6 +53,9 @@ public static class @@CLIENT_NAME@@ServiceCollectionExtensions
         {
             options.Configure(configure);
         }
+        options.Configure<ILoggerFactory>(
+            (settings, loggers) => settings.Log ??= LogTo(loggers.CreateLogger("@@PACKAGE_NAME@@"))
+        );
         services.AddTransient<I@@CLIENT_NAME@@Client>(provider =>
             provider.GetRequiredService<@@CLIENT_NAME@@Client>()
         );
@@ -57,5 +77,26 @@ public static class @@CLIENT_NAME@@ServiceCollectionExtensions
             }
         );
         return builder;
+    }
+
+    /// <summary>Logs attempts to <paramref name="logger"/>: at debug level, retried ones at
+    /// information level.</summary>
+    /// <param name="logger">The logger.</param>
+    /// <returns>A <see cref="@@CLIENT_NAME@@ClientOptions.Log"/> callback.</returns>
+    public static Action<ApiAttempt> LogTo(ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        return attempt =>
+        {
+            var elapsed = (long)attempt.Elapsed.TotalMilliseconds;
+            if (attempt.RetryIn is { } delay)
+            {
+                s_retry(logger, attempt.Method, attempt.Url, attempt.Outcome, elapsed, (long)delay.TotalMilliseconds, null);
+            }
+            else
+            {
+                s_attempt(logger, attempt.Method, attempt.Url, attempt.Outcome, elapsed, attempt.Attempt, null);
+            }
+        };
     }
 }

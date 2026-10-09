@@ -45,6 +45,7 @@ internal sealed class ApiTransport : IDisposable
     private readonly IReadOnlyList<TimeSpan>? _retrySchedule;
     private readonly int _maxRetries;
     private readonly string _userAgent;
+    private readonly Action<ApiAttempt>? _log;
 
     public ApiTransport(
         ApiAuth auth,
@@ -81,6 +82,7 @@ internal sealed class ApiTransport : IDisposable
         _retrySchedule = options.RetrySchedule;
         _maxRetries = Math.Max(0, options.MaxRetries);
         _userAgent = options.UserAgent ?? $"@@USER_AGENT_PREFIX@@-csharp/{Version}";
+        _log = options.Log;
     }
 
     internal static string? NonEmpty(string? value) => string.IsNullOrEmpty(value) ? null : value;
@@ -339,10 +341,29 @@ internal sealed class ApiTransport : IDisposable
         using var activity = s_activities.StartActivity(request.Operation, ActivityKind.Client);
         activity?.SetTag("http.request.method", request.Method.Method);
         activity?.SetTag("url.full", uri.GetLeftPart(UriPartial.Path));
+        var logUrl = _log is null
+            ? ""
+            : uri.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped);
         // An access token the API rejects is replaced once, without using up a retry.
         var renewed = false;
         for (var attempt = 0; ; attempt++)
         {
+            var started = Stopwatch.GetTimestamp();
+            HttpStatusCode? status = null;
+            string? failure = null;
+            void Log(TimeSpan? retryIn) =>
+                _log?.Invoke(
+                    new ApiAttempt(
+                        request.Operation,
+                        request.Method.Method,
+                        logUrl,
+                        attempt,
+                        status,
+                        failure,
+                        Stopwatch.GetElapsedTime(started),
+                        retryIn
+                    )
+                );
             if (attempt > 0)
             {
                 headers["@@HEADER_PREFIX@@-retry-count"] = attempt.ToString(
@@ -374,6 +395,7 @@ internal sealed class ApiTransport : IDisposable
                         .SendAsync(message, attemptToken.Token)
                         .ConfigureAwait(false);
                     activity?.SetTag("http.response.status_code", (int)response.StatusCode);
+                    status = response.StatusCode;
                     var meta = new ApiResponse(
                         response.StatusCode,
                         response.Headers,
@@ -381,6 +403,7 @@ internal sealed class ApiTransport : IDisposable
                     );
                     if (response.IsSuccessStatusCode && stream)
                     {
+                        Log(null);
                         return new(meta, [], response);
                     }
                     byte[] body;
@@ -392,6 +415,7 @@ internal sealed class ApiTransport : IDisposable
                     }
                     if (response.IsSuccessStatusCode)
                     {
+                        Log(null);
                         return new(meta, body, null);
                     }
                     if (
@@ -408,6 +432,7 @@ internal sealed class ApiTransport : IDisposable
                     else if (last || !ShouldRetry((int)response.StatusCode, idempotent))
                     {
                         activity?.SetStatus(ActivityStatusCode.Error);
+                        Log(null);
                         throw ApiExceptionExtensions.ForResponse(
                             response.StatusCode,
                             System.Text.Encoding.UTF8.GetString(body),
@@ -422,9 +447,11 @@ internal sealed class ApiTransport : IDisposable
                 }
                 catch (Exception e) when (e is HttpRequestException or IOException)
                 {
+                    failure = e.Message;
                     if (last || !idempotent)
                     {
                         activity?.SetStatus(ActivityStatusCode.Error, e.Message);
+                        Log(null);
                         throw new ApiConnectionException(
                             $"{request.Method} {request.Path} failed: {e.Message}",
                             e
@@ -433,9 +460,11 @@ internal sealed class ApiTransport : IDisposable
                 }
                 catch (OperationCanceledException e) when (!cancellationToken.IsCancellationRequested)
                 {
+                    failure = "timeout";
                     if (last || !idempotent)
                     {
                         activity?.SetStatus(ActivityStatusCode.Error, "timeout");
+                        Log(null);
                         throw new ApiTimeoutException(
                             $"{request.Method} {request.Path} timed out after {timeout}",
                             e
@@ -445,13 +474,16 @@ internal sealed class ApiTransport : IDisposable
             }
             if (renew)
             {
+                Log(TimeSpan.Zero);
                 renewed = true;
                 oauthUse = await _auth.RenewAsync(oauthUse!, _credentials, cancellationToken).ConfigureAwait(false);
                 headers["Authorization"] = $"Bearer {oauthUse.Token}";
                 attempt--;
                 continue;
             }
-            await Task.Delay(wait ?? Backoff(attempt), cancellationToken).ConfigureAwait(false);
+            wait ??= Backoff(attempt);
+            Log(wait);
+            await Task.Delay(wait.Value, cancellationToken).ConfigureAwait(false);
         }
     }
 
