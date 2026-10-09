@@ -4,6 +4,10 @@ package @@JAVA_PACKAGE@@.streaming;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Locale;
+import java.util.Map;
 
 import okhttp3.MediaType;
 import okhttp3.RequestBody;
@@ -13,6 +17,25 @@ import okio.Source;
 
 /** A file or raw request body. Bytes and files are retried; input streams are sent once. */
 public final class Upload {
+    private static final String DEFAULT_CONTENT_TYPE = "application/octet-stream";
+    private static final Map<String, String> CONTENT_TYPES =
+            Map.ofEntries(
+                    Map.entry("json", "application/json"),
+                    Map.entry("jsonl", "application/jsonl"),
+                    Map.entry("txt", "text/plain"),
+                    Map.entry("csv", "text/csv"),
+                    Map.entry("pdf", "application/pdf"),
+                    Map.entry("png", "image/png"),
+                    Map.entry("jpg", "image/jpeg"),
+                    Map.entry("jpeg", "image/jpeg"),
+                    Map.entry("gif", "image/gif"),
+                    Map.entry("webp", "image/webp"),
+                    Map.entry("mp3", "audio/mpeg"),
+                    Map.entry("wav", "audio/wav"),
+                    Map.entry("m4a", "audio/mp4"),
+                    Map.entry("mp4", "video/mp4"),
+                    Map.entry("webm", "video/webm"));
+
     private final RequestBody body;
     private final String filename;
     private final String contentType;
@@ -30,7 +53,7 @@ public final class Upload {
      * @return the upload
      */
     public static Upload of(byte[] bytes) {
-        return new Upload(RequestBody.create(bytes), null, "application/octet-stream");
+        return new Upload(RequestBody.create(bytes), null, DEFAULT_CONTENT_TYPE);
     }
 
     /**
@@ -40,7 +63,41 @@ public final class Upload {
      * @return the upload
      */
     public static Upload of(File file) {
-        return new Upload(RequestBody.create(file, null), file.getName(), "application/octet-stream");
+        return new Upload(RequestBody.create(file, null), file.getName(), DEFAULT_CONTENT_TYPE);
+    }
+
+    /**
+     * The file at {@code path}, which can be retried, named after it and typed by its extension in
+     * multipart forms ({@code application/octet-stream} for an unknown one).
+     *
+     * @param path the file
+     * @return the upload
+     */
+    public static Upload of(Path path) {
+        Path name = path.getFileName();
+        String filename = name == null ? null : name.toString();
+        int dot = filename == null ? -1 : filename.lastIndexOf('.');
+        String extension = dot < 0 ? "" : filename.substring(dot + 1).toLowerCase(Locale.ROOT);
+        RequestBody body =
+                new RequestBody() {
+                    @Override
+                    public MediaType contentType() {
+                        return null;
+                    }
+
+                    @Override
+                    public long contentLength() throws IOException {
+                        return Files.size(path);
+                    }
+
+                    @Override
+                    public void writeTo(BufferedSink sink) throws IOException {
+                        try (Source source = Okio.source(path)) {
+                            sink.writeAll(source);
+                        }
+                    }
+                };
+        return new Upload(body, filename, CONTENT_TYPES.getOrDefault(extension, DEFAULT_CONTENT_TYPE));
     }
 
     /**
@@ -75,7 +132,7 @@ public final class Upload {
                         }
                     }
                 };
-        return new Upload(body, null, "application/octet-stream");
+        return new Upload(body, null, DEFAULT_CONTENT_TYPE);
     }
 
     /**
@@ -139,7 +196,7 @@ public final class Upload {
 
     /** The multipart part, sent with {@code declared} unless the upload sets its own content type. */
     RequestBody part(String declared) {
-        boolean unset = "application/octet-stream".equals(contentType);
+        boolean unset = DEFAULT_CONTENT_TYPE.equals(contentType);
         return toRequestBody(declared != null && unset ? declared : contentType);
     }
 }
