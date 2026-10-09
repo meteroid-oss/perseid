@@ -713,6 +713,10 @@ Event streams are `EventStream<Chunk>`s, ending at `[DONE]`, with `lastEvent()` 
 
 - Models are immutable final classes: `Customer.builder()...build()` throws on a missing required
   property, and `toBuilder()` changes a copy.
+- Builders add to lists and maps one item at a time (`addTagsItem`, `putMetadataItem`). A union
+  property also has a setter per variant type, as far as Java overloads tell them apart
+  (`content("hi")`, `content(List.of(part))`), and an open enum one a `String` setter
+  (`model("gpt-4o")`). Nullable properties have neither, so `x(null)` still sends `null`.
 - Required properties are read directly, others as `Optional`s.
 - For an optional nullable property, `x(null)` sends `null` and leaving it unset omits it.
 - Unknown properties are kept in `additionalProperties()`.
