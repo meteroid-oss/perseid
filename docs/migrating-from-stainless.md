@@ -75,7 +75,8 @@ const { data, response, requestId } = await client.users.get("dnedry").withRespo
 - Model properties and parameters are camelCase (`createdAt`, `pageSize`), not the JSON names.
   The SDK converts them on the wire.
 - `date-time` values are `Date`s.
-- Types are named after the spec's schemas and exported from the package root, without the
+- Types are named after the spec's schemas, or as `[models]` in `perseid.toml` renames them
+  (`init` imports the resources' `models`), and exported from the package root, without the
   resource namespaces Stainless adds.
 
 ### Python
@@ -100,7 +101,7 @@ user = raw.parse()
   pydantic models: `model_dump()` and `model_validate()` are gone, and `to_dict()` and
   `to_json()` take no options (no `indent`, `exclude_unset` or `mode`): `to_json()` is compact,
   not indented.
-- Types live in `knockapi.models`, named after the spec's schemas.
+- Types live in `knockapi.models`, named after the spec's schemas or as `[models]` renames them.
 - There is no `with_streaming_response`.
 
 ### Go, Java and C#

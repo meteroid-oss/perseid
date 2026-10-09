@@ -41,6 +41,8 @@ pub(crate) struct Import {
     pub methods: BTreeMap<String, String>,
     /// The resource of each operation perseid places elsewhere than stainless.yml, by id.
     pub resources: BTreeMap<String, String>,
+    /// Type names by schema name, from the resources' `models`.
+    pub models: BTreeMap<String, String>,
     pub exclude: Vec<String>,
     /// What was imported, for the summary.
     pub mapped: Vec<String>,
@@ -540,7 +542,7 @@ impl Import {
 
     fn resources(&mut self, resources: &Value) {
         let mut ignored: BTreeMap<String, (usize, &'static str, &'static str)> = BTreeMap::new();
-        let mut renamed = Vec::new();
+        let mut named: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let mut stack: Vec<(String, &Value, BTreeSet<&'static str>)> = resources
             .as_object()
             .into_iter()
@@ -559,8 +561,7 @@ impl Import {
                             if let Some(schema) = schema
                                 && schema.to_upper_camel_case() != wanted
                             {
-                                renamed
-                                    .push(format!("{wanted} is {}", schema.to_upper_camel_case()));
+                                named.entry(wanted).or_default().insert(schema.to_owned());
                             }
                         }
                     }
@@ -586,12 +587,21 @@ impl Import {
                 }
             }
         }
-        if !renamed.is_empty() {
+        let mut shared = Vec::new();
+        for (name, schemas) in named {
+            match schemas.len() {
+                1 => self
+                    .models
+                    .extend(schemas.into_iter().map(|s| (s, name.clone()))),
+                _ => shared.push(format!("{name} is {}", Vec::from_iter(schemas).join(", "))),
+            }
+        }
+        if !shared.is_empty() {
             self.skip(
                 "resources.*.models",
                 format!(
-                    "perseid names types after their schema, without resource namespaces: {}",
-                    renamed.join(", ")
+                    "perseid has no resource namespaces, so these keep their schema's name: {}",
+                    shared.join("; ")
                 ),
             );
         }
@@ -715,6 +725,9 @@ impl Import {
 
     /// Without a spec, nothing tells the operations the resources and pagination rules refer to.
     pub(crate) fn without_spec(&mut self) {
+        if !self.models.is_empty() {
+            self.mapped.push(count(self.models.len(), "model name"));
+        }
         if !self.endpoints.is_empty() {
             self.skip(
                 "resources",
@@ -739,6 +752,7 @@ impl Import {
     pub(crate) fn with_spec(&mut self, spec: &str) {
         let raw: Value = serde_json::from_str(spec).unwrap_or_default();
         self.check_security(&raw);
+        self.check_models(&raw);
         if self.endpoints.is_empty() {
             return;
         }
@@ -753,6 +767,7 @@ impl Import {
             reserved: BTreeSet::new(),
             names: names.clone(),
             resources: resources.clone(),
+            models: BTreeMap::new(),
             uuid_strings: false,
         };
         let none = BTreeMap::new();
@@ -970,6 +985,33 @@ impl Import {
     }
 
     /// The top-level keys of perseid.toml, after `base_url`.
+    /// Keeps the model names of schemas the spec has, which no other schema has.
+    fn check_models(&mut self, spec: &Value) {
+        let schemas = spec
+            .pointer("/components/schemas")
+            .and_then(Value::as_object);
+        let schemas: BTreeSet<&String> = schemas.into_iter().flat_map(|s| s.keys()).collect();
+        let taken: BTreeMap<String, &String> = (schemas.iter())
+            .filter(|s| !self.models.contains_key(**s))
+            .map(|s| (s.to_upper_camel_case(), *s))
+            .collect();
+        let mut dropped = Vec::new();
+        self.models.retain(|schema, name| {
+            match (schemas.contains(schema), taken.get(name)) {
+                (false, _) => dropped.push(format!("{schema} is no schema of the spec")),
+                (true, Some(other)) => dropped.push(format!("{name} is already {other}")),
+                (true, None) => return true,
+            }
+            false
+        });
+        if !dropped.is_empty() {
+            self.skip("resources.*.models", dropped.join("; "));
+        }
+        if !self.models.is_empty() {
+            self.mapped.push(count(self.models.len(), "model name"));
+        }
+    }
+
     pub(crate) fn top_level(&self) -> String {
         let mut out = String::new();
         if let Some(timeout) = self.timeout {
@@ -984,7 +1026,7 @@ impl Import {
         out
     }
 
-    /// The `[methods]`, `[context]` and `[[pagination]]` tables.
+    /// The `[methods]`, `[resources]`, `[models]`, `[context]` and `[[pagination]]` tables.
     pub(crate) fn tables(&self, env_prefix: Option<&str>) -> String {
         let mut out = String::new();
         if !self.methods.is_empty() {
@@ -997,6 +1039,12 @@ impl Import {
             out += "\n[resources]\n";
             for (id, resource) in &self.resources {
                 out += &format!("{} = {}\n", key(id), quote(resource));
+            }
+        }
+        if !self.models.is_empty() {
+            out += "\n[models]\n";
+            for (schema, name) in &self.models {
+                out += &format!("{} = {}\n", key(schema), quote(name));
             }
         }
         if let Some(prefix) = env_prefix {

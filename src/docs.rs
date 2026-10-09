@@ -375,6 +375,7 @@ mod tests {
             reserved: Default::default(),
             names: Default::default(),
             resources: Default::default(),
+            models: Default::default(),
             uuid_strings: false,
         };
         crate::spec::api(spec, &filters).unwrap()

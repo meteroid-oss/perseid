@@ -56,6 +56,8 @@ pub struct Filters {
     pub names: BTreeMap<String, String>,
     /// Resource paths (`workspaces.peers`) by operation id.
     pub resources: BTreeMap<String, String>,
+    /// Type names by schema name.
+    pub models: BTreeMap<String, String>,
     /// Types `format: uuid` values as strings.
     pub uuid_strings: bool,
 }
@@ -174,7 +176,7 @@ pub(crate) fn api_with_renames(
         doc["openapi"] = Value::from("3.1.0");
     }
     upgrade::boolean_schemas(&mut doc);
-    normalize::normalize(&mut doc)?;
+    normalize::normalize(&mut doc, &filters.models)?;
     if filters.uuid_strings {
         normalize::drop_format(&mut doc, "uuid");
     }
@@ -647,6 +649,7 @@ mod tests {
             reserved: Default::default(),
             names: Default::default(),
             resources: Default::default(),
+            models: Default::default(),
             uuid_strings: false,
         };
         super::api(&text, &filters).unwrap();
@@ -684,6 +687,7 @@ mod tests {
             reserved: Default::default(),
             names: Default::default(),
             resources: Default::default(),
+            models: Default::default(),
             uuid_strings: false,
         };
         let warned: Vec<String> = super::ignored_servers(&doc, &filters)

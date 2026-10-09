@@ -52,6 +52,7 @@ pub fn without_config(location: &str, root: &std::path::Path) -> Result<SpecWith
         reserved,
         names: BTreeMap::new(),
         resources: BTreeMap::new(),
+        models: Default::default(),
         uuid_strings: false,
     };
     let targets = LANGUAGES
