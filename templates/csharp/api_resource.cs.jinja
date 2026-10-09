@@ -32,13 +32,6 @@
 {% set f.pager = "AsyncPager<" ~ f.page_type ~ ", " ~ m.model(op.pagination.item_schema) ~ ">" -%}
 {% endif -%}
 {%- endmacro -%}
-{#- The boolean part of a multipart body the operation and its `_stream` twin set themselves. -#}
-{% macro stream_field(op) -%}
-{% set stream_twin = op.response_is_event_stream and op.name is endingwith "_stream" and resource.operations | selectattr("name", "equalto", op.name[:-7]) | list -%}
-{% set has_stream_twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("response_is_event_stream") | list -%}
-{% set part = op.multipart_fields | default([]) | selectattr("name", "equalto", "stream") | first -%}
-{% if op.request_body_kind == "multipart" and (stream_twin or has_stream_twin) and part and part.type.to_csharp() == "bool" %}stream{% endif %}
-{%- endmacro -%}
 {#- The C# type of path parameter `p`: a string, unless its style or `content` types it. -#}
 {% macro path_param_type(op, p) -%}
 {% set styles = op.path_styles | default({}) -%}
@@ -474,11 +467,7 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
 {%- for field in op.multipart_fields %}
 {%- set value = f.body ~ "." ~ m.member(field.name, f.body_type) %}
 {%- set part_type = (", " ~ (field.content_type | tojson)) if field.content_type is defined else "" %}
-{%- if field.name == stream_field(op) %}
-{%- if op.response_is_event_stream %}
-{%- set lines.list = lines.list + ["form.Field(" ~ (field.name | tojson) ~ ", true, " ~ context ~ ".Options" ~ part_type ~ ");"] %}
-{%- endif %}
-{%- elif field.is_file and field.is_file_list %}
+{%- if field.is_file and field.is_file_list %}
 {%- set item = "item" if f.body == "upload" else "upload" %}
 {%- set add = ["foreach (var " ~ item ~ " in " ~ value ~ ")", "{", "    form.File(" ~ (field.name | tojson) ~ ", " ~ item ~ part_type ~ ");", "}"] %}
 {%- elif field.is_file %}
@@ -486,8 +475,7 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
 {%- else %}
 {%- set add = ["form.Field(" ~ (field.name | tojson) ~ ", " ~ value ~ ", " ~ context ~ ".Options" ~ part_type ~ ");"] %}
 {%- endif %}
-{%- if field.name == stream_field(op) %}
-{%- elif field.required and not field.nullable %}
+{%- if field.required and not field.nullable %}
 {%- set lines.list = lines.list + add %}
 {%- else %}
 {%- set lines.list = lines.list + ["if (" ~ value ~ " is not null)", "{"] %}
@@ -495,6 +483,9 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
 {%- set lines.list = lines.list + ["}"] %}
 {%- endif %}
 {%- endfor %}
+{%- if op.stream_part is defined and op.response_is_event_stream %}
+{%- set lines.list = lines.list + ["form.Field(" ~ (op.stream_part | tojson) ~ ", true, " ~ context ~ ".Options);"] %}
+{%- endif %}
 {%- set lines.list = lines.list + ["request.SetMultipartBody(form);"] %}
 {%- if op.request_body_optional %}
         if ({{ f.body }} is not null)
@@ -534,7 +525,7 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
 /// <summary>The <c>multipart/form-data</c> fields of <see cref="{{ resource_type_name }}.{{ op.name | to_upper_camel_case }}Async"/>.</summary>
 public sealed class {{ class_name }}
 {
-{%- for field in op.multipart_fields if field.name != stream_field(op) %}
+{%- for field in op.multipart_fields %}
 {%- if not loop.first %}{{ "\n" }}{% endif %}
 {%- if field.description | default("") | trim %}
     {{ m.doc(field.description) | indent(4) }}

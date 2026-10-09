@@ -316,6 +316,9 @@ export class {{ resource_type_name }} {
                     {% endif -%}
                     {% if not field.required or field.nullable %} } {% endif -%}
                 {% endfor -%}
+                {% if op.stream_part is defined and op.response_is_event_stream -%}
+                form.field({{ op.stream_part | tojson }}, true);
+                {% endif -%}
                 request.setMultipartBody(form);
                 {% if op.request_body_optional %} } {% endif %}
             {% endif -%}

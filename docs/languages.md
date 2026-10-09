@@ -186,6 +186,8 @@ Event streams are `Stream`s of the model each event carries, ending at `[DONE]`,
 - An `error` event, or data that is not the model but an object with an `error`, ends the stream
   with an `Error::Api` holding that data and the response's status and headers.
 - Comments are skipped, and so are `ping` and `keepalive` events that are not the model.
+- The `_stream` twin of a multipart operation sends its `stream` part as `true`, the other leaves
+  it out, and neither body struct has a `stream` field.
 
 ### Errors
 
@@ -327,7 +329,8 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
 
 - Events with a schema give a `Stream<Model>` ending at `[DONE]`, with `stream.lastEvent`.
 - The body of the non-stream twin cannot ask for the stream: `create({ stream: true })` does not
-  compile.
+  compile. A multipart body has no `stream` part: `createStream` sends it as `true`, `create`
+  leaves it out.
 - An `error` event, or data with an `error` property the event schema does not declare, throws
   an `APIError` holding it.
 - Other streams are an `EventStream` of raw events.
@@ -706,7 +709,8 @@ var customer = client.customers().retrieve("cus_1",
   extension; `Upload.of(bytes)`, `of(File)` and `of(InputStream, length)` take `withFilename` and
   `withContentType`. Input streams are not retried.
 - The `...Stream` twin of an operation whose body has a `stream` flag sends it as `true`: on a
-  copy of a JSON body, and in place of the property a form body's builder leaves out.
+  copy of a JSON body, and in place of the property the form bodies' builders of both twins
+  leave out.
 
 ### Pagination
 

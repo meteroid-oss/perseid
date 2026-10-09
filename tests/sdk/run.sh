@@ -47,7 +47,13 @@ case "$lang" in
       && perseid init --sdks rust --spec "$here/rust/tags/openapi.yaml" > /dev/null \
       && perseid generate rust > /dev/null \
       && mkdir -p rust/tests && cp "$here/rust/tags/tags.rs" rust/tests/ \
-      && cd rust && cargo test --test tags) ;;
+      && cd rust && cargo test --test tags)
+    # The multipart `_stream` twin of tests/fixtures/edge-operations.yaml.
+    (mkdir "$work/operations" && cd "$work/operations" \
+      && perseid init --sdks rust --spec "$here/../fixtures/edge-operations.yaml" > /dev/null \
+      && perseid generate rust > /dev/null \
+      && mkdir -p rust/tests && cp "$here/rust/operations/"*.rs rust/tests/ \
+      && cd rust && cargo test --test twins) ;;
   typescript)
     # The tests generate more SDKs themselves (features, torture, realworld and, with
     # `int64 = "bigint"` and `"string"`, the round trips of torture and every edge fixture).
