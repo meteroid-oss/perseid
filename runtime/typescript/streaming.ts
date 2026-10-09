@@ -13,6 +13,8 @@ export type SseEvent = {
 };
 
 const DONE: unique symbol = Symbol("done");
+const SKIP: unique symbol = Symbol("skip");
+const KEEPALIVES = new Set(["ping", "keepalive"]);
 
 /**
  * A live `text/event-stream` response, iterated once with `for await`, yielding the events
@@ -26,17 +28,20 @@ export class Stream<T> implements AsyncIterable<T> {
   constructor(
     /** The HTTP response, for its status and headers. */
     public readonly response: Response,
-    private readonly decode: (event: SseEvent) => T | typeof DONE
+    private readonly decode: (event: SseEvent) => T | typeof DONE | typeof SKIP
   ) {}
 
   /**
    * @internal A stream of the JSON `data` of each event, parsed by `parse`, up to `[DONE]`.
-   * `apiError`, when given, is thrown for an `error` event or data with an `error` property.
+   * `apiError` is thrown for an `error` event, and for data with an `error` property that is not
+   * a `T` or, unless `declaresError`, whose model does not declare it. Keepalives that are not a
+   * `T` are skipped.
    */
   static json<T>(
     response: Response,
     parse: (json: any) => T,
-    apiError?: (data: string, json: unknown) => Error
+    apiError: (data: string, json: unknown) => Error,
+    declaresError = false
   ): Stream<T> {
     return new Stream(response, (event) => {
       if (event.data === "[DONE]") {
@@ -46,16 +51,29 @@ export class Stream<T> implements AsyncIterable<T> {
       try {
         json = parseJson(event.data);
       } catch (error) {
-        if (apiError && event.event === "error") {
+        if (event.event === "error") {
           throw apiError(event.data, undefined);
+        }
+        if (KEEPALIVES.has(event.event)) {
+          return SKIP;
         }
         throw new APIDecodeError("An event's data is not valid JSON.", event.data, { cause: error });
       }
-      const failed = event.event === "error" || (isJsonObject(json) && (json as { error?: unknown }).error != null);
-      if (apiError && failed) {
+      const reported = isJsonObject(json) && (json as { error?: unknown }).error != null;
+      if (event.event === "error" || (reported && !declaresError)) {
         throw apiError(event.data, json);
       }
-      return decodeBody(parse, json, event.data);
+      try {
+        return decodeBody(parse, json, event.data);
+      } catch (error) {
+        if (reported) {
+          throw apiError(event.data, json);
+        }
+        if (KEEPALIVES.has(event.event)) {
+          return SKIP;
+        }
+        throw error;
+      }
     });
   }
 
@@ -94,6 +112,9 @@ export class Stream<T> implements AsyncIterable<T> {
           const value = this.decode(event);
           if (value === DONE) {
             return;
+          }
+          if (value === SKIP) {
+            continue;
           }
           this.event = event;
           yield value;

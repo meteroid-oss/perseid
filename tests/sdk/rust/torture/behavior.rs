@@ -326,6 +326,8 @@ async fn errors_sent_in_a_stream_are_api_errors() {
     let cases = [
         "event: error\ndata: {\"error\":{\"message\":\"overloaded\"}}\n\n",
         "data: {\"error\":{\"message\":\"overloaded\",\"type\":\"server_error\"}}\n\n",
+        // An item of the model, with an `error` the model does not declare.
+        "data: {\"text\":\"x\",\"error\":{\"message\":\"overloaded\"}}\n\n",
     ];
     for error in cases {
         let body = format!("data: {{\"text\":\"a\"}}\n\n{error}data: {{\"text\":\"b\"}}\n\n");
@@ -341,16 +343,21 @@ async fn errors_sent_in_a_stream_are_api_errors() {
         assert_eq!(error.to_string(), "API error (200 OK): overloaded");
         assert!(stream.next().await.is_none(), "the stream ends at the error");
     }
+
+    let script = Script::new(vec![Step::Reply(200, vec![EVENTS], "event: error\ndata: overloaded\n\n")]);
+    let mut stream = script.client(0).chats().create_stream(None).await.unwrap();
+    let error = stream.next().await.unwrap().unwrap_err();
+    assert_eq!(error.api().unwrap_or_else(|| panic!("{error:?}")).text(), "overloaded");
 }
 
 #[tokio::test]
-async fn keepalives_are_skipped_and_items_with_an_error_field_are_items() {
+async fn keepalives_that_are_not_items_are_skipped() {
     let body = ": comment\n\nevent: ping\ndata: {}\n\nevent: keepalive\ndata: {\"type\":\"keepalive\"}\n\n\
-        data: {\"text\":\"a\",\"error\":\"partial\"}\n\nevent: ping\n\ndata: [DONE]\n\n";
+        event: ping\ndata: alive\n\ndata: {\"text\":\"a\"}\n\nevent: ping\n\nevent: ping\ndata: {\"text\":\"b\"}\n\ndata: [DONE]\n\n";
     let script = Script::new(vec![Step::Reply(200, vec![EVENTS], body)]);
     let mut stream = script.client(0).chats().create_stream(None).await.unwrap();
-    let reply = stream.next().await.unwrap().unwrap();
-    assert_eq!((reply.text.as_str(), &reply.extra["error"]), ("a", &serde_json::json!("partial")));
+    assert_eq!(stream.next().await.unwrap().unwrap().text, "a");
+    assert_eq!(stream.next().await.unwrap().unwrap().text, "b", "a keepalive that is an item");
     assert!(stream.next().await.is_none());
 
     let body = "data: {\"text\":\"a\"}\n\nevent: ping\ndata: {}\n\n";

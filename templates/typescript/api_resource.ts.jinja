@@ -322,7 +322,7 @@ export class {{ resource_type_name }} {
             {% endif -%}
 
             {% if op.response_is_event_stream and op.event_schema_name is defined -%}
-                return request.sendJsonStream(this.requestCtx, {{ op.event_schema_name | to_upper_camel_case }}Serializer.parse, requestOptions{% if declares(op.event_schema_name, "error") %}, false{% endif %});
+                return request.sendJsonStream(this.requestCtx, {{ op.event_schema_name | to_upper_camel_case }}Serializer.parse, requestOptions{% if declares(op.event_schema_name, "error") %}, true{% endif %});
             {% elif op.response_is_event_stream -%}
                 return request.sendEventStream(this.requestCtx, requestOptions);
             {% elif op.response_is_binary | default(false) -%}

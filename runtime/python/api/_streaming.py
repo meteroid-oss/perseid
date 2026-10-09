@@ -11,8 +11,15 @@ import typing as t
 
 import httpx
 
-from .._exceptions import APIResponseValidationError, connection_error
-from ..serialization import JSONValue, from_json_value, to_json_value
+from .._exceptions import APIResponseValidationError, connection_error, request_of
+from ..serialization import (
+    BaseModel,
+    JSONValue,
+    UnknownVariant,
+    declares_key,
+    from_json_value,
+    to_json_value,
+)
 
 __all__ = [
     "AsyncBinaryResponse",
@@ -218,28 +225,60 @@ class AsyncEventStream(_AsyncEventSource):
         await self.aclose()
 
 
+_SKIP = object()
+_KEEPALIVES = ("ping", "keepalive")
+
+
 def _decode(event: SseEvent, type_: object, response: httpx.Response) -> object:
+    """The item of ``event``, or ``_SKIP`` for a keepalive that is not one."""
+    if event.event == "error":
+        raise _stream_error(response, event.data)
     try:
         data = json.loads(event.data)
     except ValueError as exc:
+        if event.event in _KEEPALIVES:
+            return _SKIP
         raise APIResponseValidationError(response, f"event {event.data!r}: {exc}") from exc
-    if event.event == "error":
-        raise _stream_error(response, data)
     try:
-        return t.cast(object, from_json_value(type_, data))
+        item = t.cast(object, from_json_value(type_, data))
     except (ValueError, TypeError) as exc:
-        if isinstance(data, dict) and t.cast("dict[str, object]", data).get("error") is not None:
-            raise _stream_error(response, data) from exc
+        if _has_error(data):
+            raise _stream_error(response, event.data) from exc
+        if event.event in _KEEPALIVES:
+            return _SKIP
         raise APIResponseValidationError(response, f"event {event.data!r}: {exc}") from exc
+    if _has_error(data) and not _declares_error(item):
+        raise _stream_error(response, event.data)
+    return item
 
 
-def _stream_error(response: httpx.Response, data: object) -> Exception:
-    """The API error an `error` event of a stream reports, with the message it gives."""
+def _has_error(data: object) -> bool:
+    return isinstance(data, dict) and t.cast("dict[str, object]", data).get("error") is not None
+
+
+def _declares_error(item: object) -> bool:
+    """Whether ``item`` is of a type with an ``error`` property, rather than an API error."""
+    if isinstance(item, UnknownVariant):
+        return False
+    return not isinstance(item, BaseModel) or declares_key(item, "error")
+
+
+def _stream_error(response: httpx.Response, text: str) -> Exception:
+    """The API error an event of a stream reports, its body the event's data."""
     from ._errors import APIStatusError
 
+    try:
+        data: object = json.loads(text)
+    except ValueError:
+        data = None
     error = t.cast("dict[str, object]", data).get("error", data) if isinstance(data, dict) else data
     message = t.cast("dict[str, object]", error).get("message") if isinstance(error, dict) else error
-    return APIStatusError(response, data, str(message) if message else json.dumps(data))
+    framing = ("content-encoding", "content-length", "transfer-encoding")
+    headers = [(k, v) for k, v in response.headers.multi_items() if k.lower() not in framing]
+    event = httpx.Response(
+        response.status_code, headers=headers, content=text.encode(), request=request_of(response)
+    )
+    return APIStatusError(event, data, str(message) if message else text)
 
 
 class Stream(_EventSource, t.Generic[_T]):
@@ -267,8 +306,11 @@ class Stream(_EventSource, t.Generic[_T]):
             if event.data == "[DONE]":
                 self.close()
                 return
+            item = _decode(event, self._type, self.response)
+            if item is _SKIP:
+                continue
             self.last_event = event
-            yield t.cast(_T, _decode(event, self._type, self.response))
+            yield t.cast(_T, item)
 
     def __enter__(self) -> Stream[_T]:
         return self
@@ -302,8 +344,11 @@ class AsyncStream(_AsyncEventSource, t.Generic[_T]):
             if event.data == "[DONE]":
                 await self.aclose()
                 return
+            item = _decode(event, self._type, self.response)
+            if item is _SKIP:
+                continue
             self.last_event = event
-            yield t.cast(_T, _decode(event, self._type, self.response))
+            yield t.cast(_T, item)
 
     async def __aenter__(self) -> AsyncStream[_T]:
         return self

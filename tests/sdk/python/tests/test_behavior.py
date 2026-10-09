@@ -414,6 +414,28 @@ class StreamErrorTest(unittest.TestCase):
         with self.assertRaises(features.APIResponseValidationError):
             self.stream('data: {"unexpected": 1}\n\n')
 
+    def test_an_error_the_model_does_not_declare_is_an_api_error(self) -> None:
+        with self.assertRaises(features.APIStatusError) as raised:
+            self.stream('data: {"delta": "a", "error": {"message": "overloaded"}}\n\n')
+        self.assertEqual(raised.exception.body["error"]["message"], "overloaded")
+        streaming = importlib.import_module(f"{features.__name__}.api._streaming")
+        event = streaming.SseEvent("message", '{"error": "partial", "code": 1}')
+        reply = httpx.Response(200, request=httpx.Request("GET", BASE))
+        self.assertEqual(streaming._decode(event, models.Error, reply), models.Error(error="partial", code=1))
+
+    def test_an_error_event_keeps_its_data_whatever_it_is(self) -> None:
+        for data, body in [('{"error": {"message": "overloaded"}}', {"error": {"message": "overloaded"}}), ("overloaded", None)]:
+            with self.subTest(data=data), self.assertRaises(features.APIStatusError) as raised:
+                self.stream(f"event: error\ndata: {data}\n\n")
+            self.assertIn("overloaded", str(raised.exception))
+            self.assertEqual(raised.exception.body, body)
+            self.assertEqual(raised.exception.raw_body, data.encode())
+            self.assertEqual(raised.exception.status_code, 200)
+
+    def test_keepalives_that_are_not_items_are_skipped(self) -> None:
+        body = 'event: ping\ndata: alive\n\nevent: keepalive\ndata: {}\n\nevent: ping\ndata: {"delta": "a"}\n\ndata: {"delta": "b"}\n\n'
+        self.assertEqual([chunk.delta for chunk in self.stream(body)], ["a", "b"])
+
 
 class PaginationErrorTest(unittest.TestCase):
     def test_an_error_on_the_first_page_is_raised_by_the_call(self) -> None:

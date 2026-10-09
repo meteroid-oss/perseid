@@ -3,6 +3,16 @@
 {% from "types/macros.rs.jinja" import rust_type, union_enum -%}
 {% set resource_type_name = resource.name | to_upper_camel_case -%}
 {#- The string alias a plain path parameter `p` of `op` is typed by, if any. -#}
+{#- `yes` when the schema `name`, or a variant of it, has the property `property`. -#}
+{% macro declares(name, property) -%}
+    {%- set t = types[name] | default(none) -%}
+    {%- if t and t.fields is defined -%}
+        {%- for f in t.fields if f.name == property or (f.flatten and f.type.schema_name() and declares(f.type.schema_name(), property)) %}{% if loop.first %}yes{% endif %}{% endfor -%}
+    {%- endif -%}
+    {%- if t and t.variants is defined and t.kind == "struct_enum" -%}
+        {%- for v in t.variants if (v.schema_ref is defined and declares(v.schema_ref, property)) or (v.fields is defined and property in (v.fields | map(attribute="name") | list)) %}{% if loop.first %}yes{% endif %}{% endfor -%}
+    {%- endif -%}
+{%- endmacro %}
 {% macro path_alias(op, p) -%}
 {% if p not in op.path_styles %}{% for t in op.typed_path_params if t.name == p and t.type.is_string_alias() %}crate::models::{{ t.type.to_rust() }}{% endfor %}{% endif -%}
 {%- endmacro %}
@@ -357,7 +367,7 @@ impl {{ resource_type_name }} {
 
         .with_options(&self.options)
         {% if op.response_is_event_stream and op.event_schema_name is defined -%}
-            .typed_events(&self.cfg)
+            .typed_events(&self.cfg, {{ "true" if declares(op.event_schema_name, "error") else "false" }})
         {% elif op.response_is_event_stream -%}
             .events(&self.cfg)
         {% elif op.response_is_binary -%}

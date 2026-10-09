@@ -484,20 +484,21 @@ export class @@CLIENT_NAME@@Request {
 
   /**
    * Same as `sendEventStream`, decoding the JSON `data` of each event, up to `[DONE]`. An `error`
-   * event, or data with an `error` property, throws an `APIError` unless `errorEvents` is false:
-   * the events declare that property.
+   * event throws an `APIError`, and so does data with an `error` property unless `declaresError`:
+   * the event model declares that property.
    */
   public sendJsonStream<T>(
     ctx: @@CLIENT_NAME@@RequestContext,
     parse: (json: any) => T,
     options?: RequestOptions,
-    errorEvents = true
+    declaresError = false
   ): APIPromise<Stream<T>> {
     return new APIPromise(this.openEventStream(ctx, options), async (response) =>
       Stream.json(
         response,
         parse,
-        errorEvents ? (data, json) => this.errorOf(ctx, response.status, data, response.headers, json) : undefined
+        (data, json) => this.errorOf(ctx, response.status, data, response.headers, json),
+        declaresError
       )
     );
   }

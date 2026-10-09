@@ -144,8 +144,10 @@ fn binary(body: ResponseBody) -> Result<BinaryResponse, Error> {
     }
 }
 
-fn typed_events<E: DeserializeOwned>(body: ResponseBody) -> Result<EventStream<E>, Error> {
-    events(body).map(EventStream::typed)
+fn typed_events<E: DeserializeOwned, const DECLARES_ERROR: bool>(
+    body: ResponseBody,
+) -> Result<EventStream<E>, Error> {
+    events(body).map(|stream| stream.typed(DECLARES_ERROR))
 }
 
 /// How one attempt ended, before deciding whether to retry.
@@ -568,12 +570,19 @@ impl Request {
         Call::new(self.accepting_events(), cfg.clone(), events, Reading::Events)
     }
 
-    /// A call opening an event stream whose events carry JSON `E`s, until `[DONE]`.
+    /// A call opening an event stream whose events carry JSON `E`s, until `[DONE]`; `E` declares
+    /// an `error` property when `declares_error`.
     pub fn typed_events<E: DeserializeOwned + Send + 'static>(
         self,
         cfg: &Arc<Configuration>,
+        declares_error: bool,
     ) -> Call<EventStream<E>> {
-        Call::new(self.accepting_events(), cfg.clone(), typed_events::<E>, Reading::Events)
+        let decode: fn(ResponseBody) -> Result<EventStream<E>, Error> = if declares_error {
+            typed_events::<E, true>
+        } else {
+            typed_events::<E, false>
+        };
+        Call::new(self.accepting_events(), cfg.clone(), decode, Reading::Events)
     }
 
     fn accepting_events(mut self) -> Self {
