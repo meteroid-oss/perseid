@@ -671,7 +671,9 @@ repo = "acme/acme-cli"
 Its templates see the API as the Rust SDK's templates do, and the version of the Rust SDK the
 program depends on: the released one. Its pull requests replace the files it generated, deleting
 those it no longer generates, and write its scaffold once. The repository releases it on its own,
-with what the pack's scaffold sets up: perseid writes no release workflow there. Since CI tokens
+with what the pack's scaffold sets up: perseid writes no release workflow there, but `perseid sync`
+gives it the release credentials of the SDK repositories (your App's `SDK_APP_ID` and
+`SDK_APP_PRIVATE_KEY`, or a check that `SDK_GITHUB_TOKEN` is set). Since CI tokens
 can't push workflows, the pull request leaves out those of the scaffold, and its description lists
 them: write them with `perseid targets cli --out <dir>` and commit them by hand. In the Action,
 `pack` must be a folder of the checkout, such as a submodule: perseid doesn't fetch packs yet.
