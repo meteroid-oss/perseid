@@ -236,6 +236,111 @@ public class HttpTests
         Assert.Null(body.Stream);
     }
 
+    private static HttpResponseMessage Events(string events)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(events, Encoding.UTF8, "text/event-stream"),
+        };
+        response.Headers.Add("x-request-id", "req_1");
+        return response;
+    }
+
+    private static async Task<List<string>> Texts(TortureClient client, List<string> texts)
+    {
+        await foreach (var reply in await client.Chats.CreateStreamAsync())
+        {
+            texts.Add(reply.Text);
+        }
+        return texts;
+    }
+
+    [Theory]
+    [InlineData("event: error\ndata: {\"error\":{\"type\":\"server_error\",\"message\":\"overloaded\"}}\n\n")]
+    [InlineData("data: {\"error\":{\"type\":\"server_error\",\"message\":\"overloaded\"}}\n\n")]
+    public async Task AnErrorInAStreamIsAnApiException(string error)
+    {
+        var (client, _) = Client(_ =>
+            Events("event: ping\ndata: alive\n\ndata: {\"text\":\"hi\"}\n\n" + error + "data: {\"text\":\"late\"}\n\n")
+        );
+        using var _ = client;
+        var texts = new List<string>();
+        var exception = await Assert.ThrowsAsync<ApiException>(() => Texts(client, texts));
+        Assert.Equal(["hi"], texts);
+        Assert.Equal(HttpStatusCode.OK, exception.StatusCode);
+        Assert.Equal("req_1", exception.RequestId);
+        Assert.Equal(error.Split("data: ")[1].TrimEnd(), exception.Body);
+        Assert.Equal("HTTP 200 (server_error): overloaded", exception.Message);
+    }
+
+    [Fact]
+    public async Task DataThatIsNeitherAnItemNorAnErrorIsADecodeError()
+    {
+        var (client, _) = Client(_ => Events("data: {\"other\":1}\n\n"));
+        using var _ = client;
+        await Assert.ThrowsAsync<ApiDecodeException>(() => Texts(client, []));
+    }
+
+    [Theory]
+    [InlineData("""{"error":{"message":"Slow down","type":"requests","code":"rate_limit_exceeded"}}""", "HTTP 429 (rate_limit_exceeded): Slow down")]
+    [InlineData("""{"error":{"message":"Slow down","type":"requests","code":null}}""", "HTTP 429 (requests): Slow down")]
+    [InlineData("""{"message":"Slow down"}""", "HTTP 429: Slow down")]
+    [InlineData("""{"detail":"Slow down","code":42}""", "HTTP 429 (42): Slow down")]
+    [InlineData("""{"error":"Slow down"}""", "HTTP 429: Slow down")]
+    [InlineData("""{"detail":[{"loc":["limit"]}]}""", """HTTP 429: {"detail":[{"loc":["limit"]}]}""")]
+    [InlineData("slow down", "HTTP 429: slow down")]
+    [InlineData("", "HTTP 429")]
+    public async Task AnApiExceptionQuotesTheMessageOfTheBody(string body, string message)
+    {
+        var (client, _) = Client(_ => Reply(HttpStatusCode.TooManyRequests, body), new() { MaxRetries = 0 });
+        using var _ = client;
+        var error = await Assert.ThrowsAsync<RateLimitException>(() => client.Things.RetrieveAsync("t1"));
+        Assert.Equal(message, error.Message);
+        Assert.Equal(body, error.Body);
+    }
+
+    [Fact]
+    public async Task LogsEachAttemptWithoutTheQueryOrCredentials()
+    {
+        var attempts = new List<ApiAttempt>();
+        var (client, _) = Client(
+            n => n == 1 ? Reply(HttpStatusCode.ServiceUnavailable) : Reply(HttpStatusCode.OK, """{"data":[]}"""),
+            new() { RetrySchedule = [TimeSpan.FromMilliseconds(5)], Log = attempts.Add }
+        );
+        using var _ = client;
+        await client.Things.ListAsync(new() { Ids = ["a"], XRequired = "r" });
+        Assert.Equal(2, attempts.Count);
+        Assert.Equal(("things.list", "GET", "https://torture.test/v1/things", 0), (attempts[0].Operation, attempts[0].Method, attempts[0].Url, attempts[0].Attempt));
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, attempts[0].StatusCode);
+        Assert.Equal(TimeSpan.FromMilliseconds(5), attempts[0].RetryIn);
+        Assert.True(attempts[0].IsRetried);
+        Assert.Equal((HttpStatusCode?)HttpStatusCode.OK, attempts[1].StatusCode);
+        Assert.Equal((1, false), (attempts[1].Attempt, attempts[1].IsRetried));
+        Assert.Matches(@"^GET https://torture\.test/v1/things: 503 in \d+ ms, retried in 5 ms$", attempts[0].ToString());
+        Assert.DoesNotContain("token", attempts[0].ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LogsAConnectionFailure()
+    {
+        var attempts = new List<ApiAttempt>();
+        var server = new Server((_, _, _) => throw new HttpRequestException("refused"));
+        using var client = new TortureClient(
+            "token",
+            new()
+            {
+                BaseUrl = "https://torture.test/v1",
+                HttpMessageHandler = server,
+                MaxRetries = 0,
+                Log = attempts.Add,
+            }
+        );
+        await Assert.ThrowsAsync<ApiConnectionException>(() => client.Things.RetrieveAsync("t1"));
+        var attempt = Assert.Single(attempts);
+        Assert.Null(attempt.StatusCode);
+        Assert.Equal("refused", attempt.Outcome);
+    }
+
     [Fact]
     public async Task ABodilessSuccessIsNullWhereTheSpecAllowsIt()
     {

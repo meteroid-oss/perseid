@@ -778,12 +778,26 @@ using var client = new AcmeClient("sk_live_...", new AcmeClientOptions { MaxRetr
 
 - `new AcmeClient()` reads `ACME_API_KEY` and `ACME_BASE_URL`.
 - Options: `BaseUrl`, `Token`, `Timeout`, `MaxRetries`, `RetrySchedule`, `UserAgent`, `Handlers`
-  ([middleware](customizing.md#middleware)), `HttpMessageHandler`.
+  ([middleware](customizing.md#middleware)), `HttpMessageHandler`, `Log`.
 - Credentials: `TokenProvider`, `ClientId`, `ClientSecret`, `OAuthClientAuthInBody`,
   `BasicAuth`, `ApiKeys`.
 - `new AcmeClient(httpClient, token)` sends requests through your own `HttpClient`.
 - Without a base URL, the constructor throws an `AcmeException`.
 - The client is thread-safe and pools connections: create one and reuse it.
+
+### Logging
+
+```csharp
+new AcmeClientOptions { Log = attempt => Console.WriteLine(attempt) };
+// GET https://api.acme.com/v1/customers: 503 in 120 ms, retried in 500 ms
+```
+
+`Log` receives an `ApiAttempt` per HTTP attempt: `Operation`, `Method`, `Url` (without its query
+or user info), `Attempt`, `StatusCode` or `Error`, `Elapsed` and `RetryIn`. It never holds
+headers, credentials or bodies. Log it at debug level, and at information level when
+`IsRetried`. With [dependency injection](#notes), attempts go to the `ILoggerFactory` of the
+container, in the `Acme` category; `AcmeServiceCollectionExtensions.LogTo(logger)` sends them to
+another `ILogger`.
 
 ### Calls and options
 
@@ -821,19 +835,24 @@ await foreach (var chunk in stream) { ... }
 ```
 
 Typed events give an `EventStream<T>` of models ending at `[DONE]`, with `LastEvent` for the raw
-event. Streams are enumerated once.
+event. Streams are enumerated once. An `error` event, or data that is no `T` but an object with an
+`error`, throws an `ApiException` with the status and headers of the response and the event's data
+as `Body`; `ping` and `keepalive` events that are no `T` are skipped. The `CreateStreamAsync` twin
+of a multipart operation sends `stream=true` itself, and neither body has a `Stream` property.
 
 ### Errors
 
 | Exception | When |
 |---|---|
 | `AcmeException` | Base of everything the SDK throws |
-| `ApiException` | Error response: `StatusCode`, `Headers`, `Body` (truncated in the message), `Error`, `GetError<T>()`, `RequestId` |
+| `ApiException` | Error response: `StatusCode`, `Headers`, `Body`, `Error`, `GetError<T>()`, `RequestId` |
 | `BadRequestException`, `UnauthorizedException`, `NotFoundException`, `RateLimitException`, `ServerErrorException`... | Subclasses by status |
 | `ApiConnectionException`, `ApiTimeoutException` | No response, or none within the timeout |
 | `ApiDecodeException` | A 2xx body the SDK cannot read |
 
-`Error` is the body parsed as the schema declared for the status, else a `JsonElement`.
+`Error` is the body parsed as the schema declared for the status, else a `JsonElement`. The message
+reads `HTTP 429 (rate_limit_exceeded): Slow down`: the `code` (else `type`) and `message` of the
+body's `error` object, else its `message` or `detail`, else the body, truncated.
 
 ### Raw responses
 
@@ -853,6 +872,10 @@ with `StatusCode`, `Headers`, `RequestId` and `Value`.
   `Status.Values`, to `switch` on `status.Value`. A string converts to any value.
 - A union is an abstract record with a nested record per variant (`StringValue`, `Customer`,
   `ArrayOfIntegers`...), implicit conversions, `AsX` accessors and `Id` for expandable objects.
+- A tagged union converts implicitly from each variant's model that no other variant holds:
+  `InputItem item = new InputMessage { ... }`. Variants are sent with the tag their schema
+  declares; several may share it, and decoding picks the one knowing the most of the object's
+  properties.
 - Unmatched values are `Unrecognized`. `DecodeAs(context.Customer)` reads a union of objects
   as another variant.
 - Inline body unions are named after the operation: `CreateTranscriptionResponse`.
@@ -865,4 +888,6 @@ with `StatusCode`, `Headers`, `RequestId` and `Value`.
 - `dependency_injection = true` under `[csharp.context]` adds
   `services.AddAcmeClient(o => o.Token = ...)`, an `IHttpClientFactory` typed client. Its
   `HttpClient` leaves the timeout to the SDK.
-- `ApiException.cs` is yours after the first generation.
+- `ApiException.cs` is yours after the first generation. It formats its message with
+  `ApiExceptionExtensions.Describe(statusCode, body)`: call it from the constructor of an older
+  one, which reads `Acme API error (status 429): {body}`.
