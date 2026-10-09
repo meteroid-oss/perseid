@@ -1,13 +1,13 @@
-//! The operations an SDK's README shows: a plain call, a paginated list and an event stream,
-//! picked from the API with arguments every language can write as literals.
+//! The operations an SDK's README shows: a plain call, a paginated list, an event stream and a
+//! download, picked from the API with arguments every language can write as literals.
 
 use heck::ToSnakeCase as _;
 use serde_json::{Map, Value, json};
 
 use crate::api::Api;
 
-/// `{call, list, stream, create}`: a plain call, a paginated list, an event stream and a call
-/// with body fields, each `null` when no operation fits.
+/// `{call, list, stream, download, create}`: a plain call, a paginated list, an event stream, a
+/// binary response and a call with body fields, each `null` when no operation fits.
 pub(crate) fn examples(api: &Api) -> Value {
     serde_json::to_value(api).map_or(Value::Null, |model| pick(&model))
 }
@@ -56,6 +56,8 @@ fn pick(model: &Value) -> Value {
         &|op, _| streams(op) && op.get("event_schema_name").is_some(),
         &|op, _| streams(op),
     ]);
+    let binary = |op: &Value| op["response_is_binary"] == true;
+    let download = first(&[&|op, _| binary(op) && get(op), &|op, _| binary(op)]);
     let call = call.or_else(|| list.clone());
     let create = first(&[&|op, ex| {
         plain(op)
@@ -63,7 +65,7 @@ fn pick(model: &Value) -> Value {
                 .as_array()
                 .is_some_and(|f| !f.is_empty())
     }]);
-    json!({ "call": call, "list": list, "stream": stream, "create": create })
+    json!({ "call": call, "list": list, "stream": stream, "download": download, "create": create })
 }
 
 /// Every `(resource, operation)`, child resources after their parent.
@@ -395,6 +397,7 @@ mod tests {
         assert_eq!(petstore["call"]["path_args"][0]["value"], "pet_id");
         assert_eq!(petstore["call"]["result"], "Pet");
         assert!(petstore["list"].is_null() && petstore["stream"].is_null());
+        assert!(petstore["download"].is_null());
 
         let features = examples_of("tests/fixtures/features.yaml");
         assert_eq!(
@@ -404,6 +407,7 @@ mod tests {
         assert_eq!(features["call"]["path_args"][0]["value"], "segment");
         assert_eq!(summary(&features["list"]), "errors.list_scenarios_pages");
         assert_eq!(features["list"]["item"], "Widget");
+        assert_eq!(summary(&features["download"]), "content.download_blob");
         let stream = &features["stream"];
         assert_eq!(summary(stream), "streaming.create_completion_stream");
         assert_eq!(stream["body"]["schema"], "CompletionRequest");
@@ -445,7 +449,7 @@ mod tests {
         });
         assert_eq!(
             pick(&model),
-            json!({ "call": null, "list": null, "stream": null, "create": null })
+            json!({ "call": null, "list": null, "stream": null, "download": null, "create": null })
         );
     }
 

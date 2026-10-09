@@ -22,7 +22,7 @@ use crate::api::{
     auth_schemes::{base64, OAuthUse, Security, SyncFuture},
     middleware::{BoxError, Next, Request as MiddlewareRequest, Response},
     upload::{Multipart, RequestBody},
-    Call, EventStream, RequestOptions, SseEvent, Upload,
+    BinaryResponse, Call, EventStream, RequestOptions, SseEvent, Upload,
 };
 use crate::{error::Error, Configuration};
 
@@ -77,17 +77,27 @@ pub(crate) fn decode_error(error: impl Into<BoxError>) -> Error {
     Error::generic(Failure::Decode(error.into()))
 }
 
-/// The body of a successful response: read whole, or left open for an event stream.
+/// How a successful response's body is read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reading {
+    Whole,
+    Events,
+    Binary,
+}
+
+/// The body of a successful response: read whole, or left open for an event stream or a binary
+/// response.
 pub(crate) enum ResponseBody {
     Buffered(Bytes),
     Events(Box<EventStream>),
+    Binary(Box<BinaryResponse>),
 }
 
 impl ResponseBody {
     fn bytes(self) -> Result<Bytes, Error> {
         match self {
             Self::Buffered(bytes) => Ok(bytes),
-            Self::Events(..) => Err(decode_error("expected a buffered body")),
+            Self::Events(..) | Self::Binary(..) => Err(decode_error("expected a buffered body")),
         }
     }
 }
@@ -123,7 +133,14 @@ fn text(body: ResponseBody) -> Result<String, Error> {
 fn events(body: ResponseBody) -> Result<EventStream, Error> {
     match body {
         ResponseBody::Events(stream) => Ok(*stream),
-        ResponseBody::Buffered(_) => Err(decode_error("expected an event stream")),
+        _ => Err(decode_error("expected an event stream")),
+    }
+}
+
+fn binary(body: ResponseBody) -> Result<BinaryResponse, Error> {
+    match body {
+        ResponseBody::Binary(response) => Ok(*response),
+        _ => Err(decode_error("expected a binary response")),
     }
 }
 
@@ -521,7 +538,7 @@ impl Request {
 
     /// A call decoding the JSON response body as `T`.
     pub fn json<T: DeserializeOwned + Send + 'static>(self, cfg: &Arc<Configuration>) -> Call<T> {
-        Call::new(self, cfg.clone(), json::<T>, false)
+        Call::new(self, cfg.clone(), json::<T>, Reading::Whole)
     }
 
     /// A call decoding the JSON response body as `T`, or `None` when there is no body.
@@ -529,25 +546,26 @@ impl Request {
         self,
         cfg: &Arc<Configuration>,
     ) -> Call<Option<T>> {
-        Call::new(self, cfg.clone(), json_or_none::<T>, false)
+        Call::new(self, cfg.clone(), json_or_none::<T>, Reading::Whole)
     }
 
     /// A call whose response has no body worth decoding.
     pub fn empty(self, cfg: &Arc<Configuration>) -> Call<()> {
-        Call::new(self, cfg.clone(), empty, false)
+        Call::new(self, cfg.clone(), empty, Reading::Whole)
     }
 
-    pub fn binary(self, cfg: &Arc<Configuration>) -> Call<Bytes> {
-        Call::new(self, cfg.clone(), ResponseBody::bytes, false)
+    /// A call answering a [`BinaryResponse`], its body left unread.
+    pub fn binary(self, cfg: &Arc<Configuration>) -> Call<BinaryResponse> {
+        Call::new(self, cfg.clone(), binary, Reading::Binary)
     }
 
     pub fn text(self, cfg: &Arc<Configuration>) -> Call<String> {
-        Call::new(self, cfg.clone(), text, false)
+        Call::new(self, cfg.clone(), text, Reading::Whole)
     }
 
     /// A call opening an event stream of raw events.
     pub fn events(self, cfg: &Arc<Configuration>) -> Call<EventStream<SseEvent>> {
-        Call::new(self.accepting_events(), cfg.clone(), events, true)
+        Call::new(self.accepting_events(), cfg.clone(), events, Reading::Events)
     }
 
     /// A call opening an event stream whose events carry JSON `E`s, until `[DONE]`.
@@ -555,7 +573,7 @@ impl Request {
         self,
         cfg: &Arc<Configuration>,
     ) -> Call<EventStream<E>> {
-        Call::new(self.accepting_events(), cfg.clone(), typed_events::<E>, true)
+        Call::new(self.accepting_events(), cfg.clone(), typed_events::<E>, Reading::Events)
     }
 
     fn accepting_events(mut self) -> Self {
@@ -569,7 +587,7 @@ impl Request {
     pub(crate) async fn send(
         mut self,
         conf: &Configuration,
-        event_stream: bool,
+        reading: Reading,
     ) -> Result<Received, Error> {
         if let Some(error) = self.error.take() {
             return Err(error);
@@ -653,7 +671,7 @@ impl Request {
         let mut renewed = false;
         loop {
             let started = std::time::Instant::now();
-            let attempt = self.attempt(conf, event_stream).await;
+            let attempt = self.attempt(conf, reading).await;
             log::attempt(&self, conf, &attempt, started.elapsed(), retries);
             if let Attempt::Done(status, headers, body) = attempt {
                 return Ok(Received {
@@ -697,11 +715,12 @@ impl Request {
         }
     }
 
-    async fn attempt(&mut self, conf: &Configuration, event_stream: bool) -> Attempt {
+    async fn attempt(&mut self, conf: &Configuration, reading: Reading) -> Attempt {
         let mut request = match self.build_request(conf) {
             Ok(request) => request,
             Err(error) => return Attempt::Failed(Failure::Request(error)),
         };
+        let timeout = self.timeout.unwrap_or(conf.timeout);
         let exchange = async {
             let body = request.body_mut().validate_empty().await;
             body.map_err(|error| Failure::Request(error.into()))?;
@@ -710,8 +729,14 @@ impl Request {
                 .await
                 .map_err(Failure::Transport)?;
             let status = response.status();
-            if status.is_success() && event_stream {
+            if status.is_success() && reading == Reading::Events {
                 return open_event_stream(response);
+            }
+            if status.is_success() && reading == Reading::Binary {
+                let (status, headers) = (response.status(), response.headers().clone());
+                let (body, buffered) = response.into_body();
+                let binary = BinaryResponse::new(status, headers.clone(), body, buffered, timeout);
+                return Ok(Attempt::Done(status, headers, ResponseBody::Binary(Box::new(binary))));
             }
             let (status, headers, body) =
                 response.into_parts().await.map_err(Failure::Transport)?;
@@ -721,7 +746,7 @@ impl Request {
                 Attempt::Status(status, headers, body)
             })
         };
-        let result = match self.timeout.unwrap_or(conf.timeout) {
+        let result = match timeout {
             Some(timeout) => tokio::time::timeout(timeout, exchange)
                 .await
                 .unwrap_or(Err(Failure::Timeout)),
@@ -953,7 +978,7 @@ async fn fetch_token(
         request = request.with_authorization(format!("Basic {}", base64(credentials.as_bytes())));
     }
     request = request.with_form_body_param(serde_json::Value::Object(form), &[], &[]);
-    let received = request.send(conf, false).await?;
+    let received = request.send(conf, Reading::Whole).await?;
     let grant: Grant = serde_json::from_slice(&received.body.bytes()?).map_err(decode_error)?;
     if grant.access_token.is_empty() {
         return Err(decode_error("the token endpoint answered without an access_token"));
@@ -995,7 +1020,7 @@ fn open_event_stream(response: Response) -> Result<Attempt, Failure> {
         ));
     }
     let (status, headers) = (response.status(), response.headers().clone());
-    let (body, buffered) = response.into_events();
+    let (body, buffered) = response.into_body();
     let stream = EventStream::new(status, headers.clone(), body, buffered);
     Ok(Attempt::Done(status, headers, ResponseBody::Events(Box::new(stream))))
 }

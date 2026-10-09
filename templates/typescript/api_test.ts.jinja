@@ -30,6 +30,8 @@ test("{{ resource.path | join(".") }}.{{ op.name }}", async () => {
   for await (const event of await {{ call }}) {
     void event;
   }
+{%- elif op.response_is_binary | default(false) %}
+  assert.equal(await (await {{ call }}).text(), {{ case.response.body | tojson }});
 {%- else %}
   await {{ call }};
 {%- endif %}

@@ -187,6 +187,21 @@ Event streams are `Stream`s of the model each event carries, ending at `[DONE]`,
   with an `Error::Api` holding that data and the response's status and headers.
 - Comments are skipped, and so are `ping` and `keepalive` events that are not the model.
 
+A file download (a binary response) is a `BinaryResponse`, its body unread:
+
+```rust
+let audio = client.audio().speech(request).await?.bytes().await?;
+let mut download = client.files().content(id).await?;
+tokio::io::copy(&mut download, &mut tokio::fs::File::create("out.bin").await?).await?;
+```
+
+- `bytes()` reads the whole body, `chunk()` and the `futures_core::Stream` give its chunks, and
+  as a `tokio::io::AsyncRead` it streams anywhere; `status()`, `headers()` and
+  `content_length()` are there before the body.
+- An error status fails the call before any body. Retries end once the headers arrive.
+- The timeout covers the headers, then each read of the body: a long download is not cut short,
+  a stalled one fails with `Error::Timeout`. Dropping the response closes the connection.
+
 ### Errors
 
 ```rust
@@ -333,6 +348,23 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
 - Other streams are an `EventStream` of raw events.
 - Breaking out of the loop or calling `stream.close()` closes the connection.
 
+A file download (a binary response) is a `BinaryResponse`, its body unread:
+
+```ts
+const audio = await (await client.audio.speech({ input: "hi" })).bytes();
+await writeFile("out.bin", await client.files.content(id)); // node:fs/promises, streamed
+```
+
+- `bytes()`, `arrayBuffer()`, `blob()` and `text()` read the whole body; `for await` and
+  `body` (a `ReadableStream`) give its chunks; `status`, `headers` and `response` (the fetch
+  `Response`) are there before the body. `cancel()` leaves the body unread.
+- An error status rejects the call before any body. Retries end once the headers arrive.
+- The timeout covers the headers, then each read of the body: a long download is not cut short,
+  a stalled one fails with `APIConnectionTimeoutError`, any other failed read with
+  `APIConnectionError`.
+- A typed wrapper rather than the bare fetch `Response`, for these errors and the per-read
+  timeout; `asResponse()` still gives the raw `Response`.
+
 ### Errors
 
 ```ts
@@ -463,6 +495,24 @@ with client.completions.create_stream(prompt="hi") as stream:
 
 Events with a documented schema yield models until `[DONE]`, with `stream.last_event` the raw
 event. Other streams yield `SseEvent`s.
+
+A file download (a binary response) is a `BinaryResponse` (`AsyncBinaryResponse`), its body
+unread:
+
+```python
+audio = client.audio.speech(input="hi").read()
+with client.files.content(file_id) as download:
+    download.write_to_file("out.bin")
+```
+
+- `read()` gives the whole body (kept for later calls), `iter_bytes(chunk_size=None)` (or
+  iterating it) the chunks as they arrive and `write_to_file(path)` streams them to disk; each
+  releases the connection. `status_code`, `headers`, `content_type` and `response` (the `httpx`
+  response) are there before the body.
+- An error status raises before any body. Retries end once the headers arrive.
+- The timeout applies to each read, as `httpx` does: a long download is not cut short.
+- Use it in a `with` (`async with`) block, or call `close()`, when the body may be left unread.
+  A sync response dropped unread closes itself; an async one keeps its connection until closed.
 
 ### Errors
 

@@ -45,9 +45,11 @@ const stream = await {{ call }};
 for await (const event of stream) {
   console.log(event);
 }
+    {%- elif op.response_is_binary | default(false) -%}
+const content = await (await {{ call }}).bytes();
     {%- elif ex.result -%}
 const {{ docs.var(ex.result, "result") }} = await {{ call }};
-    {%- elif op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_text | default(false) or op.response_is_binary | default(false) -%}
+    {%- elif op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_text | default(false) -%}
 const result = await {{ call }};
     {%- else -%}
 await {{ call }};

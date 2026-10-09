@@ -714,6 +714,121 @@ class MiddlewareTest(unittest.TestCase):
         self.assertEqual(log, ["before", "after 503", "before", "after 200"])
 
 
+class Chunks:
+    """A response body sent chunk by chunk, counting what the server produced; it may fail last."""
+
+    def __init__(self, *chunks: bytes, fail: Exception | None = None) -> None:
+        self.chunks = chunks
+        self.fail = fail
+        self.sent = 0
+
+    def __iter__(self):
+        for chunk in self.chunks:
+            self.sent += 1
+            yield chunk
+        if self.fail is not None:
+            raise self.fail
+
+    async def __aiter__(self):
+        for chunk in self:
+            yield chunk
+
+
+class BinaryResponseTest(unittest.TestCase):
+    def test_chunks_are_read_as_they_are_consumed(self) -> None:
+        body = Chunks(b"ab", b"cd", b"ef")
+        with sync_client(Recorder(httpx.Response(200, content=iter(body)))) as api:
+            with api.content.download_blob() as download:
+                self.assertEqual(body.sent, 0, "the body is not read before it is consumed")
+                self.assertEqual(download.status_code, 200)
+                chunks = download.iter_bytes()
+                self.assertEqual(next(chunks), b"ab")
+                self.assertEqual(body.sent, 1)
+                self.assertEqual(list(chunks), [b"cd", b"ef"])
+            self.assertTrue(download.response.is_closed)
+
+    def test_read_gives_the_whole_body_once_and_releases_the_connection(self) -> None:
+        handler = Recorder(httpx.Response(200, content=iter(Chunks(b"ab", b"cd")), headers={"content-type": "image/png"}))
+        with sync_client(handler) as api:
+            download = api.content.download_image()
+            self.assertEqual(download.content_type, "image/png")
+            self.assertEqual(download.read(), b"abcd")
+            self.assertTrue(download.response.is_closed)
+            self.assertEqual(download.read(), b"abcd")
+            self.assertEqual(list(download.iter_bytes(3)), [b"abc", b"d"])
+
+    def test_write_to_file_streams_the_body_to_disk(self) -> None:
+        handler = Recorder(httpx.Response(200, content=iter(Chunks(*(bytes([i]) * 1000 for i in range(5))))))
+        with tempfile.TemporaryDirectory() as directory, sync_client(handler) as api:
+            path = Path(directory) / "blob.bin"
+            download = api.content.download_blob()
+            download.write_to_file(path)
+            self.assertTrue(download.response.is_closed)
+            self.assertEqual(path.read_bytes(), b"".join(bytes([i]) * 1000 for i in range(5)))
+
+    def test_an_error_status_is_raised_before_any_body(self) -> None:
+        handler = Recorder(httpx.Response(404, json={"error": "gone"}))
+        with sync_client(handler, max_retries=0) as api:
+            with self.assertRaises(features.NotFoundError) as raised:
+                api.content.download_blob()
+        self.assertEqual(body_get(raised.exception.body, "error"), "gone")
+
+    def test_retries_stop_once_the_headers_arrive(self) -> None:
+        body = Chunks(b"ab", fail=httpx.ReadError("reset"))
+        handler = Recorder(unavailable(), httpx.Response(200, content=iter(body)))
+        with sync_client(handler) as api:
+            download = api.content.download_blob()
+            self.assertEqual(len(handler.requests), 2, "a 503 before the body is retried")
+            with self.assertRaises(features.APIConnectionError):
+                download.read()
+        self.assertEqual(len(handler.requests), 2, "a failure while reading the body is not")
+
+    def test_a_read_timeout_of_the_body_is_a_timeout_error(self) -> None:
+        body = Chunks(b"ab", fail=httpx.ReadTimeout("slow"))
+        with sync_client(Recorder(httpx.Response(200, content=iter(body)))) as api:
+            with self.assertRaises(features.APITimeoutError):
+                list(api.content.download_blob())
+
+    def test_a_response_dropped_unread_releases_its_connection(self) -> None:
+        with sync_client(Recorder(httpx.Response(200, content=iter(Chunks(b"ab"))))) as api:
+            download = api.content.download_blob()
+            response = download.response
+            del download
+            self.assertTrue(response.is_closed)
+
+    def test_the_raw_response_holds_the_unread_body(self) -> None:
+        handler = Recorder(httpx.Response(200, content=b"abc", headers={"x-request-id": "req_1"}))
+        with sync_client(handler) as api:
+            raw = api.with_raw_response.content.download_blob()
+            self.assertEqual(raw.request_id, "req_1")
+            with raw.parse() as download:
+                self.assertEqual(download.read(), b"abc")
+
+    def test_the_async_client_streams_the_body(self) -> None:
+        body = Chunks(b"ab", b"cd")
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, content=body.__aiter__())
+
+        async def run() -> None:
+            async with async_client(handler) as api:
+                async with await api.content.download_blob() as download:
+                    self.assertEqual(body.sent, 0)
+                    chunks = []
+                    async for chunk in download:
+                        chunks.append(chunk)
+                        self.assertEqual(body.sent, len(chunks))
+                    self.assertEqual(chunks, [b"ab", b"cd"])
+                self.assertTrue(download.response.is_closed)
+                self.assertEqual(await (await api.content.download_blob()).read(), b"abcd")
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "blob.bin"
+                    await (await api.content.download_blob()).write_to_file(path)
+                    self.assertEqual(path.read_bytes(), b"abcd")
+
+        asyncio.run(run())
+
+
 class CancellationTest(unittest.TestCase):
     def test_a_cancelled_call_is_not_retried_and_the_client_stays_usable(self) -> None:
         calls: list[httpx.Request] = []

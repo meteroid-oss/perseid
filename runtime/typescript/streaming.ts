@@ -115,6 +115,89 @@ export class EventStream extends Stream<SseEvent> {
   }
 }
 
+/**
+ * A binary response, its body read only as it is consumed: `bytes()`, `arrayBuffer()`, `blob()`
+ * and `text()` read it whole, `for await` and `body` give its chunks as they arrive. The body is
+ * read once. The call's timeout covers waiting for the headers, then each read of the body; a
+ * failed read throws an `APIConnectionError`. Call `cancel()` to leave the body unread.
+ */
+export class BinaryResponse implements AsyncIterable<Uint8Array> {
+  /** @internal */
+  constructor(
+    /** The HTTP response, for its status, headers and URL. Read the body through this object. */
+    public readonly response: Response,
+    /** The body as a stream of chunks. */
+    public readonly body: ReadableStream<Uint8Array>
+  ) {}
+
+  /** The HTTP status. */
+  public get status(): number {
+    return this.response.status;
+  }
+
+  /** The response headers, such as `content-type` and `content-length`. */
+  public get headers(): Headers {
+    return this.response.headers;
+  }
+
+  /** The whole body. */
+  public async bytes(): Promise<Uint8Array> {
+    return await this.concat();
+  }
+
+  public async arrayBuffer(): Promise<ArrayBuffer> {
+    return (await this.concat()).buffer as ArrayBuffer;
+  }
+
+  /** The whole body, typed by its `content-type`. */
+  public async blob(): Promise<Blob> {
+    return new Blob([await this.concat()], { type: this.headers.get("content-type") ?? "" });
+  }
+
+  /** The whole body, decoded as UTF-8. */
+  public async text(): Promise<string> {
+    return new TextDecoder().decode(await this.concat());
+  }
+
+  /** Stops reading the body and releases the connection. */
+  public async cancel(): Promise<void> {
+    if (!this.body.locked) {
+      await this.body.cancel();
+    }
+  }
+
+  public async *[Symbol.asyncIterator](): AsyncIterator<Uint8Array> {
+    const reader = this.body.getReader();
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          return;
+        }
+        yield chunk.value;
+      }
+    } finally {
+      reader.cancel().catch(() => undefined);
+    }
+  }
+
+  private async concat() {
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    for await (const chunk of this) {
+      chunks.push(chunk);
+      length += chunk.byteLength;
+    }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  }
+}
+
 class SseParser {
   public id?: string;
   private retry: number | undefined;

@@ -12,7 +12,7 @@ use http::{HeaderMap, StatusCode};
 
 use crate::{
     error::Error,
-    request::{Request, ResponseBody},
+    request::{Reading, Request, ResponseBody},
     Configuration,
 };
 
@@ -24,7 +24,7 @@ enum State<T> {
         request: Box<Request>,
         cfg: Arc<Configuration>,
         decode: Decode<T>,
-        stream: bool,
+        reading: Reading,
     },
     Sending(Sending<T>),
     Done,
@@ -44,7 +44,7 @@ impl<T: Send + 'static> Call<T> {
         request: Request,
         cfg: Arc<Configuration>,
         decode: Decode<T>,
-        stream: bool,
+        reading: Reading,
     ) -> Self {
         let request = Box::new(request);
         Self {
@@ -52,7 +52,7 @@ impl<T: Send + 'static> Call<T> {
                 request,
                 cfg,
                 decode,
-                stream,
+                reading,
             },
         }
     }
@@ -73,9 +73,9 @@ impl<T: Send + 'static> Call<T> {
                 request,
                 cfg,
                 decode,
-                stream,
+                reading,
             } => State::Sending(Box::pin(async move {
-                let response = request.send(&cfg, stream).await?;
+                let response = request.send(&cfg, reading).await?;
                 Ok(ApiResponse {
                     status: response.status,
                     headers: response.headers,

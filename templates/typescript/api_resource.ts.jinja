@@ -63,6 +63,7 @@
 {% set streams = resource.operations | selectattr("response_is_event_stream") | list -%}
 {% set typed_streams = streams | selectattr("event_schema_name", "defined") | list | length > 0 -%}
 {% set raw_streams = streams | rejectattr("event_schema_name", "defined") | list | length > 0 -%}
+{% set binaries = resource.operations | selectattr("response_is_binary") | list | length > 0 -%}
 
 {% set body -%}
 {% for op in resource.operations -%}
@@ -123,7 +124,7 @@ export class {{ resource_type_name }} {
         {% elif op.response_is_event_stream -%}
             {% set response_type = runtime("EventStream") -%}
         {% elif op.response_is_binary | default(false) -%}
-            {% set response_type = "Uint8Array" -%}
+            {% set response_type = runtime("BinaryResponse") -%}
         {% elif op.response_is_text | default(false) -%}
             {% set response_type = "string" -%}
         {% elif op.response_body_json_type is defined -%}
@@ -393,8 +394,9 @@ import { {{ sdk.client_name }}Request, type {{ sdk.client_name }}RequestContext,
 {% else -%}
 import type { {{ sdk.client_name }}RequestContext } from "../request.js";
 {% endif -%}
-{% if streams or "binary" in kinds or "multipart" in kinds -%}
+{% if streams or binaries or "binary" in kinds or "multipart" in kinds -%}
 import {
+    {% if binaries %}type {{ runtime_import("BinaryResponse") }},{% endif %}
     {% if raw_streams %}type {{ runtime_import("EventStream") }},{% endif %}
     {% if typed_streams %}type {{ runtime_import("Stream") }},{% endif %}
     {% if "multipart" in kinds %}MultipartBody, type Upload,{% endif %}

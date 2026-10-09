@@ -39,7 +39,7 @@
     {%- elif op.response_is_event_stream -%}
         {%- set returned = "APIPromise<" ~ ("Stream<" ~ (op.event_schema_name | to_upper_camel_case) ~ ">" if op.event_schema_name is defined else "EventStream") ~ ">" -%}
     {%- elif op.response_is_binary | default(false) -%}
-        {%- set returned = "APIPromise<Uint8Array>" -%}
+        {%- set returned = "APIPromise<BinaryResponse>" -%}
     {%- elif op.response_is_text | default(false) -%}
         {%- set returned = "APIPromise<string>" -%}
     {%- else -%}
@@ -58,7 +58,7 @@
 {% macro returns(op) -%}
     {%- if op.pagination is defined %}{{ model(op.response_body_schema_name) }} pages of {{ model(op.pagination.item_schema) }}
     {%- elif op.response_is_event_stream %}{% if op.event_schema_name is defined %}stream of {{ model(op.event_schema_name) }}{% else %}event stream{% endif %}
-    {%- elif op.response_is_binary | default(false) %}bytes
+    {%- elif op.response_is_binary | default(false) %}bytes, streamed
     {%- elif op.response_is_text | default(false) %}text
     {%- elif op.response_body_schema_name is defined %}{{ model(op.response_body_schema_name) }}{% if op.response_body_is_list %} list{% endif %}
     {%- elif op.response_body_json_type is defined %}`{{ m.js_type(op.response_body_json_type) | replace("|", "\\|") }}`
@@ -86,6 +86,14 @@ in [`src/models`](src/models).
 List methods return a `PagePromise`. Awaited, it gives the first `Page`: the response body, its
 properties read on the page, with `items`, `hasNextPage()`, `getNextPage()` and `iterPages()`.
 Iterated with `for await`, it yields every item of every page.
+{%- endif %}
+{%- set binary = namespace(any=false) %}
+{%- for r in api.resources if r.operations | selectattr("response_is_binary") | list %}{% set binary.any = true %}{% endfor %}
+{%- if binary.any %}
+
+A method answering a file gives a `BinaryResponse`, its body unread: `bytes()`, `arrayBuffer()`,
+`blob()` or `text()` read it whole, `for await` and `body` stream its chunks. In Node.js,
+`await writeFile(path, response)` streams it to disk.
 {%- endif %}
 {% if api.resources | length > 1 %}
 {{ docs.contents(api.resources) }}

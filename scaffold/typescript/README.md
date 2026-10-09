@@ -2,6 +2,7 @@
 {% set call = examples.call -%}
 {% set list = examples.list -%}
 {% set stream = examples.stream -%}
+{% set download = examples.download -%}
 {% set result = docs.var(call.result, "result") if call else "result" -%}
 {% macro call_of(request_options="") %}{% if call %}{{ docs.call(call, request_options) }}{% else %}client.someResource.someMethod({{ request_options }}){% endif %}{% endmacro -%}
 # @@CLIENT_NAME@@ TypeScript SDK
@@ -111,6 +112,23 @@ for await (const event of stream) {
   console.log(event);
 }
 ```
+{% endif %}
+{%- if download %}
+## Downloads
+
+A binary response comes as a `BinaryResponse`, its body unread until you consume it: `bytes()`,
+`arrayBuffer()`, `blob()` or `text()` read it whole, `for await` and `body` give its chunks as
+they arrive, and Node's `writeFile` streams it to disk:
+
+```ts
+import { writeFile } from "node:fs/promises";
+
+const content = await (await {{ docs.call(download) }}).bytes();
+await writeFile("download.bin", await {{ docs.call(download) }});
+```
+
+An error status rejects before any body, retries end once the headers arrive, and the timeout
+covers the headers, then each read, not the whole download.
 {% endif %}
 ## Retries and timeouts
 

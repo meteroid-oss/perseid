@@ -25,6 +25,8 @@ async fn {{ docs.method(op) }}() {
     while let Some(event) = stream.next().await {
         event.unwrap();
     }
+{%- elif op.response_is_binary %}
+    assert_eq!(&{{ call }}.bytes().await.unwrap()[..], {{ text(case.response.body) }}.as_bytes());
 {%- else %}
     {{ call }};
 {%- endif %}

@@ -2,6 +2,7 @@
 {% set call = examples.call -%}
 {% set list = examples.list -%}
 {% set stream = examples.stream -%}
+{% set download = examples.download -%}
 {% set create = examples.create -%}
 {% set result = docs.var(call.result, "result") if call else "result" -%}
 {% macro call_of(options="") %}{% if call %}{{ docs.call(call, options=options) }}{% else %}client.some_resource(){{ ".with_options(" ~ options ~ ")" if options }}.some_method(){% endif %}{% endmacro -%}
@@ -155,6 +156,23 @@ while let Some(event) = events.next().await {
     println!("{:?}", event?);
 }
 ```
+{% endif %}
+{%- if download %}
+## Downloads
+
+A binary response comes as a `BinaryResponse`, its body unread until you consume it: `bytes()`
+reads it whole, `chunk()` (or the `Stream`) gives its chunks as they arrive, and as a
+`tokio::io::AsyncRead` it streams to a file:
+
+```rust
+{{ docs.uses(download) }}let content = {{ docs.call(download) }}.await?.bytes().await?;
+
+let mut response = {{ docs.call(download) }}.await?;
+tokio::io::copy(&mut response, &mut tokio::fs::File::create("download.bin").await?).await?;
+```
+
+An error status fails the call before any body, retries end once the headers arrive, and the
+timeout covers the headers, then each read, not the whole download.
 {% endif %}
 ## Features
 

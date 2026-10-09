@@ -40,7 +40,16 @@ from ._errors import (
 )
 from ._pagination import AsyncPage, AsyncPaginator, SyncPage
 from ._response import APIResponse
-from ._streaming import AsyncEventStream, AsyncStream, EventStream, SseEvent, Stream, Upload
+from ._streaming import (
+    AsyncBinaryResponse,
+    AsyncEventStream,
+    AsyncStream,
+    BinaryResponse,
+    EventStream,
+    SseEvent,
+    Stream,
+    Upload,
+)
 from .client import Async{{ client }}, {{ client }}
 {%- set lazy = namespace(pairs=[]) %}
 {%- for resource in api.resources %}
@@ -90,10 +99,12 @@ __all__ = [
     "APIResponseValidationError",
     "APITimeoutError",
     "Async{{ client }}",
+    "AsyncBinaryResponse",
     "AsyncEventStream",
     "AsyncPage",
     "AsyncPaginator",
     "AsyncStream",
+    "BinaryResponse",
     "EventStream",
     "{{ client }}",
     "{{ client }}Error",

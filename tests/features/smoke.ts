@@ -5,6 +5,7 @@ import {
   APIError,
   AuthenticationError,
   BadRequestError,
+  BinaryResponse,
   ConflictError,
   Features,
   FeaturesError,
@@ -93,11 +94,20 @@ async function content(client: Features) {
   assert.equal(await client.content.retrieveScenariosText(), "hello text\n");
   assert.equal(await client.content.retrieveScenariosCsv(), 'id,name\n1,alpha\n2,"be,ta"\n');
 
-  const blob = await client.content.downloadBlob();
+  const download = await client.content.downloadBlob();
+  assert.ok(download instanceof BinaryResponse);
+  assert.equal(download.status, 200);
+  assert.equal(download.headers.get("content-type"), "application/octet-stream");
+  const blob = await download.bytes();
   assert.ok(blob instanceof Uint8Array);
   assert.equal(blob.length, 256);
   assert.deepEqual(Array.from(blob), Array.from({ length: 256 }, (_, i) => i));
-  const image = await client.content.downloadImage();
+  let streamed = 0;
+  for await (const chunk of await client.content.downloadBlob()) {
+    streamed += chunk.length;
+  }
+  assert.equal(streamed, 256);
+  const image = await (await client.content.downloadImage()).bytes();
   assert.deepEqual(
     Array.from(image),
     [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...Array.from({ length: 4 }, () => [0, 1, 0xfe, 0xff]).flat()]

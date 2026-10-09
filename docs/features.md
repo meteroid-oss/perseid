@@ -161,9 +161,15 @@ for await (const chunk of stream) process.stdout.write(chunk.delta);
   decodes into that model and the stream ends at `data: [DONE]`.
 - The raw event (`event`, `id`) of the last item is `lastEvent` / `last_event` / `Event()` /
   `LastEvent`.
+- A binary response (any media type other than JSON, text or an event stream, such as a file
+  download) is streamed in Rust, TypeScript and Python: the method returns a `BinaryResponse`
+  with its status and headers, its body unread. One call reads it whole (`.bytes()`, `.read()`),
+  or it gives its chunks as they arrive, or streams to a file. An error status fails the call
+  before any body; retries end once the headers arrive; the timeout covers the headers, then
+  each read, so a long download is not cut short.
 - A JSON, binary or text response that may also be an event stream gets a `..._stream` twin
-  method, as OpenAI's speech: bytes, or audio events. It sets the body's boolean `stream`
-  property to `true` when there is one.
+  method, as OpenAI's speech: a binary response, or audio events. It sets the body's boolean
+  `stream` property to `true` when there is one.
 - Streamed uploads are not retried.
 
 ## Raw responses

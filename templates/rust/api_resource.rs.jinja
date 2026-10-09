@@ -166,7 +166,7 @@ impl {{ resource_type_name }} {
     {% if op.response_is_event_stream -%}
     {% set returned %}crate::api::EventStream{% if op.event_schema_name is defined %}<crate::models::{{ op.event_schema_name | to_upper_camel_case }}>{% endif %}{% endset -%}
     {% elif op.response_is_binary -%}
-    {% set returned = "bytes::Bytes" -%}
+    {% set returned = "crate::api::BinaryResponse" -%}
     {% elif op.response_is_text -%}
     {% set returned = "String" -%}
     {% elif op.response_body_json_type is defined -%}
