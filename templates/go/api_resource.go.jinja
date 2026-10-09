@@ -140,6 +140,11 @@ func (a *{{ resource_type_name }}) {{ name }}() *{{ go_ident(child.name) }} {
 {% elif op.response_body_schema_name is defined %}{% set ret_type = "*" ~ go_ident(op.response_body_schema_name) %}
 {% else %}{% set ret_type = "" %}{% endif %}
 {% set lead = (op.description | default("")) | trim %}
+{#- The boolean stream part of a multipart operation with an event stream twin: true on the twin, left out of the other. -#}
+{% set stream_twin = op.response_is_event_stream and op.name is endingwith "_stream" and resource.operations | selectattr("name", "equalto", op.name[:-7]) | list %}
+{% set has_stream_twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("response_is_event_stream") | list %}
+{% set stream_part = op.multipart_fields | default([]) | selectattr("name", "equalto", "stream") | first if stream_twin or has_stream_twin else none %}
+{% if stream_part and not stream_part.type.is_bool() %}{% set stream_part = none %}{% endif %}
 {% set paged = op.pagination is defined %}
 {% set errors = op.errors | default({}) %}
 {% set fetch = "fetch" ~ name if paged else name %}
@@ -152,6 +157,10 @@ func (a *{{ resource_type_name }}) {{ name }}() *{{ go_ident(child.name) }} {
 // It returns nil when the response has no body.
 {% endif %}{% if op.stream_property is defined %}//
 // It sets {{ op.stream_property }} to true in the body it sends, leaving {{ body_var }} unchanged.
+{% elif stream_part and stream_twin %}//
+// It sends {{ stream_part.name }} as true, whatever body.{{ go_export(stream_part.name) }} holds.
+{% elif stream_part %}//
+// It leaves {{ stream_part.name }} out: [{{ resource_type_name }}.{{ name }}Stream] streams the response.
 {% endif %}{% if errors | dictsort | map(attribute=1) | reject("equalto", default_error) | list %}//
 // An error response is an [*APIError] whose Body is
 {%- for schema in errors | dictsort | map(attribute=1) | unique %}{% if not loop.first %}{{ " or" if loop.last else "," }}{% endif %} {{ go_article(go_ident(schema)) }} [*{{ go_ident(schema) }}] ({% for status, s in errors | dictsort if s == schema %}{% if not loop.first %}, {% endif %}{{ "any other status" if status == "default" else status }}{% endfor %}){% endfor %}.
@@ -237,7 +246,7 @@ func (a *{{ resource_type_name }}) {{ name }}() *{{ go_ident(child.name) }} {
 {% if op.request_body_optional %}	}
 {% endif %}{% elif op.request_body_kind == "multipart" %}{% if op.request_body_optional %}	if body != nil {
 	{% endif %}	req.SetMultipartBody([]multipartField{
-{% for field in op.multipart_fields %}		{name: {{ field.name | tojson }}, {% if field.is_file and field.is_file_list %}files: body.{{ go_export(field.name) }}{% elif field.is_file %}file: {% if field.required and not field.nullable %}&{% endif %}body.{{ go_export(field.name) }}{% else %}value: body.{{ go_export(field.name) }}{% endif %}{% if field.content_type is defined %}, contentType: {{ field.content_type | tojson }}{% endif %}},
+{% for field in op.multipart_fields if not (stream_part and field.name == stream_part.name and not stream_twin) %}		{name: {{ field.name | tojson }}, {% if field.is_file and field.is_file_list %}files: body.{{ go_export(field.name) }}{% elif field.is_file %}file: {% if field.required and not field.nullable %}&{% endif %}body.{{ go_export(field.name) }}{% elif stream_part and field.name == stream_part.name %}value: true{% else %}value: body.{{ go_export(field.name) }}{% endif %}{% if field.content_type is defined %}, contentType: {{ field.content_type | tojson }}{% endif %}},
 {% endfor %}	})
 {% if op.request_body_optional %}	}
 {% endif %}{% endif %}

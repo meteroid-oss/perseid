@@ -5,6 +5,8 @@ package @@PACKAGE_NAME@@
 import (
 	"math/rand/v2"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -18,6 +20,22 @@ type RequestOption func(*callConfig)
 func WithHeader(name, value string) RequestOption {
 	return func(c *callConfig) {
 		c.headers.Set(name, value)
+	}
+}
+
+// WithQuery sets a query parameter on the request, replacing any value the SDK
+// would send, such as one the API added after this SDK version.
+func WithQuery(name, value string) RequestOption {
+	return func(c *callConfig) {
+		c.query.Set(name, value)
+	}
+}
+
+// WithJSONSet sets the JSON body property at path, keys separated by dots, to
+// value, creating the objects on the way: WithJSONSet("metadata.source", "cli").
+func WithJSONSet(path string, value any) RequestOption {
+	return func(c *callConfig) {
+		c.jsonSet = append(c.jsonSet, jsonSetting{strings.Split(path, "."), value})
 	}
 }
 
@@ -60,15 +78,23 @@ func WithResponseInto(dst **http.Response) RequestOption {
 // callConfig is the per-call view of the client configuration.
 type callConfig struct {
 	headers       http.Header
+	query         url.Values
+	jsonSet       []jsonSetting
 	timeout       time.Duration
 	retrySchedule []time.Duration
 	jitter        bool
 	response      **http.Response
 }
 
+type jsonSetting struct {
+	path  []string
+	value any
+}
+
 func (c *config) callConfig(options []RequestOption) callConfig {
 	call := callConfig{
 		headers:       http.Header{},
+		query:         url.Values{},
 		timeout:       c.timeout,
 		retrySchedule: c.retrySchedule,
 		jitter:        c.jitter,
