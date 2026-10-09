@@ -800,13 +800,14 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
     private ApiException error(Response response, Map<String, Class<?>> errors) throws IOException {
         String body = response.body() == null ? "" : response.body().string();
         int code = response.code();
+        String reported = Utils.errorMessage(Utils.jsonOrNull(body));
         String message =
                 response.request().method()
                         + " "
                         + response.request().url().encodedPath()
                         + " failed with status "
                         + code
-                        + (body.isEmpty() ? "" : ": " + abbreviate(body));
+                        + (body.isEmpty() ? "" : ": " + abbreviate(reported != null ? reported : body));
         Headers headers = response.headers();
         Object error = errorBody(body, code, errors);
         switch (code) {

@@ -529,6 +529,40 @@ public final class Utils {
         }
     }
 
+    /**
+     * The message an error body gives: its {@code error.message}, {@code message} or {@code detail}
+     * string.
+     *
+     * @param json the error body, or null
+     * @return the message, or null when it has none
+     */
+    public static String errorMessage(JsonNode json) {
+        if (json == null || !json.isObject()) {
+            return null;
+        }
+        for (JsonNode candidate :
+                List.of(json.path("error").path("message"), json.path("message"), json.path("detail"))) {
+            if (candidate.isTextual() && !candidate.textValue().isBlank()) {
+                return candidate.textValue();
+            }
+        }
+        return null;
+    }
+
+    /**
+     * {@code text} as JSON.
+     *
+     * @param text the text
+     * @return the JSON value, or null when the text is not JSON
+     */
+    public static JsonNode jsonOrNull(String text) {
+        try {
+            return MAPPER.readTree(text);
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
     /** The mapper the SDK uses, shared: configure a {@link #getObjectMapper()} copy instead. */
     static ObjectMapper objectMapper() {
         return MAPPER;

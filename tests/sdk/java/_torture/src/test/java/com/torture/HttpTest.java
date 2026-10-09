@@ -256,6 +256,30 @@ class HttpTest {
     }
 
     @Test
+    void streamedErrorsAreApiErrorsAndKeepalivesAreSkipped() {
+        okType = "text/event-stream";
+        okBody = "event: ping\ndata: {}\n\ndata: {\"text\":\"hi\"}\n\n"
+                + "data: {\"error\":{\"message\":\"overloaded\",\"type\":\"server_error\"}}\n\ndata: {\"text\":\"late\"}\n\n";
+        List<String> texts = new ArrayList<>();
+        ApiException error;
+        try (EventStream<ChatReply> stream = client().chats().createStream(null)) {
+            error = assertThrows(ApiException.class, () -> stream.forEach(reply -> texts.add(reply.text())));
+            assertFalse(stream.iterator().hasNext());
+        }
+        assertEquals(List.of("hi"), texts);
+        assertEquals("POST /v1/chats streamed an error: overloaded", error.getMessage());
+        assertEquals(200, error.statusCode());
+        assertEquals("req_1", error.requestId().orElseThrow());
+        assertEquals("server_error", ((JsonNode) error.error().orElseThrow()).path("error").path("type").asText());
+
+        okBody = "event: error\ndata: upstream gone\n\n";
+        try (EventStream<ChatReply> stream = client().chats().createStream(null)) {
+            ApiException named = assertThrows(ApiException.class, () -> stream.iterator().hasNext());
+            assertEquals("upstream gone", named.body());
+        }
+    }
+
+    @Test
     void aBodilessSuccessIsEmptyWhereTheSpecAllowsIt() {
         okStatus = 202;
         okBody = "";
@@ -343,7 +367,14 @@ class HttpTest {
         ValidationError body = invalid.error(ValidationError.class).orElseThrow();
         assertEquals("bad name", body.message());
         assertEquals(List.of("too short"), body.fields().orElseThrow().get("name"));
-        assertTrue(invalid.getMessage().contains("422") && invalid.getMessage().contains("bad name"));
+        assertEquals("POST /v1/things failed with status 422: bad name", invalid.getMessage());
+
+        statuses.add(429);
+        errorBody = "{\"error\":{\"message\":\"Slow down\",\"type\":\"rate_limit\"}}";
+        RateLimitException limited = assertThrows(
+                RateLimitException.class, () -> client().things().retrieve("t", RequestOptions.builder().maxRetries(0).build()));
+        assertTrue(limited.getMessage().endsWith("failed with status 429: Slow down"), limited.getMessage());
+        assertEquals(errorBody, limited.body());
 
         statuses.add(500);
         errorBody = "{\"anything\":1}";
