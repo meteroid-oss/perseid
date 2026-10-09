@@ -608,6 +608,12 @@ case errors.As(err, &apiErr):
 - A tagged union has a `Type` field of its own string type (`ShapeType`, with `ShapeCircle`...
   constants), and a pointer per variant. Variants fill in an empty discriminator.
 - Inline object variants of tagged unions are structs of their own: `ContentPartTextVariant`.
+- Variants sharing a tag, as OpenAI's three `message` input items, are sent with it. `Type`
+  still names the variant (`InputItemInputMessage`, sent as `"message"`), and decoding picks
+  the variant knowing the most properties of the object.
+- An enum is a string type with typed constants. A field takes `acme.StatusActive` or
+  `"active"`; a string variable needs `acme.Status(s)`, a pointer field
+  `acme.Ptr(acme.StatusActive)`.
 
 ### Notes
 
