@@ -777,6 +777,25 @@ paths:
         required: true
         content: {application/json: {schema: {type: boolean}}}
       responses: {'204': {description: ok}}
+  # Binary content or an event stream, as OpenAI's speech: bytes, and a `_stream` twin.
+  /speech:
+    post:
+      operationId: create_speech
+      tags: [threads]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input]
+              properties: {input: {type: string}, stream_format: {type: string, enum: [sse, audio]}}
+      responses:
+        '200':
+          description: ok
+          content:
+            audio/mpeg: {schema: {type: string, format: binary}}
+            text/event-stream: {schema: {$ref: '#/components/schemas/Item'}}
   # OpenAI's list shape, paged without a rule: `after` takes the response's `last_id`.
   /threads:
     get:
