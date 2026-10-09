@@ -86,6 +86,14 @@
         "type": "string"
       }
     },
+    "models": {
+      "description": "Type names by schema name, over the schemas' own: `CreateChatCompletionResponse = \"ChatCompletion\"`. References, discriminators and the names of nested types follow.",
+      "default": {},
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
     "name": {
       "description": "Client name, in any form (`Acme`, `acme-api`, `Acme API`): the `AcmeApi` client, the `acme_api` and `acme-api` packages.",
       "type": "string"

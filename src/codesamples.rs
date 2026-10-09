@@ -207,6 +207,7 @@ pub async fn generate_codesamples(
             reserved: BTreeSet::new(),
             names: Default::default(),
             resources: Default::default(),
+            models: Default::default(),
             uuid_strings: false,
         },
     )?;

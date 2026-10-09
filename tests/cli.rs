@@ -226,7 +226,7 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
         "spec = \"openapi.yaml\"\nname = \"Knock\"\nsdks = [\"typescript\", \"python\", \"go\"]\nbase_url = \"https://api.knock.app\"\nidempotency_keys = true\nexclude = [\"notify\"]\n",
         "license = \"Apache-2.0\"\nhomepage = \"https://docs.knock.app\"\nauthors = [\"knock <support@knock.app>\"]\n",
         "[methods]\naddAudienceMembers = \"add_members\"\narchiveMessage = \"mark_as_archived\"\ngetUser = \"get\"\ngetUserFeed = \"list_items\"\n\n",
-        "[resources]\naddAudienceMembers = \"audiences\"\ngetUserFeed = \"users.feeds\"\nlistAudienceMembers = \"audiences\"\n\n",
+        "[resources]\naddAudienceMembers = \"audiences\"\ngetUserFeed = \"users.feeds\"\nlistAudienceMembers = \"audiences\"\n\n[models]\nSchedule = \"MessageSchedule\"\n\n",
         "# entries_cursor\ncursor = \"after\"\nitems = \"entries\"\nnext_cursor = \"page_info.after\"\n",
         "# items_cursor\ncursor = \"after\"\nitems = \"items\"\nnext_cursor = \"page_info.after\"\n",
         "[typescript]\npackage = \"@knocklabs/node\"\nrepo = \"knocklabs/knock-node\"\n",
@@ -246,6 +246,7 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
     );
     assert!(
         out.contains("3 resource placements, 4 method names")
+            && out.contains("1 model name")
             && !out.contains("resources.users.feeds"),
         "{out}"
     );
@@ -255,7 +256,6 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
         "client_settings.opts.branch: perseid clients take no custom options: send `X-Knock-Branch`",
         "pagination.entries_cursor.request.before: previous_cursor_param",
         "pagination.slack_channels_cursor: `query_options.cursor` is a nested parameter",
-        "resources.*.models: perseid names types after their schema, without resource namespaces: MessageSchedule is Schedule",
         "resources.users.list_schedules: `paginated: false`",
         "readme: ",
     ] {
@@ -279,7 +279,8 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
         api.contains("client.users.get(userId: string)")
             && api.contains("client.messages.markAsArchived(")
             && api.contains("client.users.list(options?: UsersListOptions): PagePromise<")
-            && !api.contains("/v1/notify"),
+            && !api.contains("/v1/notify")
+            && api.contains("MessageSchedule"),
         "{api}"
     );
     let audiences =
@@ -5405,3 +5406,85 @@ fn pack_targets_open_their_pull_request_once_the_sdk_they_wrap_is_released() {
         run.output
     );
 }
+
+#[test]
+fn models_rename_types_in_every_sdk_and_keep_their_wire_names() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("openapi.yaml"), ZOO).unwrap();
+    let languages = "rust,typescript,python,go,java,csharp";
+    let (ok, out) = perseid(dir.path(), &["init", "--sdks", languages]);
+    assert!(ok, "{out}");
+    let config = dir.path().join("perseid.toml");
+    let models = "\n[models]\nCreateAnimalResponse = \"AnimalRecord\"\nCat = \"Kitty\"\n";
+    fs::write(&config, fs::read_to_string(&config).unwrap() + models).unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(ok, "{out}");
+    for language in languages.split(',') {
+        let generated = files(&dir.path().join(language));
+        let text = |needle: &str| generated.iter().any(|(_, t)| t.contains(needle));
+        assert!(
+            text("AnimalRecordOwner") && text("Kitty") && !text("CreateAnimalResponse"),
+            "{language}"
+        );
+    }
+    let kitty = fs::read_to_string(dir.path().join("python/zoo/models/kitty.py")).unwrap();
+    assert!(kitty.contains("kind: str = \"Cat\""), "{kitty}");
+
+    fs::write(
+        &config,
+        fs::read_to_string(&config).unwrap() + "Dog = \"Kitty\"\n",
+    )
+    .unwrap();
+    let (ok, out) = perseid(dir.path(), &["generate", "--no-format"]);
+    assert!(!ok && out.contains("Kitty: Cat, Dog"), "{out}");
+}
+
+const ZOO: &str = r#"openapi: 3.1.0
+info: {title: Zoo, version: '1'}
+servers: [{url: 'https://zoo.example.com'}]
+paths:
+  /animals:
+    post:
+      operationId: createAnimal
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CreateAnimalRequest'}}}
+      responses:
+        '200':
+          description: ok
+          content: {application/json: {schema: {$ref: '#/components/schemas/CreateAnimalResponse'}}}
+components:
+  schemas:
+    CreateAnimalRequest:
+      type: object
+      required: [animal]
+      properties:
+        animal: {$ref: '#/components/schemas/Animal'}
+    CreateAnimalResponse:
+      type: object
+      required: [id, animal]
+      properties:
+        id: {type: string}
+        animal: {$ref: '#/components/schemas/Animal'}
+        owner:
+          type: object
+          properties:
+            name: {type: string}
+    Animal:
+      oneOf:
+        - {$ref: '#/components/schemas/Cat'}
+        - {$ref: '#/components/schemas/Dog'}
+      discriminator: {propertyName: kind}
+    Cat:
+      type: object
+      required: [kind]
+      properties:
+        kind: {type: string}
+        lives: {type: integer}
+    Dog:
+      type: object
+      required: [kind]
+      properties:
+        kind: {type: string}
+        good: {type: boolean}
+"#;

@@ -80,6 +80,10 @@ pub struct Config {
     /// puts the method in `client.workspaces.peers`, `workspaces` in the top-level resource.
     #[serde(default)]
     pub resources: BTreeMap<String, String>,
+    /// Type names by schema name, over the schemas' own: `CreateChatCompletionResponse =
+    /// "ChatCompletion"`. References, discriminators and the names of nested types follow.
+    #[serde(default)]
+    pub models: BTreeMap<String, String>,
     /// Also generates the operations marked `x-internal: true`.
     #[serde(default)]
     pub internal: bool,
@@ -794,6 +798,7 @@ impl Config {
             reserved: BTreeSet::new(),
             names: self.names.clone(),
             resources: self.resources.clone(),
+            models: self.models.clone(),
             uuid_strings: self.types.uuid == Some(UuidType::String),
         }
     }

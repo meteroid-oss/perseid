@@ -49,6 +49,9 @@ listWidgetEvents = "events"
 [resources]                         # resources by operation id, as dotted paths
 listWidgetEvents = "widgets.events"
 
+[models]                            # type names by schema name
+CreateWidgetResponse = "Widget"
+
 [pagination]                        # or [[pagination]] for several rules
 cursor = "starting_after"
 item_cursor = "id"
@@ -166,6 +169,7 @@ Each key is also a key of the [language tables](#language-tables), which overrid
 | `user_agent` | kebab-case `name` | Prefix of the `User-Agent` header |
 | `[methods]` | | Method names by operation id, over the [resource-style names](#method-names) |
 | `[resources]` | | Resources by operation id, over the [ones derived from tags and paths](#resources) |
+| `[models]` | | Type names by schema name, over the schema's own: `CreateChatCompletionResponse = "ChatCompletion"`. References and the types named after it (`ChatCompletionChoicesItem`) follow, the JSON keeps the schema's name as discriminator tag, and two schemas given one name fail generation. `perseid init --from stainless.yml` imports the resources' `models` |
 | `[context]` | | Values exposed to templates as `sdk.*` |
 
 `[types]` holds settings of every SDK only:

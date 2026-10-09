@@ -24,10 +24,11 @@ const PROPERTY_ANNOTATIONS: [&str; 5] = [
     "default",
 ];
 
-pub(super) fn normalize(doc: &mut Value) -> Result<()> {
+pub(super) fn normalize(doc: &mut Value, models: &BTreeMap<String, String>) -> Result<()> {
     trim_descriptions(doc);
     upgrade::each_schema(doc, &mut binary_content);
-    let renames = canonicalize_refs(doc);
+    let mut renames = canonicalize_refs(doc);
+    rename_models(doc, models, &mut renames)?;
     upgrade::type_unions(doc);
     let root = doc.clone();
     inline_operation_refs(doc, &root)?;
@@ -835,6 +836,67 @@ pub(super) fn rename_reserved_schemas(
     if renames.is_empty() {
         return renames;
     }
+    let tags = renames.keys().map(|n| (n.clone(), n.clone())).collect();
+    pin_implicit_tags(doc, &tags);
+    apply_renames(doc, &renames);
+    renames
+}
+
+/// Renames the schemas `[models]` names (spec names), adding them to `renames`, the canonical
+/// names by spec name.
+fn rename_models(
+    doc: &mut Value,
+    models: &BTreeMap<String, String>,
+    renames: &mut BTreeMap<String, String>,
+) -> Result<()> {
+    let Some(Value::Object(schemas)) = doc.pointer("/components/schemas") else {
+        return Ok(());
+    };
+    let mut models_renames = BTreeMap::new();
+    for (from, to) in models {
+        let canonical = renames.get(from).unwrap_or(from);
+        match schemas.contains_key(canonical) {
+            true if to.to_upper_camel_case().is_empty() => {
+                bail!("`{from}` in the [models] table of perseid.toml has no name")
+            }
+            true if canonical != to => {
+                models_renames.insert(canonical.clone(), to.clone());
+            }
+            true => {}
+            false => tracing::warn!(
+                "`{from}` in the [models] table of perseid.toml is no schema of the spec"
+            ),
+        }
+    }
+    let mut named: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for name in schemas.keys() {
+        let new = models_renames.get(name).unwrap_or(name);
+        (named.entry(new.to_upper_camel_case()).or_default()).push(name);
+    }
+    let clashes: Vec<String> = (named.into_iter())
+        .filter(|(_, names)| {
+            names.len() > 1 && names.iter().any(|n| models_renames.contains_key(*n))
+        })
+        .map(|(new, names)| format!("{new}: {}", names.join(", ")))
+        .collect();
+    if !clashes.is_empty() {
+        bail!(
+            "the [models] table of perseid.toml gives schemas the same name:\n  - {}",
+            clashes.join("\n  - ")
+        );
+    }
+    apply_renames(doc, &models_renames);
+    for canonical in renames.values_mut() {
+        if let Some(new) = models_renames.remove(canonical) {
+            *canonical = new;
+        }
+    }
+    renames.extend(models_renames);
+    Ok(())
+}
+
+/// Renames schemas, their references and discriminator mappings.
+fn apply_renames(doc: &mut Value, renames: &BTreeMap<String, String>) {
     if let Some(Value::Object(schemas)) = doc.pointer_mut("/components/schemas") {
         let renamed = std::mem::take(schemas)
             .into_iter()
@@ -842,10 +904,7 @@ pub(super) fn rename_reserved_schemas(
             .collect();
         *schemas = renamed;
     }
-    let tags = renames.keys().map(|n| (n.clone(), n.clone())).collect();
-    pin_implicit_tags(doc, &tags);
-    rename_references(doc, &renames);
-    renames
+    rename_references(doc, renames);
 }
 
 fn rename_references(value: &mut Value, renames: &BTreeMap<String, String>) {
@@ -2471,7 +2530,7 @@ mod tests {
     use super::*;
 
     fn normalized(mut doc: Value) -> Value {
-        normalize(&mut doc).unwrap();
+        normalize(&mut doc, &BTreeMap::new()).unwrap();
         doc
     }
 
@@ -2610,12 +2669,62 @@ mod tests {
                     "discriminator": { "propertyName": "kind" } }
             } }
         });
-        normalize(&mut doc).unwrap();
+        normalize(&mut doc, &BTreeMap::new()).unwrap();
         rename_reserved_schemas(&mut doc, &BTreeSet::from(["Result".to_owned()]));
         let mapping = &doc["components"]["schemas"]["Event"]["discriminator"]["mapping"];
         assert_eq!(mapping["Result"], json!("#/components/schemas/ResultModel"));
         assert_eq!(mapping["Odd/Name"], json!("#/components/schemas/Odd_Name"));
         assert_eq!(mapping.get("Tagged"), None);
+    }
+
+    #[test]
+    fn models_renames_schemas_their_references_and_keeps_implicit_tags() {
+        let mut doc = json!({
+            "paths": { "/c": { "post": { "operationId": "op", "responses": { "200": {
+                "description": "", "content": { "application/json": {
+                    "schema": { "$ref": "#/components/schemas/CreateCompletionResponse" } } } } } } } },
+            "components": { "schemas": {
+                "CreateCompletionResponse": { "type": "object", "properties": {
+                    "choice": { "$ref": "#/components/schemas/Odd~1Choice" } } },
+                "Odd/Choice": { "type": "object" },
+                "Event": { "oneOf": [{ "$ref": "#/components/schemas/Odd~1Choice" }],
+                    "discriminator": { "propertyName": "kind" } }
+            } }
+        });
+        let models = BTreeMap::from([
+            (
+                "CreateCompletionResponse".to_owned(),
+                "Completion".to_owned(),
+            ),
+            ("Odd/Choice".to_owned(), "Choice".to_owned()),
+            ("Missing".to_owned(), "Gone".to_owned()),
+        ]);
+        normalize(&mut doc, &models).unwrap();
+        let schemas = doc["components"]["schemas"].as_object().unwrap();
+        let names: BTreeSet<&str> = schemas.keys().map(String::as_str).collect();
+        assert_eq!(names, BTreeSet::from(["Choice", "Completion", "Event"]));
+        assert_eq!(
+            doc.pointer("/paths/~1c/post/responses/200/content/application~1json/schema/$ref"),
+            Some(&json!("#/components/schemas/Completion"))
+        );
+        assert_eq!(
+            schemas["Completion"]["properties"]["choice"]["$ref"],
+            json!("#/components/schemas/Choice")
+        );
+        let mapping = &schemas["Event"]["discriminator"]["mapping"];
+        assert_eq!(mapping["Odd/Choice"], json!("#/components/schemas/Choice"));
+    }
+
+    #[test]
+    fn models_giving_two_schemas_one_name_fail() {
+        let mut doc = json!({ "paths": {}, "components": { "schemas": {
+            "A": { "type": "object" }, "chat_completion": { "type": "object" } } } });
+        let models = BTreeMap::from([("A".to_owned(), "ChatCompletion".to_owned())]);
+        let error = format!("{:#}", normalize(&mut doc, &models).unwrap_err());
+        assert!(
+            error.contains("ChatCompletion: A, chat_completion"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -3010,7 +3119,7 @@ mod tests {
     fn external_references_are_rejected_with_their_location() {
         let mut doc = json!({ "paths": { "/x": { "get": {
             "operationId": "op", "parameters": [{ "$ref": "other.yaml#/P" }], "responses": {} } } } });
-        let error = format!("{:#}", normalize(&mut doc).unwrap_err());
+        let error = format!("{:#}", normalize(&mut doc, &BTreeMap::new()).unwrap_err());
         assert!(
             error.contains("GET /x") && error.contains("other.yaml"),
             "{error}"
