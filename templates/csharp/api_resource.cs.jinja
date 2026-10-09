@@ -34,8 +34,10 @@
 {%- endmacro -%}
 {#- The boolean part of a multipart body the operation and its `_stream` twin set themselves. -#}
 {% macro stream_field(op) -%}
-{% set twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("stream_property", "defined") | first -%}
-{% if op.request_body_kind == "multipart" %}{{ op.stream_property if op.stream_property is defined else (twin.stream_property if twin else "") }}{% endif %}
+{% set stream_twin = op.response_is_event_stream and op.name is endingwith "_stream" and resource.operations | selectattr("name", "equalto", op.name[:-7]) | list -%}
+{% set has_stream_twin = resource.operations | selectattr("name", "equalto", op.name ~ "_stream") | selectattr("response_is_event_stream") | list -%}
+{% set part = op.multipart_fields | default([]) | selectattr("name", "equalto", "stream") | first -%}
+{% if op.request_body_kind == "multipart" and (stream_twin or has_stream_twin) and part and part.type.to_csharp() == "bool" %}stream{% endif %}
 {%- endmacro -%}
 {#- The C# type of path parameter `p`: a string, unless its style or `content` types it. -#}
 {% macro path_param_type(op, p) -%}
@@ -473,7 +475,7 @@ public sealed class {{ raw_type_name }} : {{ raw_interface_name }}
 {%- set value = f.body ~ "." ~ m.member(field.name, f.body_type) %}
 {%- set part_type = (", " ~ (field.content_type | tojson)) if field.content_type is defined else "" %}
 {%- if field.name == stream_field(op) %}
-{%- if op.stream_property is defined %}
+{%- if op.response_is_event_stream %}
 {%- set lines.list = lines.list + ["form.Field(" ~ (field.name | tojson) ~ ", true, " ~ context ~ ".Options" ~ part_type ~ ");"] %}
 {%- endif %}
 {%- elif field.is_file and field.is_file_list %}
