@@ -1,0 +1,9 @@
+---
+interface Props { label: string; description?: string; tags?: string[] }
+const { label, description } = Astro.props;
+const id = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+---
+<section class="pd-update" id={id}>
+  <div class="pd-update-label"><span>{label}</span>{description && <p>{description}</p>}</div>
+  <div class="pd-update-body"><slot /></div>
+</section>

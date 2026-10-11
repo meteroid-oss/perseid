@@ -1,0 +1,70 @@
+{
+  "name": "perseid-docs",
+  "version": "0.1.2",
+  "description": "Docs sites for APIs whose SDKs perseid generates",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/meteroid-oss/perseid",
+  "keywords": [
+    "openapi",
+    "api-reference",
+    "docs",
+    "sdk",
+    "perseid",
+    "astro"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "bin": {
+    "perseid-docs": "dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/astro/index.js",
+    "./build": "./dist/build/node.js",
+    "./routes": "./dist/astro/routes.js",
+    "./mintlify": "./astro/mintlify/index.js",
+    "./astro/*": "./astro/*",
+    "./content": "./dist/astro/content.js",
+    "./reference": "./dist/reference/index.js",
+    "./reference/model": "./dist/reference/model.js",
+    "./reference/styles.css": "./styles/reference.css",
+    "./reference/client": "./dist/reference/client.js",
+    "./embed": "./dist/embed.js"
+  },
+  "files": [
+    "dist",
+    "!dist/test",
+    "perseid",
+    "astro",
+    "styles"
+  ],
+  "scripts": {
+    "build": "tsc -p . && tsc -p tsconfig.client.json && esbuild embed/embed.ts --bundle --format=iife --minify --target=es2022 --loader:.css=text --outfile=dist/embed.js && cp embed/embed.html dist/embed.html",
+    "typecheck": "tsc -p . --noEmit && tsc -p tsconfig.client.json --noEmit",
+    "test": "node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "smol-toml": "^1.4.0",
+    "yaml": "^2.8.0",
+    "shiki": "^4.5.0",
+    "@astrojs/starlight": "^0.42.5",
+    "starlight-sidebar-topics": "^0.9.0",
+    "@iconify-json/tabler": "^1.2.0",
+    "marked": "^16.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0",
+    "astro": "^7.3.6",
+    "esbuild": "^0.25.0"
+  },
+  "peerDependencies": {
+    "astro": "^7.2.10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meteroid-oss/perseid.git",
+    "directory": "packages/perseid-docs"
+  }
+}

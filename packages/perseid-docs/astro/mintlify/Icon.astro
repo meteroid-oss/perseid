@@ -1,0 +1,16 @@
+---
+// A Tabler icon by name, inlined: Mintlify's `icon` props, with `"icons": {"library": "tabler"}`.
+import { readFileSync } from "node:fs";
+import config from "virtual:perseid-docs/config";
+interface Props { name?: string | undefined; class?: string }
+type IconSet = { icons: Record<string, { body: string }>; aliases?: Record<string, { parent: string }> };
+
+const g = globalThis as { __pdIcons?: IconSet };
+if (!g.__pdIcons && config.icons) g.__pdIcons = JSON.parse(readFileSync(config.icons, "utf8")) as IconSet;
+const set = g.__pdIcons;
+const { name, class: className } = Astro.props;
+const find = (n: string) => set?.icons[n] ?? set?.icons[set?.aliases?.[n]?.parent ?? ""];
+const icon = name && set ? (find(name) ?? find(`brand-${name}`)) : undefined;
+const svg = icon ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">${icon.body}</svg>` : "";
+---
+{svg && <span class:list={["pd-icon", className]} set:html={svg} aria-hidden="true" />}

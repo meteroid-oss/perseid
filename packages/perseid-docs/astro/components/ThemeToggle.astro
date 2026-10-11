@@ -1,0 +1,53 @@
+---
+import config from "virtual:perseid-docs/config";
+import Icon from "../mintlify/Icon.astro";
+const options = [
+  { value: "auto", label: "System", icon: "device-desktop" },
+  { value: "light", label: "Light", icon: "sun" },
+  { value: "dark", label: "Dark", icon: "moon" },
+];
+---
+
+<pd-theme-toggle class="pd-theme-toggle" role="radiogroup" aria-label="Theme" data-default={config.appearance ?? "auto"}>
+  {options.map((o) => (
+    <button type="button" role="radio" data-theme-value={o.value} aria-label={o.label} title={o.label}>
+      <Icon name={o.icon} />
+    </button>
+  ))}
+</pd-theme-toggle>
+
+<script>
+  const KEY = "starlight-theme";
+  const dark = matchMedia("(prefers-color-scheme: dark)");
+  const fallback = () => document.querySelector<HTMLElement>("pd-theme-toggle")?.dataset.default || "auto";
+  const stored = () => {
+    try {
+      return localStorage.getItem(KEY) || fallback();
+    } catch {
+      return fallback();
+    }
+  };
+  const apply = (value: string) => {
+    document.documentElement.dataset.theme = value === "auto" ? (dark.matches ? "dark" : "light") : value;
+    for (const b of document.querySelectorAll<HTMLButtonElement>("[data-theme-value]")) {
+      b.setAttribute("aria-checked", String(b.dataset.themeValue === value));
+    }
+  };
+  customElements.define(
+    "pd-theme-toggle",
+    class extends HTMLElement {
+      connectedCallback() {
+        apply(stored());
+        this.addEventListener("click", (ev) => {
+          const value = (ev.target as Element).closest<HTMLButtonElement>("[data-theme-value]")?.dataset.themeValue;
+          if (!value) return;
+          try {
+            localStorage.setItem(KEY, value);
+          } catch {}
+          apply(value);
+        });
+      }
+    },
+  );
+  dark.addEventListener("change", () => stored() === "auto" && apply("auto"));
+</script>

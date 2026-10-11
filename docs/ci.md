@@ -653,6 +653,10 @@ acme/api ──spec──▶ acme/api-sdks ──PRs──▶ acme/api-typescrip
 acme/api-sdks ──PR──▶ acme/docs (api/)
 ```
 
+The site itself can be [`perseid-docs`](../packages/perseid-docs), an Astro integration reading
+`api/`: a reference that follows the reader's SDK language, guides in MDX, an embed for other
+sites, and an importer of Mintlify sites.
+
 perseid owns `path`: each pull request replaces the folder whole, deleting the files it no longer
 writes, and changes nothing outside it. The repository needs no setup beyond the App, or token,
 of `sdks.yml` reaching it: `perseid sync` installs the perseid App there, and `perseid status`

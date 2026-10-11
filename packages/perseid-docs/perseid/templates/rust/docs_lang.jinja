@@ -1,0 +1,39 @@
+{% import "docs.jinja" as docs %}
+{% import "perseid_builtin_reference.jinja" as ref %}
+
+{% macro signature(resource, op) -%}
+    {%- if op.pagination is defined -%}
+{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{{ ref.params(resource, op) }} -> PageCall<{{ op.response_body_schema_name | to_upper_camel_case }}, {{ op.pagination.item_schema | to_upper_camel_case }}>
+    {%- else -%}
+{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{{ ref.params(resource, op) }} -> Call<{{ ref.returned(op) | trim }}>
+    {%- endif -%}
+{%- endmacro %}
+
+{% macro install() %}cargo add {{ sdk.package_name }}{% endmacro %}
+
+{% macro setup() -%}
+use {{ sdk.rust_crate }}::api::{{ sdk.client_name }};
+
+let client = {{ sdk.client_name }}::builder()
+    .token(std::env::var("{{ sdk.env_prefix }}_API_KEY")?)
+    .build()?;
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro path_param(name) %}{{ name | to_rust_ident }}{% endmacro %}
+
+{% macro param(p) %}{{ p.ident | to_rust_ident }}{% endmacro %}
+
+{% macro field(f) %}{{ f.name | to_rust_ident }}{% endmacro %}
+
+{% macro type_name(name) %}{{ name | to_upper_camel_case }}{% endmacro %}
+
+{% macro sample(ex) -%}
+{{ docs.uses(ex) }}
+    {%- if ex.result -%}
+let {{ docs.var(ex.result, "result") }} = {{ docs.call(ex) }}.await?;
+    {%- else -%}
+{{ docs.call(ex) }}.await?;
+    {%- endif -%}
+{%- endmacro %}

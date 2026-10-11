@@ -1,0 +1,43 @@
+{% import "docs.jinja" as docs %}
+{% import "perseid_builtin_reference.jinja" as ref %}
+
+{% macro signature(resource, op) %}{{ ref.signature(resource, op) }}{% endmacro %}
+{% from "types/macros.py.jinja" import field_ident, py_ident %}
+
+{% macro install() %}pip install {{ sdk.package_name }}{% endmacro %}
+
+{% macro setup() -%}
+import os
+from {{ docs.package() }} import {{ sdk.client_name }}
+
+client = {{ sdk.client_name }}(api_key=os.environ["{{ sdk.env_prefix }}_API_KEY"])
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro path_param(name) %}{{ py_ident(name) }}{% endmacro %}
+
+{% macro param(p) %}{{ py_ident(p.ident) }}{% endmacro %}
+
+{% macro field(f) %}{{ field_ident(f) }}{% endmacro %}
+
+{% macro type_name(name) %}{{ name | to_upper_camel_case }}{% endmacro %}
+
+{% macro sample(ex) -%}
+    {%- set op = ex.operation -%}
+    {%- set call = docs.call(ex) -%}
+{{ docs.imports([ex]) }}
+    {%- if op.pagination is defined -%}
+for {{ docs.var(ex.item, "item") }} in {{ call }}:
+    print({{ docs.var(ex.item, "item") }})
+    {%- elif op.response_is_event_stream -%}
+for event in {{ call }}:
+    print(event)
+    {%- elif ex.result -%}
+{{ docs.var(ex.result, "result") }} = {{ call }}
+    {%- elif op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_text | default(false) or op.response_is_binary | default(false) -%}
+result = {{ call }}
+    {%- else -%}
+{{ call }}
+    {%- endif -%}
+{%- endmacro %}

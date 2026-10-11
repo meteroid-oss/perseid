@@ -1,0 +1,5 @@
+---
+interface Props { cols?: number }
+const { cols = 2 } = Astro.props;
+---
+<div class="pd-cards not-content" style={`--pd-cols:${cols}`}><slot /></div>

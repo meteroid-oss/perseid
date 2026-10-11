@@ -1,0 +1,35 @@
+{% import "docs.jinja" as docs %}
+{% import "perseid_builtin_reference.jinja" as ref %}
+
+{% macro signature(resource, op) %}{{ ref.returned(resource, op) | trim }} {{ docs.resource(resource.name) }}.{{ docs.method(op) }}{{ ref.params(resource, op) }}{% endmacro %}
+
+{% macro install() %}implementation("{{ sdk.java_package }}:{{ sdk.npm_package }}:latest.release"){% endmacro %}
+
+{% macro setup() -%}
+import {{ sdk.java_package }}.{{ sdk.client_name }};
+
+{{ sdk.client_name }} client = {{ sdk.client_name }}.fromEnv();
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro path_param(name) %}{{ name | ident("camel", "java") }}{% endmacro %}
+
+{% macro param(p) %}{{ p.ident | ident("camel", "java") }}{% endmacro %}
+
+{% macro field(f) %}{{ f.name | ident("camel", "java") }}{% endmacro %}
+
+{% macro type_name(name) %}{{ name | to_upper_camel_case }}{% endmacro %}
+
+{% macro sample(ex) -%}
+{{ docs.uses(ex) }}
+    {%- if ex.result -%}
+var {{ docs.var(ex.result, "result") }} = {{ docs.call(ex) }};
+    {%- elif ex.operation.pagination is defined -%}
+for (var {{ docs.var(ex.item, "item") }} : {{ docs.call(ex) }}.autoPagingIterable()) {
+    System.out.println({{ docs.var(ex.item, "item") }});
+}
+    {%- else -%}
+{{ docs.call(ex) }};
+    {%- endif -%}
+{%- endmacro %}

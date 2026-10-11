@@ -1,0 +1,60 @@
+{% import "docs.jinja" as docs %}
+{% import "perseid_builtin_reference.jinja" as ref %}
+
+{% macro signature(resource, op) -%}
+    {%- set result = ref.returned(resource, op) | trim -%}
+    {{ docs.resource(resource.name) }}.{{ docs.method(op) }}{{ ref.params(resource, op) }} {{ "(" ~ result ~ ", error)" if result else "error" }}
+{%- endmacro %}
+{% from "types/macros.go.jinja" import go_export, go_ident %}
+
+{% macro install() %}go get {{ sdk.go_module }}{% endmacro %}
+
+{% macro setup() -%}
+import (
+	"context"
+	"os"
+
+	{{ sdk.package_name }} "{{ sdk.go_module }}"
+)
+
+ctx := context.Background()
+client := {{ sdk.package_name }}.New(os.Getenv("{{ sdk.env_prefix }}_API_KEY"), nil)
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro path_param(name) %}{{ name | ident("camel", "go") }}{% endmacro %}
+
+{% macro param(p) %}{{ go_export(p.ident) }}{% endmacro %}
+
+{% macro field(f) %}{{ go_export(f.name) }}{% endmacro %}
+
+{% macro type_name(name) %}{{ go_ident(name) }}{% endmacro %}
+
+{% macro sample(ex) -%}
+    {%- set op = ex.operation -%}
+{{ docs.imports([ex]) }}
+    {%- if op.pagination is defined -%}
+for {{ docs.var(ex.item, "item") }}, err := range {{ docs.call(ex, suffix="AutoPaging") }} {
+	if err != nil {
+		return err
+	}
+	fmt.Println({{ docs.var(ex.item, "item") }})
+}
+    {%- elif ex.result -%}
+{{ docs.var(ex.result, "result") }}, err := {{ docs.call(ex) }}
+if err != nil {
+	return err
+}
+    {%- elif op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_event_stream or op.response_is_text | default(false) or op.response_is_binary | default(false) -%}
+result, err := {{ docs.call(ex) }}
+if err != nil {
+	return err
+}
+    {%- else -%}
+err := {{ docs.call(ex) }}
+if err != nil {
+	return err
+}
+    {%- endif -%}
+{%- endmacro %}

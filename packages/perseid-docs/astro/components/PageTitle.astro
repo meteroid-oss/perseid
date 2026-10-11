@@ -1,0 +1,89 @@
+---
+import config from "virtual:perseid-docs/config";
+import Icon from "../mintlify/Icon.astro";
+
+const route = Astro.locals.starlightRoute;
+type Entry = { type: string; label: string; isCurrent?: boolean; entries?: Entry[] };
+function crumb(entries: Entry[], trail: string[] = []): string[] | undefined {
+  for (const e of entries) {
+    if (e.type === "link" && e.isCurrent) return trail;
+    if (e.type === "group") {
+      const found = crumb(e.entries ?? [], [...trail, e.label]);
+      if (found) return found;
+    }
+  }
+}
+const found = crumb(route.sidebar as Entry[])?.join(" › ") || undefined;
+const group = found === route.entry.data.title ? undefined : found;
+const path = Astro.url.pathname.replace(/\/$/, "") || "/index";
+const markdown = `${path}.md`;
+const page = new URL(markdown, Astro.site ?? Astro.url).href;
+const prompt = encodeURIComponent(`Read ${page} so I can ask questions about it.`);
+const all = [
+  { id: "view", label: "View as Markdown", hint: "Open this page as plain text", icon: "markdown", href: markdown },
+  { id: "chatgpt", label: "Open in ChatGPT", hint: "Ask questions about this page", icon: "brand-openai", href: `https://chatgpt.com/?hints=search&q=${prompt}` },
+  { id: "claude", label: "Open in Claude", hint: "Ask questions about this page", icon: "sparkles", href: `https://claude.ai/new?q=${prompt}` },
+  { id: "perplexity", label: "Open in Perplexity", hint: "Ask questions about this page", icon: "world-search", href: `https://www.perplexity.ai/search/new?q=${prompt}` },
+  { id: "grok", label: "Open in Grok", hint: "Ask questions about this page", icon: "brand-x", href: `https://grok.com/?q=${prompt}` },
+];
+const contextual: string[] = config.contextual ?? ["copy", "view", "chatgpt", "claude"];
+const items = all.filter((i) => contextual.includes(i.id));
+---
+
+<div class="pd-title">
+  {group && <p class="pd-crumb">{group}</p>}
+  <div class="pd-title-row">
+    <h1 id="_top">{route.entry.data.title}</h1>
+    {
+      (contextual.includes("copy") || items.length > 0) && (
+        <pd-page-actions class="pd-actions" data-markdown={markdown}>
+          {contextual.includes("copy") && (
+            <button type="button" class="pd-actions-copy">
+              <Icon name="copy" />
+              <span class="pd-actions-label">Copy page</span>
+            </button>
+          )}
+          {items.length > 0 && (
+            <details class="pd-actions-menu">
+              <summary aria-label="More actions"><Icon name="chevron-down" /></summary>
+              <div class="pd-actions-list">
+                {items.map((i) => (
+                  <a href={i.href} target={i.id === "view" ? undefined : "_blank"} rel="noopener">
+                    <span class="pd-actions-icon"><Icon name={i.icon} /></span>
+                    <span><strong>{i.label}</strong><small>{i.hint}</small></span>
+                  </a>
+                ))}
+              </div>
+            </details>
+          )}
+        </pd-page-actions>
+      )
+    }
+  </div>
+</div>
+
+<script>
+  customElements.define(
+    "pd-page-actions",
+    class extends HTMLElement {
+      connectedCallback() {
+        const button = this.querySelector<HTMLButtonElement>(".pd-actions-copy");
+        const label = button?.querySelector(".pd-actions-label");
+        button?.addEventListener("click", async () => {
+          try {
+            const text = await (await fetch(this.dataset.markdown!)).text();
+            await navigator.clipboard.writeText(text);
+            if (label) label.textContent = "Copied";
+          } catch {
+            if (label) label.textContent = "Copy failed";
+          }
+          setTimeout(() => label && (label.textContent = "Copy page"), 1600);
+        });
+        document.addEventListener("click", (ev) => {
+          const menu = this.querySelector("details");
+          if (menu?.open && !menu.contains(ev.target as Node)) menu.open = false;
+        });
+      }
+    },
+  );
+</script>

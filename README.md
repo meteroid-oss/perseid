@@ -18,6 +18,8 @@ GitHub App only lends the workflows short-lived tokens, so no secret is stored.
 - **Releases included.** Each pull request is sized from the spec diff, so a breaking change asks
   for a major bump. release-please tags each SDK and publishes it with trusted publishing.
 - **Your edits survive.** perseid only rewrites or deletes files it marked `@generated`.
+- **A docs site that speaks each SDK.** [`perseid-docs`](packages/perseid-docs) shows the API
+  reference in the reader's SDK language: signatures, names, samples and return types.
 - **A CLI and an MCP server too.** Built-in [packs](docs/ci.md#targets) wrap the SDKs: a command
   line over the Rust SDK, with a local MCP server, and an MCP server in code mode over the
   TypeScript SDK, for npm, Docker, Cloudflare Workers or Claude Desktop. Each lives in a

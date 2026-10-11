@@ -1,0 +1,33 @@
+---
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import config from "virtual:perseid-docs/config";
+import { loadRoutes, renderRoute, staticPaths, type Route } from "perseid-docs/routes";
+
+export function getStaticPaths() {
+  return staticPaths(loadRoutes(config.reference, config.base));
+}
+
+const { route } = Astro.props as { route: Route };
+const page = await renderRoute(loadRoutes(config.reference, config.base), route, config.assets);
+const PRE_PAINT = `try{var l=localStorage.getItem("pr-lang");if(l)document.documentElement.dataset.prLang=l}catch(e){}`;
+const accent = config.accent ? `:root{--pr-accent:${config.accent}}` : "";
+---
+
+<StarlightPage
+  frontmatter={{
+    title: page.title,
+    description: page.description,
+    tableOfContents: false,
+    editUrl: false,
+    prev: false,
+    next: false,
+    head: [{ tag: "script", content: PRE_PAINT }],
+  }}
+>
+  <div class="pr-root pr-site not-content" data-route={route.kind}>
+    <Fragment set:html={page.html} />
+  </div>
+  <style is:inline set:html={page.css + accent}></style>
+  <script type="application/json" id="pr-servers" is:inline set:html={page.servers}></script>
+  <script is:inline set:html={page.script}></script>
+</StarlightPage>
