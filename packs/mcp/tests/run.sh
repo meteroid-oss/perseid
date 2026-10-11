@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Renders the pack against tests/acme with $PERSEID, builds its TypeScript SDK, builds the server
-# against it and against perseid-mcp, packed from $PERSEID_MCP (packages/perseid-mcp of a
-# perseid-ext checkout) when set, else from npm, then runs e2e.mjs against the CLI pack's mock
-# API. WORK keeps the rendered files.
+# against it and against perseid-mcp as packed from packages/perseid-mcp ($PERSEID_MCP to take
+# another), then runs e2e.mjs against the CLI pack's mock API. WORK keeps the rendered files.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 perseid=${PERSEID:-perseid}
@@ -13,9 +12,8 @@ rm -rf "$work/typescript" "$work/mcp" "$work"/perseid-mcp-*.tgz
 "$perseid" targets -c "$here/acme/perseid.toml" mcp --out "$work"
 
 (cd "$work/typescript" && npm install --no-audit --no-fund && npm run build)
-if [[ -n ${PERSEID_MCP:-} ]]; then
-  (cd "$PERSEID_MCP" && npm run build && npm pack --pack-destination "$work" --silent >/dev/null)
-fi
+runtime=${PERSEID_MCP:-$here/../../../packages/perseid-mcp}
+(cd "$runtime" && npm run build && npm pack --pack-destination "$work" --silent >/dev/null)
 cd "$work/mcp"
 node -e '
 const fs = require("fs");

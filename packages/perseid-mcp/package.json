@@ -1,0 +1,65 @@
+{
+  "name": "perseid-mcp",
+  "version": "0.1.0",
+  "description": "The runtime of MCP servers in code mode over SDKs perseid generates: search, a sandboxed execute, Streamable HTTP and an OAuth broker",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/meteroid-oss/perseid",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/meteroid-oss/perseid.git",
+    "directory": "packages/perseid-mcp"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "code-mode",
+    "sandbox",
+    "openapi",
+    "sdk",
+    "perseid"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "bin": {
+    "perseid-mcp": "dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./node": "./dist/node.js",
+    "./deno": "./dist/sandbox/deno.js",
+    "./quickjs": "./dist/sandbox/quickjs.js",
+    "./cloudflare": "./dist/cloudflare.js"
+  },
+  "files": [
+    "dist",
+    "!dist/test"
+  ],
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "node --test dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "^0.32.0",
+    "@modelcontextprotocol/server": "^2.3.1",
+    "quickjs-emscripten-core": "^0.32.0",
+    "sucrase": "^3.35.0",
+    "zod": "^4.2.0"
+  },
+  "peerDependencies": {
+    "deno": "^2.9.6"
+  },
+  "peerDependenciesMeta": {
+    "deno": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "^2.3.1",
+    "@types/node": "^22.0.0",
+    "deno": "^2.9.6",
+    "typescript": "^5.9.0"
+  }
+}

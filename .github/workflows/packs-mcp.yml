@@ -3,15 +3,30 @@ name: MCP pack
 on:
   push:
     branches: [main]
-    paths: ["packs/mcp/**", "src/**", "templates/typescript/**", "runtime/typescript/**", "packs/cli/tests/acme/openapi.json", "packs/cli/tests/mock.py", ".github/workflows/packs-mcp.yml"]
+    paths: ["packs/mcp/**", "packages/perseid-mcp/**", "src/**", "templates/typescript/**", "runtime/typescript/**", "packs/cli/tests/acme/openapi.json", "packs/cli/tests/mock.py", ".github/workflows/packs-mcp.yml"]
   pull_request:
-    paths: ["packs/mcp/**", "src/**", "templates/typescript/**", "runtime/typescript/**", "packs/cli/tests/acme/openapi.json", "packs/cli/tests/mock.py", ".github/workflows/packs-mcp.yml"]
+    paths: ["packs/mcp/**", "packages/perseid-mcp/**", "src/**", "templates/typescript/**", "runtime/typescript/**", "packs/cli/tests/acme/openapi.json", "packs/cli/tests/mock.py", ".github/workflows/packs-mcp.yml"]
 
 
 jobs:
+  # The runtime package: types, and its tests on every sandbox (Deno, QuickJS, the runner), the
+  # OAuth broker and the HTTP handler.
+  runtime:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: packages/perseid-mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck && npm run build && npm test
+
   # Renders the pack against tests/acme, builds its TypeScript SDK and the server on perseid-mcp
-  # from perseid-ext's main, then runs the server against the CLI pack's mock API: search,
-  # execute in each sandbox, read-only, HTTP, OAuth.
+  # as packages/ has it, then runs the server against the CLI pack's mock API: search, execute
+  # in each sandbox, read-only, HTTP, OAuth.
   pack:
     strategy:
       fail-fast: false
@@ -25,17 +40,10 @@ jobs:
         with:
           node-version: 22
       - uses: Swatinem/rust-cache@v2
-      # perseid as this commit has it, and perseid-mcp as perseid-ext's main has it.
+      # perseid and perseid-mcp as this commit has them.
       - run: cargo build --locked && echo "PERSEID=$GITHUB_WORKSPACE/target/debug/perseid" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
-        with:
-          repository: meteroid-oss/perseid-ext
-          path: ext
-      - uses: pnpm/action-setup@v4
-        with:
-          package_json_file: ext/package.json
-      - run: pnpm install --frozen-lockfile && echo "PERSEID_MCP=$GITHUB_WORKSPACE/ext/packages/perseid-mcp" >> "$GITHUB_ENV"
-        working-directory: ext
+      - run: npm ci --no-audit --no-fund
+        working-directory: packages/perseid-mcp
       - run: packs/mcp/tests/run.sh
         env:
           WORK: ${{ runner.temp }}/acme
