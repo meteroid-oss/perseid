@@ -21,7 +21,7 @@ Options:
   -V, --version  Print version
 
 Global options:
-      --format <FORMAT>       json, jsonl, yaml or table [env: ACME_FORMAT] [default: table on a terminal, else json; jsonl for lists and streams]
+      --format <FORMAT>       json, jsonl, yaml or table [env: ACME_FORMAT] [default: yaml on a terminal, else json; jsonl for lists and streams]
       --jq <FILTER>           jq filter (jaq: jq's builtins, @csv, @tsv...), run on each item of a list, on the whole array with --format json; strings print raw
       --pretty                Indent JSON off a terminal too
       --max-items <N>         Stop lists after N items, fetching no further page

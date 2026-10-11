@@ -39,6 +39,9 @@ pub const DEFAULT_MAX_ITEMS: u64 = 20;
 pub const DEFAULT_MAX_CHARS: usize = 60_000;
 /// Files larger than this are refused rather than returned as base64.
 pub const MAX_FILE_BYTES: u64 = 8 << 20;
+/// The longest tool name `[context.cli_mcp.operations.<tool>] name` may give: model APIs, which
+/// clients hand tools to, take 64 characters.
+pub const MAX_TOOL_NAME: usize = 64;
 
 pub(super) const VERSION_KEY: &str = "io.modelcontextprotocol/protocolVersion";
 const CAPABILITIES_KEY: &str = "io.modelcontextprotocol/clientCapabilities";
@@ -72,7 +75,8 @@ const DESTRUCTIVE: [&str; 14] = [
     "void",
 ];
 
-pub fn command(app: &App) -> Command {
+/// `mcp`, its help from `schema`: the toolsets, the API key headers.
+pub fn command(app: &App, schema: Option<&Schema>) -> Command {
     let (name, prefix) = (app.name, app.env_prefix);
     let command = Command::new("mcp")
         .about(match cfg!(feature = "mcp-http") {
@@ -93,7 +97,7 @@ pub fn command(app: &App) -> Command {
              {prefix}_API_KEY, the default profile. In an MCP client's configuration:\n\n  \
              {{\"command\": \"{name}\", \"args\": [\"mcp\"], \"env\": {{\"{prefix}_API_KEY\": \"...\"}}}}\n\n\
              With Claude Code: claude mcp add {name} -e {prefix}_API_KEY=... -- {name} mcp{}",
-            http_help(app)
+            http_help(schema)
         ))
         .arg(
             Arg::new("toolsets")
@@ -101,7 +105,7 @@ pub fn command(app: &App) -> Command {
                 .value_name("NAME,...")
                 .value_delimiter(',')
                 .action(ArgAction::Append)
-                .help(toolsets_help(app)),
+                .help(toolsets_help(schema)),
         )
         .arg(
             Arg::new("tools")
@@ -153,11 +157,11 @@ pub fn command(app: &App) -> Command {
 }
 
 /// The paragraph of `mcp --help` on `--port`, with the `mcp-http` feature.
-fn http_help(app: &App) -> String {
+fn http_help(schema: Option<&Schema>) -> String {
     if !cfg!(feature = "mcp-http") {
         return String::new();
     }
-    let headers = Schema::parse(app.schema).map(|schema| schema.api_key_headers());
+    let headers = schema.map(Schema::api_key_headers);
     let header = (headers.unwrap_or_default().first())
         .map(|header| format!(" or {header}: <KEY>"))
         .unwrap_or_default();
@@ -171,9 +175,10 @@ fn http_help(app: &App) -> String {
 }
 
 /// The toolsets `[context.cli_mcp]` of perseid.toml defines, for `--toolsets`' help.
-fn toolsets_help(app: &App) -> String {
-    let config = Schema::parse(app.schema).map(|schema| schema.mcp().clone());
-    let config = config.unwrap_or_default();
+fn toolsets_help(schema: Option<&Schema>) -> String {
+    let config = schema
+        .map(|schema| schema.mcp().clone())
+        .unwrap_or_default();
     let defaults = strings(&config["default_toolsets"]);
     let names: Vec<String> = config["toolsets"]
         .as_object()
@@ -264,7 +269,8 @@ fn free(name: &str, taken: &Map<String, Value>) -> String {
 }
 
 /// A tool name of `[A-Za-z0-9_.-]`, as MCP requires: `things list-all` is `things_list_all`.
-fn tool_name(words: &str) -> String {
+/// It also keys the operations of `[context.cli]` and `[context.cli_mcp]` in perseid.toml.
+pub(super) fn tool_name(words: &str) -> String {
     words
         .chars()
         .map(|c| match c.is_ascii_alphanumeric() || c == '.' {
@@ -276,7 +282,7 @@ fn tool_name(words: &str) -> String {
 
 impl Tool {
     /// The tool of an operation, with what `[context.cli_mcp.operations.<tool>]` overrides:
-    /// `description`, `title`, `annotations` (merged) and `hidden`.
+    /// `name`, `description`, `title`, `annotations` (merged) and `hidden`.
     fn new(schema: &Schema, entry: &Value, overrides: &Value) -> Option<Self> {
         let words = entry["command"].as_str()?;
         let input = schema.describe(words, false)?;
@@ -420,7 +426,9 @@ impl Tool {
             into.extend(from.clone());
         }
         Some(Self {
-            name: tool_name(words),
+            name: over["name"]
+                .as_str()
+                .map_or_else(|| tool_name(words), str::to_owned),
             words: words.split(' ').map(str::to_owned).collect(),
             title: over["title"]
                 .as_str()
@@ -687,6 +695,43 @@ fn annotations(method: &str, verb: &str) -> Value {
     }
 }
 
+/// The tools of the schema's operations, the names `[context.cli_mcp.operations.<tool>] name`
+/// gives checked: of `[A-Za-z0-9_.-]`, at most [`MAX_TOOL_NAME`] long, and each tool's own.
+fn tools(schema: &Schema) -> Result<Vec<Tool>, CliError> {
+    let overrides = &schema.mcp()["operations"];
+    let tools: Vec<Tool> = (schema.index(&[]).iter())
+        .filter_map(|entry| Tool::new(schema, entry, overrides))
+        .collect();
+    let mut owners: HashMap<&str, &Tool> = HashMap::new();
+    for tool in &tools {
+        let key = tool_name(&tool.words.join(" "));
+        let name = tool.name.as_str();
+        let given = &overrides[&key]["name"];
+        let valid = (1..=MAX_TOOL_NAME).contains(&name.len())
+            && (name.chars()).all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'));
+        if !(given.is_null() || (given.is_string() && valid)) {
+            return Err(CliError::internal(format!(
+                "[context.cli_mcp.operations.{key}] name = {given}: a tool name is 1 to \
+                 {MAX_TOOL_NAME} of A-Z, a-z, 0-9, _, . and -"
+            )));
+        }
+        if let Some(other) = owners.insert(name, tool) {
+            return Err(CliError::internal(format!(
+                "two tools are named {name}, of `{}` and `{}`: [context.cli_mcp.operations.<tool>] \
+                 name gives one another",
+                other.words.join(" "),
+                tool.words.join(" ")
+            )));
+        }
+    }
+    Ok(tools)
+}
+
+/// Checks the names of the tools, as `mcp` does when it starts: generated code's tests call it.
+pub fn check(app: &App) -> Result<(), CliError> {
+    tools(&Schema::parse(app.schema)?).map(drop)
+}
+
 /// `*` matches any run of characters, `?` any one.
 fn glob(pattern: &str, name: &str) -> bool {
     let (pattern, name): (Vec<char>, Vec<char>) =
@@ -871,11 +916,9 @@ impl Server {
         let selection = Selection::new(config, args)?;
         #[cfg(feature = "mcp-http")]
         let http = super::mcp_http::Options::new(args, &schema);
-        let (tools, left_out): (Vec<Tool>, Vec<Tool>) = schema
-            .index(&[])
-            .iter()
-            .filter_map(|entry| Tool::new(&schema, entry, &config["operations"]))
-            .partition(|tool| selection.serves(tool));
+        let tools = tools(&schema)?;
+        let (tools, left_out): (Vec<Tool>, Vec<Tool>) =
+            tools.into_iter().partition(|tool| selection.serves(tool));
         let left_out = left_out.into_iter().map(|tool| tool.name).collect();
         let mut inherited = Vec::new();
         let mut pass = |flag: &str, value: Option<String>| {
@@ -1600,8 +1643,8 @@ fn base64(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    fn schema() -> Schema {
-        let part = json!({
+    fn part() -> Value {
+        json!({
             "resources": {"things": "things"},
             "commands": {
                 "things.list": {"resource": "things", "command": "list", "method": "GET",
@@ -1637,8 +1680,11 @@ mod tests {
                 "Thing": {"type": "object", "required": ["id"], "properties": {
                     "id": {"type": "string"}, "note": {"type": "string", "nullable": true}}},
             },
-        });
-        Schema::parse(&[&part.to_string()]).unwrap()
+        })
+    }
+
+    fn schema() -> Schema {
+        Schema::parse(&[&part().to_string()]).unwrap()
     }
 
     const APP: App = App {
@@ -1646,6 +1692,7 @@ mod tests {
         env_prefix: "ACME",
         auth: &super::super::auth::ApiKey,
         default_base_url: None,
+        default_format: None,
         schema: &[],
     };
 
@@ -1867,7 +1914,7 @@ mod tests {
         assert_eq!(archive.annotations["readOnlyHint"], false);
         let served = |args: &[&str]| {
             let matches = Command::new("mcp")
-                .args(command(&APP).get_arguments().cloned())
+                .args(command(&APP, None).get_arguments().cloned())
                 .try_get_matches_from(std::iter::once("mcp").chain(args.iter().copied()))
                 .unwrap();
             let selection = Selection::new(&config, &matches).unwrap();
@@ -1896,13 +1943,59 @@ mod tests {
             ["things_list", "things_create"]
         );
         let matches = Command::new("mcp")
-            .args(command(&APP).get_arguments().cloned())
+            .args(command(&APP, None).get_arguments().cloned())
             .try_get_matches_from(["mcp", "--toolsets", "raeds"])
             .unwrap();
         let error = Selection::new(&config, &matches).err().unwrap();
         assert_eq!(
             error.message(),
             "--toolsets: no toolset `raeds`: did you mean reads? expected all or one of reads, admin"
+        );
+    }
+
+    #[test]
+    fn tools_take_the_names_of_perseid_toml_checked() {
+        let named = |operations: Value| {
+            let mcp = json!({"mcp": {"operations": operations,
+                "toolsets": {"reads": ["things_list", "fetch_*"]}, "default_toolsets": []}});
+            let schema = Schema::parse(&[&part().to_string(), &mcp.to_string()]).unwrap();
+            let tools = tools(&schema).map_err(|error| error.message().to_owned())?;
+            let config = schema.mcp().clone();
+            let matches = Command::new("mcp")
+                .args(command(&APP, None).get_arguments().cloned())
+                .try_get_matches_from(["mcp", "--exclude-tools", "*_delete"])
+                .unwrap();
+            let selection = Selection::new(&config, &matches).unwrap();
+            let served: Vec<String> = (tools.into_iter())
+                .filter(|tool| selection.serves(tool))
+                .map(|tool| tool.name)
+                .collect();
+            Ok::<_, String>(served)
+        };
+        let served = named(json!({"things_pages": {"name": "fetch_pages"},
+            "things_archive": {"name": "archive-thing"}}));
+        assert_eq!(
+            served.unwrap(),
+            ["things_create", "archive-thing"],
+            "toolsets, --tools and --exclude-tools match the names served"
+        );
+        assert_eq!(
+            named(json!({"things_pages": {"name": "things list"}})).unwrap_err(),
+            "[context.cli_mcp.operations.things_pages] name = \"things list\": a tool name is 1 to \
+             64 of A-Z, a-z, 0-9, _, . and -"
+        );
+        assert!(named(json!({"things_pages": {"name": "x".repeat(65)}})).is_err());
+        assert!(named(json!({"things_pages": {"name": 1}})).is_err());
+        assert_eq!(
+            named(json!({"things_archive": {"name": "things_delete"}})).unwrap_err(),
+            "two tools are named things_delete, of `things delete` and `things archive`: \
+             [context.cli_mcp.operations.<tool>] name gives one another"
+        );
+        let swapped = json!({"things_archive": {"name": "things_delete"},
+            "things_delete": {"name": "things_archive"}});
+        assert!(
+            named(swapped).is_ok(),
+            "names are checked once all are given"
         );
     }
 

@@ -307,7 +307,7 @@ fn init_from_stainless_maps_its_cli_and_mcp_server_to_the_built_in_packs() {
         )
         .replace(
             "  ruby:\n",
-            "  cli:\n    binary_name: knock\n    production_repo: knocklabs/knock-cli\n    publish:\n      homebrew:\n        tap_repo: knocklabs/homebrew-tap\n  ruby:\n",
+            "  cli:\n    binary_name: knock\n    default_format: yaml\n    production_repo: knocklabs/knock-cli\n    publish:\n      homebrew:\n        tap_repo: knocklabs/homebrew-tap\n  ruby:\n",
         )
         .replace(
             "      delete: delete /v1/users/{user_id}\n",
@@ -315,7 +315,7 @@ fn init_from_stainless_maps_its_cli_and_mcp_server_to_the_built_in_packs() {
         )
         .replace(
             "      merge: post /v1/users/{user_id}/merge\n",
-            "      merge:\n        endpoint: post /v1/users/{user_id}/merge\n        mcp:\n          tags: [admin]\n          description: Merge two users into one.\n",
+            "      merge:\n        endpoint: post /v1/users/{user_id}/merge\n        mcp:\n          tags: [admin]\n          description: Merge two users into one.\n          tool_name: merge_users\n        cli:\n          enabled: false\n",
         );
     fs::write(dir.path().join("stainless.yml"), config).unwrap();
     let (ok, out) = perseid(dir.path(), &["init", "--from", "stainless.yml"]);
@@ -328,7 +328,9 @@ fn init_from_stainless_maps_its_cli_and_mcp_server_to_the_built_in_packs() {
         "[targets.mcp]\nwraps = \"typescript\"\nrepo = \"knocklabs/knock-mcp\"\n",
         "[context.cli_mcp.toolsets]\nadmin = [\"users_merge\"]\n",
         "[context.cli_mcp.operations.users_delete]\nhidden = true\n",
-        "[context.cli_mcp.operations.users_merge]\ndescription = \"Merge two users into one.\"\n",
+        "[context.cli]\ndefault_format = \"yaml\"\n",
+        "[context.cli.operations.users_merge]\nhidden = true\n",
+        "[context.cli_mcp.operations.users_merge]\nname = \"merge_users\"\ndescription = \"Merge two users into one.\"\n",
     ] {
         assert!(config.contains(expected), "{expected}\n---\n{config}");
     }

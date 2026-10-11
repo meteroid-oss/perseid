@@ -9,16 +9,25 @@ cli_client_id = "acme-cli"
 cli_scopes = ["things:read"]
 cli_revocation_url = "/oauth/revoke"
 
+[context.cli]
+default_format = "yaml"
+
+[context.cli.operations.things_list_labels]
+hidden = true
+
 [context.cli_mcp]
 instructions = "Quantities are counts of items in stock."
 default_toolsets = ["things"]
 
 [context.cli_mcp.toolsets]
 things = ["things_*", "attachment_*"]
-meta = ["health_*", "auth_api_*"]
+meta = ["health_*", "whoami"]
 
 [context.cli_mcp.operations.things_delete]
 description = "Delete a thing for good: its attachments go too."
+
+[context.cli_mcp.operations.auth_api_retrieve_whoami]
+name = "whoami"
 
 [rust]
 package = "acme-rs"

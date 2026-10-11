@@ -27,6 +27,7 @@ pub mod cli {
         env_prefix: "ACME",
         auth: &AUTH,
         default_base_url: DEFAULT_BASE_URL,
+        default_format: None,
         schema: SCHEMA,
     };
 

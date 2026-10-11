@@ -16,7 +16,8 @@ users upgrade like they would to any new major version.
   MCP server; `mcp_server` of the TypeScript target as `[targets.mcp]`, an MCP server in code
   mode in a repository of its own, which deploys to npm, Docker, Cloudflare Workers or an MCP
   bundle, with an OAuth server of its own for one-click connectors. The `mcp` of resources and
-  methods (`false`, `tags`, `description`) set the CLI's MCP tools.
+  methods (`false`, `tags`, `description`, `tool_name`) set the CLI's MCP tools, a method's
+  `cli.enabled: false` leaves its command out, and the CLI's `default_format` carries over.
 
 Plan it as a major release of each SDK: calls look the same in Python and mostly the same in
 TypeScript, but types and some names change (see [what changes](#what-changes-for-your-users)).
