@@ -1,0 +1,26 @@
+name: perseid-docs
+
+on:
+  push:
+    branches: [main]
+    paths: ["packages/perseid-docs/**", "packages/tsconfig.base.json", ".github/workflows/docs-package.yml"]
+  pull_request:
+    paths: ["packages/perseid-docs/**", "packages/tsconfig.base.json", ".github/workflows/docs-package.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  # The docs site, reference viewer and embed: build, types and tests.
+  package:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: packages/perseid-docs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build && npm run typecheck && npm test

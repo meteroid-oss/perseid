@@ -3,9 +3,9 @@ name: MCP pack
 on:
   push:
     branches: [main]
-    paths: ["packs/mcp/**", "packages/perseid-mcp/**", "src/**", "templates/typescript/**", "runtime/typescript/**", "packs/cli/tests/acme/openapi.json", "packs/cli/tests/mock.py", ".github/workflows/packs-mcp.yml"]
+    paths: ["packs/mcp/**", "packages/perseid-mcp/**", "packages/tsconfig.base.json", "src/**", "templates/typescript/**", "runtime/typescript/**", "packs/cli/tests/acme/openapi.json", "packs/cli/tests/mock.py", ".github/workflows/packs-mcp.yml"]
   pull_request:
-    paths: ["packs/mcp/**", "packages/perseid-mcp/**", "src/**", "templates/typescript/**", "runtime/typescript/**", "packs/cli/tests/acme/openapi.json", "packs/cli/tests/mock.py", ".github/workflows/packs-mcp.yml"]
+    paths: ["packs/mcp/**", "packages/perseid-mcp/**", "packages/tsconfig.base.json", "src/**", "templates/typescript/**", "runtime/typescript/**", "packs/cli/tests/acme/openapi.json", "packs/cli/tests/mock.py", ".github/workflows/packs-mcp.yml"]
 
 
 jobs:

@@ -1,0 +1,44 @@
+{% import "docs.jinja" as docs %}
+{% import "perseid_builtin_reference.jinja" as ref %}
+
+{% macro signature(resource, op) -%}
+    {%- set value = ref.returned(op) | trim -%}
+    {%- if op.pagination is defined -%}
+        {%- set returned_type = "AsyncPager<" ~ docs.page_class(resource.name, op) ~ ", " ~ docs.model_name(op.pagination.item_schema) ~ ">" -%}
+    {%- else -%}
+        {%- set returned_type = "Task<" ~ value ~ ">" if value else "Task" -%}
+    {%- endif -%}
+    {{ returned_type }} {{ docs.resource(resource.name) }}.{{ docs.method(op) }}{{ ref.params(resource, op) }}
+{%- endmacro %}
+
+{% macro install() %}dotnet add package {{ sdk.package_name }}{% endmacro %}
+
+{% macro setup() -%}
+using {{ sdk.package_name }};
+using {{ sdk.package_name }}.Models;
+
+using var client = new {{ sdk.client_name }}Client(Environment.GetEnvironmentVariable("{{ sdk.env_prefix }}_API_KEY"));
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro path_param(name) %}{{ name | to_lower_camel_case }}{% endmacro %}
+
+{% macro param(p) %}{{ p.ident | to_upper_camel_case }}{% endmacro %}
+
+{% macro field(f) %}{{ f.name | to_upper_camel_case }}{% endmacro %}
+
+{% macro type_name(name) %}{{ name | to_upper_camel_case }}{% endmacro %}
+
+{% macro sample(ex) -%}
+    {%- if ex.operation.pagination is defined -%}
+await foreach (var {{ docs.var(ex.item, "item") }} in {{ docs.call(ex) }})
+{
+    Console.WriteLine({{ docs.var(ex.item, "item") }});
+}
+    {%- elif ex.result -%}
+var {{ docs.var(ex.result, "result") }} = await {{ docs.call(ex) }};
+    {%- else -%}
+await {{ docs.call(ex) }};
+    {%- endif -%}
+{%- endmacro %}

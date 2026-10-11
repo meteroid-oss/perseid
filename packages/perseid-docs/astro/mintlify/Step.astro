@@ -1,0 +1,8 @@
+---
+interface Props { title?: string; icon?: string }
+const { title } = Astro.props;
+---
+<li class="pd-step">
+  {title && <p class="pd-step-title">{title}</p>}
+  <slot />
+</li>

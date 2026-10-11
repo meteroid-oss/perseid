@@ -1,0 +1,43 @@
+{% import "docs.jinja" as docs %}
+{% import "perseid_builtin_reference.jinja" as ref %}
+
+{% macro signature(resource, op) %}{{ ref.signature(resource, op) }}{% endmacro %}
+
+{% macro install() %}npm install {{ sdk.npm_package }}{% endmacro %}
+
+{% macro setup() -%}
+import { {{ sdk.client_name }} } from "{{ sdk.npm_package }}";
+
+const client = new {{ sdk.client_name }}({ apiKey: process.env.{{ sdk.env_prefix }}_API_KEY });
+{%- endmacro %}
+
+{% macro method(resource, op) %}{{ docs.resource(resource.name) }}.{{ docs.method(op) }}{% endmacro %}
+
+{% macro path_param(name) %}{{ name | ident("camel", "typescript") }}{% endmacro %}
+
+{% macro param(p) %}{{ p.ident | ident("camel") }}{% endmacro %}
+
+{% macro field(f) %}{{ f.name | ident("camel") }}{% endmacro %}
+
+{% macro type_name(name) %}{{ name | to_upper_camel_case }}{% endmacro %}
+
+{% macro sample(ex) -%}
+    {%- set op = ex.operation -%}
+    {%- set call = docs.call(ex) -%}
+    {%- if op.pagination is defined -%}
+for await (const {{ docs.var(ex.item, "item") }} of {{ call }}) {
+  console.log({{ docs.var(ex.item, "item") }});
+}
+    {%- elif op.response_is_event_stream -%}
+const stream = await {{ call }};
+for await (const event of stream) {
+  console.log(event);
+}
+    {%- elif ex.result -%}
+const {{ docs.var(ex.result, "result") }} = await {{ call }};
+    {%- elif op.response_body_schema_name is defined or op.response_body_json_type is defined or op.response_is_text | default(false) or op.response_is_binary | default(false) -%}
+const result = await {{ call }};
+    {%- else -%}
+await {{ call }};
+    {%- endif -%}
+{%- endmacro %}

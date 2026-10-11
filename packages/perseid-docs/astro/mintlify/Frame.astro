@@ -1,0 +1,9 @@
+---
+interface Props { caption?: string; hint?: string }
+const { caption, hint } = Astro.props;
+---
+<figure class="pd-frame">
+  {hint && <p>{hint}</p>}
+  <slot />
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>

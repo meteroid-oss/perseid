@@ -1,0 +1,5 @@
+---
+interface Props { title: string; defaultOpen?: boolean; icon?: string }
+const { title, defaultOpen } = Astro.props;
+---
+<details class="pd-accordion" open={defaultOpen}><summary>{title}</summary><div><slot /></div></details>
