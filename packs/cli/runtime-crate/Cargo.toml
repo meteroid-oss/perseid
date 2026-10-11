@@ -1,0 +1,98 @@
+[package]
+name = "perseid-cli-runtime"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "The API-independent runtime of the CLIs perseid generates: global options, profiles, request bodies, output formats and errors."
+license = "Apache-2.0"
+publish = false
+
+# The modules live in ../runtime, which perseid vendors into each generated CLI.
+[lib]
+path = "../runtime/mod.rs"
+
+[dependencies]
+clap = { version = "4.6", features = ["string"] }
+clap_complete = "4.6"
+clap_mangen = "0.3"
+comfy-table = "8"
+dirs = "7"
+hyper = "1.7"   # the request types of --dry-run, the SDK's own HTTP stack
+jaq-core = "3.1"
+jaq-json = { version = "2.0", features = ["serde"] }
+jaq-std = "3.0"
+regex-bites = "0.1"   # the `pattern`s of schemas, as jaq-std matches its regexes
+rpassword = "7.4"
+serde = { version = "1", features = ["derive"] }
+serde-saphyr = { version = "1.3", default-features = false, features = ["serialize"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_path_to_error = "0.1"
+tokio = { version = "1", features = ["rt", "sync"] }
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse", "display"] }
+
+# OAuth, behind `oauth`, and `mcp --port`, behind `mcp-http`: the HTTP stack and hashes the Rust
+# SDK already depends on.
+base64 = { version = "0.22", optional = true }
+getrandom = { version = "0.2", optional = true }
+http-body-util = { version = "0.1", optional = true }
+hyper-rustls = { version = "0.27", optional = true, default-features = false, features = ["http1", "tls12", "ring", "native-tokio"] }
+hyper-util = { version = "0.1", optional = true, features = ["http1", "tokio"] }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["std", "tls12", "ring"] }
+sha2 = { version = "0.10", optional = true }
+url = { version = "2.5", optional = true }
+
+# The OS keyring, behind `keyring`: keyring-core and the store of each platform, all in Rust.
+keyring-core = { version = "1", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-native-keyring-store = { version = "1", optional = true, features = ["keychain"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-native-keyring-store = { version = "1", optional = true }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+zbus-secret-service-keyring-store = { version = "1", optional = true, features = ["rt-async-io-crypto-rust"] }
+
+[features]
+default = ["oauth", "mcp-http"]
+keyring = [
+    "dep:keyring-core",
+    "dep:apple-native-keyring-store",
+    "dep:windows-native-keyring-store",
+    "dep:zbus-secret-service-keyring-store",
+]
+mcp-http = [
+    "dep:http-body-util",
+    "hyper/http1",
+    "hyper/server",
+    "dep:hyper-util",
+    "tokio/net",
+]
+oauth = [
+    "dep:base64",
+    "dep:getrandom",
+    "dep:http-body-util",
+    "hyper/client",
+    "hyper/http1",
+    "dep:hyper-rustls",
+    "dep:hyper-util",
+    "hyper-util/client-legacy",
+    "dep:rustls",
+    "dep:sha2",
+    "dep:url",
+    "tokio/io-util",
+    "tokio/net",
+    "tokio/time",
+]
+
+[dev-dependencies]
+tempfile = "3"
+toml = { version = "1", default-features = false, features = ["std", "serde", "parse"] }
+
+[[example]]
+name = "acme"
+required-features = ["oauth"]
+
+[[test]]
+name = "acme"
+required-features = ["oauth"]

@@ -1,0 +1,21 @@
+Download an attachment
+
+`GET /v1/things/{thing_id}/attachments/{attachment_id}`
+
+Usage: acme things attachments download [OPTIONS] <THING_ID> <ATTACHMENT_ID>
+
+Arguments:
+  <THING_ID>
+          The thing's ID
+
+  <ATTACHMENT_ID>
+          
+
+Options:
+  -o, --output <FILE>
+          (required) Write the file to FILE, then print {"path","bytes","content_type"}; - for stdout
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

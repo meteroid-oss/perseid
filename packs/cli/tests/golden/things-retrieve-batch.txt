@@ -1,0 +1,15 @@
+Retrieve several things
+
+`GET /v1/things/batch/{ids}`
+
+Usage: acme things retrieve-batch <IDS,...>
+
+Arguments:
+  <IDS,...>
+          Their IDs
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

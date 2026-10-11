@@ -1,0 +1,22 @@
+A usage report
+
+`GET /v1/reports`
+
+Usage: acme reports retrieve --since <DATE> --kind <STRING>
+
+Options:
+      --since <DATE>
+          (required) First day of the report
+
+      --kind <STRING>
+          (required)
+          
+          [possible values: daily, monthly]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Example:
+  acme reports retrieve --since 2026-01-31 --kind daily
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

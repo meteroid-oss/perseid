@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 
 use crate::{
+    assets,
     changelog::Changelog,
     config::{After, Config, Sdk, TargetKind, TargetTable, same_repo},
     generate::{self, Change, GENERATION, Options},
@@ -54,7 +55,11 @@ impl Target {
             "{at}: name targets in lowercase letters, digits and dashes"
         );
         let kinds = TargetKind::ALL.map(TargetKind::name).join(", ");
-        let kind = match (&table.pack, table.kind) {
+        // `[targets.cli]` alone names the built-in pack `cli`.
+        let builtin =
+            (table.pack.is_none() && table.kind.is_none() && assets::packs().contains(&name))
+                .then(|| name.to_owned());
+        let kind = match (table.pack.as_ref().or(builtin.as_ref()), table.kind) {
             (Some(_), Some(kind)) => bail!(
                 "{at}: `pack` makes it a pack target, delete `kind = \"{}\"`",
                 kind.name()
@@ -65,7 +70,15 @@ impl Target {
                         && !["gh:", "github:", "git@", "http://", "https://"]
                             .iter()
                             .any(|p| dir.starts_with(p)),
-                    "{at}: `pack = {dir:?}`: perseid reads packs from a folder for now, set its path relative to perseid.toml, such as \"../packs/cli\""
+                    "{at}: `pack = {dir:?}`: name a built-in pack ({}), or set the path of a folder relative to perseid.toml, such as \"./packs/mine\"",
+                    assets::packs().join(", ")
+                );
+                ensure!(
+                    dir.contains('/')
+                        || dir.contains('\\')
+                        || assets::packs().contains(&dir.as_str()),
+                    "{at}: `pack = {dir:?}`: no built-in pack has this name, among {}. A folder is named by its path, such as \"./{dir}\"",
+                    assets::packs().join(", ")
                 );
                 let wraps = table.wraps.with_context(|| {
                     format!("{at}: set `wraps`, the language of the SDK the pack wraps")
@@ -732,9 +745,9 @@ mod tests {
 
     #[test]
     fn unknown_kinds_and_paths_outside_one_folder_are_refused() {
-        let cli = error("[targets.cli]\nrepo = \"acme/cli\"\n");
+        let cli = error("[targets.tool]\nrepo = \"acme/cli\"\n");
         assert!(
-            cli.contains("[targets.cli]: no target kind is named `cli`")
+            cli.contains("[targets.tool]: no target kind is named `tool`")
                 && cli.contains("among docs"),
             "{cli}"
         );
@@ -764,6 +777,45 @@ mod tests {
         let config =
             config("release = false\n[targets.docs]\nrepo = \"a/b\"\nafter = \"generate\"\n");
         assert!(!config.unwrap().awaits_releases());
+    }
+
+    #[test]
+    fn built_in_packs_are_named_by_the_table_or_by_pack() {
+        assert_eq!(assets::packs(), ["cli", "mcp"]);
+        let parsed = config(
+            "[targets.cli]\nwraps = \"go\"\nrepo = \"acme/cli\"\n\
+             [targets.agents]\npack = \"mcp\"\nwraps = \"typescript\"\nrepo = \"acme/mcp\"\n",
+        )
+        .unwrap();
+        let kinds: Vec<_> = parsed
+            .targets(&[])
+            .unwrap()
+            .into_iter()
+            .map(|t| t.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                Kind::Pack {
+                    dir: "mcp".into(),
+                    wraps: "typescript"
+                },
+                Kind::Pack {
+                    dir: "cli".into(),
+                    wraps: "go"
+                },
+            ]
+        );
+        let unknown = error("[targets.cli]\npack = \"cli2\"\nwraps = \"go\"\nrepo = \"a/b\"\n");
+        assert!(
+            unknown.contains("no built-in pack has this name, among cli, mcp"),
+            "{unknown}"
+        );
+        let folder =
+            config("[targets.cli]\npack = \"./cli2\"\nwraps = \"go\"\nrepo = \"a/b\"\n").unwrap();
+        assert!(
+            matches!(&folder.targets(&[]).unwrap()[0].kind, Kind::Pack { dir, .. } if dir == "./cli2")
+        );
     }
 
     #[test]
@@ -827,16 +879,16 @@ mod tests {
 
     #[test]
     fn pack_targets_name_a_folder_and_an_sdk_perseid_toml_lists() {
-        let cli = |table: &str| error(&format!("[targets.cli]\nrepo = \"acme/cli\"\n{table}"));
-        let pack = "pack = \"packs/cli\"\n";
+        let cli = |table: &str| error(&format!("[targets.tool]\nrepo = \"acme/tool\"\n{table}"));
+        let pack = "pack = \"packs/tool\"\n";
         for (table, expected) in [
             (
                 format!("{pack}wraps = \"rust\"\n"),
-                "[targets.cli] `wraps = \"rust\"` names an SDK that `sdks` doesn't list",
+                "[targets.tool] `wraps = \"rust\"` names an SDK that `sdks` doesn't list",
             ),
             (
                 format!("{pack}wraps = \"go\"\nafter = \"typescript\"\n"),
-                "[targets.cli]: `after = \"typescript\"` waits for an SDK the pack doesn't wrap: set \"go\", \"sdks\" or \"generate\"",
+                "[targets.tool]: `after = \"typescript\"` waits for an SDK the pack doesn't wrap: set \"go\", \"sdks\" or \"generate\"",
             ),
             (
                 format!("{pack}wraps = \"go\"\nafter = \"ruby\"\n"),
@@ -844,30 +896,30 @@ mod tests {
             ),
             (
                 format!("{pack}wraps = \"go\"\nkind = \"docs\"\n"),
-                "[targets.cli]: `pack` makes it a pack target, delete `kind = \"docs\"`",
+                "[targets.tool]: `pack` makes it a pack target, delete `kind = \"docs\"`",
             ),
             (
                 "wraps = \"go\"\n".to_owned(),
-                "[targets.cli]: `wraps` names the SDK a pack wraps, set `pack` too",
+                "[targets.tool]: `wraps` names the SDK a pack wraps, set `pack` too",
             ),
             (
                 pack.to_owned(),
-                "[targets.cli]: set `wraps`, the language of the SDK the pack wraps",
+                "[targets.tool]: set `wraps`, the language of the SDK the pack wraps",
             ),
             (
                 "pack = \"gh:acme/packs/cli@v0\"\nwraps = \"go\"\n".to_owned(),
-                "perseid reads packs from a folder for now",
+                "name a built-in pack (cli, mcp), or set the path of a folder",
             ),
             (
                 format!("{pack}wraps = \"go\"\npath = \"../cli\"\n"),
-                "`path = \"../cli\"` must be a folder of acme/cli, such as \"cli\"",
+                "`path = \"../cli\"` must be a folder of acme/tool, such as \"cli\"",
             ),
         ] {
             let text = cli(&table);
             assert!(text.contains(expected), "{table}: {text}");
         }
         let unreleased = error(
-            "release = false\n[targets.cli]\nrepo = \"a/b\"\npack = \"p\"\nwraps = \"go\"\nafter = \"go\"\n",
+            "release = false\n[targets.tool]\nrepo = \"a/b\"\npack = \"./p\"\nwraps = \"go\"\nafter = \"go\"\n",
         );
         assert!(
             unreleased.contains("(`after = \"go\"`), which `release = false` leaves to you"),
@@ -911,8 +963,8 @@ mod tests {
             assert!(text.contains(expected), "{table}: {text}");
         }
         let twice = error(
-            "[targets.cli]\npack = \"p\"\nwraps = \"go\"\nrepo = \"acme/cli\"\n\
-             [targets.tui]\npack = \"q\"\nwraps = \"go\"\nrepo = \"acme/cli\"\npath = \"tui\"\n",
+            "[targets.cli]\npack = \"./p\"\nwraps = \"go\"\nrepo = \"acme/cli\"\n\
+             [targets.tui]\npack = \"./q\"\nwraps = \"go\"\nrepo = \"acme/cli\"\npath = \"tui\"\n",
         );
         assert!(
             twice

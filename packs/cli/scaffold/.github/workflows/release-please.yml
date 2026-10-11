@@ -1,0 +1,40 @@
+# Opens the release pull request from the commits on main; merging it drafts the GitHub Release
+# and its tag, then the release workflow of dist builds the tag, uploads and publishes it.
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency: release-please
+
+jobs:
+  release:
+    if: ${{ !github.event.repository.fork }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      id-token: write
+    steps:
+      # The first credential found: your App, a token, the perseid App, else the workflow token.
+      - id: release
+        uses: meteroid-oss/perseid/release@v0
+        with:
+          app-id: ${{ vars.SDK_APP_ID }}
+          app-private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
+          release-token: ${{ secrets.SDK_GITHUB_TOKEN }}
+          ci-workflows: ci.yml
+      # A tag created by a workflow starts no workflow, but a dispatch does.
+      - if: steps.release.outputs.paths != '[]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAGS: ${{ steps.release.outputs.tags }}
+        run: |
+          for tag in $(jq -r '.[]' <<< "$TAGS"); do
+            gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$tag" -f tag="$tag"
+          done

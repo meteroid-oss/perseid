@@ -204,7 +204,18 @@ fn run(
     let Kind::Pack { dir: from, wraps } = &target.kind else {
         bail!("[targets.{}] isn't a pack", target.name);
     };
-    let pack = Pack::load(&root.join(from), wraps)?;
+    // A built-in pack is written out of the binary for the time of the run.
+    let builtin = assets::packs()
+        .contains(&from.as_str())
+        .then(tempfile::tempdir)
+        .transpose()?;
+    let pack = match &builtin {
+        Some(temp) => {
+            assets::materialize_pack(from, temp.path())?;
+            Pack::load(temp.path(), wraps)?
+        }
+        None => Pack::load(&root.join(from), wraps)?,
+    };
     let sdk = config.sdks(&[(*wraps).to_owned()])?.remove(0);
     let (context, pack_value) = contexts(config, root, &sdk, &pack, target, released);
     let mut tokens = context.clone();

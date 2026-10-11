@@ -1,0 +1,204 @@
+{#- JSON Schema of the model's types, for the runtime's `schema` module: `$ref`s to `#/$defs/`,
+    `nullable` and `discriminator` as OpenAPI has them. `types` is the model's schemas. -#}
+{% from "macros.jinja" import schema_kind, first_line, many -%}
+
+{#- `schema` (an object's JSON) with `extra` (`,"key":value...`) added. -#}
+{% macro extend(schema, extra) -%}
+{% if not extra %}{{ schema }}{% elif schema == "{}" %}{{ "{" ~ extra[1:] ~ "}" }}{% else %}{{ schema[:-1] ~ extra ~ "}" }}{% endif -%}
+{%- endmacro %}
+
+{#- `,"minimum":1,...`: the JSON Schema keywords of the model's `constraints`, but `items`. -#}
+{% macro keywords(c, unique=true) -%}
+{% if c -%}
+{% for key, name in [("minimum", "minimum"), ("maximum", "maximum"), ("exclusive_minimum", "exclusiveMinimum"), ("exclusive_maximum", "exclusiveMaximum"), ("multiple_of", "multipleOf"), ("min_length", "minLength"), ("max_length", "maxLength"), ("pattern", "pattern"), ("min_items", "minItems"), ("max_items", "maxItems"), ("format", "format")] if c[key] is defined %},"{{ name }}":{{ c[key] | tojson }}{% endfor -%}
+{% if unique and c.unique_items is defined and c.unique_items %},"uniqueItems":true{% endif -%}
+{% endif -%}
+{%- endmacro %}
+
+{#- The schema of a value of `ty`, with the keywords of `c`, its constraints: those of its
+    items for a list. Absent from older models, they are optional. -#}
+{% macro type_schema(ty, c=none) -%}
+{% set rust = ty.to_rust() -%}
+{% if ty.is_nullable() %}{{ extend(type_schema(ty.inner_type(), c), ',"nullable":true') }}
+{%- elif ty.is_list() or ty.is_set() %}{"type":"array","items":{{ type_schema(ty.inner_type(), c["items"] if c and c["items"] is defined else none) }}{% if ty.is_set() %},"uniqueItems":true{% endif %}{{ keywords(c, not ty.is_set()) }}}
+{%- else %}{{ extend(base_schema(ty), keywords(c)) }}
+{%- endif %}
+{%- endmacro %}
+
+{#- The schema of a value of `ty`, neither nullable nor a list. -#}
+{% macro base_schema(ty) -%}
+{% set rust = ty.to_rust() -%}
+{% if ty.is_schema_ref() %}{"$ref":"#/$defs/{{ ty.schema_name() }}"}
+{%- elif ty.is_map() %}{"type":"object","additionalProperties":{{ type_schema(ty.value_type()) }}}
+{%- elif ty.is_union() %}{}
+{%- elif ty.is_json_object() %}{"type":"object"}
+{%- elif ty.is_bool() %}{"type":"boolean"}
+{%- elif ty.is_datetime() %}{"type":"string","format":"date-time"}
+{%- elif ty.is_date() %}{"type":"string","format":"date"}
+{%- elif rust in ["i16", "u16", "i32", "i64", "u64"] %}{"type":"integer","format":"{{ {"i16": "int16", "u16": "uint16", "i32": "int32", "i64": "int64", "u64": "uint64"}[rust] }}"}
+{%- elif rust in ["f32", "f64"] %}{"type":"number"}
+{%- elif rust == "rust_decimal::Decimal" %}{"type":"string","format":"decimal"}
+{%- elif rust == "uuid::Uuid" %}{"type":"string","format":"uuid"}
+{%- elif ty.is_uri() %}{"type":"string","format":"uri"}
+{%- elif ty.is_string() %}{"type":"string"}
+{%- else %}{}
+{%- endif %}
+{%- endmacro %}
+
+{#- `,"default":...,"examples":[...]`, and `,"deprecated":true`, of a field or parameter. -#}
+{% macro annotations(x) -%}
+{% if x.default is defined %},"default":{{ x.default | tojson }}{% endif -%}
+{% if x.example is defined %},"examples":[{{ x.example | tojson }}]{% endif -%}
+{% if x.deprecated is defined and x.deprecated %},"deprecated":true{% endif -%}
+{%- endmacro %}
+
+{#- `,"description":"..."` from the first paragraph of `text`. -#}
+{% macro described(text) -%}
+{% if text %},"description":{{ first_line(text) | tojson }}{% endif -%}
+{%- endmacro %}
+
+{#- The schema of a field: its type's, nullable and described. -#}
+{% macro field_schema(f) -%}
+{{ extend(type_schema(f.type, f.constraints if f.constraints is defined else none), (',"nullable":true' if f.nullable else "") ~ described(f.description) ~ annotations(f)) }}
+{%- endmacro %}
+
+{#- An object of `fields`, those flattened into it as `allOf`; with `tag`, a `(field, value)`, that
+    field first, required to be that value. -#}
+{% macro object_schema(fields, additional, tag=none) -%}
+{% set fields = fields | rejectattr("name", "eq", tag[0]) | list if tag else fields -%}
+{"type":"object","properties":{
+{%- if tag %}{{ tag[0] | tojson }}:{"type":"string","const":{{ tag[1] | tojson }}}{% if fields | rejectattr("flatten") | list %},{% endif %}{% endif -%}
+{%- for f in fields | rejectattr("flatten") %}{{ f.name | tojson }}:{{ field_schema(f) }}{% if not loop.last %},{% endif %}{% endfor -%}
+},"required":[{% if tag %}{{ tag[0] | tojson }}{% if fields | rejectattr("flatten") | selectattr("required") | list %},{% endif %}{% endif %}{% for f in fields | rejectattr("flatten") | selectattr("required") %}{{ f.name | tojson }}{% if not loop.last %},{% endif %}{% endfor %}],
+{%- set flat = fields | selectattr("flatten") | list -%}
+{% if flat %}"allOf":[{% for f in flat %}{{ type_schema(f.type) }}{% if not loop.last %},{% endif %}{% endfor %}],{% endif -%}
+"additionalProperties":{{ additional }}}
+{%- endmacro %}
+
+{#- The schema of the model's type `t`, named `name`. -#}
+{% macro def_schema(name, t, types) -%}
+{% if t.kind == "struct" -%}
+{{ extend(object_schema(t.fields, type_schema(t.additional_properties.value_type()) if t.additional_properties is defined and t.additional_properties else "false"), described(t.description)) }}
+{%- elif t.kind == "string_enum" %}{"type":"string","enum":{{ t["values"] | tojson }}{{ described(t.description) }}}
+{%- elif t.kind == "integer_enum" %}{"type":"integer"{{ described(t.description) }}}
+{%- elif t.kind == "string_alias" %}{"type":"string"{{ keywords(t.constraints if t.constraints is defined else none) }}{{ described(t.description) }}}
+{%- elif t.kind == "alias" %}{{ extend(type_schema(t.target, t.constraints if t.constraints is defined else none), described(t.description)) }}
+{%- elif t.kind == "struct_enum" and t.repr == "internally_tagged" -%}
+{% set tags = wire_tags(t, types) | split("\n") | list -%}
+{"oneOf":[{% for i in range(tags | length) %}{"$ref":"#/$defs/{{ variant_name(name, tags, i) }}"}{% if not loop.last %},{% endif %}{% endfor %}],"discriminator":{"propertyName":{{ t.discriminator_field | tojson }},"mapping":{
+{%- set ns = namespace(first=true) -%}
+{%- for i in range(tags | length) if tags[i] not in tags[:i] %}{% if not ns.first %},{% endif %}{% set ns.first = false %}{{ tags[i] | tojson }}:"#/$defs/{{ variant_name(name, tags, i) }}"{% endfor %}}}{{ described(t.description) }}}
+{%- elif t.kind == "struct_enum" -%}
+{"type":"object","required":[{{ t.discriminator_field | tojson }}],"properties":{ {{- t.discriminator_field | tojson }}:{"type":"string","enum":[{% for v in t.variants %}{{ v.name | tojson }}{% if not loop.last %},{% endif %}{% endfor %}]}}{{ described(t.description) }}}
+{%- else %}{}{% endif -%}
+{%- endmacro %}
+
+{#- The tags the variants of `t` are sent with, one per line: a variant's name, or when it is only
+    its schema's, the literal its tag field declares, as OpenAI's `InputMessage` is `message`. -#}
+{% macro wire_tags(t, types) -%}
+{% for v in t.variants -%}
+{% set target = types[v.schema_ref] if v.type == "ref" and v.schema_ref in types else none -%}
+{% set declared = (target.fields | selectattr("name", "eq", t.discriminator_field) | first) if target and target.fields is defined else none -%}
+{{ declared.literal if declared and declared.literal is defined and declared.literal and v.name == v.schema_ref else v.name }}{% if not loop.last %}{{ "\n" }}{% endif -%}
+{% endfor -%}
+{%- endmacro %}
+
+{#- The `$defs` name of the `i`th variant of the union `name`: `<union>.<tag>`, numbered from 1
+    when variants share their tag, as OpenAI's three `message` input items do. -#}
+{% macro variant_name(name, tags, i) -%}
+{{ name }}.{{ tags[i] }}{% if tags | select("eq", tags[i]) | list | length > 1 %}.{{ (tags[:i] | select("eq", tags[i]) | list | length) + 1 }}{% endif -%}
+{%- endmacro %}
+
+{#- The `$defs` entries of the variants of an internally tagged union, `<union>.<tag>`: each its
+    fields (those of the type it refers to, or its own) and the union's, with the tag as a
+    required `const`, which specs often leave out of the variants (serde's `tag` through utoipa)
+    though every value carries it. The checker picks a variant by that `const`. -#}
+{% macro variant_defs(name, t, types) -%}
+{% set tags = wire_tags(t, types) | split("\n") | list -%}
+{% for i in range(t.variants | length) -%}
+{% set v = t.variants[i] -%}
+{% set target = types[v.schema_ref] if v.type == "ref" and v.schema_ref in types else none -%}
+,{{ variant_name(name, tags, i) | tojson }}:
+{%- if v.type == "ref" and not (target and target.kind == "struct") -%}
+{"allOf":[{"$ref":"#/$defs/{{ v.schema_ref }}"}],"type":"object","properties":{ {{- t.discriminator_field | tojson }}:{"type":"string","const":{{ tags[i] | tojson }}}},"required":[{{ t.discriminator_field | tojson }}]}
+{%- elif target -%}
+{{ extend(object_schema(target.fields + t.fields, type_schema(target.additional_properties.value_type()) if target.additional_properties is defined and target.additional_properties else "false", (t.discriminator_field, tags[i])), described(target.description)) }}
+{%- else %}{{ object_schema(v.fields + t.fields, "false", (t.discriminator_field, tags[i])) }}{% endif -%}
+{% endfor -%}
+{%- endmacro %}
+
+{#- A minimal valid value of `ty`: required fields only, placeholders by type, within the
+    bounds and of the format of its constraints `c`. -#}
+{% macro example(ty, types, depth=0, c=none) -%}
+{% set rust = ty.to_rust() -%}
+{% set formats = {"email": "jane@example.com", "hostname": "example.com", "ipv4": "192.0.2.1", "ipv6": "2001:db8::1"} -%}
+{% if ty.is_nullable() %}{{ example(ty.inner_type(), types, depth, c) }}
+{%- elif ty.is_schema_ref() %}{{ example_def(ty.schema_name(), types, depth + 1) }}
+{%- elif ty.is_list() or ty.is_set() %}[{{ example(ty.inner_type(), types, depth + 1, c["items"] if c and c["items"] is defined else none) }}]
+{%- elif c and c.minimum is defined and (ty.is_int_or_uint() or rust in ["f32", "f64"]) %}{{ c.minimum }}
+{%- elif c and c.format is defined and c.format in formats %}{{ formats[c.format] | tojson }}
+{%- elif ty.is_map() or ty.is_union() or ty.is_json_object() %}{}
+{%- elif ty.is_bool() %}true
+{%- elif ty.is_datetime() %}"2026-01-31T09:00:00Z"
+{%- elif ty.is_date() %}"2026-01-31"
+{%- elif rust in ["i16", "u16", "i32", "i64", "u64"] %}1
+{%- elif rust in ["f32", "f64"] %}1.5
+{%- elif rust == "rust_decimal::Decimal" %}"10.00"
+{%- elif rust == "uuid::Uuid" %}"00000000-0000-0000-0000-000000000000"
+{%- elif ty.is_uri() %}"https://example.com"
+{%- else %}"string"
+{%- endif %}
+{%- endmacro %}
+
+{#- The members of a minimal object of `fields`, without braces. -#}
+{% macro example_fields(fields, types, depth) -%}
+{% set ns = namespace(parts=[]) -%}
+{% for f in fields if f.required -%}
+{% if f.flatten -%}
+{% set inner = example(f.type, types, depth)[1:-1] -%}
+{% if inner %}{% set ns.parts = ns.parts + [inner] %}{% endif -%}
+{% else -%}
+{% set value = (f.example | tojson) if f.example is defined else ((f.default | tojson) if f.default is defined and f.default is not none else example(f.type, types, depth, f.constraints if f.constraints is defined else none)) -%}
+{% set ns.parts = ns.parts + [(f.name | tojson) ~ ":" ~ value] -%}
+{% endif -%}
+{% endfor -%}
+{{ ns.parts | join(",") }}
+{%- endmacro %}
+
+{#- A minimal valid value of the model's type `name`. -#}
+{% macro example_def(name, types, depth) -%}
+{% set t = types[name] if name in types else none -%}
+{% if not t or depth > 6 %}{}
+{%- elif t.kind == "struct" %}{ {{- example_fields(t.fields, types, depth) -}} }
+{%- elif t.kind == "string_enum" %}{{ t["values"] | first | tojson }}
+{%- elif t.kind == "integer_enum" %}0
+{%- elif t.kind == "string_alias" %}"string"
+{%- elif t.kind == "alias" %}{{ example(t.target, types, depth) }}
+{%- elif t.kind == "struct_enum" -%}
+{% set v = t.variants | first -%}
+{% set fields = v.fields if v.type == "struct" else ((types[v.schema_ref].fields if v.schema_ref in types and types[v.schema_ref].fields is defined else [])) -%}
+{% set inner = example_fields(fields + t.fields, types, depth) -%}
+{ {{- t.discriminator_field | tojson }}:{{ (wire_tags(t, types) | split("\n") | first) | tojson }}{% if inner %},{{ inner }}{% endif -%} }
+{%- else %}{}{% endif -%}
+{%- endmacro %}
+
+{#- The shape of a JSON flag's value for its help: `{line1*, city, country*}`, `*` required. -#}
+{% macro skeleton(ty, types) -%}
+{% if ty.is_nullable() %}{{ skeleton(ty.inner_type(), types) }}
+{%- elif ty.is_list() or ty.is_set() %}{% set inner = skeleton(ty.inner_type(), types) %}{% if inner %}[{{ inner }}, ...]{% endif %}
+{%- elif ty.is_map() %}{"<key>": ...}
+{%- elif ty.is_schema_ref() and ty.schema_name() in types -%}
+{% set t = types[ty.schema_name()] -%}
+{% if t.kind == "struct" -%}
+{% set ns = namespace(names=[]) -%}
+{% for f in t.fields -%}
+{% if f.flatten and f.type.is_schema_ref() and f.type.schema_name() in types and types[f.type.schema_name()].fields is defined -%}
+{% for g in types[f.type.schema_name()].fields %}{% set ns.names = ns.names + [g.name ~ ("*" if g.required else "")] %}{% endfor -%}
+{% elif not f.flatten %}{% set ns.names = ns.names + [f.name ~ ("*" if f.required else "")] %}{% endif -%}
+{% endfor -%}
+{{ "{" ~ (ns.names | join(", ")) ~ "}" }}
+{%- elif t.kind == "struct_enum" -%}
+{{ "{" ~ t.discriminator_field ~ "*: " ~ (wire_tags(t, types) | split("\n") | unique | join("|")) ~ ", ...}" }}
+{%- endif -%}
+{%- endif %}
+{%- endmacro %}

@@ -11,6 +11,23 @@ pub fn under(prefix: &str) -> impl Iterator<Item = (&'static str, &'static [u8])
     })
 }
 
+/// The names of the built-in packs, `packs/<name>/pack.toml` in the repository.
+pub fn packs() -> Vec<&'static str> {
+    let mut names: Vec<_> = (FILES.iter())
+        .filter_map(|(path, _)| path.strip_prefix("packs/")?.strip_suffix("/pack.toml"))
+        .collect();
+    names.dedup();
+    names
+}
+
+/// Writes the built-in pack `name` to `dir`: its manifest, templates, runtime and scaffold.
+pub fn materialize_pack(name: &str, dir: &Path) -> Result<()> {
+    for (path, content) in under(&format!("packs/{name}")) {
+        crate::fsx::write(&dir.join(path), content)?;
+    }
+    Ok(())
+}
+
 /// Writes the built-in templates and runtime for `language` to `dir`, then layers overrides on top.
 pub fn materialize(language: &str, overrides: Option<&Path>, dir: &Path) -> Result<()> {
     for kind in ["templates", "runtime"] {

@@ -1,0 +1,30 @@
+[package]
+name = "@@NPM_PACKAGE@@-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "The @@CLIENT_NAME@@ API from the command line"
+repository = "https://github.com/@@PACK_REPO@@"
+homepage = "https://github.com/@@PACK_REPO@@"
+publish = false
+
+[[bin]]
+name = "@@NPM_PACKAGE@@"
+path = "src/main.rs"
+
+[dependencies]
+# The commands perseid generates from the spec, with the runtime and the SDK. `keyring` keeps
+# the secrets of `auth login` in the OS keyring: remove it to keep them in the config file.
+generated = { package = "@@NPM_PACKAGE@@-cli-generated", path = "generated", features = ["keyring"] }
+
+[package.metadata.dist]
+dist = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+# To build against an SDK not released yet:
+# [patch.crates-io]
+# @@PACKAGE_NAME@@ = { path = "../@@PACKAGE_NAME@@" }

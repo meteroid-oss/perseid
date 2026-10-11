@@ -10,7 +10,13 @@ users upgrade like they would to any new major version.
 - Your API keeps changing, and the SDKs must follow it.
 - You want generation to run in your own CI, from a spec you own.
 - Your SDKs are in languages perseid generates: TypeScript, Python, Go, Java and C# (and Rust).
-  perseid generates no Kotlin, Ruby, PHP, CLI, Terraform provider or MCP server.
+  perseid generates no Kotlin, Ruby, PHP or Terraform provider.
+- A CLI and an MCP server come with it, as built-in [packs](ci.md#targets): `targets.cli` imports
+  as `[targets.cli]`, a CLI over the Rust SDK (Stainless's wraps the Go SDK) with its own local
+  MCP server; `mcp_server` of the TypeScript target as `[targets.mcp]`, an MCP server in code
+  mode in a repository of its own, which deploys to npm, Docker, Cloudflare Workers or an MCP
+  bundle, with an OAuth server of its own for one-click connectors. The `mcp` of resources and
+  methods (`false`, `tags`, `description`) set the CLI's MCP tools.
 
 Plan it as a major release of each SDK: calls look the same in Python and mostly the same in
 TypeScript, but types and some names change (see [what changes](#what-changes-for-your-users)).

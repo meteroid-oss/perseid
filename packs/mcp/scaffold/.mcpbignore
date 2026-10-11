@@ -1,0 +1,9 @@
+# What the MCP bundle (npm run mcpb) leaves out: the sources, and what other targets deploy.
+src/
+.github/
+Dockerfile
+compose.yaml
+wrangler.jsonc
+tsconfig.json
+*.mcpb
+.wrangler/

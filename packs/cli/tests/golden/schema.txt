@@ -1,0 +1,16 @@
+Print, as JSON, the index of the commands under the words given (all without any), or for a command the JSON Schema of its parameters and body, with an example body; --response gives what it prints.
+
+Usage: acme schema [OPTIONS] [COMMAND]...
+
+Arguments:
+  [COMMAND]...
+          
+
+Options:
+      --response
+          The schema of what the command prints
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`
