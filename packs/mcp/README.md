@@ -33,7 +33,7 @@ Two, as Stainless and Cloudflare serve large APIs, rather than one per operation
 
 ## The sandbox
 
-The runtime is the npm package [`perseid-mcp`](https://github.com/meteroid-oss/perseid-ext/tree/main/packages/perseid-mcp): the generated server
+The runtime is the npm package [`perseid-mcp`](../../packages/perseid-mcp): the generated server
 depends on it, so a fix to the sandbox or the transports reaches every server as a version bump.
 
 A script runs in [Deno](https://deno.com) with no permission at all: no network, no files, no
@@ -67,7 +67,7 @@ Streamable HTTP on `/mcp`, stateless, with one of three kinds of credentials:
   checks them by introspection (`MCP_INTROSPECTION_URL`, `MCP_CLIENT_ID`, `MCP_CLIENT_SECRET`)
   and calls the API with them.
 
-`/health` answers for load balancers. See [`perseid-mcp`](https://github.com/meteroid-oss/perseid-ext/tree/main/packages/perseid-mcp#credentials-over-http)
+`/health` answers for load balancers. See [`perseid-mcp`](../../packages/perseid-mcp#credentials-over-http)
 for how the broker stores grants.
 
 ## The generated repository
@@ -86,7 +86,6 @@ asked for at install) to the GitHub release, for Claude Desktop.
 ## Tests
 
 `tests/run.sh` renders the pack against `tests/acme` (the CLI pack's acme spec) with `$PERSEID`,
-builds the TypeScript SDK and the server (on perseid-mcp from `$PERSEID_MCP`, a perseid-ext
-checkout's `packages/perseid-mcp`, else npm), and runs `tests/e2e.mjs` against the CLI pack's mock
+builds the TypeScript SDK and the server (on `packages/perseid-mcp`, packed), and runs `tests/e2e.mjs` against the CLI pack's mock
 API: search, scripts with pages and errors, the sandbox's walls and limits, read-only, and HTTP
 credentials.
