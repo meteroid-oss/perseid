@@ -482,12 +482,24 @@ class Cli(unittest.TestCase):
         self.assertIn("reports_retrieve", default, "tools no toolset holds are served")
         self.assertNotIn("health_retrieve_ping", default)
         self.assertTrue(default["things_delete"]["description"].startswith("Delete a thing for good"))
+        self.assertIn("things_list_labels", default, "hidden from the CLI's help, not from mcp")
         _, meta = tools("--toolsets", "meta")
-        self.assertEqual(sorted(meta), ["auth_api_retrieve_whoami", "health_retrieve_ping", "reports_retrieve"])
+        self.assertEqual(sorted(meta), ["health_retrieve_ping", "reports_retrieve", "whoami"],
+                         "toolsets match the names tools are given")
         _, every = tools("--toolsets", "all")
         self.assertIn("health_retrieve_ping", every)
+        self.assertNotIn("auth_api_retrieve_whoami", every)
+        self.assertEqual(every["whoami"]["annotations"]["readOnlyHint"], True)
         error = self.error(2, "mcp", "--toolsets", "nope")
         self.assertEqual(error["message"], "--toolsets: no toolset `nope`: expected all or one of meta, things")
+
+    def test_perseid_toml_hides_commands_and_sets_the_format_of_terminals(self):
+        self.assertNotIn("list-labels", self.ok("things", "--help"))
+        self.assertEqual(self.ok("things", "list-labels"), '["new","sale"]\n', "hidden, it still runs")
+        self.assertNotIn("things list-labels", [c["command"] for c in json.loads(self.ok("schema"))])
+        self.assertEqual(json.loads(self.ok("schema", "things", "list-labels"))["method"], "GET")
+        self.assertTrue(self.tty("things", "retrieve", "th_1").startswith("id: th_1\nname: Widget\n"))
+        self.assertTrue(self.ok("things", "retrieve", "th_1").startswith('{"id":"th_1"'))
 
     def mcp_http(self, *args, key="sk_env"):
         """An `acme mcp --port 0` server, and a function posting it a message: status, headers, body."""

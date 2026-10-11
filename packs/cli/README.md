@@ -16,13 +16,19 @@ cli_client_id = "acme-cli"          # optional: the OAuth client of `auth login 
 cli_scopes = ["things:read"]        # optional: the scopes it asks for (default: the server's)
 cli_revocation_url = "/oauth/revoke" # optional: RFC 7009 revocation on `auth logout`
 
+[context.cli]                       # optional: the commands, see Generated code and Output
+default_format = "yaml"             # on a terminal, instead of table
+[context.cli.operations.customers_list_events]
+hidden = true                       # out of help and completions, still a tool of `mcp`
+
 [context.cli_mcp]                   # optional: the tools of `mcp`, see MCP server
 instructions = "Amounts are in cents."
 default_toolsets = ["billing"]
 [context.cli_mcp.toolsets]
-billing = ["subscriptions_*", "invoices_*"]
+billing = ["subscriptions_*", "invoices_*", "archive_customer"]
 admin = ["oauth_*", "batch_jobs_*"]
 [context.cli_mcp.operations.customers_archive]
+name = "archive_customer"
 description = "Archive a customer: hidden from lists; its subscriptions keep running."
 ```
 
@@ -52,7 +58,7 @@ Cargo.toml                    the binary crate `<name>-cli`, bin `<name>` (scaff
 src/main.rs                   mounts the generated commands and yours, picks the login (scaffold)
 generated/                    perseid's: the library crate `<name>-cli-generated`
   Cargo.toml                  the SDK (`sdk.version`) and the runtime's dependencies
-  src/lib.rs                  NAME, ENV_PREFIX, DEFAULT_BASE_URL, APP, AUTH, SCHEMA, command(), dispatch(), client(), From<sdk::Error>
+  src/lib.rs                  NAME, ENV_PREFIX, DEFAULT_BASE_URL, DEFAULT_FORMAT, APP, AUTH, SCHEMA, command(), dispatch(), client(), From<sdk::Error>
   src/schema.json             the JSON Schema of the API's types, for `schema` and body checks
   src/commands/<resource>.rs  command() and dispatch() of a resource, a function per operation, its SCHEMA
   src/runtime/                the vendored runtime
@@ -139,6 +145,13 @@ Global options are listed in the root's help only; every other help ends with on
 them. A command's long help may say `{bin}` and `{words}`, which `app::command` replaces with
 the binary's name and the command's words.
 
+`[context.cli.operations.<tool>]` of perseid.toml, keyed like `[context.cli_mcp.operations]` by
+the command's words joined by `_` before any rename (`customers list-events` is
+`customers_list_events`), takes `hidden = true`: `app::command` leaves the command out of help,
+completions and man pages, and `schema` out of its index, and its resource too when every command
+of it is hidden. The command still runs when typed, and stays a tool of `mcp`, whose calls run it:
+MCP has its own `hidden`.
+
 Names are kebab case: `add-ons`, `list-entitlements`, `--per-page`. A top-level resource the
 SDK named `<tag>_api` because a schema has its tag's name is `<tag>`: the model's
 `display_path`, or, with perseid models older than it, the name without `_api` when a schema
@@ -213,6 +226,7 @@ it end to end.
 | `ctx.token().await?`, `ctx.base_url()` | the bearer token (refreshed if needed) and base URL, for the SDK's builder |
 | `ctx.max_retries()`, `ctx.timeout()`, `ctx.attempts()` | `--retries`, `--timeout` and `--debug`'s log of attempts, for the SDK's builder |
 | `App { default_base_url: DEFAULT_BASE_URL, .. }`, `ctx.api_base_url()` | the SDK's default base URL, which OAuth URLs resolve against without `--base-url` |
+| `App { default_format: DEFAULT_FORMAT, .. }` | the format on a terminal without `--format`, `None` for `table` |
 | `App { schema: SCHEMA, .. }` | the JSON Schema parts `schema` prints and bodies are checked against |
 | `ctx.print(&response)?` | one response, in the chosen format, through `--jq` |
 | `ctx.items()`, `is_full()`, `first_page_only()`, `fetched_page(more, chosen)`, `push(&item)?`, `finish()?` | paginated items, streamed; one page on a terminal |
@@ -225,6 +239,7 @@ it end to end.
 | `ctx.dry_run()`, `dry_run::Recorder::record(request)` | `--dry-run`: the SDK's `HttpClient` recording the request |
 | `CliError::{api, timeout, network, decode, invalid_request, usage, internal}`, `with_retry_after` | `From<sdk::Error>` |
 | `app::run_with(APP, command(), args, Host::captured(stdin), dispatch)` | tests, in process |
+| `mcp::check(&APP)` | tests: the names `[context.cli_mcp]` gives tools |
 
 Generated resources must not take the name of a top-level built-in (`app::BUILTINS`: `auth`,
 `completion`, `man`, `schema`, `agents`, `mcp`).
@@ -234,8 +249,10 @@ Generated resources must not take the name of a top-level built-in (`app::BUILTI
 ### Output
 
 `--format json|jsonl|yaml|table`, else `<PREFIX>_FORMAT`. Without either, on a terminal:
-`table`; off a terminal: `json` for one response, `jsonl` for paginated lists and event streams
-(one item per line, printed as they arrive). Event streams are `jsonl` on a terminal too.
+`table`, or the `default_format` of perseid.toml's `[context.cli]` (`DEFAULT_FORMAT`, which an
+unknown value makes a `compile_error!`); off a terminal: `json` for one response, `jsonl` for
+paginated lists and event streams (one item per line, printed as they arrive), whatever
+`default_format` says, as programs read it. Event streams are `jsonl` on a terminal too.
 
 - JSON is compact off a terminal, one line per document, and indented on one or with
   `--pretty`. Tables alone have colors: `json` and `jsonl` never do, and with either chosen
@@ -426,8 +443,12 @@ server has them: `mcp` serves those of `default_toolsets` and the tools no tools
 those `--toolsets billing,admin` names; `--toolsets all` serves every tool, deprecated ones and
 those `hidden` included, which are otherwise left out. A new operation joins its resource's
 toolset, so a whole family is hidden in one line. `operations.<tool>` overrides a tool's
-`description`, `title` and `annotations` (merged), or `hidden`; `instructions` comes first in
-the server's.
+`name`, `description`, `title` and `annotations` (merged), or `hidden`; `instructions` comes
+first in the server's.
+
+`<tool>` is the name of the command, `name` the one served: toolsets, `--tools`,
+`--exclude-tools` and calls take it. It is 1 to 64 of `A-Za-z0-9_.-` (model APIs take 64), and no
+other tool's; else `mcp` fails to start, as `mcp::check` in the generated crate's tests does.
 
 `--tools 'customers_*,plans_list'` serves the tools matching a glob, whatever the toolsets;
 `--exclude-tools '*_delete'` leaves out those matching one, and `--read-only` serves GET and

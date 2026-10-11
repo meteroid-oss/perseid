@@ -52,6 +52,9 @@ pub(crate) struct Import {
     pub toolsets: BTreeMap<String, BTreeSet<String>>,
     /// `mcp_instructions` of `[context]`, the MCP server's own instructions.
     pub mcp_instructions: Option<String>,
+    /// `[context.cli]`: the commands left out of the CLI, and its default `--format`.
+    pub cli_hidden: BTreeSet<String>,
+    pub default_format: Option<String>,
     /// What was imported, for the summary.
     pub mapped: Vec<String>,
     /// `(key, why)` of what has no perseid equivalent.
@@ -89,6 +92,8 @@ pub(crate) struct PackTarget {
 pub(crate) struct Tool {
     pub hidden: bool,
     pub description: Option<String>,
+    /// The tool's name, rather than its command's.
+    pub name: Option<String>,
 }
 
 /// A method of a Stainless resource.
@@ -701,9 +706,12 @@ impl Import {
                             self.tools.entry(name.clone()).or_default().description =
                                 Some(text.clone());
                         }
+                        ("tool_name", Value::String(text)) => {
+                            self.tools.entry(name.clone()).or_default().name = Some(text.clone());
+                        }
                         (other, _) => self.skip(
                             format!("resources.{dotted}.mcp.{other}"),
-                            "the CLI's mcp names its tools after their commands",
+                            "no perseid.toml equivalent",
                         ),
                     }
                 }
@@ -744,6 +752,14 @@ impl Import {
                     self.skip(at, "the CLI's release.yml publishes with dist: shell, PowerShell, Homebrew, npm and MCP bundles");
                 }
                 "options" => self.skip(at, "perseid's CLI wraps the Rust SDK, not the Go SDK"),
+                "default_format" => match value.as_str() {
+                    Some(format @ ("json" | "jsonl" | "yaml")) => {
+                        self.default_format = Some(format.to_owned());
+                    }
+                    Some("pretty") => self.default_format = Some("table".into()),
+                    Some("auto") => {}
+                    _ => self.skip(at, "the CLI's formats are json, jsonl, yaml and table"),
+                },
                 _ => self.skip(at, "no perseid.toml equivalent"),
             }
         }
@@ -829,8 +845,17 @@ impl Import {
             _ => None,
         };
         self.tool(&dotted, &method["mcp"]);
+        // `cli: { enabled: false }` leaves the command out of the CLI; nothing else of `cli` maps.
+        if method["cli"]["enabled"] == false {
+            self.cli_hidden.insert(tool_name(&dotted));
+        }
+        let cli_switch = method["cli"]
+            .as_object()
+            .is_some_and(|c| c.keys().all(|k| k == "enabled"));
         for (key, _) in method.as_object().into_iter().flatten() {
-            if !["endpoint", "paginated", "skip", "only", "type", "mcp"].contains(&key.as_str()) {
+            if !["endpoint", "paginated", "skip", "only", "type", "mcp"].contains(&key.as_str())
+                && !(key == "cli" && cli_switch)
+            {
                 ignored
                     .entry(format!("resources.*.methods.*.{key}"))
                     .or_insert((0, "method", method_key(key)))
@@ -1247,10 +1272,22 @@ impl Import {
                 );
             }
         }
+        if let Some(format) = &self.default_format {
+            out += &format!("\n[context.cli]\ndefault_format = {}\n", quote(format));
+        }
+        for command in &self.cli_hidden {
+            out += &format!(
+                "\n[context.cli.operations.{}]\nhidden = true\n",
+                key(command)
+            );
+        }
         for (tool, settings) in &self.tools {
             out += &format!("\n[context.cli_mcp.operations.{}]\n", key(tool));
             if settings.hidden {
                 out += "hidden = true\n";
+            }
+            if let Some(name) = &settings.name {
+                out += &format!("name = {}\n", quote(name));
             }
             if let Some(description) = &settings.description {
                 out += &format!("description = {}\n", quote(description));

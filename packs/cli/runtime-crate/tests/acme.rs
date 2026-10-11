@@ -22,7 +22,7 @@ use perseid_cli_runtime::{
     app::{Captured, Host},
     exit,
     oauth::{self, Browser, DeviceCode},
-    run_with, ApiKey, App, Method, Methods,
+    run_with, ApiKey, App, Format, Method, Methods,
 };
 use serde_json::{json, Value};
 use url::Url;
@@ -123,6 +123,32 @@ fn a_terminal_gets_a_table_by_default() {
     assert_eq!(
         out.stdout,
         "id    name    quantity  tags\nth_1  Widget  10        []\n"
+    );
+}
+
+#[test]
+fn the_default_format_of_the_cli_replaces_tables_on_a_terminal() {
+    let yaml = App {
+        default_format: Some(Format::Yaml),
+        ..cli::APP
+    };
+    let tty = run_app(yaml, "things list --max-items 1", "", |host| {
+        host.stdout_tty = true;
+    });
+    assert_eq!(
+        tty.stdout,
+        "- id: th_1\n  name: Widget\n  quantity: 10\n  tags: []\n"
+    );
+    let env = run_app(yaml, "things list --max-items 1", "", |host| {
+        host.stdout_tty = true;
+        host.env.insert("ACME_FORMAT".into(), "jsonl".into());
+    });
+    assert_eq!(env.json()["id"], "th_1");
+    let piped = run_app(yaml, "things list --max-items 1", "", |_| {});
+    assert_eq!(
+        piped.json()["id"],
+        "th_1",
+        "off a terminal output stays JSON"
     );
 }
 

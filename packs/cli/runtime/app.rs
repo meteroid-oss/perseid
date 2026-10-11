@@ -42,6 +42,9 @@ pub struct App {
     pub auth: &'static dyn Auth,
     /// The SDK's base URL when neither `--base-url`, `<PREFIX>_BASE_URL` nor the profile set one.
     pub default_base_url: Option<&'static str>,
+    /// The format on a terminal when neither `--format` nor `<PREFIX>_FORMAT` gives one; `None`
+    /// for `table`. Off a terminal output stays JSON, for programs.
+    pub default_format: Option<Format>,
     /// The parts of the generated schema (see `schema`): what `schema` prints and request
     /// bodies are checked against; `&[]` for none.
     pub schema: &'static [&'static str],
@@ -53,6 +56,7 @@ impl fmt::Debug for App {
             .field("name", &self.name)
             .field("env_prefix", &self.env_prefix)
             .field("default_base_url", &self.default_base_url)
+            .field("default_format", &self.default_format)
             .finish_non_exhaustive()
     }
 }
@@ -80,16 +84,19 @@ pub mod ids {
 pub const BUILTINS: [&str; 6] = ["auth", "completion", "man", "schema", "agents", "mcp"];
 
 /// Adds the global options and the built-in commands to the generated root command. Global
-/// options are listed in the root's help only: the others point to it.
+/// options are listed in the root's help only: the others point to it. The commands
+/// `[context.cli.operations.<tool>]` hides are left out of help, completions and man pages.
 pub fn command(app: &App, root: Command) -> Command {
+    let schema = Schema::parse(app.schema).ok();
     let prefix = app.env_prefix;
+    let tty_format = app.default_format.map_or("table", Format::name);
     let globals = [
         Arg::new(ids::FORMAT)
             .long(ids::FORMAT)
             .value_name("FORMAT")
             .value_parser(Format::NAMES)
             .hide_possible_values(true)
-            .help(format!("json, jsonl, yaml or table [env: {prefix}_FORMAT] [default: table on a terminal, else json; jsonl for lists and streams]")),
+            .help(format!("json, jsonl, yaml or table [env: {prefix}_FORMAT] [default: {tty_format} on a terminal, else json; jsonl for lists and streams]")),
         Arg::new(ids::JQ)
             .long(ids::JQ)
             .value_name("FILTER")
@@ -183,7 +190,7 @@ pub fn command(app: &App, root: Command) -> Command {
             Command::new("agents")
                 .about("How to use this CLI from scripts and agents: output, errors, discovery"),
         )
-        .subcommand(mcp::command(app));
+        .subcommand(mcp::command(app, schema.as_ref()));
     let root = root
         .subcommand_required(true)
         .arg_required_else_help(true)
@@ -210,7 +217,42 @@ pub fn command(app: &App, root: Command) -> Command {
                         .value_parser(value_parser!(PathBuf)),
                 ),
         );
-    point_to_globals(root, &pointer, app.name, &[])
+    let root = point_to_globals(root, &pointer, app.name, &[]);
+    match schema.map(|schema| hidden(&schema)) {
+        Some(hidden) if !hidden.is_empty() => hide(root, &hidden, &[]),
+        _ => root,
+    }
+}
+
+/// The words of the commands `[context.cli.operations.<tool>] hidden` hides, `<tool>` being the
+/// name of their MCP tool before `[context.cli_mcp]` renames it.
+fn hidden(schema: &Schema) -> Vec<String> {
+    let operations = &schema.cli()["operations"];
+    (schema.index(&[]).into_iter())
+        .filter_map(|entry| entry["command"].as_str().map(str::to_owned))
+        .filter(|words| operations[mcp::tool_name(words)]["hidden"] == true)
+        .collect()
+}
+
+/// Hides the commands under `cmd` whose words are `hidden`, and those whose every command is.
+fn hide(cmd: Command, hidden: &[String], words: &[&str]) -> Command {
+    let subcommands: Vec<String> = cmd
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_owned())
+        .collect();
+    subcommands.into_iter().fold(cmd, |cmd, name| {
+        cmd.mut_subcommand(&name, |sub| {
+            let words = [words, &[name.as_str()]].concat();
+            if hidden.contains(&words.join(" ")) {
+                return sub.hide(true);
+            }
+            let sub = hide(sub, hidden, &words);
+            match sub.has_subcommands() && sub.get_subcommands().all(Command::is_hide_set) {
+                true => sub.hide(true),
+                false => sub,
+            }
+        })
+    })
 }
 
 /// The help of the global options, which are hidden from every command but listed here.
@@ -767,6 +809,7 @@ where
     };
     let style = Style {
         format: globals.format,
+        tty_format: app.default_format,
         tty: stdout_tty,
         color: color(stdout_tty) && !globals.format.is_some_and(Format::is_json),
         pretty: globals.pretty,
@@ -1042,7 +1085,9 @@ impl Session {
         if let Some(described) = schema.describe(&words.join(" "), args.get_flag("response")) {
             return out.print(&described);
         }
-        let index = schema.index(&words);
+        let mut index = schema.index(&words);
+        let hidden = hidden(&schema);
+        index.retain(|entry| !hidden.iter().any(|words| entry["command"] == *words));
         if index.is_empty() {
             return Err(CliError::usage(format!(
                 "schema: no command `{}`: `{} schema` lists them",
@@ -1181,6 +1226,7 @@ mod tests {
         env_prefix: "ACME",
         auth: &auth::ApiKey,
         default_base_url: None,
+        default_format: None,
         schema: &[],
     };
 
@@ -1244,6 +1290,49 @@ mod tests {
     #[test]
     fn the_command_tree_is_valid() {
         cli().debug_assert();
+    }
+
+    #[test]
+    fn perseid_toml_hides_commands_and_picks_the_format_of_terminals() {
+        const SCHEMA: &str = r#"{
+          "resources": {"things": "things", "labels": "things labels"},
+          "cli": {"operations": {"things_archive": {"hidden": true},
+                                 "things_labels_list": {"hidden": true},
+                                 "auth_login": {"hidden": true}}},
+          "commands": {
+            "things.list": {"resource": "things", "command": "list", "method": "GET", "path": "/things"},
+            "things.archive": {"resource": "things", "command": "archive", "method": "POST", "path": "/archive"},
+            "labels.list": {"resource": "labels", "command": "list", "method": "GET", "path": "/labels"}
+          }
+        }"#;
+        let app = App {
+            default_format: Some(Format::Yaml),
+            schema: &[SCHEMA],
+            ..APP
+        };
+        let root = Command::new("acme").subcommand(
+            Command::new("things")
+                .subcommand(Command::new("list"))
+                .subcommand(Command::new("archive"))
+                .subcommand(Command::new("labels").subcommand(Command::new("list"))),
+        );
+        let cmd = command(&app, root);
+        let things = cmd.find_subcommand("things").unwrap();
+        let hidden = |cmd: &Command, name: &str| cmd.find_subcommand(name).unwrap().is_hide_set();
+        assert!(!hidden(&cmd, "things") && !hidden(things, "list"));
+        assert!(hidden(things, "archive"), "hidden in perseid.toml");
+        assert!(hidden(things, "labels"), "every command of it is hidden");
+        assert!(!hidden(cmd.find_subcommand("auth").unwrap(), "login"));
+        assert!(cmd
+            .try_get_matches_from(["acme", "things", "archive"])
+            .is_ok());
+        let format = command(&app, Command::new("acme"));
+        let format = (format.get_arguments())
+            .find(|arg| arg.get_id() == ids::FORMAT)
+            .and_then(Arg::get_help)
+            .unwrap()
+            .to_string();
+        assert!(format.contains("[default: yaml on a terminal, else json;"));
     }
 
     #[test]
