@@ -1,0 +1,18 @@
+Retrieve a thing
+
+`GET /v1/things/{thing_id}`
+
+Usage: acme things retrieve <THING_ID>
+
+Arguments:
+  <THING_ID>
+          The thing's ID
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Example:
+  acme things retrieve th_123
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

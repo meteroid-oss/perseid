@@ -292,6 +292,58 @@ fn init_from_stainless_maps_targets_pagination_and_method_names() {
 }
 
 #[test]
+fn init_from_stainless_maps_its_cli_and_mcp_server_to_the_built_in_packs() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::copy(
+        "tests/fixtures/stainless-openapi.yaml",
+        dir.path().join("openapi.yaml"),
+    )
+    .unwrap();
+    let config = fs::read_to_string("tests/fixtures/stainless.yml").unwrap();
+    let config = config
+        .replace(
+            "    staging_repo: knocklabs/knock-node-staging\n",
+            "    staging_repo: knocklabs/knock-node-staging\n    options:\n      mcp_server:\n        instructions: Recipients are users or objects.\n        generate_cloudflare_worker: true\n",
+        )
+        .replace(
+            "  ruby:\n",
+            "  cli:\n    binary_name: knock\n    production_repo: knocklabs/knock-cli\n    publish:\n      homebrew:\n        tap_repo: knocklabs/homebrew-tap\n  ruby:\n",
+        )
+        .replace(
+            "      delete: delete /v1/users/{user_id}\n",
+            "      delete:\n        endpoint: delete /v1/users/{user_id}\n        mcp: false\n",
+        )
+        .replace(
+            "      merge: post /v1/users/{user_id}/merge\n",
+            "      merge:\n        endpoint: post /v1/users/{user_id}/merge\n        mcp:\n          tags: [admin]\n          description: Merge two users into one.\n",
+        );
+    fs::write(dir.path().join("stainless.yml"), config).unwrap();
+    let (ok, out) = perseid(dir.path(), &["init", "--from", "stainless.yml"]);
+    assert!(ok, "{out}");
+    let config = fs::read_to_string(dir.path().join("perseid.toml")).unwrap();
+    for expected in [
+        "sdks = [\"rust\", \"typescript\", \"python\", \"go\"]",
+        "mcp_instructions = \"Recipients are users or objects.\"\n",
+        "[targets.cli]\nwraps = \"rust\"\nrepo = \"knocklabs/knock-cli\"\n",
+        "[targets.mcp]\nwraps = \"typescript\"\nrepo = \"knocklabs/knock-mcp\"\n",
+        "[context.cli_mcp.toolsets]\nadmin = [\"users_merge\"]\n",
+        "[context.cli_mcp.operations.users_delete]\nhidden = true\n",
+        "[context.cli_mcp.operations.users_merge]\ndescription = \"Merge two users into one.\"\n",
+    ] {
+        assert!(config.contains(expected), "{expected}\n---\n{config}");
+    }
+    for said in [
+        "perseid's CLI wraps the Rust SDK",
+        "HOMEBREW_TAP variable of the CLI's repository to `knocklabs/homebrew-tap`",
+        "the MCP server gets a repository of its own, `knocklabs/knock-mcp`",
+        "targets.cli.binary_name: the CLI's binary is named after the npm package",
+    ] {
+        assert!(out.contains(said), "{said}\n---\n{out}");
+    }
+    assert!(!out.contains("perseid generates no CLI"), "{out}");
+}
+
+#[test]
 fn init_from_a_stainless_config_written_for_another_spec_warns_and_keeps_its_operations() {
     let dir = tempfile::tempdir().unwrap();
     fs::copy(

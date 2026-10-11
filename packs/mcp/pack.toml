@@ -1,0 +1,9 @@
+# A hosted MCP server for the API in code mode, over the TypeScript SDK: a search tool over the
+# SDK, and an execute tool running scripts against it in a sandbox. The runtime is the npm package
+# perseid-mcp; the summary template writes src/generated/api.ts and package.json.
+name = "mcp"
+wraps = ["typescript"]
+model = 1
+
+[templates]
+api_summary = { dir = "." }

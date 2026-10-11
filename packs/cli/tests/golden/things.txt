@@ -1,0 +1,19 @@
+Things you own, and their attachments.
+
+Usage: acme things <COMMAND>
+
+Commands:
+  list            List things
+  create          Create a thing
+  retrieve        Retrieve a thing
+  delete          Delete a thing
+  create-photo    Add a photo
+  retrieve-batch  Retrieve several things
+  list-labels     List the labels of things
+  attachments     The attachments API
+  help            Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

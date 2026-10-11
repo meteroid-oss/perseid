@@ -1,0 +1,46 @@
+name: MCP pack
+
+on:
+  push:
+    branches: [main]
+    paths: ["packs/mcp/**", "src/**", "templates/typescript/**", "runtime/typescript/**", "packs/cli/tests/acme/openapi.json", "packs/cli/tests/mock.py", ".github/workflows/packs-mcp.yml"]
+  pull_request:
+    paths: ["packs/mcp/**", "src/**", "templates/typescript/**", "runtime/typescript/**", "packs/cli/tests/acme/openapi.json", "packs/cli/tests/mock.py", ".github/workflows/packs-mcp.yml"]
+
+
+jobs:
+  # Renders the pack against tests/acme, builds its TypeScript SDK and the server on perseid-mcp
+  # from perseid-ext's main, then runs the server against the CLI pack's mock API: search,
+  # execute in each sandbox, read-only, HTTP, OAuth.
+  pack:
+    strategy:
+      fail-fast: false
+      matrix:
+        sandbox: [deno, quickjs, remote]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: Swatinem/rust-cache@v2
+      # perseid as this commit has it, and perseid-mcp as perseid-ext's main has it.
+      - run: cargo build --locked && echo "PERSEID=$GITHUB_WORKSPACE/target/debug/perseid" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: meteroid-oss/perseid-ext
+          path: ext
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ext/package.json
+      - run: pnpm install --frozen-lockfile && echo "PERSEID_MCP=$GITHUB_WORKSPACE/ext/packages/perseid-mcp" >> "$GITHUB_ENV"
+        working-directory: ext
+      - run: packs/mcp/tests/run.sh
+        env:
+          WORK: ${{ runner.temp }}/acme
+          SANDBOX: ${{ matrix.sandbox }}
+      # The same server as a Cloudflare Worker: it builds and bundles, QuickJS's WebAssembly with it.
+      - if: matrix.sandbox == 'quickjs'
+        working-directory: ${{ runner.temp }}/acme/mcp
+        run: npx wrangler deploy --dry-run --outdir "$RUNNER_TEMP/worker"

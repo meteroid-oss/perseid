@@ -1,0 +1,54 @@
+Serve the API's operations as the tools of a Model Context Protocol server, on stdin and stdout: a tool per operation, named after its command (`things create` is things_create), whose input is its parameters and `body`, checked like the command's. Results are the API's JSON, as text and structuredContent, which `jq` filters. Lists return {items, has_more, next}, at most `max_items` items (20 by default); files, base64 resources; errors, the error JSON of the command with isError. Event streams are left out.
+
+Tool schemas suit the client its clientInfo names, or --client: $ref for claude and vscode, every schema inlined for the others.
+
+Credentials are those of the command line: --profile, --api-key, ACME_API_KEY, the default profile. In an MCP client's configuration:
+
+  {"command": "acme", "args": ["mcp"], "env": {"ACME_API_KEY": "..."}}
+
+With Claude Code: claude mcp add acme -e ACME_API_KEY=... -- acme mcp
+
+With --port, over Streamable HTTP at http://127.0.0.1:<PORT>/mcp, stateless: each POST is one JSON-RPC message, answered with JSON. Each request brings its API key, as Authorization: Bearer <KEY>; the server's own credentials serve those without one only with --key-from-env. Requests from browser origins other than localhost's are refused, unless --allowed-origins lists them. GET /health answers {"status", "version"}.
+
+Usage: acme mcp [OPTIONS]
+
+Options:
+      --toolsets <NAME,...>
+          Serve the tools of these toolsets, or all with hidden and deprecated ones: meta, things (default)
+
+      --tools <GLOB,...>
+          Serve only the tools whose name matches one of these globs, whatever the toolsets: customers_*,plans_list
+
+      --exclude-tools <GLOB,...>
+          Leave out the tools whose name matches one of these globs, whatever --tools says
+
+      --read-only
+          Serve the tools of GET operations only, whatever --tools says
+
+      --client <CLIENT>
+          Serve the JSON Schema this client takes, whatever its clientInfo says
+          
+          [possible values: claude, vscode, cursor, openai, gemini, other]
+
+      --max-chars <N>
+          Cut results longer than this many characters, 0 for no limit [default: 60000]
+
+      --list
+          Print the tools as JSON, as the client would get them, and exit
+
+      --port <PORT>
+          Serve over Streamable HTTP on this port, at /mcp, instead of stdio; 0 picks a free one
+
+      --host <ADDR>
+          The address --port listens on, 0.0.0.0 for every interface [default: 127.0.0.1]
+
+      --key-from-env
+          Serve HTTP requests without an API key with the server's credentials: --api-key, ACME_API_KEY, the profile
+
+      --allowed-origins <ORIGIN,...>
+          Serve browsers at these origins too, besides localhost's: https://app.example.com, or * for any
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

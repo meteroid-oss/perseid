@@ -1,0 +1,31 @@
+# The fixture the CLI pack is tested against: the Rust SDK of openapi.json, then the CLI.
+spec = "openapi.json"
+name = "Acme"
+sdks = ["rust"]
+release = false
+
+[context]
+cli_client_id = "acme-cli"
+cli_scopes = ["things:read"]
+cli_revocation_url = "/oauth/revoke"
+
+[context.cli_mcp]
+instructions = "Quantities are counts of items in stock."
+default_toolsets = ["things"]
+
+[context.cli_mcp.toolsets]
+things = ["things_*", "attachment_*"]
+meta = ["health_*", "auth_api_*"]
+
+[context.cli_mcp.operations.things_delete]
+description = "Delete a thing for good: its attachments go too."
+
+[rust]
+package = "acme-rs"
+path = "rust"
+
+[targets.cli]
+pack = "../.."
+wraps = "rust"
+repo = "acme/acme-cli"
+after = "generate"

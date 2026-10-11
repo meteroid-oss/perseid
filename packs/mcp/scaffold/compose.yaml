@@ -1,0 +1,41 @@
+# The server self-hosted, its two halves apart: `mcp` holds the grants and makes every API call;
+# `sandbox` runs the scripts, holds no key, and reaches nothing but `mcp`. A script that escaped
+# its sandbox would find nothing to take. Yours: perseid writes it once.
+#
+#   MCP_OAUTH_SECRET=$(openssl rand -base64 32) MCP_RUNNER_TOKEN=$(openssl rand -base64 32) \
+#   MCP_PUBLIC_URL=https://mcp.example.com docker compose up -d
+services:
+  mcp:
+    build: .
+    command: ["--port", "8080", "--oauth", "--store", "/data/grants.db", "--public-url", "${MCP_PUBLIC_URL}", "--sandbox", "remote"]
+    environment:
+      MCP_OAUTH_SECRET: ${MCP_OAUTH_SECRET:?generate one with openssl rand -base64 32}
+      MCP_RUNNER_URL: http://sandbox:8090
+      MCP_RUNNER_TOKEN: ${MCP_RUNNER_TOKEN:?generate one with openssl rand -base64 32}
+    ports: ["8080:8080"]
+    volumes: ["grants:/data"]
+    networks: [public, scripts]
+    restart: unless-stopped
+
+  sandbox:
+    build: .
+    entrypoint: ["node", "node_modules/perseid-mcp/dist/cli.js", "runner", "--port", "8090", "--sandbox", "deno"]
+    environment:
+      MCP_RUNNER_TOKEN: ${MCP_RUNNER_TOKEN}
+    networks: [scripts]
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # gVisor, where the host has it (https://gvisor.dev): a kernel of its own around the scripts.
+    # runtime: runsc
+    restart: unless-stopped
+
+volumes:
+  grants:
+
+networks:
+  public:
+  # No route out: the sandbox talks to mcp, and to nothing else.
+  scripts:
+    internal: true

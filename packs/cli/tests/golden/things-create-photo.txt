@@ -1,0 +1,21 @@
+Add a photo
+
+`POST /v1/things/{thing_id}/photos`
+
+Usage: acme things create-photo [OPTIONS] --file <FILE> <THING_ID>
+
+Arguments:
+  <THING_ID>
+          The thing's ID
+
+Options:
+      --caption <STRING>
+          Shown under the photo
+
+      --file <FILE>
+          (required) (a path, or - for stdin)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

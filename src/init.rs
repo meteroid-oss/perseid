@@ -231,11 +231,13 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         "\n[metadata]\n{}",
         metadata(info, &name, license.as_deref())
     );
+    let mut context = false;
     if let Some(stainless) = &imported {
         let env_prefix = stainless
             .env_prefix
             .as_deref()
             .filter(|p| *p != name.to_shouty_snake_case());
+        context = env_prefix.is_some();
         toml += &stainless.tables(env_prefix);
     }
     let draft = Config::parse(&toml, config::FILE)?;
@@ -267,11 +269,20 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         }
     }
     let stainless_prefix = imported.as_ref().is_some_and(|s| s.env_prefix.is_some());
+    let context_keys = imported
+        .as_ref()
+        .map(|i| i.context_keys())
+        .unwrap_or_default();
     if let Some(words) = words.as_ref().filter(|_| !stainless_prefix) {
         toml += &format!(
-            "\n[context]\nenv_prefix = {}\n",
+            "\n[context]\nenv_prefix = {}\n{context_keys}",
             quote(&words.join("_").to_uppercase())
         );
+    } else if !context && !context_keys.is_empty() {
+        toml += &format!("\n[context]\n{context_keys}");
+    }
+    if let Some(stainless) = &imported {
+        toml += &stainless.pack_tables();
     }
     fsx::write(&path, toml.as_bytes())?;
     println!("+ {}", config::FILE);

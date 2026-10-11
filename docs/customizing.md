@@ -186,8 +186,10 @@ Union field types, for values of several types such as Stripe's `string | Custom
 ## Packs
 
 A pack renders a program wrapping one SDK, such as a CLI over the Rust SDK, from templates of
-its own against the model of that SDK. A [pack target](configuration.md#targets) names its
-folder, and `perseid targets <name> --out <dir>` previews it.
+its own against the model of that SDK. A [pack target](configuration.md#targets) names a
+built-in pack (`cli`, `mcp`: [packs/](../packs), in the binary) or its folder, and
+`perseid targets <name> --out <dir>` previews it. The built-in packs are written the way your own
+would be.
 
 ```
 packs/cli/

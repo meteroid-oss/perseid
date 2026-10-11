@@ -1,0 +1,54 @@
+# The npm publish job of release.yml (dist's, with a guard): publishes the release's npm package
+# with npm trusted publishing, else the NPM_TOKEN secret, which only the first publish needs.
+# Without either, the job says so and succeeds, so the release goes on without npm.
+name: Publish to npm
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      id-token: write
+    env:
+      PLAN: ${{ inputs.plan }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-*
+          path: npm/
+          merge-multiple: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          registry-url: https://registry.npmjs.org
+      - env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm install -g 'npm@^11.5.1'
+          for pkg in $(jq -r '.releases[].artifacts[] | select(endswith("-npm-package.tar.gz"))' <<< "$PLAN"); do
+            dir=$RUNNER_TEMP/${pkg%.tar.gz}
+            mkdir -p "$dir" && tar -xzf "npm/$pkg" -C "$dir"
+            (
+              cd "$dir/package"
+              name=$(npm pkg get name | tr -d '"')
+              version=$(npm pkg get version | tr -d '"')
+              if npm view "$name@$version" version > /dev/null 2>&1; then
+                echo "::notice::$name@$version is already on npm"
+              elif [ -z "$NODE_AUTH_TOKEN" ] && ! npm view "$name" name > /dev/null 2>&1; then
+                echo "::notice::$name is not on npm yet: its first publish needs the NPM_TOKEN secret, then trusted publishing"
+              else
+                # Provenance requires the package to name the repository it is built from.
+                npm pkg delete repository
+                npm pkg set repository.type=git "repository.url=git+$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+                npm publish --access public --provenance --ignore-scripts
+              fi
+            )
+          done

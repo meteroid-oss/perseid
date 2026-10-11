@@ -1,0 +1,26 @@
+// The server on Cloudflare Workers: `npm run deploy`. Yours: perseid writes it once.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "@@HEADER_PREFIX@@-mcp",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "build": { "command": "npm run build:worker" },
+  // QuickJS's WebAssembly, compiled at deploy: Workers compile none at run time.
+  "rules": [{ "type": "CompiledWasm", "globs": ["**/*.wasm", "**/quickjs-wasmfile-release-sync/wasm"], "fallthrough": true }],
+  "vars": {
+    // api-key: each request brings its key. oauth: the server is its own OAuth server, users
+    // paste their key once on its consent page (needs OAUTH_DB and the MCP_OAUTH_SECRET secret:
+    // `npx wrangler secret put MCP_OAUTH_SECRET`). authorization-server: the API's own.
+    "MCP_AUTH": "oauth",
+    // quickjs: scripts in QuickJS inside this Worker, any plan. dynamic-workers: each script in a
+    // Dynamic Worker of its own, full V8, Workers Paid, billed per script: uncomment LOADER.
+    "MCP_SANDBOX": "quickjs"
+    // "MCP_PUBLIC_URL": "https://mcp.example.com",
+    // "MCP_KEYS_URL": "https://example.com/settings/api-keys",
+    // "MCP_READ_ONLY": "true"
+  },
+  // Grants of the OAuth server: wrangler creates the database on the first deploy.
+  "d1_databases": [{ "binding": "OAUTH_DB", "database_name": "@@HEADER_PREFIX@@-mcp-oauth" }]
+  // "worker_loaders": [{ "binding": "LOADER" }]
+}

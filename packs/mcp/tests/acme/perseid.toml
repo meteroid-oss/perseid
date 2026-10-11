@@ -1,0 +1,18 @@
+# The fixture the MCP pack is tested against: the CLI pack's acme spec, its TypeScript SDK, then
+# the server.
+spec = "../../../cli/tests/acme/openapi.json"
+name = "Acme"
+sdks = ["typescript"]
+release = false
+
+[context]
+mcp_instructions = "Quantities are counts of items in stock."
+
+[typescript]
+path = "typescript"
+
+[targets.mcp]
+pack = "../.."
+wraps = "typescript"
+repo = "acme/acme-mcp"
+after = "generate"

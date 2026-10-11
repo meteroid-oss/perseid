@@ -1,0 +1,10 @@
+# A command line for the API, over the Rust SDK: the commands of every operation in the library
+# crate generated/, with the runtime vendored in it, mounted by the binary crate of the scaffold.
+name = "cli"
+wraps = ["rust"]
+model = 1
+runtime = "generated/src/runtime"
+
+[templates]
+api_resource = { dir = "generated/src/commands" }   # a module per resource
+api_summary = { dir = "generated" }                 # src/lib.rs, src/schema.json and Cargo.toml

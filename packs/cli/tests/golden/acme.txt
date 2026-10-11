@@ -1,0 +1,38 @@
+The Acme API from the command line
+
+Usage: acme <COMMAND>
+
+Commands:
+  attachment  The attachment API
+  auth-api    The auth api API
+  events      The events API
+  health      The health API
+  reports     The reports API
+  things      Things you own, and their attachments.
+  schema      Print the JSON Schema of a command's input, or the index of commands
+  agents      How to use this CLI from scripts and agents: output, errors, discovery
+  mcp         Serve the API's operations as the tools of an MCP server, on stdio or over HTTP
+  auth        Manage credentials and profiles
+  completion  Print a shell completion script
+  help        Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
+
+Global options:
+      --format <FORMAT>       json, jsonl, yaml or table [env: ACME_FORMAT] [default: table on a terminal, else json; jsonl for lists and streams]
+      --jq <FILTER>           jq filter (jaq: jq's builtins, @csv, @tsv...), run on each item of a list, on the whole array with --format json; strings print raw
+      --pretty                Indent JSON off a terminal too
+      --max-items <N>         Stop lists after N items, fetching no further page
+      --all                   Fetch every page of a list on a terminal too, which shows the first page
+      --dry-run               Print the request as JSON instead of sending it: method, url, query, headers, body
+      --allow-unknown-fields  Send body fields and enum values the schema does not know
+      --profile <NAME>        Profile of the config file to use [env: ACME_PROFILE]
+      --api-key <KEY>         API key [env: ACME_API_KEY]
+      --base-url <URL>        API base URL [env: ACME_BASE_URL]
+      --retries <N>           Retry a request up to N times on no response, 408, 429 or 5xx, if idempotent or with an idempotency key [env: ACME_RETRIES] [default: 2]
+      --no-retry              Never retry, as --retries 0
+      --timeout <SECS>        Timeout of each attempt in seconds, 0 for none [env: ACME_TIMEOUT] [default: the SDK's]
+      --no-color              Disable colors (also when NO_COLOR is set)
+      --debug                 Print diagnostics to stderr

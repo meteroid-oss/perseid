@@ -20,6 +20,17 @@ fn main() {
         println!("cargo:rerun-if-changed={dir}");
         collect(Path::new(dir), &mut files);
     }
+    // The built-in packs, as perseid renders them: their tests and docs stay in the repository.
+    println!("cargo:rerun-if-changed=packs");
+    for pack in fs::read_dir("packs").unwrap() {
+        let pack = pack.unwrap().path();
+        files.push(pack.join("pack.toml"));
+        for dir in ["templates", "runtime", "scaffold"] {
+            if pack.join(dir).is_dir() {
+                collect(&pack.join(dir), &mut files);
+            }
+        }
+    }
     files.sort();
     let entries: String = files
         .iter()

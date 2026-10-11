@@ -1,0 +1,23 @@
+Log in and store the credential in a profile of the config file. --api-key stores that key, --api-key-stdin the first line of stdin; without them an API key is prompted for (hidden) or read from stdin, unless a flag below picks another way. --profile names the profile (default: the default profile) and --base-url is stored with it. Secrets go to the OS keyring when there is one, else to the file.
+
+ACME_API_KEY needs no login.
+
+Usage: acme auth login [OPTIONS]
+
+Options:
+      --api-key-stdin
+          Store the API key read from stdin, a terminal's too
+
+      --web
+          Log in with a browser
+
+      --device
+          Log in with a code, from any device
+
+      --no-keyring
+          Store the secrets in the config file, not the OS keyring [env: ACME_NO_KEYRING]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

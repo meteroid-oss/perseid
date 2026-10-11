@@ -1,0 +1,41 @@
+List things
+
+Every thing of the catalog, newest first.
+
+`GET /v1/things`
+
+Prints every item, one JSON object per line off a terminal, fetching the pages as needed: --starting-after fetches that page only.
+
+Usage: acme things list [OPTIONS]
+
+Options:
+      --starting-after <STRING>
+          The ID of the thing to list after
+
+      --limit <INTEGER 1..100>
+          Things per page [default: 20]
+
+      --status <STRING,...>
+          Only things with these statuses
+          
+          [possible values: draft, active, retired]
+
+      --query-format <STRING>
+          (deprecated) How names are written
+          
+          [possible values: short, long]
+
+      --archived[=<BOOL>]
+          Archived things only
+          
+          [possible values: true, false]
+
+      --sort <STRING>
+          Sort order, `-` first for descending
+          
+          [possible values: name, -name]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

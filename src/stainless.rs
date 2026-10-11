@@ -44,6 +44,14 @@ pub(crate) struct Import {
     /// Type names by schema name, from the resources' `models`.
     pub models: BTreeMap<String, String>,
     pub exclude: Vec<String>,
+    /// The built-in packs stainless.yml's CLI and MCP server map to: `cli`, `mcp`.
+    pub packs: BTreeMap<&'static str, PackTarget>,
+    /// `[context.cli_mcp.operations.<tool>]`: what the `mcp` of a method says.
+    pub tools: BTreeMap<String, Tool>,
+    /// `[context.cli_mcp.toolsets]`: the tools of each of the `mcp.tags`.
+    pub toolsets: BTreeMap<String, BTreeSet<String>>,
+    /// `mcp_instructions` of `[context]`, the MCP server's own instructions.
+    pub mcp_instructions: Option<String>,
     /// What was imported, for the summary.
     pub mapped: Vec<String>,
     /// `(key, why)` of what has no perseid equivalent.
@@ -55,6 +63,10 @@ pub(crate) struct Import {
     unspecified: Vec<(String, String)>,
     security_schemes: Option<Value>,
     security: Option<Value>,
+    /// Resources' `mcp`, applied to their methods without one of their own.
+    resource_tools: Vec<(String, Value)>,
+    /// The methods with an `mcp` of their own, dotted.
+    own_tools: BTreeSet<String>,
 }
 
 /// The settings of one language table.
@@ -64,6 +76,19 @@ pub(crate) struct Target {
     pub repo: Option<String>,
     pub module: Option<String>,
     pub exclude: Vec<String>,
+}
+
+/// A target of a built-in pack.
+#[derive(Default)]
+pub(crate) struct PackTarget {
+    pub repo: Option<String>,
+}
+
+/// What stainless.yml says of a method's MCP tool.
+#[derive(Default)]
+pub(crate) struct Tool {
+    pub hidden: bool,
+    pub description: Option<String>,
 }
 
 /// A method of a Stainless resource.
@@ -220,6 +245,10 @@ impl Import {
         let mut found: BTreeMap<&'static str, (&str, &Value)> = BTreeMap::new();
         for (key, target) in targets.as_object().into_iter().flatten() {
             let at = format!("targets.{key}");
+            if key == "cli" && target["skip"] != true {
+                self.cli(target);
+                continue;
+            }
             let Some(language) = language(key) else {
                 self.skip(at, unsupported_target(key));
                 continue;
@@ -253,6 +282,13 @@ impl Import {
                 _ => format!("{{{}}}", keys.join(",")),
             };
             self.skip(format!("targets.{keys}.{field}"), why);
+        }
+        // perseid's CLI wraps the Rust SDK, where Stainless's wraps the Go SDK.
+        if self.packs.contains_key("cli") && !self.targets.contains_key("rust") {
+            self.targets.insert("rust", Target::default());
+            self.warnings.push(
+                "perseid's CLI wraps the Rust SDK, which `sdks` now lists: Stainless's wraps the Go SDK".into(),
+            );
         }
         self.sdks = LANGUAGES
             .iter()
@@ -329,6 +365,9 @@ impl Import {
                         match (option.as_str(), value.as_str()) {
                             ("go_module_path_override", Some(module)) => {
                                 out.module = Some(module.to_owned());
+                            }
+                            ("mcp_server", _) if language == "typescript" => {
+                                self.mcp_server(value, out.repo.as_deref());
                             }
                             _ => self.skip(format!("{at}.{option}"), target_option(option)),
                         }
@@ -578,6 +617,7 @@ impl Import {
                         }
                     }
                     "skip" | "only" => {}
+                    "mcp" => self.resource_tools.push((dotted.clone(), value.clone())),
                     other => {
                         ignored
                             .entry(format!("resources.*.{other}"))
@@ -619,6 +659,147 @@ impl Import {
         for (key, (n, noun, why)) in ignored {
             self.skip(format!("{key} ({})", count(n, noun)), why);
         }
+        for (resource, mcp) in std::mem::take(&mut self.resource_tools) {
+            let methods: Vec<String> = (self.endpoints.iter())
+                .map(|m| m.dotted.clone())
+                .filter(|d| d.starts_with(&format!("{resource}.")) && !self.own_tools.contains(d))
+                .collect();
+            for dotted in methods {
+                self.tool(&dotted, &mcp);
+            }
+        }
+        if !self.tools.is_empty() || !self.toolsets.is_empty() {
+            self.mapped.push(count(
+                self.tools.len() + self.toolsets.len(),
+                "MCP tool setting",
+            ));
+        }
+    }
+
+    /// What a method's `mcp` says of its tool in the CLI's `mcp`: `false` hides it, `tags` put it
+    /// in toolsets, `description` describes it.
+    fn tool(&mut self, dotted: &str, mcp: &Value) {
+        if mcp.is_null() {
+            return;
+        }
+        self.own_tools.insert(dotted.to_owned());
+        let name = tool_name(dotted);
+        match mcp {
+            Value::Bool(false) => self.tools.entry(name).or_default().hidden = true,
+            Value::Object(fields) => {
+                for (key, value) in fields {
+                    match (key.as_str(), value) {
+                        ("tags", Value::Array(tags)) => {
+                            for tag in tags.iter().filter_map(Value::as_str) {
+                                self.toolsets
+                                    .entry(tag.to_owned())
+                                    .or_default()
+                                    .insert(name.clone());
+                            }
+                        }
+                        ("description", Value::String(text)) => {
+                            self.tools.entry(name.clone()).or_default().description =
+                                Some(text.clone());
+                        }
+                        (other, _) => self.skip(
+                            format!("resources.{dotted}.mcp.{other}"),
+                            "the CLI's mcp names its tools after their commands",
+                        ),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `targets.cli`: the built-in `cli` pack, over the Rust SDK.
+    fn cli(&mut self, target: &Value) {
+        let mut pack = PackTarget::default();
+        if let Some(production) = target["production_repo"].as_str() {
+            let repo = production
+                .split_once('#')
+                .map_or(production, |(repo, _)| repo);
+            match repo_name(repo) {
+                true => pack.repo = Some(repo.to_owned()),
+                false => self.skip(
+                    "targets.cli.production_repo",
+                    format!("`{repo}` is no GitHub owner/name: set `repo` under [targets.cli]"),
+                ),
+            }
+        }
+        for (key, value) in target.as_object().into_iter().flatten() {
+            let at = format!("targets.cli.{key}");
+            match key.as_str() {
+                "production_repo" | "skip" => {}
+                "binary_name" => self.skip(
+                    at,
+                    "the CLI's binary is named after the npm package: rename `[[bin]]` in its Cargo.toml after the first generation",
+                ),
+                "publish" => {
+                    if let Some(tap) = value["homebrew"]["tap_repo"].as_str() {
+                        self.warnings.push(format!(
+                            "set the HOMEBREW_TAP variable of the CLI's repository to `{tap}` for its Homebrew formula"
+                        ));
+                    }
+                    self.skip(at, "the CLI's release.yml publishes with dist: shell, PowerShell, Homebrew, npm and MCP bundles");
+                }
+                "options" => self.skip(at, "perseid's CLI wraps the Rust SDK, not the Go SDK"),
+                _ => self.skip(at, "no perseid.toml equivalent"),
+            }
+        }
+        if pack.repo.is_none() {
+            self.warnings
+                .push("set `repo` under [targets.cli]: the repository of the CLI".into());
+        }
+        self.packs.insert("cli", pack);
+        self.mapped.push("the CLI".into());
+    }
+
+    /// `targets.typescript.options.mcp_server`: the built-in `mcp` pack, in code mode over the
+    /// TypeScript SDK, in a repository of its own.
+    fn mcp_server(&mut self, options: &Value, sdk_repo: Option<&str>) {
+        if *options == Value::Bool(false) {
+            return;
+        }
+        let repo = sdk_repo.map(|repo| {
+            format!(
+                "{}-mcp",
+                repo.trim_end_matches("-typescript")
+                    .trim_end_matches("-node")
+            )
+        });
+        match &repo {
+            Some(repo) => self.warnings.push(format!(
+                "the MCP server gets a repository of its own, `{repo}`: create it, or set another `repo` under [targets.mcp]"
+            )),
+            None => self.warnings.push("set `repo` under [targets.mcp]: the repository of the MCP server".into()),
+        }
+        for (key, value) in options.as_object().into_iter().flatten() {
+            let at = format!("targets.typescript.options.mcp_server.{key}");
+            match key.as_str() {
+                "instructions" => self.mcp_instructions = value.as_str().map(str::to_owned),
+                "enable_code_tool" => {}
+                "package_name" => self.skip(at, "the server's npm package is the SDK's, suffixed -mcp"),
+                "enable_docs_tool" => self.skip(at, "`search` quotes the SDK's own declarations"),
+                "generate_cloudflare_worker" => self.skip(
+                    at,
+                    "nothing to set: the server deploys as a Worker (wrangler.jsonc), its own OAuth server on D1",
+                ),
+                "oauth_resource_metadata" => {
+                    let servers: Vec<&str> = (value["authorization_servers"].as_array().into_iter().flatten())
+                        .filter_map(Value::as_str)
+                        .collect();
+                    self.skip(
+                        at,
+                        format!("run the server with --authorization-server {}, or MCP_AUTH=authorization-server on Workers", servers.join(" --authorization-server ")),
+                    );
+                }
+                "publish" => self.skip(at, "the server's release.yml publishes to npm, ghcr.io and an MCP bundle"),
+                _ => self.skip(at, "no perseid.toml equivalent"),
+            }
+        }
+        self.packs.insert("mcp", PackTarget { repo });
+        self.mapped.push("the MCP server, in code mode".into());
     }
 
     fn method(
@@ -647,8 +828,9 @@ impl Import {
             Value::String(_) => Some(true),
             _ => None,
         };
+        self.tool(&dotted, &method["mcp"]);
         for (key, _) in method.as_object().into_iter().flatten() {
-            if !["endpoint", "paginated", "skip", "only", "type"].contains(&key.as_str()) {
+            if !["endpoint", "paginated", "skip", "only", "type", "mcp"].contains(&key.as_str()) {
                 ignored
                     .entry(format!("resources.*.methods.*.{key}"))
                     .or_insert((0, "method", method_key(key)))
@@ -1037,6 +1219,46 @@ impl Import {
         out
     }
 
+    /// The keys of `[context]` beyond `env_prefix`.
+    pub(crate) fn context_keys(&self) -> String {
+        match &self.mcp_instructions {
+            Some(text) => format!("mcp_instructions = {}\n", quote(text)),
+            None => String::new(),
+        }
+    }
+
+    /// The `[targets]` of the built-in packs, and `[context.cli_mcp]`.
+    pub(crate) fn pack_tables(&self) -> String {
+        let mut out = String::new();
+        for (name, pack) in &self.packs {
+            let wraps = if *name == "cli" { "rust" } else { "typescript" };
+            out += &format!("\n[targets.{name}]\nwraps = {}\n", quote(wraps));
+            if let Some(repo) = &pack.repo {
+                out += &format!("repo = {}\n", quote(repo));
+            }
+        }
+        if !self.toolsets.is_empty() {
+            out += "\n[context.cli_mcp.toolsets]\n";
+            for (tag, tools) in &self.toolsets {
+                out += &format!(
+                    "{} = {}\n",
+                    key(tag),
+                    list(&tools.iter().cloned().collect::<Vec<_>>())
+                );
+            }
+        }
+        for (tool, settings) in &self.tools {
+            out += &format!("\n[context.cli_mcp.operations.{}]\n", key(tool));
+            if settings.hidden {
+                out += "hidden = true\n";
+            }
+            if let Some(description) = &settings.description {
+                out += &format!("description = {}\n", quote(description));
+            }
+        }
+        out
+    }
+
     /// The `[methods]`, `[resources]`, `[models]`, `[context]` and `[[pagination]]` tables.
     pub(crate) fn tables(&self, env_prefix: Option<&str>) -> String {
         let mut out = String::new();
@@ -1059,7 +1281,11 @@ impl Import {
             }
         }
         if let Some(prefix) = env_prefix {
-            out += &format!("\n[context]\nenv_prefix = {}\n", quote(prefix));
+            out += &format!(
+                "\n[context]\nenv_prefix = {}\n{}",
+                quote(prefix),
+                self.context_keys()
+            );
         }
         for (name, rule) in &self.pagination {
             out += &format!("\n[[pagination]]                      # {name}\n");
@@ -1114,6 +1340,12 @@ fn client_name(org: &str, casings: &Value) -> String {
             }
         })
         .collect()
+}
+
+/// The tool of a method in the CLI's `mcp`, named after its command: `things.attachments.upload`
+/// is `things_attachments_upload`.
+fn tool_name(dotted: &str) -> String {
+    dotted.split('.').map(snake).collect::<Vec<_>>().join("_")
 }
 
 /// `get /v1/users` as `("get", "/v1/users")`.
@@ -1520,7 +1752,7 @@ fn unsupported_target(target: &str) -> String {
     match target {
         "kotlin" => "perseid generates no Kotlin SDK: Kotlin code can use the Java SDK".into(),
         "ruby" | "php" => format!("perseid generates no {} SDK", target.to_upper_camel_case()),
-        "cli" => "perseid generates no CLI".into(),
+        "cli" => "skipped: `skip: true`".into(),
         "terraform" => "perseid generates no Terraform provider".into(),
         "openapi" => "perseid publishes no processed spec".into(),
         "sql" => "perseid generates no SQL extension".into(),
@@ -1530,7 +1762,9 @@ fn unsupported_target(target: &str) -> String {
 
 fn target_option(option: &str) -> String {
     match option {
-        "mcp_server" => "perseid generates no MCP server".into(),
+        "mcp_server" => {
+            "the MCP server wraps the TypeScript SDK: set it on the `typescript` target".into()
+        }
         "node_migration" | "enable_v2" | "code_style" => {
             "perseid has one generator per language, without migration modes".into()
         }
@@ -1546,7 +1780,8 @@ fn resource_key(key: &str) -> &'static str {
             "perseid names types after their schema, without resource namespaces"
         }
         "custom" => "write the code by hand next to the generated files: perseid keeps it",
-        "mcp" | "terraform" | "cli" => "perseid generates no MCP server, Terraform provider or CLI",
+        "terraform" => "perseid generates no Terraform provider",
+        "cli" => "the CLI generates a command per operation",
         _ => "no perseid equivalent",
     }
 }
@@ -1565,7 +1800,8 @@ fn method_key(key: &str) -> &'static str {
             "perseid documents methods from the spec's summary and description"
         }
         "skip_test_reason" => "perseid's generated tests run against their own mock server",
-        "mcp" | "cli" | "terraform" => "perseid generates no MCP server, CLI or Terraform provider",
+        "terraform" => "perseid generates no Terraform provider",
+        "cli" => "the CLI generates a command per operation",
         _ => "no perseid equivalent",
     }
 }
