@@ -27,9 +27,7 @@
 {% if type.kind == "struct_enum" -%}
 {% for variant in type.variants -%}
 {% if variant.type == "struct" and variant.fields | default([]) | length > 0 -%}
-{% set class = variant.name | to_rust_variant -%}
-{% if class == type_name %}{% set class = class ~ "Value" %}{% endif -%}
-{% if class in [type.discriminator_field | to_rust_variant, "Unrecognized"] %}{% set class = class ~ "Variant" %}{% endif -%}
+{% set class = m.tagged_variant_class(variant, type) -%}
 [JsonSerializable(typeof({{ type_name }}.{{ class }}Data), TypeInfoPropertyName = "{{ type_name }}{{ class }}Data")]
 {% endif -%}
 {% endfor -%}
@@ -58,9 +56,7 @@
 {% set type_name = type.name | to_upper_camel_case -%}
 {% set owners = namespace(list=[(type.fields, type_name)]) -%}
 {% for variant in type.variants | default([]) if variant.type == "struct" -%}
-{% set class = variant.name | to_rust_variant -%}
-{% if class == type_name %}{% set class = class ~ "Value" %}{% endif -%}
-{% if class in [type.discriminator_field | to_rust_variant, "Unrecognized"] %}{% set class = class ~ "Variant" %}{% endif -%}
+{% set class = m.tagged_variant_class(variant, type) -%}
 {% set owners.list = owners.list + [(variant.fields | default([]), type_name ~ class)] -%}
 {% endfor -%}
 {% for fields, owner in owners.list -%}

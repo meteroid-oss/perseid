@@ -205,6 +205,14 @@
 {%- endif %}
 {%- endmacro %}
 
+{# The nested record of variant `v` in the tagged union `type`, suffixed `Variant` when named like a
+   member of the union's records: the tag, `Unrecognized` and its `Tag` and `Raw`, or `Value`. -#}
+{% macro tagged_variant_class(v, type) -%}
+{% set owner = type.name | to_upper_camel_case -%}
+{% set class = member(v.name, owner) -%}
+{{ class }}{% if class in [member(type.discriminator_field, owner), "Unrecognized", "Tag", "Raw", "Value"] %}Variant{% endif %}
+{%- endmacro %}
+
 {# The exception class thrown for an error response status: `404`, `4XX` or `default`. -#}
 {% macro status_exception(status) -%}
 {% set classes = {"400": "BadRequestException", "401": "UnauthorizedException", "403": "ForbiddenException",
