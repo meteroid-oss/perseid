@@ -508,6 +508,8 @@ manual runs. The action builds the SDK and runs its tests, the generated ones an
 | C# | `dotnet test` |
 
 - When the SDKs live in folders next to other code, it runs only on changes under them.
+- A pull request, or a push of one commit, tests only the SDKs it changes, and all of them when it
+  changes `sdk-ci.yml`. The jobs of the others pass without testing. Manual runs test them all.
 - A dispatched run posts the `sdk-ci` commit status, so the release PRs and SDK pull requests
   pushed with the default token can require it (see
   [the default `GITHUB_TOKEN`](#the-default-github_token)).

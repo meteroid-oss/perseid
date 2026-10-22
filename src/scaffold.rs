@@ -697,6 +697,90 @@ mod tests {
     }
 
     #[test]
+    fn ci_tests_only_the_sdks_a_change_touches() {
+        let workflow = ci_workflow("main", &["typescript".into(), "go".into()]);
+        let workflow = String::from_utf8(workflow).unwrap();
+        let step = &workflow[workflow.find("id: changes").unwrap()..];
+        let script: String = step[step.find("run: |\n").unwrap() + 7..]
+            .lines()
+            .take_while(|line| line.starts_with("          "))
+            .map(|line| format!("{}\n", &line[10..]))
+            .collect();
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| crate::pr::git(dir.path(), args).unwrap();
+        let commit = |path: &str| {
+            let file = dir.path().join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, git(&["rev-parse", "--short", "HEAD"])).unwrap();
+            git(&["add", "."]);
+            git(&[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                path,
+            ]);
+        };
+        git(&["init", "--quiet", "--initial-branch=main"]);
+        std::fs::write(dir.path().join("README.md"), "").unwrap();
+        git(&["add", "."]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "base",
+        ]);
+        git(&["checkout", "--quiet", "-b", "pr"]);
+        commit("go/client.go");
+        git(&["checkout", "--quiet", "main"]);
+        commit("README.md");
+        let before = git(&["rev-parse", "HEAD"]);
+        // The merge commit `actions/checkout` checks out for a pull request.
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "merge",
+            "--no-ff",
+            "-qm",
+            "m",
+            "pr",
+        ]);
+        let output = tempfile::NamedTempFile::new().unwrap();
+        let tested = |event: &str, before: &str, path: &str| {
+            std::fs::write(output.path(), "").unwrap();
+            let status = std::process::Command::new("bash")
+                .args(["-e", "-c", &script])
+                .current_dir(dir.path())
+                .env("EVENT", event)
+                .env("BEFORE", before)
+                .env("SDK_PATH", path)
+                .env("GITHUB_OUTPUT", output.path())
+                .status()
+                .unwrap();
+            assert!(status.success());
+            std::fs::read_to_string(output.path()).unwrap() == "test=true\n"
+        };
+        assert!(tested("pull_request", "", "go"));
+        assert!(!tested("pull_request", "", "typescript"));
+        assert!(tested("push", before.trim(), "go"));
+        assert!(!tested("push", before.trim(), "typescript"));
+        assert!(
+            tested("push", &"0".repeat(40), "typescript"),
+            "unknown base"
+        );
+        assert!(tested("workflow_dispatch", "", "typescript"));
+        commit(".github/workflows/sdk-ci.yml");
+        assert!(tested("pull_request", "", "typescript"));
+    }
+
+    #[test]
     fn unset_metadata_lines_are_dropped() {
         let context = serde_json::json!({ "license": null, "repository": "https://x.dev/r" });
         let source = "a\nlicense = \"@@LICENSE@@\"\nrepository = \"@@REPOSITORY@@\"\n";

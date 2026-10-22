@@ -104,8 +104,8 @@ var pets = await petstore.Pets.ListAsync(new() { Limit = 10, Status = PetStatus.
   and the pinned formatters, then runs `perseid generate --pr`, which commits the SDKs to the
   `perseid/update` branch and opens or updates one pull request per repository, split per SDK
   when an update of several is too large for release-please.
-- `sdk-ci.yml`, in each repository holding SDKs, builds each SDK and runs its tests on pull
-  requests and pushes.
+- `sdk-ci.yml`, in each repository holding SDKs, builds each SDK a pull request or push changes
+  and runs its tests.
 - `sdk-release.yml`, in each repository holding SDKs, runs release-please on merge and publishes
   each released SDK from the `release` environment.
 
