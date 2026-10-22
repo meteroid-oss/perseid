@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/meteroid-oss/perseid/compare/v0.14.0...v0.14.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* **csharp:** suffix tagged variants named Tag, Raw or Value ([#118](https://github.com/meteroid-oss/perseid/issues/118)) ([df0f55b](https://github.com/meteroid-oss/perseid/commit/df0f55be92d676cea9d055f6d6780439ea5246b0))
+
 ## [0.14.0](https://github.com/meteroid-oss/perseid/compare/v0.13.0...v0.14.0) (2026-10-09)
 
 
