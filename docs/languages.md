@@ -1026,6 +1026,8 @@ with `StatusCode`, `Headers`, `RequestId` and `Value`.
   properties.
 - Unmatched values are `Unrecognized`. `DecodeAs(context.Customer)` reads a union of objects
   as another variant.
+- A tagged variant named after the tag property, `Unrecognized`, `Tag`, `Raw` or `Value`, all
+  members of the union's records, takes a `Variant` suffix: `GitRef.TagVariant`.
 - Inline body unions are named after the operation: `CreateTranscriptionResponse`.
 
 ### Notes

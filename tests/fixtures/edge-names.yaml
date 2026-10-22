@@ -389,6 +389,7 @@ components:
         escaped: {$ref: '#/components/schemas/a~1b'}
         escaped_property: {$ref: '#/components/schemas/a~1b/properties/v'}
         child: {$ref: '#/components/schemas/Child'}
+        git_ref: {$ref: '#/components/schemas/GitRef'}
     Props:
       type: object
       required: [foo_bar, ID]
@@ -526,3 +527,11 @@ components:
       allOf:
         - $ref: '#/components/schemas/PetBase'
         - {type: object, properties: {meow: {type: boolean}}}
+    # Tagged variants named like the members of a union's records: `Tag` and `Raw` of the unknown
+    # variant, `Value` of the others.
+    GitRef:
+      oneOf:
+        - {type: object, required: [type, name], properties: {type: {type: string, enum: [Branch]}, name: {type: string}}}
+        - {type: object, required: [type, pattern], properties: {type: {type: string, enum: [Tag]}, pattern: {type: string}}}
+        - {type: object, required: [type, sha], properties: {type: {type: string, enum: [Raw]}, sha: {type: string}}}
+        - {type: object, required: [type], properties: {type: {type: string, enum: [Value]}}}

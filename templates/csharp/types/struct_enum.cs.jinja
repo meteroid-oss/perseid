@@ -6,10 +6,7 @@
 {% if type.repr != "internally_tagged" and not adjacent -%}
 {{ panic("csharp codegen: unsupported struct enum representation `" ~ type.repr ~ "` for type `" ~ type.name ~ "`") }}
 {% endif -%}
-{% macro variant_class(variant) -%}
-{% set name = m.member(variant.name, type_name) -%}
-{% if name in [tag_prop, "Unrecognized"] %}{{ name }}Variant{% else %}{{ name }}{% endif %}
-{%- endmacro -%}
+{% macro variant_class(variant) %}{{ m.tagged_variant_class(variant, type) }}{% endmacro -%}
 {#- The base fields of a decoded variant, as an object initializer inside the `Read` switch. -#}
 {% macro base_init() -%}
 {% if type.fields | length > 0 %}
