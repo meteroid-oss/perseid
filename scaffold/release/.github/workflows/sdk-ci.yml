@@ -27,7 +27,25 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: meteroid-oss/perseid/test@v0
+          fetch-depth: 2
+      # Pull requests and pushes test the SDKs they change, all of them when they change this
+      # workflow. The other jobs pass without testing, so that all can be required checks.
+      - id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SDK_PATH: ${{ matrix.path }}
+        run: |
+          case "$EVENT" in
+            pull_request) base=HEAD^1 ;;
+            push) base=$(git rev-parse --quiet --verify "$BEFORE^{commit}") || base= ;;
+            *) base= ;;
+          esac
+          if [ -z "$base" ] || ! git diff --quiet "$base" HEAD -- "$SDK_PATH" .github/workflows/sdk-ci.yml; then
+            echo "test=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.changes.outputs.test == 'true'
+        uses: meteroid-oss/perseid/test@v0
         with:
           path: ${{ matrix.path }}
 
