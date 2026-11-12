@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.2](https://github.com/meteroid-oss/perseid/compare/v0.14.1...v0.14.2) (2026-11-12)
+
+
+### Features
+
+* test only the SDKs a pull request or push changes in sdk-ci.yml ([#120](https://github.com/meteroid-oss/perseid/issues/120)) ([0b54fb5](https://github.com/meteroid-oss/perseid/commit/0b54fb5a8c75f2008bbf27bff306459216e04214))
+
+
+### Bug Fixes
+
+* **release:** keep every release of a release PR, and publish when its body is large ([#122](https://github.com/meteroid-oss/perseid/issues/122)) ([9948e46](https://github.com/meteroid-oss/perseid/commit/9948e465a063abd0290f5826e1963b1a1b89c028))
+
 ## [0.14.1](https://github.com/meteroid-oss/perseid/compare/v0.14.0...v0.14.1) (2026-10-22)
 
 
