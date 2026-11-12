@@ -183,7 +183,10 @@ impl Changelog {
                 } else {
                     "feat(api)"
                 };
-                format!("{BEGIN}\n{kind}: {}\n{END}", e.text)
+                // release-please reads its PR body as HTML: oasdiff's `array<object>` there is a
+                // tag left open, and the releases after it are lost.
+                let text = e.text.replace('<', "‹").replace('>', "›");
+                format!("{BEGIN}\n{kind}: {text}\n{END}")
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -318,6 +321,25 @@ mod tests {
         assert_eq!(
             only_components.entries()[0].text,
             "update the API definitions"
+        );
+    }
+
+    #[test]
+    fn entries_hold_no_angle_brackets_for_release_please() {
+        let text = "the response's body `type` changed from `array<object>` to `object`";
+        let changelog = Changelog {
+            changes: vec![change(
+                true,
+                "GET /pets",
+                "response-body-type-changed",
+                text,
+            )],
+            omitted: 0,
+        };
+        let nested = changelog.nested();
+        assert!(
+            nested.contains("from `array‹object›` to `object`") && !nested.contains('<'),
+            "{nested}"
         );
     }
 
