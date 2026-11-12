@@ -90,13 +90,12 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
-        PR: ${{ steps.please.outputs.pr }}
+        BRANCH: ${{ fromJSON(steps.please.outputs.pr).headBranchName }}
         WORKFLOWS: ${{ inputs.ci-workflows }}
       run: |
-        branch=$(jq -r .headBranchName <<< "$PR")
         for workflow in $WORKFLOWS; do
-          gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$branch" ||
-            echo "::warning::$workflow wasn't dispatched on $branch: does it exist, with \`on: workflow_dispatch\`?"
+          gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "$BRANCH" ||
+            echo "::warning::$workflow wasn't dispatched on $BRANCH: does it exist, with \`on: workflow_dispatch\`?"
         done
 
     # The pushed commit came from a pull request labeled by `perseid generate --auto-merge`. A merge
@@ -105,11 +104,11 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ steps.app.outputs.token || inputs.release-token || steps.hosted.outputs.token || inputs.token }}
-        PR: ${{ steps.please.outputs.pr }}
+        PR: ${{ fromJSON(steps.please.outputs.pr).number }}
       run: |
         labels=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[].labels[].name] | join(" ")')
         case " $labels " in
-          *" perseid:auto-release "*) gh pr merge "$(jq -r .number <<< "$PR")" --auto --squash --repo "$GITHUB_REPOSITORY" ;;
+          *" perseid:auto-release "*) gh pr merge "$PR" --auto --squash --repo "$GITHUB_REPOSITORY" ;;
         esac
 
     - id: released
@@ -118,8 +117,13 @@ runs:
         GH_TOKEN: ${{ github.token }}
         SDK_PATH: ${{ inputs.path }}
         TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-        RELEASES: ${{ toJSON(steps.please.outputs) }}
+      # Not an env variable: with the release PR's body, twice, the outputs exceed the 128 KiB a
+      # variable may hold. No line of the JSON can end the quoted heredoc.
       run: |
+        releases=$(cat <<'PERSEID_RELEASES'
+        ${{ toJSON(steps.please.outputs) }}
+        PERSEID_RELEASES
+        )
         if [ -n "$SDK_PATH" ]; then
           config=$(gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/release-please-config.json?ref=$GITHUB_SHA")
           if ! jq -e --arg path "$SDK_PATH" '.packages | has($path)' <<< "$config" > /dev/null; then
@@ -129,10 +133,10 @@ runs:
           tags=$(jq -cn --arg path "$SDK_PATH" --arg tag "$TAG" '{($path): $tag}')
         else
           tags=$(jq -c '. as $r | .paths_released // "[]" | fromjson
-            | map({key: ., value: ($r[if . == "." then "tag_name" else "\(.)--tag_name" end] // "")}) | from_entries' <<< "$RELEASES")
+            | map({key: ., value: ($r[if . == "." then "tag_name" else "\(.)--tag_name" end] // "")}) | from_entries' <<< "$releases")
         fi
         {
           echo "paths=$(jq -c keys_unsorted <<< "$tags")"
-          echo "releases=$(jq -c . <<< "$RELEASES")"
+          echo "releases=$(jq -c . <<< "$releases")"
           echo "tags=$tags"
         } >> "$GITHUB_OUTPUT"
