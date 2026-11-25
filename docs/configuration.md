@@ -52,6 +52,9 @@ listWidgetEvents = "widgets.events"
 [models]                            # type names by schema name
 CreateWidgetResponse = "Widget"
 
+[headers]                           # sent with every request unless the caller sets them
+Acme-Version = "{info.version}"     # {info.version}: the spec's info.version
+
 [pagination]                        # or [[pagination]] for several rules
 cursor = "starting_after"
 item_cursor = "id"
@@ -93,6 +96,7 @@ of every key with its description and allowed values.
 | `spec` | The OpenAPI document, a path relative to `perseid.toml` (`openapi.json` by default) or an `http(s)` URL |
 | `name` | The client name, in any form |
 | `sdks` | Among `rust`, `typescript`, `python`, `go`, `java`, `csharp` |
+| `[headers]` | Headers every request sends unless the client or the call sets them. `{info.version}` in a value is the spec's `info.version`: `Acme-Version = "{info.version}"` pins each SDK release to the API version it was generated from. Names are HTTP tokens, values printable ASCII without quotes or backslashes |
 | `idempotency_keys` | `true` when the API deduplicates POST requests by `Idempotency-Key`: the SDKs send one with every POST and retry them. `false` by default: a POST is only retried when the caller gives it a key, as replaying it could apply it twice. A 429 is retried for every method |
 
 - The spec is Swagger 2.0 or OpenAPI 3.0, 3.1 or 3.2, JSON or YAML. `$ref`s to other files or URLs
@@ -180,7 +184,8 @@ Each key is also a key of the [language tables](#language-tables), which overrid
 
 ## Operations
 
-Every operation is generated, except those marked `x-internal: true`.
+Every operation is generated, except those marked `x-internal: true`. Those marked `x-beta: true`
+say so in their doc comment and in the API reference.
 
 | Key | Description |
 |---|---|
@@ -379,6 +384,8 @@ Read as declared:
 
 Discriminators and `allOf`:
 
+- Generation warns about a `mapping` entry naming no schema, or a schema the union does not
+  list, and about tags mapping to one schema, each a variant of its own.
 - A discriminator on a base schema whose subtypes reference it in `allOf` makes the base a union
   of its subtypes: those of the `mapping`, plus those referencing the base or another subtype.
 - The base's own fields move to `{Base}Base`. A subtype that other subtypes extend becomes the
@@ -416,6 +423,7 @@ Every SDK makes spec names valid identifiers:
 | A type name the SDK or its runtime uses (`Upload`, `Options`, the client name, standard types) | `Model` suffix |
 | Punctuation | Words: `created<` is `created_lt`, `-` is `minus` |
 | Keywords of the language | Escaped: `r#type` in Rust, `lambda_` in Python, `final_` in Java |
+| Java methods named like a keyword or an `Object` method (`void`, `finalize`, `wait`) | The operation id: `voidInvoice`, else an `Operation` suffix |
 | A name Go cannot export | `X` prefix |
 | Enum values sharing an identifier | Numeric suffix: `bps` and `Bps` are `Bps` and `Bps2`. Repeated values are dropped |
 | Parameters sharing a name | `_query`, `_header` or `_cookie` suffix |

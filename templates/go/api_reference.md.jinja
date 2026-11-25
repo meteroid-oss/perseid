@@ -63,7 +63,7 @@
     {{ docs.resource(resource.path) }}.{{ docs.method(op) }}{{ suffix }}{{ params(resource, op) }} {{ result if suffix else ("(" ~ result ~ ", error)" if result else "error") }}
 {%- endmacro -%}
 {% macro row(op, signature, returns) -%}
-| `{{ signature }}`{% if op.deprecated %} (deprecated){% endif %} | `{{ op.method | upper }} {{ op.path }}` | {{ returns }} |
+| `{{ signature }}`{% if op.deprecated %} (deprecated){% endif %}{% if op.beta %} (beta){% endif %} | `{{ op.method | upper }} {{ op.path }}` | {{ returns }} |
 {%- endmacro -%}
 {% macro table(resource) -%}
 | Method | Request | Returns |

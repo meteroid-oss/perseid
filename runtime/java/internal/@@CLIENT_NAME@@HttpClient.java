@@ -64,6 +64,9 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
     private static final Set<String> BODY_METHODS = Set.of("POST", "PUT", "PATCH");
     /** Whether the API deduplicates POSTs by {@code Idempotency-Key}, so that each gets one to be retried. */
     private static final boolean AUTO_IDEMPOTENCY_KEY = @@IDEMPOTENCY_KEYS@@;
+
+    /** Sent with every request unless the client or the call sets them, such as the API version. */
+    private static final Map<String, String> FIXED_HEADERS = @@FIXED_HEADERS@@;
     private static final Duration MAX_RETRY_AFTER = Duration.ofSeconds(60);
     private static final Duration MAX_CONNECT_TIMEOUT = Duration.ofSeconds(10);
     private static final long DEFAULT_BACKOFF_MILLIS = 500;
@@ -593,6 +596,7 @@ public final class @@CLIENT_NAME@@HttpClient implements AutoCloseable {
             if (retrySafe) {
                 request.tag(RetrySafe.class, RetrySafe.INSTANCE);
             }
+            FIXED_HEADERS.forEach(request::header);
             defaultHeaders.forEach(request::header);
             if (auth != null) {
                 auth.apply(request, url, security);

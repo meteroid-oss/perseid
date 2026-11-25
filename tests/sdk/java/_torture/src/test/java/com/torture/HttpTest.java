@@ -65,6 +65,7 @@ class HttpTest {
     private final List<String> requests = Collections.synchronizedList(new ArrayList<>());
     private final List<String> idempotencyKeys = Collections.synchronizedList(new ArrayList<>());
     private final List<String> traces = Collections.synchronizedList(new ArrayList<>());
+    private final List<List<String>> versions = Collections.synchronizedList(new ArrayList<>());
     private final List<String> required = Collections.synchronizedList(new ArrayList<>());
     private final List<String> bodies = Collections.synchronizedList(new ArrayList<>());
     private final List<String> retryCounts = Collections.synchronizedList(new ArrayList<>());
@@ -88,6 +89,7 @@ class HttpTest {
                     + (exchange.getRequestURI().getRawQuery() == null ? "" : "?" + exchange.getRequestURI().getRawQuery()));
             idempotencyKeys.add(exchange.getRequestHeaders().getFirst("idempotency-key"));
             traces.add(exchange.getRequestHeaders().getFirst("x-trace"));
+            versions.add(exchange.getRequestHeaders().get("torture-version"));
             required.add(exchange.getRequestHeaders().getFirst("x-required"));
             retryCounts.add(exchange.getRequestHeaders().getFirst("x-torture-retry-count"));
             rawQueries.add(exchange.getRequestURI().getRawQuery());
@@ -184,6 +186,13 @@ class HttpTest {
         retryAfterMs = "5";
         assertEquals("n", client().things().retrieve("t").name());
         assertEquals(2, requests.size());
+    }
+
+    @Test
+    void fixedHeadersAreSentUnlessTheCallSetsThem() {
+        client().things().retrieve("t");
+        client().things().retrieve("t", RequestOptions.builder().header("Torture-Version", "2.0.0").build());
+        assertEquals(List.of(List.of("1.0.0"), List.of("2.0.0")), versions);
     }
 
     @Test

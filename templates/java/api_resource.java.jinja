@@ -36,7 +36,7 @@
 {% set ops = namespace(list=[]) -%}
 {% for op in resource.operations -%}
     {% set op_owner = "operation `" ~ op.id ~ "`" -%}
-    {% set op_name = op.name | ident("camel", "java") -%}
+    {% set op_name = op.name | java_method(op.id) -%}
     {% set op_pascal = op.name | to_upper_camel_case -%}
     {% set returns = "returningNothing()" -%}
     {% set res_type = "Void" -%}
@@ -633,7 +633,7 @@ public final class {{ resource_type_name }} {
     {% endfor -%}
     {% set body_cls = op.name | to_upper_camel_case ~ "Body" -%}
     /**
-     * Multipart form fields of {@link #{{ op.name | ident("camel", "java") }}}, immutable: build them with
+     * Multipart form fields of {@link #{{ op.name | java_method(op.id) }}}, immutable: build them with
      * {@link #builder()}.
      */
     public static final class {{ body_cls }} {

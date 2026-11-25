@@ -433,6 +433,9 @@ impl<'de> serde::Deserialize<'de> for {{ name }} {
 #[deprecated]
 #[allow(deprecated)]
 {% endif -%}
+{% if bare in ["add", "sub", "mul", "div", "rem", "neg", "not", "bitand", "bitor", "bitxor", "shl", "shr"] -%}
+#[allow(clippy::should_implement_trait)]
+{% endif -%}
 pub fn {{ ident }}(mut self, {{ ident }}: impl Into<{{ ty }}>) -> Self {
     self.{{ ident }} = {% if tristate %}Some(Some({{ ident }}.into())){% else %}Some({{ ident }}.into()){% endif %};
     self

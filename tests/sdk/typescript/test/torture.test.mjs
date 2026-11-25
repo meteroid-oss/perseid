@@ -15,7 +15,7 @@ after(() => rmSync(dir, { recursive: true, force: true }));
 copyFileSync(join(fixtures, "torture.yaml"), join(dir, "openapi.yaml"));
 writeFileSync(
   join(dir, "perseid.toml"),
-  'spec = "openapi.yaml"\nsdks = ["typescript"]\nname = "Torture"\nidempotency_keys = true\nbase_url = "https://torture.test/v1"\n[typescript]\nint64 = "bigint"\n'
+  'spec = "openapi.yaml"\nsdks = ["typescript"]\nname = "Torture"\nidempotency_keys = true\nheaders = { Torture-Version = "{info.version}" }\nbase_url = "https://torture.test/v1"\n[typescript]\nint64 = "bigint"\n'
 );
 execFileSync("perseid", ["generate"], { cwd: dir, stdio: "ignore" });
 const sdkDir = join(dir, "typescript");
@@ -169,6 +169,14 @@ describe("client", () => {
     for (const call of calls) {
       assert.equal(Object.keys(call.init.headers).filter((h) => /idempotency/i.test(h)).length, 1);
     }
+  });
+
+  it("sends the fixed headers unless the call sets them", async () => {
+    const { calls, torture } = client([json(THING)]);
+    await torture.things.retrieve("t");
+    await torture.things.retrieve("t", { headers: { "TORTURE-VERSION": "2.0.0" } });
+    assert.equal(calls[0].init.headers["torture-version"], "1.0.0");
+    assert.equal(calls[1].init.headers["torture-version"], "2.0.0");
   });
 
   it("takes per-request headers", async () => {

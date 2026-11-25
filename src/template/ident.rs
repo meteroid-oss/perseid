@@ -278,6 +278,34 @@ pub(crate) fn ident(name: &str, case: &str, language: Option<&str>) -> Result<St
     Ok(out)
 }
 
+/// Methods of `java.lang.Object` a resource method must not override or overload.
+const JAVA_OBJECT: &[&str] = &[
+    "clone",
+    "equals",
+    "finalize",
+    "getClass",
+    "hashCode",
+    "notify",
+    "notifyAll",
+    "toString",
+    "wait",
+];
+
+/// The Java method of the operation `name` (its resource-style name) and `id`: when `name` is a
+/// keyword or a method of `Object`, the operation id (`void` of `void_invoice` is `voidInvoice`).
+pub(crate) fn java_method(name: &str, id: &str) -> Result<String, Error> {
+    let taken = |s: &str| JAVA.contains(&s) || JAVA_OBJECT.contains(&s);
+    let method = ident(name, "camel", None)?;
+    if !taken(&method) {
+        return Ok(method);
+    }
+    let from_id = ident(id, "camel", None)?;
+    Ok(match taken(&from_id) || from_id == method {
+        true => format!("{method}Operation"),
+        false => from_id,
+    })
+}
+
 /// Whether `name` can be written as is as a Python class attribute: an identifier that is no
 /// keyword and hides no name the generated annotations use.
 pub(crate) fn python_attr(name: &str) -> bool {
@@ -400,6 +428,17 @@ pub(crate) fn idents(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn java_methods_avoid_keywords_and_object() {
+        assert_eq!(java_method("void", "void_invoice").unwrap(), "voidInvoice");
+        assert_eq!(
+            java_method("finalize", "finalize_invoice").unwrap(),
+            "finalizeInvoice"
+        );
+        assert_eq!(java_method("wait", "wait").unwrap(), "waitOperation");
+        assert_eq!(java_method("list_items", "x").unwrap(), "listItems");
+    }
 
     fn rust(name: &str) -> String {
         ident(name, "snake", Some("rust")).unwrap()

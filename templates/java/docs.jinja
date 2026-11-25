@@ -17,7 +17,7 @@
 
 {% macro resource(path) %}{{ accessors(path) }}{% endmacro %}
 
-{% macro method(op) %}{{ op.name | ident("camel", "java") }}{% endmacro %}
+{% macro method(op) %}{{ op.name | java_method(op.id) }}{% endmacro %}
 
 {% macro package_path() %}src/main/java/{{ sdk.java_package | replace(".", "/") }}{% endmacro %}
 

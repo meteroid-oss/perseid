@@ -123,6 +123,20 @@ public class HttpTests
     }
 
     [Fact]
+    public async Task SendsTheFixedHeadersUnlessTheCallSetsThem()
+    {
+        var (client, server) = Client(_ => Reply(HttpStatusCode.OK, ThingJson));
+        using var _ = client;
+        await client.Things.RetrieveAsync("t1");
+        await client.Things.RetrieveAsync(
+            "t1",
+            new RequestOptions { Headers = { ["TORTURE-VERSION"] = "2.0.0" } }
+        );
+        Assert.Equal("1.0.0", Header(server.Seen[0].Request, "Torture-Version"));
+        Assert.Equal("2.0.0", Header(server.Seen[1].Request, "Torture-Version"));
+    }
+
+    [Fact]
     public async Task TakesPerCallHeaders()
     {
         var (client, server) = Client(_ => Reply(HttpStatusCode.OK, ThingJson));

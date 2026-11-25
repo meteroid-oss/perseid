@@ -346,6 +346,23 @@ func TestAutomaticIdempotencyKeysSurviveRetries(t *testing.T) {
 	}
 }
 
+func TestFixedHeadersAreSentUnlessTheCallSetsThem(t *testing.T) {
+	sc := newScript(reply(200, thingJSON), reply(200, thingJSON))
+	client := sc.client(retries(0))
+	if _, err := client.Things().Retrieve(context.Background(), "t"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Things().Retrieve(context.Background(), "t", WithHeader("torture-version", "2.0.0")); err != nil {
+		t.Fatal(err)
+	}
+	if got := sc.request(0).Header.Values("Torture-Version"); len(got) != 1 || got[0] != "1.0.0" {
+		t.Errorf("first call sends %q", got)
+	}
+	if got := sc.request(1).Header.Values("Torture-Version"); len(got) != 1 || got[0] != "2.0.0" {
+		t.Errorf("second call sends %q", got)
+	}
+}
+
 func TestCancellingACallStopsItsRetries(t *testing.T) {
 	// During the wait before a retry.
 	sc := newScript(replyWith(503, "busy", map[string]string{"Retry-After-Ms": "800"}), reply(200, thingJSON))

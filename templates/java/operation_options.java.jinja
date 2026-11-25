@@ -51,7 +51,7 @@ import {{ sdk.java_package }}.models.{{ c | to_upper_camel_case }};
 {% endfor -%}
 
 /**
- * Optional parameters of {@code {{ operation.name | ident("camel", "java") }}}, immutable: build them
+ * Optional parameters of {@code {{ operation.name | java_method(operation.id) }}}, immutable: build them
  * with {@link #builder()}.
  */
 public final class {{ class_name }} {

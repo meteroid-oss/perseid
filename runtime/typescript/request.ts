@@ -24,6 +24,8 @@ import { BinaryResponse, EventStream, type MultipartBody, Stream, type UploadBod
 
 export const LIB_VERSION = "@@VERSION@@"; // x-release-please-version
 const USER_AGENT = `@@USER_AGENT_PREFIX@@-typescript/${LIB_VERSION}`;
+/** Sent with every request unless the client or the call sets them, such as the API version. */
+const FIXED_HEADERS: Readonly<Record<string, string>> = @@FIXED_HEADERS@@;
 
 const DEFAULT_RETRIES = 2;
 const INITIAL_RETRY_DELAY_MS = 500;
@@ -554,6 +556,7 @@ export class @@CLIENT_NAME@@Request {
 
     const headers: Record<string, string> = {
       accept: "application/json, */*;q=0.8",
+      ...FIXED_HEADERS,
       ...authHeaders,
       "user-agent": USER_AGENT,
       "@@HEADER_PREFIX@@-req-id": Math.floor(Math.random() * Number.MAX_SAFE_INTEGER).toString(),

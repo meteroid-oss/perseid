@@ -29,6 +29,8 @@ use crate::{error::Error, Configuration};
 const IDEMPOTENCY_KEY: &str = "idempotency-key";
 /// Whether the API deduplicates POSTs by `Idempotency-Key`, so that each gets one to be retried.
 const AUTO_IDEMPOTENCY_KEY: bool = @@IDEMPOTENCY_KEYS@@;
+/// Sent with every request unless the client or the call sets them, such as the API version.
+const FIXED_HEADERS: &[(&str, &str)] = @@FIXED_HEADERS@@;
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(60);
 
 /// A request that got no usable API response. The crate's `Error` is built from it.
@@ -621,6 +623,11 @@ impl Request {
                 }
                 Ok(_) => {}
                 Err(error) => return Err(request_error(error)),
+            }
+        }
+        for (name, value) in FIXED_HEADERS {
+            if !self.overrides.contains_key(*name) && !self.headers.contains_key(*name) {
+                self.headers.insert(*name, HeaderValue::from_static(value));
             }
         }
         for (name, value) in auth.headers {

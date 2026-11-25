@@ -97,6 +97,8 @@ __all__ = [
 
 DEFAULT_TIMEOUT: float = @@TIMEOUT@@
 DEFAULT_MAX_RETRIES = 2
+FIXED_HEADERS: t.Final[t.Mapping[str, str]] = @@FIXED_HEADERS@@
+"""Sent with every request unless the client or the call sets them, such as the API version."""
 AUTO_IDEMPOTENCY_KEY: bool = json.loads("@@IDEMPOTENCY_KEYS@@")
 """Whether the API deduplicates POSTs by ``idempotency-key``, so that each gets one to be retried."""
 INITIAL_RETRY_DELAY = 0.5
@@ -345,7 +347,9 @@ class Configuration:
     async_middleware: list[AsyncMiddleware] = dataclasses.field(default_factory=list[AsyncMiddleware])
 
     def headers(self) -> httpx.Headers:
-        headers = httpx.Headers({"user-agent": self.user_agent, "accept": "application/json"})
+        headers = httpx.Headers(
+            {**FIXED_HEADERS, "user-agent": self.user_agent, "accept": "application/json"}
+        )
         headers.update(self.default_headers)
         return headers
 
