@@ -623,6 +623,9 @@ pub(crate) struct Operation {
     description: Option<String>,
     /// Whether this operation is marked as deprecated.
     deprecated: bool,
+    /// Whether `x-beta: true` marks it as liable to change in a minor release.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    beta: bool,
     /// The HTTP method.
     ///
     /// Encoded as "get", "post" or such because that's what aide's PathItem iterator gives us.
@@ -1045,6 +1048,11 @@ impl Operation {
             false => None,
         };
         let x_pagination = op.extensions.get("x-pagination").cloned();
+        let beta = match op.extensions.get("x-beta") {
+            None | Some(serde_json::Value::Bool(false)) => false,
+            Some(serde_json::Value::Bool(true)) => true,
+            Some(_) => return Err(SpecError("`x-beta` must be a boolean").into()),
+        };
         let x_perseid_name = match op.extensions.get("x-perseid-name") {
             None => None,
             Some(serde_json::Value::String(name)) if !name.trim().is_empty() => {
@@ -1074,8 +1082,11 @@ impl Operation {
             stream: false,
             id: op_id,
             name: op_name,
-            description: super::html::doc(operation_doc(op.summary, op.description)),
+            description: super::html::doc(operation_doc(op.summary, op.description))
+                .map(|doc| if beta { beta_doc(&doc) } else { doc })
+                .or_else(|| beta.then(|| BETA_NOTE.to_owned())),
             deprecated: op.deprecated,
+            beta,
             method: method.to_owned(),
             path: path.to_owned(),
             path_params,
@@ -1527,6 +1538,16 @@ fn operation_doc(summary: Option<String>, description: Option<String>) -> Option
             Some(format!("{}\n\n{description}", summary.trim()))
         }
         (summary, description) => description.or(summary),
+    }
+}
+
+const BETA_NOTE: &str = "Beta: this operation may change in a minor release.";
+
+/// `doc` with the beta note after its first paragraph.
+fn beta_doc(doc: &str) -> String {
+    match doc.split_once("\n\n") {
+        Some((first, rest)) => format!("{first}\n\n{BETA_NOTE}\n\n{rest}"),
+        None => format!("{doc}\n\n{BETA_NOTE}"),
     }
 }
 
@@ -2323,6 +2344,8 @@ mod tests {
             Some("List pets, newest first.")
         );
         assert_eq!(doc(Some(" "), None), None);
+        assert_eq!(beta_doc("List pets"), format!("List pets\n\n{BETA_NOTE}"));
+        assert_eq!(beta_doc("A\n\nB"), format!("A\n\n{BETA_NOTE}\n\nB"));
     }
 
     fn widget() -> Value {

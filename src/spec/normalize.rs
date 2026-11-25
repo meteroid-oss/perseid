@@ -26,6 +26,7 @@ const PROPERTY_ANNOTATIONS: [&str; 5] = [
 
 pub(super) fn normalize(doc: &mut Value, models: &BTreeMap<String, String>) -> Result<()> {
     trim_descriptions(doc);
+    lint_discriminators(doc);
     upgrade::each_schema(doc, &mut binary_content);
     let mut renames = canonicalize_refs(doc);
     rename_models(doc, models, &mut renames)?;
@@ -42,6 +43,91 @@ pub(super) fn normalize(doc: &mut Value, models: &BTreeMap<String, String>) -> R
     let tags = renames.into_iter().map(|(old, new)| (new, old)).collect();
     pin_implicit_tags(doc, &tags);
     Ok(())
+}
+
+/// Warns about the discriminator mappings of the spec as written that perseid would otherwise
+/// read silently: a target that is no schema or no variant of the union, and tags sharing a
+/// schema, which become as many variants of it.
+fn lint_discriminators(doc: &Value) {
+    let schemas = doc
+        .pointer("/components/schemas")
+        .and_then(Value::as_object);
+    for warning in discriminator_lints(doc, schemas, "#") {
+        tracing::warn!("{warning}");
+    }
+}
+
+fn discriminator_lints(
+    value: &Value,
+    schemas: Option<&Map<String, Value>>,
+    at: &str,
+) -> Vec<String> {
+    let mut lints = Vec::new();
+    match value {
+        Value::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                lints.extend(discriminator_lints(item, schemas, &format!("{at}/{i}")));
+            }
+        }
+        Value::Object(map) => {
+            for (key, child) in map {
+                if !matches!(
+                    key.as_str(),
+                    "example" | "examples" | "default" | "enum" | "const"
+                ) {
+                    let key = key.replace('~', "~0").replace('/', "~1");
+                    lints.extend(discriminator_lints(child, schemas, &format!("{at}/{key}")));
+                }
+            }
+            let Some(mapping) = map
+                .get("discriminator")
+                .and_then(|d| d.get("mapping")?.as_object())
+            else {
+                return lints;
+            };
+            let variants: Vec<&str> = ["oneOf", "anyOf"]
+                .iter()
+                .filter_map(|key| map.get(*key)?.as_array())
+                .flatten()
+                .filter_map(|v| v.get("$ref")?.as_str())
+                .collect();
+            let mut tags: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+            for (tag, target) in mapping {
+                let Some(target) = target.as_str() else {
+                    continue;
+                };
+                let name = target.strip_prefix(SCHEMA_PREFIX).unwrap_or(target);
+                if !target.starts_with('#') && name.contains(['/', '#']) {
+                    continue;
+                }
+                if !schemas.is_some_and(|s| s.contains_key(name)) {
+                    lints.push(format!(
+                        "discriminator of `{at}`: `{tag}` maps to `{target}`, which is no schema of \
+                         the spec, so no variant takes it"
+                    ));
+                    continue;
+                }
+                let listed = variants
+                    .iter()
+                    .any(|v| v.strip_prefix(SCHEMA_PREFIX).unwrap_or(v) == name);
+                if !variants.is_empty() && !listed {
+                    lints.push(format!(
+                        "discriminator of `{at}`: `{tag}` maps to `{name}`, which is no variant of \
+                         the union"
+                    ));
+                }
+                tags.entry(name).or_default().push(tag);
+            }
+            for (name, tags) in tags.into_iter().filter(|(_, tags)| tags.len() > 1) {
+                lints.push(format!(
+                    "discriminator of `{at}`: `{}` all map to `{name}`, a variant of the union each",
+                    tags.join("`, `")
+                ));
+            }
+        }
+        _ => {}
+    }
+    lints
 }
 
 /// Gives `format: binary` to the strings of a binary `contentMediaType` without a
@@ -2548,6 +2634,35 @@ fn is_object_shallow(schema: &Value) -> Option<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn discriminator_lints_name_missing_and_shared_targets() {
+        let doc = json!({"components": {"schemas": {
+            "A": {"type": "object"},
+            "B": {"type": "object"},
+            "Value": {
+                "oneOf": [{"$ref": "#/components/schemas/A"}, {"$ref": "#/components/schemas/B"}],
+                "discriminator": {"propertyName": "kind", "mapping": {
+                    "a": "#/components/schemas/A",
+                    "alias": "#/components/schemas/A",
+                    "b": "B",
+                    "box": "#/components/schemas/Box",
+                }},
+            },
+        }}});
+        let schemas = doc
+            .pointer("/components/schemas")
+            .and_then(Value::as_object);
+        assert_eq!(
+            super::discriminator_lints(&doc, schemas, "#"),
+            [
+                "discriminator of `#/components/schemas/Value`: `box` maps to \
+                 `#/components/schemas/Box`, which is no schema of the spec, so no variant takes it",
+                "discriminator of `#/components/schemas/Value`: `a`, `alias` all map to `A`, a \
+                 variant of the union each",
+            ]
+        );
+    }
+
     use super::*;
 
     fn normalized(mut doc: Value) -> Value {

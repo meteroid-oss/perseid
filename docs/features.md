@@ -55,6 +55,7 @@ x-pagination:
   before: ending_before         # with `item_cursor`: set by the caller, pages backwards
   has_more: has_more            # optional, as are `total_pages`, `total` and `first_page`
   items: data                   # `data` by default, else the response's only array of objects
+  limit: limit                  # optional: the page size parameter, sent on every page
 ```
 
 Or describe them once in `perseid.toml`, to match every operation with that query parameter and

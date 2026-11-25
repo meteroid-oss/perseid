@@ -39,6 +39,9 @@ pub(crate) struct Pagination {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) total: Option<Vec<String>>,
     pub(crate) first_page: i64,
+    /// Query parameter taking the page size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) limit: Option<String>,
     /// For each path above (`item_cursor` within an item), whether each of its properties may
     /// be absent or null, for SDKs that read them through typed fields.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -105,6 +108,18 @@ impl Pagination {
             style != Style::Cursor || spec.next_cursor.is_some() != spec.item_cursor.is_some(),
             "cursor pagination needs exactly one of `next_cursor` or `item_cursor`"
         );
+
+        if let Some(limit) = &spec.limit {
+            let (_, ty, required) = op
+                .query_params
+                .iter()
+                .find(|(name, ..)| name == limit)
+                .with_context(|| format!("no `{limit}` query parameter"))?;
+            ensure!(
+                is_integer(ty) && !required,
+                "`limit` must name an optional integer query parameter"
+            );
+        }
 
         let response = op.response.context("no JSON response body")?;
         let items = match &spec.items {
@@ -201,6 +216,7 @@ impl Pagination {
             total_pages,
             total,
             first_page: spec.first_page.unwrap_or(1),
+            limit: spec.limit.clone(),
             optional,
         })
     }

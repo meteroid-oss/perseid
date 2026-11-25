@@ -58,6 +58,9 @@ pub fn populate_env(
          language: Option<Cow<'_, str>>,
          owner: Cow<'_, str>| { ident::idents(&names, &case, language.as_deref(), &owner) },
     );
+    env.add_filter("java_method", |name: Cow<'_, str>, id: Cow<'_, str>| {
+        ident::java_method(&name, &id)
+    });
     env.add_filter("enum_names", |values: Vec<String>| {
         ident::enum_names(&values)
     });

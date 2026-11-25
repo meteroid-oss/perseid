@@ -60,6 +60,10 @@ pub struct Config {
     pub idempotency_keys: Option<bool>,
     /// Prefix of the `User-Agent` header: the kebab-case `name` by default.
     pub user_agent: Option<String>,
+    /// Headers every request sends unless the caller sets them, such as an API version:
+    /// `{ Acme-Version = "{info.version}" }`, `{info.version}` being the spec's `info.version`.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
     /// Installs the Standard Webhooks signature verifier in every SDK.
     pub webhooks: Option<bool>,
     /// `false` leaves out the tests generated with each SDK, one per operation.
@@ -136,6 +140,10 @@ pub struct Config {
     pub targets: BTreeMap<String, TargetTable>,
     #[serde(skip)]
     pub home: Home,
+    /// Whether this generation leads to a major release, which moves a Go module of version
+    /// 1.x to its `/v2` path.
+    #[serde(skip)]
+    pub major_release: bool,
 }
 
 /// The repository holding perseid.toml: the web URL of its `origin`, and perseid.toml's folder.
@@ -524,6 +532,8 @@ pub struct Pagination {
     pub total: Option<String>,
     /// Number of the first page, 1 by default.
     pub first_page: Option<i64>,
+    /// Optional integer query parameter taking the page size, kept on every page.
+    pub limit: Option<String>,
     /// perseid.toml only: operations this rule must apply to, instead of every matching one.
     #[serde(default)]
     pub operations: Vec<String>,
@@ -897,16 +907,89 @@ impl Config {
             })
     }
 
-    /// Defaults `base_url` to the spec's first absolute server, the one `perseid init` writes.
-    pub fn default_to_spec_server(&mut self, spec: &str) {
+    /// Defaults `base_url` to the spec's first absolute server, the one `perseid init` writes,
+    /// and fills `{info.version}` into `headers`.
+    pub fn defaults_from_spec(&mut self, spec: &str) -> anyhow::Result<()> {
         #[derive(Deserialize)]
-        struct Servers {
+        struct Doc {
             #[serde(default)]
             servers: Value,
+            #[serde(default)]
+            info: Value,
         }
+        let doc = serde_json::from_str::<Doc>(spec).ok();
         if self.base_url.is_none() {
-            let servers = serde_json::from_str::<Servers>(spec).map(|doc| doc.servers);
-            self.base_url = servers.ok().and_then(|s| crate::spec::server_url(&s));
+            self.base_url = doc
+                .as_ref()
+                .and_then(|d| crate::spec::server_url(&d.servers));
+        }
+        let version = doc.as_ref().and_then(|d| d.info.get("version")?.as_str());
+        for (name, value) in &mut self.headers {
+            if value.contains("{info.version}") {
+                let version = version.with_context(|| {
+                    format!("header `{name}` uses `{{info.version}}`, but the spec has no `info.version`")
+                })?;
+                *value = value.replace("{info.version}", version);
+            }
+            ensure!(
+                !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)),
+                "`{name}` in [headers] is not a valid header name"
+            );
+            ensure!(
+                value
+                    .bytes()
+                    .all(|b| (b' '..=b'~').contains(&b) && b != b'"' && b != b'\\'),
+                "the value of `{name}` in [headers] must be printable ASCII without quotes or backslashes"
+            );
+        }
+        Ok(())
+    }
+
+    /// `headers` as a literal of `language`'s runtime.
+    fn headers_literal(&self, language: &str) -> String {
+        let pairs = self.headers.iter();
+        let quoted = |s: &str| format!("\"{s}\"");
+        match language {
+            "typescript" | "python" => {
+                let entries: Vec<String> = pairs
+                    .map(|(n, v)| format!("{}: {}", quoted(&n.to_lowercase()), quoted(v)))
+                    .collect();
+                format!("{{{}}}", entries.join(", "))
+            }
+            "rust" => {
+                let entries: Vec<String> = pairs
+                    .map(|(n, v)| format!("({}, {})", quoted(&n.to_lowercase()), quoted(v)))
+                    .collect();
+                format!("&[{}]", entries.join(", "))
+            }
+            "go" => {
+                let entries: Vec<String> = pairs
+                    .map(|(n, v)| format!("{{{}, {}}}", quoted(n), quoted(v)))
+                    .collect();
+                format!("[][2]string{{{}}}", entries.join(", "))
+            }
+            "java" => {
+                let entries: Vec<String> = pairs
+                    .map(|(n, v)| format!("Map.entry({}, {})", quoted(n), quoted(v)))
+                    .collect();
+                format!("Map.ofEntries({})", entries.join(", "))
+            }
+            "csharp" if self.headers.is_empty() => {
+                "Array.Empty<(string Name, string Value)>()".to_owned()
+            }
+            "csharp" => {
+                let entries: Vec<String> = pairs
+                    .map(|(n, v)| format!("({}, {})", quoted(n), quoted(v)))
+                    .collect();
+                format!(
+                    "new (string Name, string Value)[] {{ {} }}",
+                    entries.join(", ")
+                )
+            }
+            _ => String::new(),
         }
     }
 
@@ -931,12 +1014,17 @@ impl Config {
             "rust_crate": if language == "rust" { package.replace('-', "_") } else { snake.clone() },
             "java_package": if language == "java" { package.clone() } else { format!("com.{snake}") },
             "npm_package": if language == "typescript" { &package } else { &kebab },
-            "go_module": self.go_module(sdk).unwrap_or_else(|| kebab.clone()),
+            "go_module": self
+                .go_module(sdk)
+                .map(|module| go_major_module(&module, &version, self.major_release, dir))
+                .unwrap_or_else(|| kebab.clone()),
             "default_base_url": base_url,
             "has_default_base_url": !base_url.is_empty(),
             "user_agent_prefix": pick(&target.user_agent, &self.user_agent, &kebab),
             "header_prefix": pick(&target.header_prefix, &self.header_prefix, &kebab),
             "idempotency_keys": self.idempotency_keys.unwrap_or(false),
+            "headers": self.headers,
+            "fixed_headers": self.headers_literal(language),
             "env_prefix": self.name.to_shouty_snake_case(),
             "webhooks": target.webhooks.or(self.webhooks).unwrap_or(false),
             "tests": target.tests.or(self.tests).unwrap_or(true),
@@ -1087,6 +1175,42 @@ pub(crate) fn manifest_version(dir: &Path) -> Option<String> {
     read("version.txt").map(|v| v.trim().to_owned())
 }
 
+/// `module` with the `/vN` suffix Go requires from major version 2: that of the SDK's `version`,
+/// or of the next one with `major_release`, and never below the one its go.mod in `dir` has.
+fn go_major_module(module: &str, version: &str, major_release: bool, dir: &Path) -> String {
+    let (base, own) = split_major(module);
+    let current: u64 = version
+        .split('.')
+        .next()
+        .and_then(|m| m.parse().ok())
+        .unwrap_or(0);
+    let next = match major_release && current >= 1 {
+        true => current + 1,
+        false => current,
+    };
+    let declared = std::fs::read_to_string(dir.join("go.mod"))
+        .ok()
+        .and_then(|text| {
+            let line = text.lines().find_map(|l| l.strip_prefix("module "))?;
+            Some(split_major(line.trim()).1)
+        });
+    match own.max(next).max(declared.unwrap_or(0)) {
+        major if major >= 2 => format!("{base}/v{major}"),
+        _ => base.to_owned(),
+    }
+}
+
+/// A module path without its `/vN` major suffix, and N (0 without one).
+pub(crate) fn split_major(module: &str) -> (&str, u64) {
+    match module.rsplit_once("/v") {
+        Some((base, n)) if !n.starts_with('0') => match n.parse::<u64>() {
+            Ok(major) if major >= 2 => (base, major),
+            _ => (module, 0),
+        },
+        _ => (module, 0),
+    }
+}
+
 /// The version `.release-please-manifest.json` holds for the SDK at `path` of the checkout it is
 /// at `dir` of: that of an SDK whose old manifest was deleted to regenerate it.
 fn released_version(dir: &Path, path: &str) -> Option<String> {
@@ -1134,6 +1258,27 @@ fn csproj_version(dir: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn go_modules_take_the_major_suffix_from_version_2() {
+        let dir = tempfile::tempdir().unwrap();
+        let module =
+            |m: &str, version: &str, major: bool| go_major_module(m, version, major, dir.path());
+        assert_eq!(module("github.com/a/b", "0.4.0", true), "github.com/a/b");
+        assert_eq!(module("github.com/a/b", "1.3.0", false), "github.com/a/b");
+        assert_eq!(module("github.com/a/b", "1.3.0", true), "github.com/a/b/v2");
+        assert_eq!(module("github.com/a/b", "2.1.0", true), "github.com/a/b/v3");
+        assert_eq!(
+            module("github.com/a/b/v3", "1.0.0", false),
+            "github.com/a/b/v3"
+        );
+        assert_eq!(module("github.com/a/v1", "1.0.0", false), "github.com/a/v1");
+        std::fs::write(dir.path().join("go.mod"), "module github.com/a/b/v2\n").unwrap();
+        assert_eq!(
+            module("github.com/a/b", "1.3.0", false),
+            "github.com/a/b/v2"
+        );
+    }
 
     fn context(toml: &str, language: &str) -> Value {
         let config: Config = toml::from_str(toml).unwrap();
@@ -1475,7 +1620,7 @@ mod tests {
     fn base_url_defaults_to_the_spec_s_first_absolute_server() {
         let base_url = |toml: &str, spec: &str| {
             let mut config: Config = toml::from_str(toml).unwrap();
-            config.default_to_spec_server(spec);
+            config.defaults_from_spec(spec).unwrap();
             let sdk = config.sdks(&[]).unwrap().remove(0);
             let context = config.context(&sdk, Path::new("/nonexistent"));
             let url = context["default_base_url"].as_str().unwrap().to_owned();

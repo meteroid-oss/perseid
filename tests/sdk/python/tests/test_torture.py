@@ -33,7 +33,7 @@ def generate(
         (project / "openapi.yaml").write_text(spec)
     base = f'base_url = "{base_url}"\n' if base_url else ""
     (project / "perseid.toml").write_text(
-        f'spec = "openapi.yaml"\nname = "{name.title()}"\nsdks = ["python"]\nidempotency_keys = true\n{base}[python]\n{python}'
+        f'spec = "openapi.yaml"\nname = "{name.title()}"\nsdks = ["python"]\nidempotency_keys = true\nheaders = {{ Torture-Version = "{{info.version}}" }}\n{base}[python]\n{python}'
     )
     subprocess.run(["perseid", "generate"], cwd=project, check=True, capture_output=True)
     sys.path.insert(0, str(project / "python"))
@@ -616,6 +616,13 @@ class ClientTest(unittest.TestCase):
         keys = [r.headers.get_list("idempotency-key") for r in self.requests]
         self.assertTrue(keys[0][0].startswith("auto_"))
         self.assertEqual(keys[1:], [["mine"], ["extra"]])
+
+    def test_fixed_headers_are_sent_unless_the_call_sets_them(self) -> None:
+        with client(self.respond(httpx.Response(200, json=THING))) as api:
+            api.things.retrieve("t")
+            api.things.retrieve("t", extra_headers={"TORTURE-VERSION": "2.0.0"})
+        versions = [r.headers.get_list("torture-version") for r in self.requests]
+        self.assertEqual(versions, [["1.0.0"], ["2.0.0"]])
 
     def test_patch_sends_explicit_nulls(self) -> None:
         with client(self.respond(httpx.Response(200, json=THING))) as api:

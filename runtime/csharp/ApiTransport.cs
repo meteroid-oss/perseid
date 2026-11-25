@@ -26,6 +26,9 @@ internal sealed class ApiTransport : IDisposable
     /// be retried.</summary>
     private static readonly bool AutoIdempotencyKey = bool.Parse("@@IDEMPOTENCY_KEYS@@");
 
+    /// <summary>Sent with every request unless the call sets them, such as the API version.</summary>
+    private static readonly (string Name, string Value)[] FixedHeaders = @@FIXED_HEADERS@@;
+
     internal static readonly string Version =
         typeof(ApiTransport)
             .Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
@@ -305,6 +308,10 @@ internal sealed class ApiTransport : IDisposable
             .ConfigureAwait(false);
         headers.Remove("Cookie", out var authCookie);
         headers["User-Agent"] = _userAgent;
+        foreach (var (name, value) in FixedHeaders)
+        {
+            headers[name] = value;
+        }
         headers["@@HEADER_PREFIX@@-req-id"] = ((ulong)Random.Shared.NextInt64()).ToString(
             CultureInfo.InvariantCulture
         );

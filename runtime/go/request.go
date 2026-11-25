@@ -59,6 +59,10 @@ type request struct {
 // one to be retried.
 const autoIdempotencyKey = @@IDEMPOTENCY_KEYS@@
 
+// fixedHeaders are sent with every request unless the client or the call sets them, such as
+// the API version.
+var fixedHeaders = @@FIXED_HEADERS@@
+
 // queryStyle is how a structured query parameter is serialized.
 type queryStyle int
 
@@ -501,6 +505,11 @@ func (c *Client) do(ctx context.Context, req *request) ([]byte, int, error) {
 	}
 	for name, values := range call.headers {
 		req.headers[name] = values
+	}
+	for _, header := range fixedHeaders {
+		if req.headers.Get(header[0]) == "" {
+			req.SetHeader(header[0], header[1])
+		}
 	}
 	// Cookie parameters, the API key cookie and a Cookie header of the call share one header.
 	if cookies := append(slices.Clone(req.cookies), req.headers.Values("Cookie")...); len(cookies) > 0 {

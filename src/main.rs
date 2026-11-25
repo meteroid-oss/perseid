@@ -380,7 +380,20 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let (mut config, root) = Config::load(&config_path)?;
             let location = spec.unwrap_or_else(|| config.spec.clone());
             let spec = generate::load_spec(&config, &root, Some(&location))?;
-            config.default_to_spec_server(&spec);
+            config.defaults_from_spec(&spec)?;
+            let base = base_spec.map(|b| cwd.join(b));
+            let asked = bump;
+            let sized = match (pr, bump) {
+                (false, _) => None,
+                (true, Bump::Auto) => Some(sizing::size(&sizing::Comparison {
+                    root: &root,
+                    spec: &location,
+                    base: base.as_deref(),
+                    relax_enum_additions,
+                })?),
+                (true, bump) => Some((bump, Default::default())),
+            };
+            config.major_release = matches!(sized, Some((Bump::Major, _)));
             let options = Options {
                 check,
                 format: !no_format,
@@ -468,18 +481,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 eprintln!("\nSDKs are out of date, run `perseid generate`");
                 return Ok(ExitCode::FAILURE);
             }
-            if pr {
-                let base = base_spec.map(|b| cwd.join(b));
-                let asked = bump;
-                let (bump, changelog) = match bump {
-                    Bump::Auto => sizing::size(&sizing::Comparison {
-                        root: &root,
-                        spec: &location,
-                        base: base.as_deref(),
-                        relax_enum_additions,
-                    })?,
-                    bump => (bump, Default::default()),
-                };
+            if let Some((bump, changelog)) = sized {
                 let request = Request {
                     bump,
                     changelog,
@@ -613,7 +615,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         } => {
             let (mut config, root) = Config::load(&config_path)?;
             let spec = generate::load_spec(&config, &root, spec.as_deref())?;
-            config.default_to_spec_server(&spec);
+            config.defaults_from_spec(&spec)?;
             let sdks = config.sdks(&languages)?;
             let data = perseid::docs_data::run(&config, &root, &sdks, &spec, &BTreeMap::new())?;
             let text = serde_json::to_string_pretty(&data)? + "\n";

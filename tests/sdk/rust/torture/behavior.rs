@@ -277,6 +277,19 @@ async fn automatic_idempotency_keys_survive_retries() {
 }
 
 #[tokio::test]
+async fn fixed_headers_are_sent_unless_the_call_sets_them() {
+    let script = Script::new(vec![reply(200, THING), reply(200, THING)]);
+    let client = script.client(0);
+    client.things().retrieve("t").await.unwrap();
+    let options = torture::api::RequestOptions::new().header("Torture-Version", "2.0.0");
+    client.things().with_options(options).retrieve("t").await.unwrap();
+    assert_eq!(script.headers(0)["torture-version"], "1.0.0");
+    let second = script.headers(1);
+    let versions: Vec<_> = second.get_all("torture-version").iter().collect();
+    assert_eq!(versions, ["2.0.0"]);
+}
+
+#[tokio::test]
 async fn dropping_a_call_cancels_its_retries() {
     let slow = Step::Reply(503, vec![("retry-after-ms", "800")], "busy");
     let script = Script::new(vec![slow, reply(200, THING)]);

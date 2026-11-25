@@ -606,6 +606,9 @@ go get github.com/acme/acme-go
 ```
 
 Go 1.23+. The module path is set by `module` under `[go]`, else derived from the repository.
+From version 2, it ends with the `/vN` Go requires: a `generate --pr` sized as a major release of
+a 1.x SDK moves it, and go.mod's `module` with it, to `/v2`, and later generations keep the suffix
+go.mod has.
 
 ### Client
 

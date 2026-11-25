@@ -88,6 +88,9 @@ use crate::{error::Result, models::*, Configuration};
         {% set bare = ident | replace("r#", "") -%}
         /// Sets the `{{ p.name }}` {{ location }} parameter.
         #[must_use]
+        {% if bare in ["add", "sub", "mul", "div", "rem", "neg", "not", "bitand", "bitor", "bitxor", "shl", "shr"] -%}
+        #[allow(clippy::should_implement_trait)]
+        {% endif -%}
         pub fn {{ ident }}(mut self, {{ ident }}: impl Into<{{ ty }}>) -> Self {
             self.{{ ident }} = Some({{ ident }}.into());
             self

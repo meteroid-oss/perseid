@@ -235,14 +235,30 @@ fn enables(doc: &DocumentMut, value: &str) -> bool {
     }
 }
 
-/// `require` directives of go.mod, with the lines of go.sum for the modules they add.
+/// The `/vN` suffix of go.mod's `module` path, which follows the wanted one after a major
+/// release, and its `require` directives, with the lines of go.sum for the modules they add.
 fn go(module: &str, sum: &str, wanted: &str, wanted_sum: &str) -> (Edit, Option<String>) {
+    let path = |text: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix("module ").map(str::trim).map(str::to_owned))
+    };
+    let renamed = match (path(module), path(wanted)) {
+        (Some(current), Some(wanted))
+            if current != wanted
+                && crate::config::split_major(&current).0
+                    == crate::config::split_major(&wanted).0 =>
+        {
+            Some(module.replacen(&format!("module {current}"), &format!("module {wanted}"), 1))
+        }
+        _ => None,
+    };
+    let module = renamed.as_deref().unwrap_or(module);
     let missing: Vec<(String, String)> = requirements(wanted)
         .into_iter()
         .filter(|(path, _)| !requirements(module).iter().any(|(p, _)| p == path))
         .collect();
     if missing.is_empty() {
-        return (None, None);
+        return (renamed.map(|text| (text, vec![])), None);
     }
     let mut module = with_newline(module);
     for (path, version) in &missing {
@@ -901,6 +917,16 @@ mod tests {
         let current = "[dependencies]\nhyper-tls = \"0.6\"\n";
         let wanted = "[dependencies]\nhyper-tls = { version = \"0.6\", optional = true }\n\n[features]\nnative-tls = [\"dep:hyper-tls\"]\n";
         assert_eq!(cargo(current, wanted).unwrap(), None);
+    }
+
+    #[test]
+    fn go_mod_follows_the_wanted_module_path() {
+        let current = "module github.com/acme/acme-go\n\ngo 1.24\n";
+        let wanted = "module github.com/acme/acme-go/v2\n\ngo 1.24\n";
+        let (edit, sum) = go(current, "", wanted, "");
+        assert_eq!(edit.unwrap().0, wanted);
+        assert_eq!(sum, None);
+        assert_eq!(go(wanted, "", wanted, "").0, None);
     }
 
     #[test]
