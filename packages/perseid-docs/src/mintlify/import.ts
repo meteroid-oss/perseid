@@ -82,7 +82,7 @@ export async function importMintlify(from: string, to: string, site?: string): P
     }
   }
 
-  const link = (page: string) => (page === home ? "/" : `/${page}/`);
+  const link = (page: string) => (page === home ? "/" : `/${page}`);
   const sidebarOf = (items: (string | MintNavGroup)[]): object[] =>
     items.map((item) =>
       typeof item === "string"
@@ -96,7 +96,7 @@ export async function importMintlify(from: string, to: string, site?: string): P
       ? '"reference"'
       : JSON.stringify(sidebarOf([...(t.groups ?? []), ...(t.pages ?? [])]), null, 2).replace(/\n/g, "\n      ");
     const first = (t.groups ?? []).flatMap(pagesOf)[0] ?? (t.pages ?? []).flatMap(pagesOf)[0];
-    return `    {\n      label: ${JSON.stringify(t.tab)},\n      link: ${JSON.stringify(reference ? "/api-reference/" : link(first ?? home ?? "index"))},\n      items: ${items},\n    }`;
+    return `    {\n      label: ${JSON.stringify(t.tab)},\n      link: ${JSON.stringify(reference ? "/api-reference" : link(first ?? home ?? "index"))},\n      items: ${items},\n    }`;
   });
 
   const logo = typeof config.logo === "string" ? { light: config.logo, dark: config.logo } : config.logo;
@@ -111,6 +111,8 @@ import { defineConfig } from "astro/config";
 import perseidDocs from "perseid-docs";
 
 export default defineConfig({${site ? `\n  site: ${JSON.stringify(site)},` : ""}
+  // Mintlify's URLs: no trailing slash, and the home page at /${home ?? "index"} too.
+  trailingSlash: "never",${home && home !== "index" ? `\n  redirects: { ${JSON.stringify(`/${home}`)}: "/" },` : ""}
   integrations: [
     perseidDocs({
       title: ${JSON.stringify(config.name ?? "Docs")},${logo?.light || logo?.dark ? `\n      logo: { light: ${JSON.stringify(`./src/assets/${(logo.light ?? logo.dark)!.replace(/^\//, "")}`)}, dark: ${JSON.stringify(`./src/assets/${(logo.dark ?? logo.light)!.replace(/^\//, "")}`)}, replacesTitle: true },` : ""}${config.favicon ? `\n      favicon: ${JSON.stringify(config.favicon)},` : ""}${social.length ? `\n      social: ${JSON.stringify(social)},` : ""}

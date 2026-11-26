@@ -10,8 +10,8 @@ export const getStaticPaths: GetStaticPaths = async () => {
     params: { slug: entry.id === "index" ? "index" : entry.id },
     props: { text: guide(entry.data.title, entry.data.description, entry.body ?? "") },
   }));
-  if (config.reference) {
-    for (const page of markdownPages(loadRoutes(config.reference, config.base))) {
+  for (const r of config.references) {
+    for (const page of markdownPages(loadRoutes(r.source, r.base, config.format))) {
       pages.push({ params: { slug: page.path }, props: { text: page.text } });
     }
   }

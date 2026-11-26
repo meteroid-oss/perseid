@@ -1,5 +1,6 @@
 ---
 import config from "virtual:perseid-docs/config";
+import { markdownHref } from "perseid-docs/routes";
 import Icon from "../mintlify/Icon.astro";
 
 const route = Astro.locals.starlightRoute;
@@ -15,8 +16,8 @@ function crumb(entries: Entry[], trail: string[] = []): string[] | undefined {
 }
 const found = crumb(route.sidebar as Entry[])?.join(" › ") || undefined;
 const group = found === route.entry.data.title ? undefined : found;
-const path = Astro.url.pathname.replace(/\/$/, "") || "/index";
-const markdown = `${path}.md`;
+const prefix = config.format.base.replace(/\/+$/, "");
+const markdown = markdownHref(Astro.url.pathname.slice(Astro.url.pathname.startsWith(prefix) ? prefix.length : 0), config.format);
 const page = new URL(markdown, Astro.site ?? Astro.url).href;
 const prompt = encodeURIComponent(`Read ${page} so I can ask questions about it.`);
 const all = [
