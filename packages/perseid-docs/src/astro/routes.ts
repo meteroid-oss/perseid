@@ -379,27 +379,21 @@ export function markdownPages(r: ReferenceRoutes): MarkdownPage[] {
     }
   }
   const webhooks = reference.webhooks ?? [];
+  const webhookText = (w: Webhook, level: string) => {
+    const schema = w.body?.schema.ref ? w.body.schema.ref : w.body ? mdType(w.body.schema) : "";
+    return [`${level} ${w.name}`, w.description ?? "", schema ? `Payload: ${schema}` : ""].filter(Boolean).join("\n\n");
+  };
   if (webhooks.length) {
-    pages.push({
-      path: `${r.base}/webhooks`,
-      title: "Webhooks",
-      text: [
-        "# Webhooks",
-        ...webhooks.map((w) => {
-          const schema = w.body?.schema.ref ? w.body.schema.ref : w.body ? mdType(w.body.schema) : "";
-          return [`## ${w.name}`, w.description ?? "", schema ? `Payload: ${schema}` : ""].filter(Boolean).join("\n\n");
-        }),
-      ].join("\n\n"),
-    });
+    pages.push({ path: `${r.base}/webhooks`, title: "Webhooks", text: ["# Webhooks", ...webhooks.map((w) => webhookText(w, "##"))].join("\n\n") });
   }
-  const models = Object.values(reference.models).sort((a, b) => a.name.localeCompare(b.name));
+  for (const w of webhooks) pages.push({ path: webhookPath(r, w), title: w.name, text: `${webhookText(w, "#")}\n` });
+  const models = Object.values(reference.models)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((m) => ({ name: m.name, text: modelMarkdown({ ...m, schema: flatten(m.schema, reference.models) }) }));
   if (models.length) {
-    pages.push({
-      path: `${r.base}/models`,
-      title: "Models",
-      text: ["# Models", ...models.map((m) => modelMarkdown({ ...m, schema: flatten(m.schema, reference.models) }))].join("\n\n"),
-    });
+    pages.push({ path: `${r.base}/models`, title: "Models", text: ["# Models", ...models.map((m) => m.text)].join("\n\n") });
   }
+  for (const m of models) pages.push({ path: `${r.base}/models/${m.name}`, title: m.name, text: `${m.text.replace(/^## /, "# ")}\n` });
   return pages;
 }
 
