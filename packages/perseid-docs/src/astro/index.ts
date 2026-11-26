@@ -6,7 +6,8 @@ import starlight from "@astrojs/starlight";
 import type { StarlightUserConfig } from "@astrojs/starlight/types";
 import starlightSidebarTopics from "starlight-sidebar-topics";
 import type { AstroIntegration } from "astro";
-import { loadRoutes, sidebar as referenceSidebar, type ReferenceSource } from "./routes.js";
+import { registerBaseLinks } from "./base-links.js";
+import { formatHref, loadRoutes, sidebar as referenceSidebar, type ReferenceSource, type SiteReference, type UrlFormat } from "./routes.js";
 
 type Sidebar = NonNullable<StarlightUserConfig["sidebar"]>;
 
@@ -14,8 +15,27 @@ export interface Topic {
   label: string;
   link: string;
   icon?: string;
-  /** The sidebar of this topic; `"reference"` for the API reference's. */
-  items: Sidebar | "reference";
+  /** The sidebar of this topic: `"reference"` for the API reference's, `"reference:<id>"` for
+   * the one of `references` with that `id`. */
+  items: Sidebar | "reference" | `reference:${string}`;
+}
+
+/** Another API reference, such as a previous version of the API. */
+export interface ReferenceOptions {
+  /** Names it in `topics`: `items: "reference:v1"`. */
+  id: string;
+  /** The label of its sidebar group without topics: `API Reference (<id>)` by default. */
+  label?: string;
+  /** The docs model `perseid-docs build` writes, as `reference`. */
+  reference?: string;
+  /** The folder holding `openapi.json` and, optionally, `docs-data.json`, as `api`. Without docs
+   * data, the reference shows cURL. */
+  api?: string | { spec: string; data?: string };
+  /** URL prefix: `api-reference/<id>` by default. */
+  base?: string;
+  /** A superseded version: a banner on each page links to the main reference. `true` writes the
+   * banner, a string is its HTML. */
+  legacy?: boolean | string;
 }
 
 export interface PerseidDocsOptions {
@@ -28,6 +48,8 @@ export interface PerseidDocsOptions {
   api?: string | { spec: string; data?: string };
   /** URL prefix of the reference: `api-reference` by default, as Mintlify's. */
   referenceBase?: string;
+  /** More API references, such as the legacy version of the API. */
+  references?: ReferenceOptions[];
   /** The sidebar of the guides, the reference's appended as its own group. */
   sidebar?: Sidebar;
   /** Sections with a sidebar each, switched at the top of the sidebar, as Mintlify's tabs. */
@@ -87,13 +109,13 @@ function head(options: PerseidDocsOptions): NonNullable<StarlightUserConfig["hea
   return out;
 }
 
-function referenceSource(root: string, options: PerseidDocsOptions): ReferenceSource | undefined {
+function referenceSource(root: string, options: Pick<ReferenceOptions, "reference" | "api">, fallback: boolean): ReferenceSource | undefined {
   if (options.reference) {
     const file = resolve(root, options.reference);
     if (!existsSync(file)) throw new Error(`perseid-docs: ${file} is missing: run \`perseid-docs build\` first`);
     return file;
   }
-  const api = options.api ?? (existsSync(resolve(root, "api/openapi.json")) ? "api" : undefined);
+  const api = options.api ?? (fallback && existsSync(resolve(root, "api/openapi.json")) ? "api" : undefined);
   if (!api) return undefined;
   const spec = resolve(root, typeof api === "string" ? join(api, "openapi.json") : api.spec);
   const data = typeof api === "string" ? resolve(root, api, "docs-data.json") : api.data && resolve(root, api.data);
@@ -101,39 +123,79 @@ function referenceSource(root: string, options: PerseidDocsOptions): ReferenceSo
   return data && existsSync(data) ? { spec, data } : { spec };
 }
 
+const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+const trim = (path: string) => path.replace(/^\/+|\/+$/g, "");
+
+function siteReferences(root: string, options: PerseidDocsOptions, format: UrlFormat): SiteReference[] {
+  const main = trim(options.referenceBase ?? "api-reference");
+  const out: SiteReference[] = [];
+  const source = referenceSource(root, options, true);
+  if (source) out.push({ id: "", label: "API Reference", source, base: main });
+  for (const r of options.references ?? []) {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(r.id)) throw new Error(`perseid-docs: name references in lowercase letters, digits and dashes, not "${r.id}"`);
+    const extra = referenceSource(root, r, false);
+    if (!extra) throw new Error(`perseid-docs: set \`api\` or \`reference\` of the reference "${r.id}"`);
+    const label = r.label ?? `API Reference (${r.id})`;
+    const current = source ? ` <a href="${formatHref(main, format)}">Read the current API reference</a>.` : "";
+    const banner = typeof r.legacy === "string" ? r.legacy : r.legacy ? `${escapeHtml(label)} documents a legacy version of the API.${current}` : undefined;
+    out.push({ id: r.id, label, source: extra, base: trim(r.base ?? `${main}/${r.id}`), ...(banner ? { banner } : {}) });
+  }
+  const bases = new Set(out.map((r) => r.base));
+  if (bases.size !== out.length) throw new Error("perseid-docs: give each reference its own `base`");
+  return out;
+}
+
+const topicId = (id: string) => (id ? `perseid-reference-${id}` : "perseid-reference");
+
 export default function perseidDocs(options: PerseidDocsOptions): AstroIntegration {
-  const base = (options.referenceBase ?? "api-reference").replace(/^\/|\/$/g, "");
   return {
     name: "perseid-docs",
     hooks: {
-      "astro:config:setup": ({ config, updateConfig, injectRoute }) => {
+      "astro:config:setup": ({ config, updateConfig, injectRoute, logger }) => {
         const root = fileURLToPath(config.root);
-        const source = referenceSource(root, options);
-        const routes = source ? loadRoutes(source, base) : undefined;
-        const reference = routes ? referenceSidebar(routes) : [];
+        const format: UrlFormat = { base: config.base, trailingSlash: config.trailingSlash };
+        const references = siteReferences(root, options, format);
+        if (!registerBaseLinks((config.markdown as unknown as { processor?: Parameters<typeof registerBaseLinks>[0] }).processor, config.base)) {
+          logger.warn(`the Markdown processor isn't Sätteri or unified: links in pages won't take the base ${config.base}`);
+        }
+        const sidebars = new Map(references.map((r) => [r.id, referenceSidebar(loadRoutes(r.source, r.base, format)) as Sidebar]));
         const plugins = [...(options.starlight?.plugins ?? [])];
         let sidebar: Sidebar | undefined = options.sidebar;
         if (options.topics?.length) {
+          const referenceOf = (items: Topic["items"]) =>
+            items === "reference" ? "" : typeof items === "string" ? items.slice("reference:".length) : undefined;
+          for (const t of options.topics) {
+            const id = referenceOf(t.items);
+            if (id !== undefined && !sidebars.has(id)) {
+              throw new Error(`perseid-docs: the topic "${t.label}" shows ${id ? `the reference "${id}", which \`references\` lacks` : "the API reference, which has no `api` or `reference`"}`);
+            }
+          }
+          // Most specific first: a reference under another's base takes its own pages.
+          const patterns = Object.fromEntries(
+            [...references]
+              .sort((a, b) => b.base.length - a.base.length)
+              .filter((r) => options.topics!.some((t) => referenceOf(t.items) === r.id))
+              .map((r) => [topicId(r.id), [`/${r.base}/**`]]),
+          );
+          const guides = options.topics.findIndex((t) => referenceOf(t.items) === undefined);
           plugins.push(
             starlightSidebarTopics(
-              options.topics.map((t, i) => ({
-                id: t.items === "reference" ? "perseid-reference" : `topic-${i}`,
-                label: t.label,
-                link: t.link,
-                ...(t.icon ? { icon: t.icon } : {}),
-                items: (t.items === "reference" ? reference : t.items) as Sidebar,
-              })) as never,
-              {
-                topics: {
-                  "perseid-reference": [`/${base}/**`],
-                  [`topic-${options.topics.findIndex((t) => t.items !== "reference")}`]: ["**"],
-                },
-              } as never,
+              options.topics.map((t, i) => {
+                const id = referenceOf(t.items);
+                return {
+                  id: id === undefined ? `topic-${i}` : topicId(id),
+                  label: t.label,
+                  link: t.link,
+                  ...(t.icon ? { icon: t.icon } : {}),
+                  items: (id === undefined ? t.items : sidebars.get(id)) as Sidebar,
+                };
+              }) as never,
+              { topics: { ...patterns, ...(guides >= 0 ? { [`topic-${guides}`]: ["**"] } : {}) } } as never,
             ),
           );
           sidebar = undefined;
-        } else if (routes) {
-          sidebar = [...(options.sidebar ?? []), { label: "API Reference", items: reference as Sidebar }];
+        } else if (references.length) {
+          sidebar = [...(options.sidebar ?? []), ...references.map((r) => ({ label: r.label, items: sidebars.get(r.id)! }))];
         }
         updateConfig({
           integrations: [
@@ -171,8 +233,8 @@ export default function perseidDocs(options: PerseidDocsOptions): AstroIntegrati
                 load: (id: string) =>
                   id === "\0perseid-docs-config"
                     ? `export default ${JSON.stringify({
-                        reference: source,
-                        base,
+                        references,
+                        format,
                         accent: options.accent,
                         icons: iconsDir(),
                         assets: { css: here("../../styles/reference.css"), script: here("../reference/client.js") },
@@ -190,12 +252,8 @@ export default function perseidDocs(options: PerseidDocsOptions): AstroIntegrati
         });
         injectRoute({ pattern: "/[...slug].md", entrypoint: here("../../astro/routes/markdown.ts"), prerender: true });
         injectRoute({ pattern: "/llms.txt", entrypoint: here("../../astro/routes/llms.ts"), prerender: true });
-        if (routes) {
-          injectRoute({
-            pattern: `/${base}/[...slug]`,
-            entrypoint: here("../../astro/ReferencePage.astro"),
-            prerender: true,
-          });
+        for (const r of references) {
+          injectRoute({ pattern: `/${r.base}/[...slug]`, entrypoint: here("../../astro/ReferencePage.astro"), prerender: true });
         }
       },
     },

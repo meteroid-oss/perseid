@@ -185,6 +185,7 @@ function specWebhooks(spec: Obj, models: Record<string, Schema>): Webhook[] {
     if (!method) continue;
     const op = item[method] as Obj;
     const webhook: Webhook = { name, slug: `webhook-${kebab(name)}`, method };
+    if (typeof op.summary === "string" && op.summary) webhook.summary = op.summary;
     const description = [op.description, op.summary].find((d) => typeof d === "string" && d && d !== `${name} webhook`);
     if (typeof description === "string") webhook.description = description;
     const body = requestBody(spec, op, models);
@@ -275,6 +276,7 @@ function operation(
     sdk: {},
     samples: {},
   };
+  if (typeof op.summary === "string" && op.summary) out.summary = op.summary;
   if (typeof op.description === "string" && op.description !== op.summary) out.description = op.description;
   if (op.deprecated === true) out.deprecated = true;
 

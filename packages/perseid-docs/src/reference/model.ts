@@ -21,6 +21,7 @@ export interface Webhook {
   name: string;
   /** URL fragment, unique in the reference. */
   slug: string;
+  summary?: string;
   description?: string;
   method: string;
   /** The payload. */
@@ -69,6 +70,7 @@ export interface Operation {
   /** URL fragment, unique in the reference. */
   slug: string;
   title: string;
+  summary?: string;
   description?: string;
   method: string;
   path: string;

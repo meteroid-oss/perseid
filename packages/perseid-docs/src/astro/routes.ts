@@ -26,13 +26,25 @@ import type { DocsData } from "../build/data.js";
  * and docs data the orchestrator writes in the docs repository's `api/` folder. */
 export type ReferenceSource = string | { spec: string; data?: string };
 
+/** How the site's URLs look: Astro's `base` and `trailingSlash`. */
+export interface UrlFormat {
+  base: string;
+  trailingSlash: "always" | "never" | "ignore";
+}
+
+const DEFAULT_FORMAT: UrlFormat = { base: "/", trailingSlash: "ignore" };
+
 export interface ReferenceRoutes {
   reference: Reference;
+  /** URL prefix of the reference, under the site's base: `api-reference`. */
   base: string;
+  format: UrlFormat;
   /** Route slug of each group, by group id. */
   groupSlugs: Map<string, string>;
   /** Route path of each operation under the base, by operation slug. */
   opSlugs: Map<string, string>;
+  /** Route path of each webhook under the base, by event name. */
+  webhookSlugs: Map<string, string>;
 }
 
 export type Route =
@@ -44,64 +56,110 @@ export type Route =
   | { kind: "webhook"; webhook: string }
   | { kind: "model"; model: string };
 
+/** The site URL of `path`, a path under the site's base. */
+export function formatHref(path: string, format: UrlFormat = DEFAULT_FORMAT): string {
+  const prefix = format.base.replace(/\/+$/, "");
+  const clean = path.replace(/^\/+|\/+$/g, "");
+  if (!clean) return format.trailingSlash === "never" ? prefix || "/" : `${prefix}/`;
+  return `${prefix}/${clean}${format.trailingSlash === "never" ? "" : "/"}`;
+}
+
+/** The site URL of the Markdown twin of `path`. */
+export function markdownHref(path: string, format: UrlFormat = DEFAULT_FORMAT): string {
+  return `${format.base.replace(/\/+$/, "")}/${path.replace(/^\/+|\/+$/g, "") || "index"}.md`;
+}
+
+/** Mintlify's `prepareStringToBeValidFilename`: the file name, so the URL, of its page for an
+ * operation or a webhook. Characters a URL path can't hold as they are are dropped. */
+export function mintlifySlug(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  return text
+    .replaceAll(" ", "-")
+    .replace(/\{.*?\}/g, "-")
+    .replace(/^-/, "")
+    .replace(/-$/, "")
+    .replace(/[{}(),.'\n/]/g, "")
+    .replaceAll(/--/g, "-")
+    .toLowerCase()
+    .replace(/[?#%\\"<>|^`]/g, "");
+}
+
 const cache = new Map<string, ReferenceRoutes>();
 
-/** Routes are Mintlify's: `/<base>/<tag>/<summary>`, so links to a Mintlify reference keep working. */
-export function loadRoutes(source: ReferenceSource, base: string): ReferenceRoutes {
-  const key = `${JSON.stringify(source)}\0${base}`;
+export function readReference(source: ReferenceSource): Reference {
+  return typeof source === "string"
+    ? (JSON.parse(readFileSync(source, "utf8")) as Reference)
+    : assemble(
+        parseSpec(readFileSync(source.spec, "utf8"), source.spec),
+        source.data ? (JSON.parse(readFileSync(source.data, "utf8")) as DocsData) : undefined,
+      );
+}
+
+/** Routes are Mintlify's, so links to a Mintlify reference keep working: `/<base>/<tag>/<summary>`
+ * for an operation, `<method>-<path>` without a summary, `/<base>/webhooks/<summary>` for a
+ * webhook. */
+export function loadRoutes(source: ReferenceSource, base: string, format: UrlFormat = DEFAULT_FORMAT): ReferenceRoutes {
+  const key = `${JSON.stringify(source)}\0${base}\0${JSON.stringify(format)}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const reference =
-    typeof source === "string"
-      ? (JSON.parse(readFileSync(source, "utf8")) as Reference)
-      : assemble(
-          parseSpec(readFileSync(source.spec, "utf8"), source.spec),
-          source.data ? (JSON.parse(readFileSync(source.data, "utf8")) as DocsData) : undefined,
-        );
+  const reference = readReference(source);
   const groupSlugs = new Map<string, string>();
   const opSlugs = new Map<string, string>();
+  const webhookSlugs = new Map<string, string>();
   const taken = new Set<string>(["models", "webhooks"]);
-  const byId = new Map(reference.groups.map((g) => [g.id, g]));
-  const root = (g: Group): Group => (g.parent && byId.has(g.parent) ? root(byId.get(g.parent)!) : g);
-  const inRoot = new Map<string, Set<string>>();
-  const unique = (names: Set<string>, base: string) => {
-    let slug = base;
-    for (let i = 2; names.has(slug); i++) slug = `${base}-${i}`;
-    names.add(slug);
+  const claim = (path: string, first: number) => {
+    let slug = path;
+    for (let i = first; taken.has(slug); i++) slug = `${path}-${i}`;
+    taken.add(slug);
     return slug;
   };
-  // A sub-resource lives under its root's URL, the tag Mintlify filed its operations under.
-  for (const group of reference.groups.filter((g) => root(g) === g)) {
-    groupSlugs.set(group.id, unique(taken, kebab(group.title) || group.id));
-    inRoot.set(group.id, new Set());
-  }
+  const byId = new Map(reference.groups.map((g) => [g.id, g]));
+  const root = (g: Group): Group => (g.parent && byId.has(g.parent) ? root(byId.get(g.parent)!) : g);
+  const roots = reference.groups.filter((g) => root(g) === g);
+  for (const group of roots) groupSlugs.set(group.id, claim(mintlifySlug(group.title) || group.id, 2));
+  // A docs model written before summaries were kept names operations by title.
+  const summaries = reference.groups.some((g) => g.operations.some((op) => op.summary !== undefined));
+  // A sub-resource's operations live under its root's URL, the tag Mintlify filed them under.
   for (const group of reference.groups) {
-    const top = root(group);
-    const names = inRoot.get(top.id)!;
-    if (group !== top) groupSlugs.set(group.id, `${groupSlugs.get(top.id)}/${unique(names, kebab(group.title) || group.id)}`);
+    const folder = groupSlugs.get(root(group).id)!;
     for (const op of group.operations) {
-      opSlugs.set(op.slug, `${groupSlugs.get(top.id)}/${unique(names, kebab(op.title) || op.slug)}`);
+      const summary = summaries ? op.summary : op.title;
+      const name = mintlifySlug(summary) || `${op.method.toLowerCase()}-${mintlifySlug(op.path)}`;
+      opSlugs.set(op.slug, claim(`${folder}/${name}`, 1));
     }
   }
-  const routes = { reference, base: base.replace(/^\/|\/$/g, ""), groupSlugs, opSlugs };
+  for (const group of reference.groups.filter((g) => root(g) !== g)) {
+    groupSlugs.set(group.id, claim(`${groupSlugs.get(root(group).id)}/${kebab(group.title) || group.id}`, 2));
+  }
+  for (const webhook of reference.webhooks ?? []) {
+    webhookSlugs.set(webhook.name, claim(`webhooks/${mintlifySlug(webhook.summary) || mintlifySlug(webhook.name)}`, 1));
+  }
+  const routes = { reference, base: base.replace(/^\/|\/$/g, ""), format, groupSlugs, opSlugs, webhookSlugs };
   cache.set(key, routes);
   return routes;
 }
 
+/** Paths under the site's base, without slashes around them. */
+export const introPath = (r: ReferenceRoutes) => r.base;
+export const groupPath = (r: ReferenceRoutes, group: Group) => `${r.base}/${r.groupSlugs.get(group.id)}`;
+export const operationPath = (r: ReferenceRoutes, op: Operation) => `${r.base}/${r.opSlugs.get(op.slug)}`;
+export const webhookPath = (r: ReferenceRoutes, webhook: Webhook) => `${r.base}/${r.webhookSlugs.get(webhook.name)}`;
+export const modelPath = (r: ReferenceRoutes, name: string) => `${r.base}/models/${encodeURIComponent(name)}`;
+
 export function groupHref(r: ReferenceRoutes, group: Group): string {
-  return `/${r.base}/${r.groupSlugs.get(group.id)}/`;
+  return formatHref(groupPath(r, group), r.format);
 }
 
-export function operationHref(r: ReferenceRoutes, op: Operation, group: Group): string {
-  return `/${r.base}/${r.opSlugs.get(op.slug)}/`;
+export function operationHref(r: ReferenceRoutes, op: Operation, _group?: Group): string {
+  return formatHref(operationPath(r, op), r.format);
 }
 
 export function webhookHref(r: ReferenceRoutes, webhook: Webhook): string {
-  return `/${r.base}/webhooks/${encodeURIComponent(webhook.name)}/`;
+  return formatHref(webhookPath(r, webhook), r.format);
 }
 
 export function modelHref(r: ReferenceRoutes, name: string): string {
-  return `/${r.base}/models/${encodeURIComponent(name)}/`;
+  return formatHref(modelPath(r, name), r.format);
 }
 
 export function staticPaths(r: ReferenceRoutes): { params: { slug: string | undefined }; props: { route: Route } }[] {
@@ -121,7 +179,7 @@ export function staticPaths(r: ReferenceRoutes): { params: { slug: string | unde
   const webhooks = r.reference.webhooks ?? [];
   if (webhooks.length) out.push({ params: { slug: "webhooks" }, props: { route: { kind: "webhooks" } } });
   for (const w of webhooks) {
-    out.push({ params: { slug: `webhooks/${w.name}` }, props: { route: { kind: "webhook", webhook: w.name } } });
+    out.push({ params: { slug: r.webhookSlugs.get(w.name)! }, props: { route: { kind: "webhook", webhook: w.name } } });
   }
   if (Object.keys(r.reference.models).length) {
     out.push({ params: { slug: "models" }, props: { route: { kind: "models" } } });
@@ -148,7 +206,7 @@ function sidebarGroup(r: ReferenceRoutes, group: Group): object {
     items: [
       ...group.operations.map((op) => ({
         label: op.title,
-        link: operationHref(r, op, group),
+        link: `/${operationPath(r, op)}`,
         badge: { text: op.method === "delete" ? "DEL" : op.method.toUpperCase(), variant: METHOD_VARIANT[op.method] ?? "default" },
         attrs: { class: `pd-op pd-op-${op.method}` },
       })),
@@ -159,19 +217,19 @@ function sidebarGroup(r: ReferenceRoutes, group: Group): object {
 
 export function sidebar(r: ReferenceRoutes): object[] {
   return [
-    { label: "Introduction", link: `/${r.base}/` },
+    { label: "Introduction", link: `/${introPath(r)}` },
     ...r.reference.groups.filter((g) => !g.parent).map((group) => sidebarGroup(r, group)),
     ...(r.reference.webhooks?.length
       ? [{
           label: "Webhooks",
           collapsed: true,
           items: [
-            { label: "All events", link: `/${r.base}/webhooks/` },
-            ...r.reference.webhooks.map((w) => ({ label: w.name, link: webhookHref(r, w), attrs: { class: "pd-op pd-webhook" } })),
+            { label: "All events", link: `/${r.base}/webhooks` },
+            ...r.reference.webhooks.map((w) => ({ label: w.name, link: `/${webhookPath(r, w)}`, attrs: { class: "pd-op pd-webhook" } })),
           ],
         }]
       : []),
-    ...(Object.keys(r.reference.models).length ? [{ label: "Models", link: `/${r.base}/models/` }] : []),
+    ...(Object.keys(r.reference.models).length ? [{ label: "Models", link: `/${r.base}/models` }] : []),
   ];
 }
 
@@ -299,22 +357,21 @@ export function markdownPages(r: ReferenceRoutes): MarkdownPage[] {
       .join("\n\n"),
   });
   for (const group of reference.groups) {
-    const base = groupHref(r, group).replace(/^\/|\/$/g, "");
     pages.push({
-      path: base,
+      path: groupPath(r, group),
       title: group.title,
       ...(group.description ? { description: firstSentence(group.description) } : {}),
       text: [
         `# ${group.title}`,
         group.description ?? "",
-        group.operations.map((op) => `- [${op.title}](/${operationHref(r, op, group).replace(/^\/|\/$/g, "")}.md): \`${op.method.toUpperCase()} ${op.path}\``).join("\n"),
+        group.operations.map((op) => `- [${op.title}](${markdownHref(operationPath(r, op), r.format)}): \`${op.method.toUpperCase()} ${op.path}\``).join("\n"),
       ]
         .filter(Boolean)
         .join("\n\n"),
     });
     for (const op of group.operations) {
       pages.push({
-        path: operationHref(r, op, group).replace(/^\/|\/$/g, ""),
+        path: operationPath(r, op),
         title: op.title,
         ...(op.description ? { description: firstSentence(op.description) } : {}),
         text: operationMarkdown(r, op),
@@ -322,27 +379,21 @@ export function markdownPages(r: ReferenceRoutes): MarkdownPage[] {
     }
   }
   const webhooks = reference.webhooks ?? [];
+  const webhookText = (w: Webhook, level: string) => {
+    const schema = w.body?.schema.ref ? w.body.schema.ref : w.body ? mdType(w.body.schema) : "";
+    return [`${level} ${w.name}`, w.description ?? "", schema ? `Payload: ${schema}` : ""].filter(Boolean).join("\n\n");
+  };
   if (webhooks.length) {
-    pages.push({
-      path: `${r.base}/webhooks`,
-      title: "Webhooks",
-      text: [
-        "# Webhooks",
-        ...webhooks.map((w) => {
-          const schema = w.body?.schema.ref ? w.body.schema.ref : w.body ? mdType(w.body.schema) : "";
-          return [`## ${w.name}`, w.description ?? "", schema ? `Payload: ${schema}` : ""].filter(Boolean).join("\n\n");
-        }),
-      ].join("\n\n"),
-    });
+    pages.push({ path: `${r.base}/webhooks`, title: "Webhooks", text: ["# Webhooks", ...webhooks.map((w) => webhookText(w, "##"))].join("\n\n") });
   }
-  const models = Object.values(reference.models).sort((a, b) => a.name.localeCompare(b.name));
+  for (const w of webhooks) pages.push({ path: webhookPath(r, w), title: w.name, text: `${webhookText(w, "#")}\n` });
+  const models = Object.values(reference.models)
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((m) => ({ name: m.name, text: modelMarkdown({ ...m, schema: flatten(m.schema, reference.models) }) }));
   if (models.length) {
-    pages.push({
-      path: `${r.base}/models`,
-      title: "Models",
-      text: ["# Models", ...models.map((m) => modelMarkdown({ ...m, schema: flatten(m.schema, reference.models) }))].join("\n\n"),
-    });
+    pages.push({ path: `${r.base}/models`, title: "Models", text: ["# Models", ...models.map((m) => m.text)].join("\n\n") });
   }
+  for (const m of models) pages.push({ path: `${r.base}/models/${m.name}`, title: m.name, text: `${m.text.replace(/^## /, "# ")}\n` });
   return pages;
 }
 
@@ -399,4 +450,22 @@ function mdType(s: import("../reference/index.js").Schema): string {
 
 function oneLine(text: string): string {
   return text.replace(/\s*\n\s*/g, " ").trim();
+}
+
+/** A reference of the site, as the integration resolved it. */
+export interface SiteReference {
+  /** `""` for the main reference. */
+  id: string;
+  label: string;
+  source: ReferenceSource;
+  base: string;
+  /** The banner of a legacy reference's pages, as HTML. */
+  banner?: string;
+}
+
+/** The reference a route pattern serves: each is injected as `/<base>/[...slug]`. */
+export function referenceOf(references: SiteReference[], pattern: string): SiteReference {
+  const found = references.find((r) => pattern.endsWith(`/${r.base}/[...slug]`));
+  if (!found) throw new Error(`perseid-docs: no reference serves ${pattern}`);
+  return found;
 }

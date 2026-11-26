@@ -29,6 +29,45 @@ export default defineConfig({
 The API reference is built from `api/openapi.json` and `api/docs-data.json` (what
 `perseid docs-data` writes), or from `reference: "reference.json"`.
 
+## URLs
+
+The reference's URLs are Mintlify's, so a site moved from Mintlify keeps its links and search
+ranking: `/api-reference/<tag>/<summary>` for an operation (`<method>-<path>` without a summary)
+and `/api-reference/webhooks/<summary>` for a webhook. `import-mintlify` also writes
+`trailingSlash: "never"`, Mintlify's style.
+
+Links follow Astro's `base` and `trailingSlash`, the reference's and the pages' alike, so a site
+can live under a path of another, such as `https://www.acme.com/docs`:
+
+```js
+export default defineConfig({
+  site: "https://www.acme.com",
+  base: "/docs",
+  trailingSlash: "never",
+  integrations: [perseidDocs({ title: "Acme" })],
+});
+```
+
+## A legacy version of the API
+
+`references` adds API references beside the main one, each from its own folder or docs model. A
+`legacy` one gets a banner on each page linking to the current reference. Without docs data, it
+shows cURL:
+
+```js
+perseidDocs({
+  title: "Acme",
+  references: [{ id: "v1", label: "API v1", api: "api-v1", legacy: true }],
+  topics: [
+    { label: "Docs", link: "/", items: [/* ... */] },
+    { label: "API Reference", link: "/api-reference", items: "reference" },
+    { label: "API v1", link: "/api-reference/v1", items: "reference:v1" },
+  ],
+});
+```
+
+It lives at `/api-reference/<id>` unless `base` says otherwise.
+
 Embedded, from a spec URL alone:
 
 ```html

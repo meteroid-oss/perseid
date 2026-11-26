@@ -1,6 +1,6 @@
 {
   "name": "perseid-docs",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Docs sites for APIs whose SDKs perseid generates",
   "license": "Apache-2.0",
   "homepage": "https://github.com/meteroid-oss/perseid",
@@ -30,7 +30,8 @@
     "./reference/model": "./dist/reference/model.js",
     "./reference/styles.css": "./styles/reference.css",
     "./reference/client": "./dist/reference/client.js",
-    "./embed": "./dist/embed.js"
+    "./embed": "./dist/embed.js",
+    "./base-links": "./dist/astro/base-links.js"
   },
   "files": [
     "dist",
