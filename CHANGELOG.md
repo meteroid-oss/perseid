@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.14.3](https://github.com/meteroid-oss/perseid/compare/v0.14.2...v0.14.3) (2026-11-26)
+
+
+### Features
+
+* `[headers]` in perseid.toml, sent with every request unless the client or the call sets them; `{info.version}` pins an SDK to the API version it was generated from ([8b380bd](https://github.com/meteroid-oss/perseid/commit/8b380bd211ff4a222aeed37115a3d8eb3204b36e))
+* `x-beta` operations say so in their doc comment and API reference ([8b380bd](https://github.com/meteroid-oss/perseid/commit/8b380bd211ff4a222aeed37115a3d8eb3204b36e))
+* generate the SDKs of the Meteroid API v2 ([#123](https://github.com/meteroid-oss/perseid/issues/123)) ([8b380bd](https://github.com/meteroid-oss/perseid/commit/8b380bd211ff4a222aeed37115a3d8eb3204b36e))
+* **go:** the module path takes its `/vN` suffix from version 2, moved by a `generate --pr` sized as major, and go.mod's `module` follows it ([8b380bd](https://github.com/meteroid-oss/perseid/commit/8b380bd211ff4a222aeed37115a3d8eb3204b36e))
+* **java:** methods named like a keyword or an `Object` method take the operation id (`voidInvoice`) ([8b380bd](https://github.com/meteroid-oss/perseid/commit/8b380bd211ff4a222aeed37115a3d8eb3204b36e))
+* **pagination:** `limit` in `x-pagination` and `[[pagination]]` names the page size parameter ([8b380bd](https://github.com/meteroid-oss/perseid/commit/8b380bd211ff4a222aeed37115a3d8eb3204b36e))
+* **perseid-docs:** Mintlify's URLs, Astro's base and trailing slash, legacy references ([#126](https://github.com/meteroid-oss/perseid/issues/126)) ([c9e61de](https://github.com/meteroid-oss/perseid/commit/c9e61deaaf5e364579428fb056cd27522258fcf1))
+* the cli and mcp packs, perseid-docs and perseid-mcp move in from perseid-ext ([#125](https://github.com/meteroid-oss/perseid/issues/125)) ([b00e105](https://github.com/meteroid-oss/perseid/commit/b00e105466ee933c78f20438d3edc306841ac1f3))
+* warn about discriminator mappings naming no schema or no variant, and about tags sharing a schema ([8b380bd](https://github.com/meteroid-oss/perseid/commit/8b380bd211ff4a222aeed37115a3d8eb3204b36e))
+
+
+### Bug Fixes
+
+* **rust:** no `should_implement_trait` lint on setters named `add`, `sub`... ([8b380bd](https://github.com/meteroid-oss/perseid/commit/8b380bd211ff4a222aeed37115a3d8eb3204b36e))
+
 ## [0.14.2](https://github.com/meteroid-oss/perseid/compare/v0.14.1...v0.14.2) (2026-11-12)
 
 
