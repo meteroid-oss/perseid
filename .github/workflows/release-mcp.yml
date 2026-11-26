@@ -1,0 +1,56 @@
+name: Release perseid-mcp
+
+# Publishes perseid-mcp when main carries a version of it that npm does not have yet, then tags
+# it: trusted publishing, with provenance. NPM_TOKEN only for the first publish, before the
+# package exists on npm to trust this workflow.
+on:
+  push:
+    branches: [main]
+    paths: [packages/perseid-mcp/package.json, .github/workflows/release-mcp.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+    defaults:
+      run:
+        working-directory: packages/perseid-mcp
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        id: version
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ -n "$(npm view "perseid-mcp@$version" version 2>/dev/null)" ]; then
+            echo "perseid-mcp@$version is already published"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.version.outputs.publish == 'true'
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later.
+      - if: steps.version.outputs.publish == 'true'
+        run: npm install --global npm@latest
+      - if: steps.version.outputs.publish == 'true'
+        run: npm ci --no-audit --no-fund && npm run build && npm test
+      - name: Publish
+        if: steps.version.outputs.publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
+      - name: Tag
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          tag="perseid-mcp-v${{ steps.version.outputs.version }}"
+          git tag "$tag" && git push origin "$tag"

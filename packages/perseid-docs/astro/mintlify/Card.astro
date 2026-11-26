@@ -1,0 +1,11 @@
+---
+import Icon from "./Icon.astro";
+interface Props { title?: string; icon?: string; href?: string; color?: string; horizontal?: boolean }
+const { title, icon, href, color } = Astro.props;
+const Tag = href ? "a" : "div";
+---
+<Tag class="pd-card" href={href} style={color ? `--pd-icon:${color}` : undefined}>
+  <Icon name={icon} class="pd-card-icon" />
+  {title && <span class="pd-card-title">{title}</span>}
+  <div class="pd-card-body"><slot /></div>
+</Tag>

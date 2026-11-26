@@ -655,19 +655,33 @@ acme/api ──spec──▶ acme/api-sdks ──PRs──▶ acme/api-typescrip
 acme/api-sdks ──PR──▶ acme/docs (api/)
 ```
 
+The site itself can be [`perseid-docs`](../packages/perseid-docs), an Astro integration reading
+`api/`: a reference that follows the reader's SDK language, guides in MDX, an embed for other
+sites, and an importer of Mintlify sites.
+
 perseid owns `path`: each pull request replaces the folder whole, deleting the files it no longer
 writes, and changes nothing outside it. The repository needs no setup beyond the App, or token,
 of `sdks.yml` reaching it: `perseid sync` installs the perseid App there, and `perseid status`
 reports a target repository it can't reach.
 
 A [pack](customizing.md#packs) target generates a program wrapping one SDK, such as a CLI over the
-Rust SDK, in a repository of its own, once that SDK is released:
+Rust SDK, in a repository of its own, once that SDK is released. perseid has two packs built in:
+
+- [`cli`](../packs/cli): a command line over the Rust SDK, a clap command per operation, with a
+  local MCP server (`<cli> mcp`, a tool per operation, on stdio or Streamable HTTP);
+- [`mcp`](../packs/mcp): an MCP server in code mode over the TypeScript SDK (a `search` tool and
+  a sandboxed `execute`), deployed as an npm package, a Docker image, a Cloudflare Worker, or an
+  MCP bundle, with an OAuth server of its own for one-click connectors.
 
 ```toml
-[targets.cli]
-pack = "packs/cli"   # the pack's folder, relative to perseid.toml
+[targets.cli]        # the built-in pack `cli`, named by the table
 wraps = "rust"
 repo = "acme/acme-cli"
+
+[targets.tools]
+pack = "./packs/tools"   # a pack of your own: its folder, relative to perseid.toml
+wraps = "go"
+repo = "acme/acme-tools"
 ```
 
 Its templates see the API as the Rust SDK's templates do, and the version of the Rust SDK the
@@ -677,8 +691,8 @@ with what the pack's scaffold sets up: perseid writes no release workflow there,
 gives it the release credentials of the SDK repositories (your App's `SDK_APP_ID` and
 `SDK_APP_PRIVATE_KEY`, or a check that `SDK_GITHUB_TOKEN` is set). Since CI tokens
 can't push workflows, the pull request leaves out those of the scaffold, and its description lists
-them: write them with `perseid targets cli --out <dir>` and commit them by hand. In the Action,
-`pack` must be a folder of the checkout, such as a submodule: perseid doesn't fetch packs yet.
+them: write them with `perseid targets cli --out <dir>` and commit them by hand. A pack of your
+own must be a folder of the checkout, such as a submodule: perseid doesn't fetch packs yet.
 
 ### `after`
 

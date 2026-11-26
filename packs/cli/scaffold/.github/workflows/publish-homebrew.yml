@@ -1,0 +1,87 @@
+# The Homebrew publish job of release.yml (dist's, with a guard): commits the release's formula
+# to the tap, the HOMEBREW_TAP variable or `<owner>/homebrew-tap`. Without a credential reaching
+# the tap it says so and succeeds, so the release goes on without Homebrew.
+name: Publish to Homebrew
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    permissions:
+      id-token: write
+    env:
+      PLAN: ${{ inputs.plan }}
+      TAP: ${{ vars.HOMEBREW_TAP || format('{0}/homebrew-tap', github.repository_owner) }}
+    steps:
+      - id: tap
+        run: |
+          echo "owner=${TAP%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${TAP#*/}" >> "$GITHUB_OUTPUT"
+      # The credentials of perseid's workflows, in its order: your App, a token, the perseid App.
+      - id: app
+        if: vars.SDK_APP_ID != ''
+        continue-on-error: true
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.SDK_APP_ID }}
+          private-key: ${{ secrets.SDK_APP_PRIVATE_KEY }}
+          owner: ${{ steps.tap.outputs.owner }}
+          repositories: ${{ steps.tap.outputs.name }}
+          permission-contents: write
+      - id: hosted
+        if: vars.SDK_APP_ID == ''
+        env:
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN || secrets.SDK_GITHUB_TOKEN }}
+          REPOSITORIES: ${{ env.TAP }}
+          PERMISSIONS: '{"contents":"write"}'
+          OPTIONAL: 'true'
+        run: |
+          [ -z "$TOKEN" ] || exit 0
+          script=$RUNNER_TEMP/hosted-token.sh
+          if curl -sSfL -o "$script" https://raw.githubusercontent.com/meteroid-oss/perseid/v0/hosted-token.sh; then
+            bash "$script"
+          fi
+      - id: credential
+        env:
+          TOKEN: ${{ steps.app.outputs.token || secrets.HOMEBREW_TAP_TOKEN || secrets.SDK_GITHUB_TOKEN || steps.hosted.outputs.token }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::No credential reaches $TAP: the formula is not published. Install the perseid App (or yours) on it, or set HOMEBREW_TAP_TOKEN"
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.credential.outputs.missing != 'true'
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: true
+          repository: ${{ env.TAP }}
+          token: ${{ steps.app.outputs.token || secrets.HOMEBREW_TAP_TOKEN || secrets.SDK_GITHUB_TOKEN || steps.hosted.outputs.token }}
+      - if: steps.credential.outputs.missing != 'true'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-*
+          path: Formula/
+          merge-multiple: true
+      - if: steps.credential.outputs.missing != 'true'
+        name: Commit the formula
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for release in $(echo "$PLAN" | jq --compact-output '.releases[] | select([.artifacts[] | endswith(".rb")] | any)'); do
+            filename=$(echo "$release" | jq '.artifacts[] | select(endswith(".rb"))' --raw-output)
+            name=${filename%.rb}
+            version=$(echo "$release" | jq .app_version --raw-output)
+            export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+            brew update
+            brew style --except-cops FormulaAudit/Homepage,FormulaAudit/Desc,FormulaAuditStrict --fix "Formula/${filename}" || true
+            git add "Formula/${filename}"
+            git commit -m "${name} ${version}"
+          done
+          git push

@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist/reference",
+    "rootDir": "src/reference",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "auto",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "files": [
+    "src/reference/client.ts"
+  ]
+}

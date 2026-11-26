@@ -1,0 +1,100 @@
+{#- Shared by every language's perseid-docs.json template, copied next to each one. -#}
+
+{#- The literal `docs.call` writes for a value named `name` of type `ty`, `none` when no
+    literal holds it. `example` is the spec's, when it has one. -#}
+{% macro literal(out, name, ty, types, example=none) -%}
+    {%- set out.lit = none -%}
+    {%- set rs = ty.to_rust() | string -%}
+    {%- set ids = {"bool": "Bool", "i16": "Int16", "u16": "UInt16", "i32": "Int32", "i64": "Int64", "u64": "UInt64", "f32": "Float", "f64": "Double", "String": "String", "uuid::Uuid": "Uuid", "chrono::NaiveDate": "Date"} -%}
+    {%- set id = "Date" if ty.is_date() else (ids[rs] if rs in ids else ("SchemaRef" if ty.is_schema_ref() else none)) -%}
+    {%- set schema = types[ty.schema_name()] if id == "SchemaRef" and ty.schema_name() in types else none -%}
+    {%- set text = example if example is string and example | length > 0 and example | length < 40 and "\"" not in example and "\\" not in example else name -%}
+    {%- if id == "String" or (schema and schema.kind == "string_alias") -%}
+        {%- set out.lit = {"name": name, "kind": "string", "type": "String", "int64": false, "unsigned64": false, "value": text} -%}
+    {%- elif schema and schema.kind == "string_enum" and schema.values -%}
+        {%- set out.lit = {"name": name, "kind": "enum", "type": "Enum", "int64": false, "unsigned64": false, "value": schema.values[0], "schema": ty.schema_name()} -%}
+    {%- elif id in ["Int16", "UInt16", "Int32", "Int64", "UInt64"] -%}
+        {%- set v = example if example is number and example >= 0 else 1 -%}
+        {%- set out.lit = {"name": name, "kind": "integer", "type": id, "int64": id in ["Int64", "UInt64"], "unsigned64": id == "UInt64", "value": v} -%}
+    {%- elif id in ["Float", "Double"] -%}
+        {%- set out.lit = {"name": name, "kind": "number", "type": id, "int64": false, "unsigned64": false, "value": 1.5} -%}
+    {%- elif id == "Bool" -%}
+        {%- set out.lit = {"name": name, "kind": "boolean", "type": "Bool", "int64": false, "unsigned64": false, "value": true} -%}
+    {%- elif id == "Uuid" -%}
+        {%- set out.lit = {"name": name, "kind": "uuid", "type": "Uuid", "int64": false, "unsigned64": false, "value": "3fa85f64-5717-4562-b3fc-2c963f66afa6"} -%}
+    {%- elif id == "Date" -%}
+        {%- set out.lit = {"name": name, "kind": "date", "type": "Date", "int64": false, "unsigned64": false, "value": "2024-01-02"} -%}
+    {%- endif -%}
+{%- endmacro %}
+
+{#- `{kind, type, schema?, item?}` of a literal: the type of a list's items, as perseid names it. -#}
+{% macro item_type(out, lit) -%}
+    {%- if lit.item is defined %}{% set out.item = {"kind": lit.kind, "type": lit.type, "schema": lit.schema, "item": lit.item} %}
+    {%- elif lit.schema is defined %}{% set out.item = {"kind": lit.kind, "type": lit.type, "schema": lit.schema} %}
+    {%- else %}{% set out.item = {"kind": lit.kind, "type": lit.type} %}{% endif -%}
+{%- endmacro %}
+
+{#- Sets `out.lit` to the literal of a value, lists of one item and structs of their required
+    fields included when the installed perseid's `docs.jinja` renders them (`sdk.perseid_docs_nested`). -#}
+{% macro value(out, name, ty, types, example, outer) -%}
+    {%- set _ = literal(out, name, ty, types, example) -%}
+    {%- if not out.lit and sdk.perseid_docs_nested | default(false) -%}
+        {%- if ty.is_list() -%}
+            {%- set inner = namespace(lit=none, item=none) -%}
+            {%- set _ = value(inner, name, ty.inner_type(), types, none, outer) -%}
+            {%- if inner.lit -%}
+                {%- set _ = item_type(inner, inner.lit) -%}
+                {%- set out.lit = {"name": name, "kind": "list", "type": "List", "item": inner.item, "items": [inner.lit]} -%}
+            {%- endif -%}
+        {%- elif ty.is_schema_ref() and ty.schema_name() in types and types[ty.schema_name()].kind == "struct" and ty.schema_name() not in outer and outer | length < 3 -%}
+            {%- set nested = namespace(fields=[], ok=true) -%}
+            {%- set _ = struct_fields(nested, ty.schema_name(), types, outer + [ty.schema_name()]) -%}
+            {%- if nested.ok -%}
+                {%- set out.lit = {"name": name, "kind": "object", "type": "SchemaRef", "schema": ty.schema_name(), "fields": nested.fields} -%}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endmacro %}
+
+{#- Sets `out.fields` to the literals of the required fields of struct `name`, `out.ok` to false
+    when one cannot be written. -#}
+{% macro struct_fields(out, name, types, outer) -%}
+    {%- set defaults = types[name].discriminator_defaults if types[name].discriminator_defaults is defined else {} -%}
+    {%- for f in types[name].fields -%}
+        {%- if f.flatten -%}{% set out.ok = false %}
+        {%- elif f.required -%}
+            {%- set field = namespace(lit=none) -%}
+            {%- set _ = value(field, f.name, f.type, types, f.example | default(none), outer) -%}
+            {%- if field.lit and not f.nullable and f.name not in defaults -%}{% set out.fields = out.fields + [field.lit] %}{% else %}{% set out.ok = false %}{%- endif -%}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endmacro %}
+
+{#- Sets `out.ex` to the `{resource, operation, path_args, body, result, item}` that
+    `docs.call` renders, and `out.complete` to whether it holds every required argument. -#}
+{% macro example(out, resource, op, types) -%}
+    {%- set acc = namespace(args=[], complete=true, lit=none) -%}
+    {%- for p in op.typed_path_params -%}
+        {%- set _ = literal(acc, p.name, p.type, types) -%}
+        {%- if acc.lit -%}{% set acc.args = acc.args + [acc.lit] %}{% else %}{% set acc.complete = false %}{%- endif -%}
+    {%- endfor -%}
+    {%- for p in op.query_params + op.header_params if p.required -%}{% set acc.complete = false %}{%- endfor -%}
+    {%- set body = none -%}
+    {%- if op.request_body_kind == "json" and op.request_body_schema_name is defined and not op.request_body_is_list and types[op.request_body_schema_name].kind == "struct" -%}
+        {%- set fields = namespace(fields=[], ok=true) -%}
+        {%- set _ = struct_fields(fields, op.request_body_schema_name, types, [op.request_body_schema_name]) -%}
+        {%- if not fields.ok %}{% set acc.complete = false %}{% endif -%}
+        {%- set body = {"schema": op.request_body_schema_name, "fields": fields.fields} -%}
+    {%- elif op.request_body_kind != "none" and not op.request_body_optional -%}
+        {%- set acc.complete = false -%}
+    {%- endif -%}
+    {%- set out.complete = acc.complete -%}
+    {%- set out.ex = {
+        "resource": resource.name,
+        "operation": op,
+        "path_args": acc.args,
+        "body": body,
+        "result": op.response_body_schema_name if op.response_body_schema_name is defined and not op.response_body_is_list else none,
+        "item": op.pagination.item_schema if op.pagination is defined else none,
+    } -%}
+{%- endmacro %}

@@ -1,0 +1,1096 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Acme",
+    "version": "1.0.0",
+    "description": "Things, as a service."
+  },
+  "servers": [
+    {
+      "url": "https://api.acme.dev"
+    }
+  ],
+  "tags": [
+    {
+      "name": "things",
+      "description": "Things you own, and their attachments.\n\nThings are never deleted."
+    }
+  ],
+  "security": [
+    {
+      "api_key": []
+    },
+    {
+      "oauth": [
+        "things:read"
+      ]
+    }
+  ],
+  "paths": {
+    "/v1/things": {
+      "get": {
+        "operationId": "listThings",
+        "tags": [
+          "things"
+        ],
+        "summary": "List things",
+        "description": "Every thing of the catalog, newest first.",
+        "parameters": [
+          {
+            "name": "starting_after",
+            "in": "query",
+            "description": "The ID of the thing to list after",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Things per page",
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "example": 10
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only things with these statuses",
+            "schema": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ThingStatus"
+              }
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "description": "How names are written",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "short",
+                "long"
+              ]
+            },
+            "deprecated": true
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "description": "Archived things only",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Sort order, `-` first for descending",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "name",
+                "-name"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThingList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createThing",
+        "tags": [
+          "things"
+        ],
+        "summary": "Create a thing",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Makes retries safe",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateThing"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Thing"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/things/{thing_id}": {
+      "get": {
+        "operationId": "getThing",
+        "tags": [
+          "things"
+        ],
+        "summary": "Retrieve a thing",
+        "parameters": [
+          {
+            "name": "thing_id",
+            "in": "path",
+            "required": true,
+            "description": "The thing's ID",
+            "schema": {
+              "type": "string",
+              "pattern": "^th_"
+            },
+            "example": "th_123"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Thing"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteThing",
+        "tags": [
+          "things"
+        ],
+        "summary": "Delete a thing",
+        "parameters": [
+          {
+            "name": "thing_id",
+            "in": "path",
+            "required": true,
+            "description": "The thing's ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/things/{thing_id}/attachments": {
+      "post": {
+        "operationId": "uploadAttachment",
+        "tags": [
+          "things"
+        ],
+        "summary": "Upload an attachment",
+        "parameters": [
+          {
+            "name": "thing_id",
+            "in": "path",
+            "required": true,
+            "description": "The thing's ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/things/{thing_id}/attachments/{attachment_id}": {
+      "get": {
+        "operationId": "downloadAttachment",
+        "tags": [
+          "things"
+        ],
+        "summary": "Download an attachment",
+        "parameters": [
+          {
+            "name": "thing_id",
+            "in": "path",
+            "required": true,
+            "description": "The thing's ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file",
+            "content": {
+              "application/pdf": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/things/{thing_id}/photos": {
+      "post": {
+        "operationId": "addPhoto",
+        "tags": [
+          "things"
+        ],
+        "summary": "Add a photo",
+        "parameters": [
+          {
+            "name": "thing_id",
+            "in": "path",
+            "required": true,
+            "description": "The thing's ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "file"
+                ],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  },
+                  "caption": {
+                    "type": "string",
+                    "description": "Shown under the photo"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/whoami": {
+      "get": {
+        "operationId": "whoami",
+        "tags": [
+          "auth"
+        ],
+        "summary": "The caller",
+        "description": "Who the credential belongs to.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Caller"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ping": {
+      "get": {
+        "operationId": "ping",
+        "tags": [
+          "health"
+        ],
+        "summary": "Check the API is up",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "pong",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "streamEvents",
+        "tags": [
+          "events"
+        ],
+        "summary": "Stream events",
+        "description": "Changes to things, as they happen.",
+        "responses": {
+          "200": {
+            "description": "Events",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Event"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/reports": {
+      "get": {
+        "operationId": "getReport",
+        "tags": [
+          "reports"
+        ],
+        "summary": "A usage report",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": true,
+            "description": "First day of the report",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "example": "2026-01-31"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ReportKind"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Report"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/things/batch/{ids}": {
+      "get": {
+        "operationId": "getThingsBatch",
+        "tags": [
+          "things"
+        ],
+        "summary": "Retrieve several things",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "path",
+            "required": true,
+            "style": "simple",
+            "description": "Their IDs",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
+              "maxItems": 10
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Thing"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/labels": {
+      "get": {
+        "operationId": "list_thing_labels",
+        "tags": [
+          "things"
+        ],
+        "summary": "List the labels of things",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/attachments/{attachment_id}": {
+      "get": {
+        "operationId": "getAttachment",
+        "tags": [
+          "attachment"
+        ],
+        "summary": "Retrieve an attachment",
+        "parameters": [
+          {
+            "name": "attachment_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The attachment's ID",
+            "example": "at_123"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "api_key": {
+        "type": "http",
+        "scheme": "bearer"
+      },
+      "oauth": {
+        "type": "oauth2",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://auth.acme.dev/authorize",
+            "tokenUrl": "/oauth/token",
+            "scopes": {
+              "things:read": "Read things",
+              "things:write": "Write things"
+            }
+          },
+          "deviceAuthorization": {
+            "deviceAuthorizationUrl": "/oauth/device",
+            "tokenUrl": "/oauth/token",
+            "scopes": {
+              "things:read": "Read things"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ThingStatus": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "active",
+          "retired"
+        ]
+      },
+      "ReportKind": {
+        "type": "string",
+        "enum": [
+          "daily",
+          "monthly"
+        ]
+      },
+      "Address": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          }
+        }
+      },
+      "Thing": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "quantity",
+          "status",
+          "tags"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ThingStatus"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "address": {
+            "$ref": "#/components/schemas/Address"
+          }
+        }
+      },
+      "ThingList": {
+        "type": "object",
+        "required": [
+          "data",
+          "has_more"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Thing"
+            }
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CreateThing": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The thing's name",
+            "minLength": 1,
+            "maxLength": 50,
+            "example": "Lamp"
+          },
+          "quantity": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many are in stock",
+            "minimum": 0,
+            "maximum": 1000,
+            "default": 1
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether it is for sale"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ThingStatus"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Labels",
+            "maxItems": 5,
+            "uniqueItems": true
+          },
+          "address": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "format": {
+            "type": "string",
+            "description": "A field named like a global flag"
+          },
+          "meta.source": {
+            "type": "string",
+            "description": "A property whose name has a dot"
+          },
+          "since": {
+            "type": "string",
+            "format": "date",
+            "description": "When it was made"
+          },
+          "price": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "multipleOf": 0.01,
+            "description": "Its price, in euros"
+          },
+          "contact": {
+            "$ref": "#/components/schemas/Email"
+          },
+          "website": {
+            "type": "string",
+            "format": "uri",
+            "description": "Its page",
+            "examples": [
+              "https://acme.dev/lamp"
+            ]
+          },
+          "sku": {
+            "$ref": "#/components/schemas/Sku"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/Delivery"
+          },
+          "label": {
+            "$ref": "#/components/schemas/Label"
+          }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "required": [
+          "id",
+          "size"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "Caller": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "required": [
+          "type",
+          "thing_id"
+        ],
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "thing_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Report": {
+        "type": "object",
+        "required": [
+          "since",
+          "kind",
+          "count"
+        ],
+        "properties": {
+          "since": {
+            "type": "string",
+            "format": "date"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ReportKind"
+          },
+          "count": {
+            "type": "integer"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Email": {
+        "type": "string",
+        "format": "email",
+        "description": "An email address"
+      },
+      "Sku": {
+        "type": "string",
+        "pattern": "^[A-Z]{3}-[0-9]+$",
+        "description": "A stock keeping unit"
+      },
+      "Delivery": {
+        "description": "How the thing reaches its buyer: the variants leave out their tag, as serde's tag through utoipa does",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/Pickup"
+          },
+          {
+            "$ref": "#/components/schemas/Shipping"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "method",
+          "mapping": {
+            "pickup": "#/components/schemas/Pickup",
+            "shipping": "#/components/schemas/Shipping"
+          }
+        },
+        "properties": {
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "Pickup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "store"
+        ],
+        "properties": {
+          "store": {
+            "type": "string"
+          }
+        }
+      },
+      "Shipping": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "address"
+        ],
+        "properties": {
+          "address": {
+            "$ref": "#/components/schemas/Address"
+          }
+        }
+      },
+      "Label": {
+        "description": "Variants that share their tag, as OpenAI's message input items do",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/TextLabel"
+          },
+          {
+            "$ref": "#/components/schemas/LinesLabel"
+          },
+          {
+            "$ref": "#/components/schemas/ImageLabel"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind"
+        }
+      },
+      "TextLabel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "text"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "LinesLabel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "lines"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text"
+            ]
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ImageLabel": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "url"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      }
+    }
+  }
+}

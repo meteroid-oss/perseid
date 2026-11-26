@@ -1,0 +1,28 @@
+---
+import config from "virtual:perseid-docs/config";
+import SiteTitle from "virtual:starlight/components/SiteTitle";
+import Search from "virtual:starlight/components/Search";
+
+const topics = Astro.locals.starlightSidebarTopics?.topics ?? [];
+const navbar = config.navbar ?? {};
+---
+
+<div class="pd-header">
+  <div class="pd-header-title"><SiteTitle /></div>
+  <div class="pd-header-search"><Search /></div>
+  <nav class="pd-header-nav" aria-label="Sections">
+    {
+      topics.length > 1 && (
+        <div class="pd-tabs">
+          {topics.map((t) => (
+            <a href={t.link} aria-current={t.isCurrent ? "page" : undefined}>
+              {t.label}
+            </a>
+          ))}
+        </div>
+      )
+    }
+    {navbar.links?.map((l: { label: string; href: string }) => <a class="pd-button pd-button-quiet" href={l.href}>{l.label}</a>)}
+    {navbar.primary && <a class="pd-button pd-button-primary" href={navbar.primary.href}>{navbar.primary.label}</a>}
+  </nav>
+</div>

@@ -1,0 +1,69 @@
+# The MCP bundles of release.yml, once the release is out: one per platform, the binary serving
+# `mcp` on stdio, for Claude Desktop and the clients installing bundles (.mcpb). The API key is
+# asked for at install, kept by the client.
+name: Publish MCP bundles
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      PLAN: ${{ inputs.plan }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: artifacts-*
+          path: artifacts/
+          merge-multiple: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+      - run: |
+          tag=$(jq -r '.announcement_tag' <<< "$PLAN")
+          version=$(jq -r '.releases[0].app_version' <<< "$PLAN")
+          bin=@@NPM_PACKAGE@@
+          for pair in aarch64-apple-darwin:darwin-arm64 x86_64-apple-darwin:darwin-x64 \
+                      x86_64-pc-windows-msvc:win32-x64 x86_64-unknown-linux-gnu:linux-x64 \
+                      aarch64-unknown-linux-gnu:linux-arm64; do
+            target=${pair%%:*} platform=${pair##*:} os=${platform%%-*}
+            archive=$(ls artifacts/*-"$target".tar.xz artifacts/*-"$target".zip 2>/dev/null | head -1)
+            [ -n "$archive" ] || { echo "::warning::no archive for $target"; continue; }
+            dir=$RUNNER_TEMP/$platform && mkdir -p "$dir/unpacked" "$dir/bundle/server"
+            case $archive in *.zip) unzip -q "$archive" -d "$dir/unpacked" ;; *) tar -xJf "$archive" -C "$dir/unpacked" ;; esac
+            exe=$bin && [ "$os" = win32 ] && exe=$bin.exe
+            cp "$(find "$dir/unpacked" -type f -name "$exe" | head -1)" "$dir/bundle/server/$exe"
+            jq -n --arg bin "$bin" --arg exe "$exe" --arg version "$version" --arg os "$os" '{
+              manifest_version: "0.3",
+              name: $bin,
+              display_name: "@@CLIENT_NAME@@",
+              version: $version,
+              description: "The @@CLIENT_NAME@@ API for MCP clients: a tool per operation, from its command line.",
+              author: { name: "@@CLIENT_NAME@@" },
+              server: {
+                type: "binary",
+                entry_point: ("server/" + $exe),
+                mcp_config: {
+                  command: ("${__dirname}/server/" + $bin),
+                  args: ["mcp"],
+                  env: { "@@ENV_PREFIX@@_API_KEY": "${user_config.api_key}" }
+                }
+              },
+              user_config: {
+                api_key: { type: "string", title: "@@CLIENT_NAME@@ API key", description: "Your @@CLIENT_NAME@@ API key", sensitive: true, required: true }
+              },
+              compatibility: { platforms: [$os] }
+            }' > "$dir/bundle/manifest.json"
+            npx -y @anthropic-ai/mcpb@2 pack "$dir/bundle" "$bin-$platform.mcpb"
+          done
+          gh release upload "$tag" ./*.mcpb --clobber --repo "$GITHUB_REPOSITORY"

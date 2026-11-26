@@ -1,0 +1,18 @@
+Upload an attachment
+
+`POST /v1/things/{thing_id}/attachments`
+
+Usage: acme things attachments upload --file <FILE> <THING_ID>
+
+Arguments:
+  <THING_ID>
+          The thing's ID
+
+Options:
+      --file <FILE>
+          (required) The request body, a file or - for stdin (a path, or - for stdin)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

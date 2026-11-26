@@ -1,0 +1,12 @@
+The attachment API
+
+Usage: acme attachment <COMMAND>
+
+Commands:
+  retrieve  Retrieve an attachment
+  help      Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

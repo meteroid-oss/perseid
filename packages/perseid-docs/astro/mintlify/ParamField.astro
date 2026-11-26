@@ -1,0 +1,9 @@
+---
+interface Props { body?: string; query?: string; path?: string; header?: string; type?: string; required?: boolean; default?: unknown }
+const p = Astro.props;
+const name = p.body ?? p.query ?? p.path ?? p.header ?? "";
+---
+<div class="pd-param">
+  <div class="pd-param-head"><code>{name}</code>{p.type && <span class="pd-param-type">{p.type}</span>}{p.required && <span class="pd-param-required">required</span>}{p.default !== undefined && <span class="pd-param-default">default: <code>{String(p.default)}</code></span>}</div>
+  <slot />
+</div>

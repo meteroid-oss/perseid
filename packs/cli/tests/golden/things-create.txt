@@ -1,0 +1,70 @@
+Create a thing
+
+`POST /v1/things`
+
+Usage: acme things create [OPTIONS]
+
+Options:
+      --idempotency-key <STRING>
+          Makes retries safe
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Body:
+  -d, --data <JSON|@FILE|->
+          Request body as JSON, @file to read it from a file, - from stdin; field flags override it
+
+      --active[=<BOOL>]
+          Whether it is for sale
+          
+          [possible values: true, false]
+
+      --address <JSON>
+          {city, country}
+
+      --contact <EMAIL>
+          An email address
+
+      --delivery <JSON>
+          {method*: pickup|shipping, ...}
+
+      --body-format <STRING>
+          A field named like a global flag
+
+      --label <JSON>
+          {kind*: text|image, ...}
+
+      --meta-source <STRING>
+          A property whose name has a dot
+
+      --name <STRING>
+          (required) The thing's name
+
+      --price <NUMBER >0>
+          Its price, in euros
+
+      --quantity <INTEGER 0..1000>
+          How many are in stock [default: 1]
+
+      --since <DATE>
+          When it was made
+
+      --sku <ID>
+          A stock keeping unit
+
+      --status <STRING>
+          [possible values: draft, active, retired]
+
+      --tags <STRING>
+          Labels (repeatable)
+
+      --website <URI>
+          Its page
+
+Example, with the required fields:
+  acme things create --name Lamp
+
+The body's JSON Schema: `acme schema things create`
+
+Global options: --format --jq --pretty --max-items --all --dry-run --allow-unknown-fields --profile --api-key --base-url --retries --no-retry --timeout --no-color --debug; see `acme --help`

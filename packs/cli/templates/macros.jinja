@@ -1,0 +1,175 @@
+{#- Names and kinds shared by the CLI pack's templates; `types` is the model's schemas. -#}
+
+{#- The binary's name: the API's name in kebab case, which `sdk.npm_package` is for Rust. -#}
+{% macro cli_name() %}{{ sdk.npm_package }}{% endmacro %}
+
+{#- Flags of the runtime (global ones, --data, --output) and of clap, which parameters must not
+    take: they become `--<location>-<name>`. -#}
+{% set reserved_flags = ["format", "jq", "pretty", "dry-run", "all", "allow-unknown-fields", "profile", "api-key", "base-url", "max-items", "no-color", "debug", "retries", "no-retry", "timeout", "data", "output", "help", "version"] -%}
+
+{#- The command of a resource or operation in kebab case, `-api` after the name of a built-in:
+    those of the runtime at the top (`app::BUILTINS`), `help` of clap anywhere. -#}
+{% macro command_name(name, top=false) -%}
+{% set kebab = name | to_kebab_case -%}
+{{ kebab ~ "-api" if kebab in (["auth", "completion", "man", "schema", "agents", "mcp", "help"] if top else ["help"]) else kebab }}
+{%- endmacro %}
+
+{#- The command of a top-level resource: its `display_path`, the name before the SDK added
+    `_api` because a schema has its tag's name. Older models have none: the `_api` goes then. -#}
+{% macro resource_command(resource, types) -%}
+{% set ns = namespace(name=resource.name) -%}
+{% if resource.display_path is defined and resource.display_path %}{% set ns.name = resource.display_path | first -%}
+{% elif ns.name is endingwith("_api") and (ns.name[:-4] | to_upper_camel_case) in types %}{% set ns.name = ns.name[:-4] %}{% endif -%}
+{{ command_name(ns.name, top=true) }}
+{%- endmacro %}
+
+{#- An operation's name without the resource's it repeats after its verb, in kebab case:
+    `list_custom_property_definitions` of `custom_properties` is `list-definitions`. -#}
+{% macro short_name(op, resource) -%}
+{% set word = resource.path | last -%}
+{% set single = (word[:-3] ~ "y") if word is endingwith("ies") else (word[:-1] if word is endingwith("s") else word) -%}
+{% set verb = op.name | split("_") | first -%}
+{% set rest = op.name[(verb | length) + 1:] -%}
+{% set ns = namespace(name=op.name) -%}
+{% for prefix in [word, single] if ns.name == op.name and rest -%}
+{% if rest == prefix %}{% set ns.name = verb %}{% elif rest is startingwith(prefix ~ "_") %}{% set ns.name = verb ~ "_" ~ rest[(prefix | length) + 1:] %}{% endif -%}
+{% endfor -%}
+{{ ns.name | to_kebab_case }}
+{%- endmacro %}
+
+{#- The command of an operation: its short name, unless that clashes with another operation's
+    name or short name, or a sub-resource's. -#}
+{% macro op_command(op, resource) -%}
+{% set mine = short_name(op, resource) -%}
+{% set ns = namespace(clash=false) -%}
+{% for other in resource.operations if other.name != op.name -%}
+{% if mine == (other.name | to_kebab_case) or mine == short_name(other, resource) %}{% set ns.clash = true %}{% endif -%}
+{% endfor -%}
+{% for child in resource.children if mine == (child.accessor | to_kebab_case) %}{% set ns.clash = true %}{% endfor -%}
+{{ command_name(op.name if ns.clash else mine) }}
+{%- endmacro %}
+
+{#- The command of a sub-resource of `resource`: `-api` after an operation's. -#}
+{% macro child_command(child, resource) -%}
+{% set name = command_name(child.accessor) -%}
+{% set ns = namespace(taken=false) -%}
+{% for op in resource.operations if op_command(op, resource) == name %}{% set ns.taken = true %}{% endfor -%}
+{{ name ~ "-api" if ns.taken else name }}
+{%- endmacro %}
+
+{#- The command words of a resource, from the top: `plans versions`. -#}
+{% macro resource_words(resource, resources, types) -%}
+{% if resource.parent -%}
+{% set parent = resources | selectattr("name", "equalto", resource.parent) | first -%}
+{% set child = parent.children | selectattr("name", "equalto", resource.name) | first -%}
+{{ resource_words(parent, resources, types) }} {{ child_command(child, parent) }}
+{%- else %}{{ resource_command(resource, types) }}{% endif -%}
+{%- endmacro %}
+
+{#- The kind of the schema `ty` refers to, through a nullable wrapper; empty if none. -#}
+{% macro schema_kind(ty, types) -%}
+{% if ty.is_nullable() %}{{ schema_kind(ty.inner_type(), types) }}{% elif ty.is_schema_ref() and ty.schema_name() in types %}{{ types[ty.schema_name()].kind }}{% endif -%}
+{%- endmacro %}
+
+{#- How a flag's text becomes JSON (`body::Kind`), for a whole value of `ty`. -#}
+{% macro kind(ty, types) -%}
+{% if ty.is_nullable() %}{{ kind(ty.inner_type(), types) }}
+{%- elif ty.is_bool() %}Boolean
+{%- elif ty.is_int_or_uint() %}Integer
+{%- elif ty.to_rust() in ["f32", "f64"] %}Number
+{%- elif ty.is_json_object() or ty.is_map() or ty.is_list() or ty.is_set() %}Json
+{%- elif schema_kind(ty, types) in ["struct", "struct_enum"] %}Json
+{%- else %}String
+{%- endif %}
+{%- endmacro %}
+
+{#- "1" when `ty` is a list of scalars, a repeatable flag. -#}
+{% macro many(ty, types) -%}
+{% if ty.is_nullable() %}{{ many(ty.inner_type(), types) }}{% elif (ty.is_list() or ty.is_set()) and kind(ty.inner_type(), types) != "Json" %}1{% endif -%}
+{%- endmacro %}
+
+{#- The kind of each value of a flag of `ty`: the items' for a repeatable one. -#}
+{% macro value_kind(ty, types) -%}
+{% if ty.is_nullable() %}{{ value_kind(ty.inner_type(), types) }}{% elif many(ty, types) %}{{ kind(ty.inner_type(), types) }}{% else %}{{ kind(ty, types) }}{% endif -%}
+{%- endmacro %}
+
+{#- The help's name of a flag's values, when the kind's says too little: `DATE`, `ID`. -#}
+{% macro value_name(ty, types) -%}
+{% if ty.is_nullable() or many(ty, types) %}{{ value_name(ty.inner_type(), types) }}
+{%- elif ty.is_datetime() %}DATE-TIME
+{%- elif ty.is_date() %}DATE
+{%- elif ty.to_rust() == "uuid::Uuid" %}UUID
+{%- elif ty.to_rust() == "rust_decimal::Decimal" %}DECIMAL
+{%- elif ty.is_uri() %}URI
+{%- elif schema_kind(ty, types) == "string_alias" %}ID
+{%- endif %}
+{%- endmacro %}
+
+{#- `.value_name("EMAIL")` for the known `format` of the constraints `c`, else `value_name`'s;
+    `.range("1..100")` for their bounds. -#}
+{% macro value_name_call(ty, types, c=none) -%}
+{% set each = (c["items"] if c and c["items"] is defined else none) if many(ty, types) else c -%}
+{% set format = each.format if each and each.format is defined and each.format in ["email", "hostname", "ipv4", "ipv6", "password"] else "" -%}
+{% set name = (format | upper) or value_name(ty, types) -%}
+{% if name %}.value_name("{{ name }}"){% endif -%}
+{% set bounds = bounds_text(each) -%}
+{% if bounds %}.range({{ bounds | rust_str }}){% endif -%}
+{%- endmacro %}
+
+{#- The bounds of the constraints `c`: `1..100`, `1..`, `..100`, or `>0 <=1` with exclusive ones. -#}
+{% macro bounds_text(c) -%}
+{% if c -%}
+{% set lo = c.minimum if c.minimum is defined else none -%}
+{% set hi = c.maximum if c.maximum is defined else none -%}
+{% if c.exclusive_minimum is defined or c.exclusive_maximum is defined -%}
+{{ [(">" ~ c.exclusive_minimum) if c.exclusive_minimum is defined else ((">=" ~ lo) if lo is not none else ""), ("<" ~ c.exclusive_maximum) if c.exclusive_maximum is defined else (("<=" ~ hi) if hi is not none else "")] | select | join(" ") }}
+{%- elif lo is not none or hi is not none %}{{ lo if lo is not none else "" }}..{{ hi if hi is not none else "" }}{% endif -%}
+{% endif -%}
+{%- endmacro %}
+
+{#- `.default_value("20")` and `.deprecated()` of a parameter or field `x`, for its help. -#}
+{% macro notes_call(x) -%}
+{% if x.default is defined and x.default is not none %}.default_value({{ (x.default if x.default is string else x.default | tojson) | rust_str }}){% endif -%}
+{% if x.deprecated is defined and x.deprecated %}.deprecated(){% endif -%}
+{%- endmacro %}
+
+{#- `.values(&[...])` for a flag of an enum, or of a list of one. -#}
+{% macro values(ty, types) -%}
+{% if ty.is_nullable() or many(ty, types) %}{{ values(ty.inner_type(), types) }}
+{%- elif schema_kind(ty, types) == "string_enum" %}.values(&[{{ types[ty.schema_name()]["values"] | map("rust_str") | join(", ") }}])
+{%- endif %}
+{%- endmacro %}
+
+{#- The first paragraph of a description, on one line. -#}
+{% macro first_line(text) -%}
+{% if text %}{{ text | trim | split("\n\n") | first | replace("\n", " ") | trim }}{% endif -%}
+{%- endmacro %}
+
+{#- The description of a field, else of the alias it refers to (`Email`). -#}
+{% macro field_description(f, types) -%}
+{% set ty = f.type.inner_type() if f.type.is_nullable() else f.type -%}
+{% if f.description is defined and f.description %}{{ f.description }}
+{%- elif schema_kind(ty, types) in ["alias", "string_alias"] and types[ty.schema_name()].description is defined %}{{ types[ty.schema_name()].description }}{% endif -%}
+{%- endmacro %}
+
+{#- `.help("...")` from the first paragraph of a description. -#}
+{% macro help(text) -%}
+{% if text %}.help({{ first_line(text) | rust_str }}){% endif -%}
+{%- endmacro %}
+
+{#- The Rust type of `ty`, as the CLI crate names it: models through `sdk::models`. -#}
+{% macro cli_type(ty) -%}
+{% if ty.is_datetime() %}chrono::DateTime<chrono::Utc>
+{%- elif ty.is_date() %}chrono::NaiveDate
+{%- elif ty.is_nullable() %}Option<{{ cli_type(ty.inner_type()) }}>
+{%- elif ty.is_list() or ty.is_set() %}Vec<{{ cli_type(ty.inner_type()) }}>
+{%- elif ty.is_map() %}std::collections::HashMap<String, {{ cli_type(ty.value_type()) }}>
+{%- elif ty.is_schema_ref() %}sdk::models::{{ ty.to_rust() }}
+{%- else %}{{ ty.to_rust() }}
+{%- endif %}
+{%- endmacro %}
+
+{#- The crates `cli_type(ty)` names besides the SDK, space-separated. -#}
+{% macro type_crates(ty) -%}
+{% if ty.is_datetime() or ty.is_date() %}chrono {% elif ty.is_nullable() or ty.is_list() or ty.is_set() %}{{ type_crates(ty.inner_type()) }}{% elif ty.is_map() %}{{ type_crates(ty.value_type()) }}{% elif ty.to_rust() == "uuid::Uuid" %}uuid {% elif ty.to_rust() == "rust_decimal::Decimal" %}rust_decimal {% endif -%}
+{%- endmacro %}
