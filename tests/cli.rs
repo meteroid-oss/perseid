@@ -205,6 +205,30 @@ fn without_a_spec_init_points_to_connect_and_generate_previews() {
 }
 
 #[test]
+fn generate_previews_any_spec_without_perseid_toml() {
+    let dir = tempfile::tempdir().unwrap();
+    let spec = std::path::absolute("tests/fixtures/petstore.yaml").unwrap();
+    let args = [
+        "generate",
+        "python",
+        "go",
+        "--spec",
+        spec.to_str().unwrap(),
+        "--out",
+        "sdks",
+        "--no-format",
+    ];
+    let (ok, out) = perseid(dir.path(), &args);
+    assert!(ok, "{out}");
+    assert!(out.contains("npx perseid init"), "{out}");
+    assert!(dir.path().join("sdks/python/pyproject.toml").exists());
+    assert!(dir.path().join("sdks/go/client.go").exists());
+    assert!(!dir.path().join("sdks/rust").exists());
+    assert!(!dir.path().join("perseid.toml").exists());
+    assert!(!dir.path().join(".github").exists());
+}
+
+#[test]
 fn init_from_stainless_maps_targets_pagination_and_method_names() {
     let dir = tempfile::tempdir().unwrap();
     fs::copy(

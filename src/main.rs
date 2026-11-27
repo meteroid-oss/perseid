@@ -80,6 +80,7 @@ enum Command {
         from: Option<String>,
     },
     /// Generate the SDKs perseid.toml lists, from its spec, starting each from its package skeleton.
+    /// Without perseid.toml, `--spec` and `--out` preview the SDKs of any spec.
     Generate {
         /// Languages to generate (default: all configured).
         #[arg(value_parser = LANGUAGES)]
@@ -377,7 +378,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
             dispatch,
             no_format,
         } => {
-            let (mut config, root) = Config::load(&config_path)?;
+            let preview = out.is_some() && spec.is_some() && !config_path.exists();
+            let (mut config, root) = match &spec {
+                Some(spec) if preview => (init::preview(spec, &languages, &cwd)?, cwd.clone()),
+                _ => Config::load(&config_path)?,
+            };
             let location = spec.unwrap_or_else(|| config.spec.clone());
             let spec = generate::load_spec(&config, &root, Some(&location))?;
             config.defaults_from_spec(&spec)?;
@@ -476,6 +481,11 @@ fn run(cli: Cli) -> Result<ExitCode> {
                 .map(|(sdk, dir)| (sdk.language.to_owned(), shown(dir, &cwd)))
                 .collect();
             println!("{}", generate::summary(&changes, &places));
+            if preview {
+                println!(
+                    "\nKeep them in sync with the spec, as pull requests and releases: `npx perseid init`"
+                );
+            }
             let changed = changes.values().any(|c| !c.is_empty());
             if check && changed {
                 eprintln!("\nSDKs are out of date, run `perseid generate`");

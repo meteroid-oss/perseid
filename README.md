@@ -2,12 +2,34 @@
 
 # perseid
 
-**Idiomatic SDKs, always in sync with your OpenAPI spec.**
+<p align="center">
+  <a href="https://www.npmjs.com/package/perseid"><img src="https://img.shields.io/npm/v/perseid?color=4f93e6" alt="npm"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-b07ce8" alt="Apache-2.0"></a>
+  <a href="docs/migrating-from-stainless.md"><img src="https://img.shields.io/badge/migrating_from-Stainless-f5873a" alt="Migrating from Stainless"></a>
+</p>
+
+**Idiomatic SDKs, always in sync with your OpenAPI spec. Open source, free, in your own CI.**
 
 perseid generates Rust, TypeScript, Python, Go, Java and C# SDKs. When the spec changes, a GitHub
 Action regenerates them, opens a pull request, and releases them to their registries once you
 merge. It is one static binary, run in your CI. No account and no subscription: the perseid
 GitHub App only lends the workflows short-lived tokens, so no secret is stored.
+
+> **Coming from Stainless?** Stainless stopped taking new customers in May 2026.
+> `npx perseid init --from stainless.yml` imports your packages, resources, method names and
+> pagination, so your users upgrade as they would to any new major version.
+> See the [migration guide](docs/migrating-from-stainless.md).
+
+## Try it on your spec
+
+```sh
+npx perseid generate --spec openapi.yaml --out sdks
+```
+
+Six SDKs in `sdks/<language>` in a few seconds, each with its README, `api.md` and tests. No
+account, no config file, nothing written anywhere else. No spec at hand? Pass
+`--spec https://raw.githubusercontent.com/meteroid-oss/perseid/main/tests/fixtures/petstore.yaml`.
+Name languages to generate fewer: `npx perseid generate typescript python --spec ...`.
 
 ## Why perseid
 
@@ -25,7 +47,7 @@ GitHub App only lends the workflows short-lived tokens, so no secret is stored.
   TypeScript SDK, for npm, Docker, Cloudflare Workers or Claude Desktop. Each lives in a
   repository of its own and follows the spec like the SDKs.
 
-## Quick start
+## Keep them in sync
 
 perseid runs from the repository that holds your OpenAPI spec, so every change to the spec
 regenerates the SDKs. The SDKs can live there or in their own repositories.
@@ -46,12 +68,6 @@ the repositories you select. Each run
 trades its GitHub OIDC token for an App token covering its repositories for an hour, so nothing
 is stored. Rather keep the key yourself? `npx perseid app` creates a GitHub App of your own, or
 set a [fine-grained token](docs/ci.md#tokens) as the `SDK_GITHUB_TOKEN` secret.
-
-To see the SDKs before pushing anything:
-
-```sh
-npx perseid generate --out /tmp/sdks   # every SDK in /tmp/sdks/<language>
-```
 
 perseid also installs with `curl -fsSL https://sh.meteroid.com/perseid | sh`
 or runs as the `ghcr.io/meteroid-oss/perseid` image. Linux and macOS, x64 and arm64.
@@ -144,7 +160,7 @@ See [repository layouts](docs/ci.md#repository-layouts).
 | Command | Description |
 |---|---|
 | `init` | Write `perseid.toml` and the workflows. Local only: nothing is sent to GitHub. |
-| `generate` | Write the SDKs. `--out <dir>` previews, `--check` fails on drift, `--pr` opens pull requests. |
+| `generate` | Write the SDKs. `--out <dir>` previews, from any `--spec` without a `perseid.toml`. `--check` fails on drift, `--pr` opens pull requests. |
 | `sync` | Install the perseid App on the repositories `perseid.toml` names, and commit their release workflow. |
 | `connect <owner/repo>` | In the API repository: push the spec to the SDKs repository. |
 | `app` | Set up a GitHub App of your own instead of the perseid App. |
@@ -184,6 +200,16 @@ operation or schema. Names that clash fail generation, listed together. Leave an
 with `exclude = ["<operation id>"]`, and open an issue with the spec attached.
 
 perseid started as a fork of [Svix's openapi-codegen](https://github.com/svix/openapi-codegen).
+
+## Built by Meteroid
+
+perseid is built and used by [Meteroid](https://meteroid.com/?utm_source=github&utm_medium=readme&utm_campaign=perseid),
+the open-source billing and pricing platform: subscriptions, usage-based billing and invoicing.
+It generates [Meteroid's own SDKs](https://github.com/search?q=org%3Ameteroid-oss+sdk&type=repositories).
+If your API needs metering and invoicing too, have a look at
+[meteroid-oss/meteroid](https://github.com/meteroid-oss/meteroid).
+
+If perseid saves you an SDK vendor bill, a ⭐ helps other teams find it.
 
 ## Contributing
 

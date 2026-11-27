@@ -36,7 +36,7 @@ use a GitHub App of your own (`perseid app`) or a token: see [credentials](ci.md
 
 | Generator | SDK languages | Other outputs |
 |---|---|---|
-| perseid | Rust, TypeScript, Python (sync and async), Go, Java, C# | `api.md` and a README per SDK |
+| perseid | Rust, TypeScript, Python (sync and async), Go, Java, C# | `api.md` and a README per SDK, a docs site in each SDK's language ([perseid-docs](../packages/perseid-docs)), a CLI with a local MCP server, an MCP server in code mode ([packs](ci.md#targets)) |
 | Stainless | TypeScript, Python, Go, Java, Kotlin, Ruby, PHP, C# | CLI, MCP server, Terraform provider, docs platform |
 | Fern | TypeScript, Python, Java, Go, C#, Ruby, PHP, Swift, Rust. Kotlin in progress | CLI, docs sites, WebSockets (AsyncAPI), gRPC |
 | Speakeasy | TypeScript, Python, Go, Java, C#, PHP, Ruby, Unity | MCP server (TypeScript), CLI, Terraform provider, Postman collections |
@@ -72,9 +72,9 @@ use a GitHub App of your own (`perseid app`) or a token: see [credentials](ci.md
 
 - **Languages.** Ruby, PHP, Kotlin, Swift, Dart and C++ are not perseid targets. openapi-generator
   covers far more.
-- **More than SDKs.** perseid makes no docs site, CLI, MCP server or Terraform provider. Stainless
-  made all four, Speakeasy makes the last three, Fern and Scalar make docs and CLIs, and Scalar
-  hosts MCP servers.
+- **More than SDKs.** perseid makes no Terraform provider and hosts nothing: its docs site, CLI
+  and MCP servers run where you deploy them. Speakeasy makes Terraform providers, Fern and Scalar
+  host docs, and Scalar hosts MCP servers.
 - **Edits inside generated files.** Speakeasy, Scalar, Stainless and Fern (on Enterprise) merge
   your edits into generated files. perseid keeps whole files you own, and offers middleware,
   snippets and templates for the rest.
@@ -83,7 +83,7 @@ use a GitHub App of your own (`perseid app`) or a token: see [credentials](ci.md
 - **GitHub only.** perseid's pull requests, releases and App are GitHub's. `perseid generate` and
   `--check` run in any CI, but the release flow does not.
 - **Support.** The commercial vendors sell support, SLAs and migrations. perseid has GitHub issues.
-- **Maturity.** perseid is at 0.12. Before 1.0, its configuration and output can still break.
+- **Maturity.** perseid is before 1.0: its configuration and output can still break.
 
 ## Where perseid is ahead
 
@@ -102,11 +102,11 @@ use a GitHub App of your own (`perseid app`) or a token: see [credentials](ci.md
 
 Choose perseid if the six languages cover you, you release from GitHub, and you want the SDKs in
 your own repositories with no vendor account or bill. Look elsewhere if you need another
-language, a docs site, a CLI, an MCP server, or edits merged inside generated files.
+language, a Terraform provider, hosted docs, or edits merged inside generated files.
 
 ### Speakeasy
 
-Choose Speakeasy if you need Ruby, PHP, Unity, a Terraform provider or an MCP server, and either
+Choose Speakeasy if you need Ruby, PHP, Unity or a Terraform provider, and either
 accept AGPL-3.0 code in your SDKs or pay for a commercial license.
 
 ### Fern
@@ -122,7 +122,8 @@ Python and Go.
 ### Stainless
 
 Stainless takes no new customers. If your SDKs are there, plan a move. perseid generates a similar
-call style: resources, lists that page on their own, errors typed by status.
+call style: resources, lists that page on their own, errors typed by status. `perseid init --from
+stainless.yml` imports the config: see [migrating from Stainless](migrating-from-stainless.md).
 
 ### openapi-generator
 

@@ -84,6 +84,110 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     if interactive {
         crate::prompt::intro("perseid init")?;
     }
+    let Draft {
+        toml,
+        name,
+        sdks,
+        repo,
+        license,
+        spec_path,
+    } = draft(&init, root, interactive, &mut imported)?;
+    fsx::write(&path, toml.as_bytes())?;
+    println!("+ {}", config::FILE);
+    let (config, _) = Config::load(&path)?;
+    write_files(&config, root)?;
+    let where_ = match &repo {
+        None if config.sdks(&[])?.iter().any(|s| s.remote().is_some()) => config
+            .sdks(&[])?
+            .iter()
+            .map(|s| match s.remote() {
+                Some(repo) => repo.to_owned(),
+                None => format!("{}/ here", s.path),
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        Some(repo) if repo.contains("{lang}") => sdks
+            .iter()
+            .map(|s| repo.replace("{lang}", s))
+            .collect::<Vec<_>>()
+            .join(", "),
+        Some(repo) => format!("{repo} ({})", folders(&sdks)),
+        None => format!("{} here", folders(&sdks)),
+    };
+    let from = match config.source() {
+        Source::Url(_) => format!("{spec_path}, fetched daily"),
+        Source::File(file) if !root.join(file).exists() => {
+            format!("{file}, once `perseid connect` pushes it here")
+        }
+        Source::File(_) => spec_path,
+    };
+    println!("\n{name} SDKs: {where_}");
+    println!("  Spec: {from}");
+    println!("  Packages: {}", packages(&config)?);
+    println!(
+        "  Rename a package in its [language] table of {}, before its first release",
+        config::FILE
+    );
+    match &license {
+        None => println!(
+            "! no license: the SDKs get no LICENSE, and crates.io and Maven Central refuse packages without one. Set `license` under [metadata]"
+        ),
+        Some(license) if !crate::scaffold::ships_license(license) => println!(
+            "! perseid has no text of {license} to write as the SDKs' LICENSE: add one to each SDK"
+        ),
+        Some(_) => {}
+    }
+    if let (Some(stainless), Some(from)) = (&imported, &init.from) {
+        println!("\nFrom {from}: {}", stainless.mapped.join(", "));
+        if !stainless.skipped.is_empty() {
+            println!("Not carried over from {from}:");
+            for (key, why) in &stainless.skipped {
+                println!("  - {key}: {why}");
+            }
+        }
+        for warning in &stainless.warnings {
+            println!("! {warning}");
+        }
+    }
+    next_steps(&config, root);
+    Ok(())
+}
+
+/// The perseid.toml `init` would write for `spec`, without asking or writing anything: lets
+/// `perseid generate --spec <path|url> --out <dir>` preview the SDKs before any setup.
+pub fn preview(spec: &str, sdks: &[String], root: &Path) -> Result<Config> {
+    let init = Init {
+        spec: Some(spec.to_owned()),
+        name: None,
+        sdks: match sdks.is_empty() {
+            true => LANGUAGES.iter().map(|l| (*l).to_owned()).collect(),
+            false => sdks.to_vec(),
+        },
+        repo: None,
+        base_url: None,
+        license: None,
+        from: None,
+    };
+    let draft = draft(&init, root, false, &mut None)?;
+    Config::parse(&draft.toml, config::FILE)
+}
+
+struct Draft {
+    toml: String,
+    name: String,
+    sdks: Vec<String>,
+    repo: Option<String>,
+    license: Option<String>,
+    spec_path: String,
+}
+
+/// perseid.toml for `init`, from its flags, the spec, and the answers when `interactive`.
+fn draft(
+    init: &Init,
+    root: &Path,
+    interactive: bool,
+    imported: &mut Option<crate::stainless::Import>,
+) -> Result<Draft> {
     let spec = match &init.spec {
         Some(spec) => Some(spec.clone()),
         None => match pick_spec(root, interactive)? {
@@ -107,7 +211,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         },
         _ => json!({}),
     };
-    if let Some(stainless) = &mut imported {
+    if let Some(stainless) = imported.as_mut() {
         match doc.get("paths") {
             Some(_) => stainless.with_spec(&doc.to_string()),
             None => stainless.without_spec(),
@@ -138,7 +242,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         )?,
         (None, false) => derived.clone(),
     };
-    let sdks = match (init.sdks.is_empty(), &mut imported) {
+    let sdks = match (init.sdks.is_empty(), imported.as_mut()) {
         (true, Some(stainless)) => stainless.sdks.clone(),
         (true, None) => ask_sdks()?,
         (false, stainless) => {
@@ -220,10 +324,10 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     {
         toml += "timeout = 600\n";
     }
-    if let Some(stainless) = &imported {
+    if let Some(stainless) = imported.as_ref() {
         toml += &stainless.top_level();
     }
-    let info = match &imported {
+    let info = match imported.as_ref() {
         Some(stainless) => &with_contact(&doc["info"], stainless),
         None => &doc["info"],
     };
@@ -232,7 +336,7 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
         metadata(info, &name, license.as_deref())
     );
     let mut context = false;
-    if let Some(stainless) = &imported {
+    if let Some(stainless) = imported.as_ref() {
         let env_prefix = stainless
             .env_prefix
             .as_deref()
@@ -281,68 +385,17 @@ pub fn run(init: Init, root: &Path) -> Result<()> {
     } else if !context && !context_keys.is_empty() {
         toml += &format!("\n[context]\n{context_keys}");
     }
-    if let Some(stainless) = &imported {
+    if let Some(stainless) = imported.as_ref() {
         toml += &stainless.pack_tables();
     }
-    fsx::write(&path, toml.as_bytes())?;
-    println!("+ {}", config::FILE);
-    let (config, _) = Config::load(&path)?;
-    write_files(&config, root)?;
-    let where_ = match &repo {
-        None if config.sdks(&[])?.iter().any(|s| s.remote().is_some()) => config
-            .sdks(&[])?
-            .iter()
-            .map(|s| match s.remote() {
-                Some(repo) => repo.to_owned(),
-                None => format!("{}/ here", s.path),
-            })
-            .collect::<Vec<_>>()
-            .join(", "),
-        Some(repo) if repo.contains("{lang}") => sdks
-            .iter()
-            .map(|s| repo.replace("{lang}", s))
-            .collect::<Vec<_>>()
-            .join(", "),
-        Some(repo) => format!("{repo} ({})", folders(&sdks)),
-        None => format!("{} here", folders(&sdks)),
-    };
-    let from = match config.source() {
-        Source::Url(_) => format!("{spec_path}, fetched daily"),
-        Source::File(file) if !root.join(file).exists() => {
-            format!("{file}, once `perseid connect` pushes it here")
-        }
-        Source::File(_) => spec_path,
-    };
-    println!("\n{name} SDKs: {where_}");
-    println!("  Spec: {from}");
-    println!("  Packages: {}", packages(&config)?);
-    println!(
-        "  Rename a package in its [language] table of {}, before its first release",
-        config::FILE
-    );
-    match &license {
-        None => println!(
-            "! no license: the SDKs get no LICENSE, and crates.io and Maven Central refuse packages without one. Set `license` under [metadata]"
-        ),
-        Some(license) if !crate::scaffold::ships_license(license) => println!(
-            "! perseid has no text of {license} to write as the SDKs' LICENSE: add one to each SDK"
-        ),
-        Some(_) => {}
-    }
-    if let (Some(stainless), Some(from)) = (&imported, &init.from) {
-        println!("\nFrom {from}: {}", stainless.mapped.join(", "));
-        if !stainless.skipped.is_empty() {
-            println!("Not carried over from {from}:");
-            for (key, why) in &stainless.skipped {
-                println!("  - {key}: {why}");
-            }
-        }
-        for warning in &stainless.warnings {
-            println!("! {warning}");
-        }
-    }
-    next_steps(&config, root);
-    Ok(())
+    Ok(Draft {
+        toml,
+        name,
+        sdks,
+        repo,
+        license,
+        spec_path,
+    })
 }
 
 /// `info` of the spec, its contact completed with the organization of stainless.yml.
