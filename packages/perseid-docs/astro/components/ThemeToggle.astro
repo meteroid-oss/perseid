@@ -20,9 +20,11 @@ const options = [
   const KEY = "starlight-theme";
   const dark = matchMedia("(prefers-color-scheme: dark)");
   const fallback = () => document.querySelector<HTMLElement>("pd-theme-toggle")?.dataset.default || "auto";
+  // Nothing stored: never chosen. "" is Starlight's picker storing "auto".
   const stored = () => {
     try {
-      return localStorage.getItem(KEY) || fallback();
+      const value = localStorage.getItem(KEY);
+      return value === null ? fallback() : value || "auto";
     } catch {
       return fallback();
     }

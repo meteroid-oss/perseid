@@ -99,13 +99,6 @@ function head(options: PerseidDocsOptions): NonNullable<StarlightUserConfig["hea
       { tag: "link", attrs: { rel: "stylesheet", href: `https://fonts.googleapis.com/css2?${fonts}&display=swap` } },
     );
   }
-  if (options.appearance) {
-    const theme = JSON.stringify(options.appearance);
-    out.push({
-      tag: "script",
-      content: `try{if(!localStorage.getItem("starlight-theme"))document.documentElement.dataset.theme=${theme}}catch(e){}`,
-    });
-  }
   return out;
 }
 
@@ -212,6 +205,8 @@ export default function perseidDocs(options: PerseidDocsOptions): AstroIntegrati
                 Header: here("../../astro/components/Header.astro"),
                 Sidebar: here("../../astro/components/Sidebar.astro"),
                 PageTitle: here("../../astro/components/PageTitle.astro"),
+                ThemeProvider: here("../../astro/components/ThemeProvider.astro"),
+                ThemeSelect: here("../../astro/components/ThemeSelect.astro"),
                 ...(options.starlight?.components ?? {}),
               },
               ...options.starlight,
