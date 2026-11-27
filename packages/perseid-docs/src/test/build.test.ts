@@ -40,6 +40,14 @@ test("convertPage maps frontmatter and imports the components used", () => {
   assert.match(out, /import \{ Note \} from "perseid-docs\/mintlify";/);
 });
 
+test("convertPage keeps the sidebar of a frame page, not of a custom one", () => {
+  const frame = convertPage("---\ntitle: Home\nmode: frame\n---\n<div>x</div>\n", []);
+  assert.doesNotMatch(frame, /template: splash/);
+  assert.match(frame, /tableOfContents: false/);
+  assert.match(frame, /<div class="pd-frame-page" \/>/);
+  assert.match(convertPage("---\ntitle: Land\nmode: custom\n---\nx\n", []), /template: splash/);
+});
+
 test("convertPage reads a bare string frontmatter as the title", () => {
   assert.match(convertPage("---\nQuotes\n---\n\nBody\n", []), /^---\ntitle: Quotes\n---/);
 });

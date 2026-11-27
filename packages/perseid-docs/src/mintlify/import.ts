@@ -211,11 +211,12 @@ export function convertPage(source: string, warnings: string[], file = "page"): 
   const out: Record<string, unknown> = { title: front.title ?? titleFrom(original) ?? file };
   if (front.description) out.description = front.description;
   if (front.sidebarTitle) out.sidebar = { label: front.sidebarTitle };
-  if (front.mode === "frame" || front.mode === "custom") {
+  // "custom" is a blank page; "frame" keeps the sidebar around the page's own layout.
+  if (front.mode === "custom") {
     out.template = "splash";
     out.pagefind = true;
   }
-  if (front.mode === "wide") out.tableOfContents = false;
+  if (front.mode === "wide" || front.mode === "frame") out.tableOfContents = false;
   for (const key of Object.keys(front)) {
     if (!["title", "description", "sidebarTitle", "mode", "icon", "iconType", "og:title", "og:description", "ContentWidth"].includes(key)) {
       warnings.push(`${file}: frontmatter \`${key}\` has no equivalent, dropped`);

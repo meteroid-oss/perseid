@@ -1,0 +1,16 @@
+---
+import Default from "@astrojs/starlight/components/ThemeProvider.astro";
+import config from "virtual:perseid-docs/config";
+const appearance = config.appearance ?? "";
+---
+
+<Default />
+{/* The reader's choice, "auto" (ours) or "" (Starlight's) for the system's; else the site's appearance. */}
+<script is:inline define:vars={{ appearance }}>
+  try {
+    const stored = localStorage.getItem("starlight-theme");
+    const system = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    const theme = stored === "light" || stored === "dark" ? stored : stored === null ? appearance || system : system;
+    document.documentElement.dataset.theme = theme;
+  } catch {}
+</script>
